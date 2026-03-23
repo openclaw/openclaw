@@ -217,6 +217,8 @@ describe("ensureAgentWorkspace", () => {
         '{"lastChecks":{}}\n',
         "utf-8",
       );
+      await fs.mkdir(path.join(sourceDir, "avatars"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "avatars", "sophia.png"), "seed avatar\n", "utf-8");
       await fs.writeFile(path.join(sourceDir, "openclaw.render.json"), "{}", "utf-8");
       process.env.OPENCLAW_CONFIG_PATH = path.join(sourceDir, "openclaw.render.json");
 
@@ -248,6 +250,9 @@ describe("ensureAgentWorkspace", () => {
       await expect(
         fs.readFile(path.join(tempDir, "memory", "heartbeat-state.json"), "utf-8"),
       ).resolves.toBe('{"lastChecks":{}}\n');
+      await expect(fs.readFile(path.join(tempDir, "avatars", "sophia.png"), "utf-8")).resolves.toBe(
+        "seed avatar\n",
+      );
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     } finally {
@@ -291,6 +296,8 @@ describe("ensureAgentWorkspace", () => {
         '{"lastChecks":{}}\n',
         "utf-8",
       );
+      await fs.mkdir(path.join(sourceDir, "avatars"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "avatars", "sophia.png"), "seed avatar\n", "utf-8");
       process.env.OPENCLAW_CONFIG_PATH = path.join(sourceDir, "openclaw.render.json");
 
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
@@ -302,6 +309,12 @@ describe("ensureAgentWorkspace", () => {
       await fs.writeFile(
         path.join(tempDir, DEFAULT_TONE_SKILLS_FILENAME),
         "# tone_skills.md\nkeep my custom tone\n",
+        "utf-8",
+      );
+      await fs.mkdir(path.join(tempDir, "avatars"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "avatars", "sophia.png"),
+        "keep my custom avatar\n",
         "utf-8",
       );
 
@@ -319,6 +332,9 @@ describe("ensureAgentWorkspace", () => {
       await expect(
         fs.readFile(path.join(tempDir, DEFAULT_TONE_SKILLS_FILENAME), "utf-8"),
       ).resolves.toBe("# tone_skills.md\nkeep my custom tone\n");
+      await expect(fs.readFile(path.join(tempDir, "avatars", "sophia.png"), "utf-8")).resolves.toBe(
+        "keep my custom avatar\n",
+      );
       await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject(
         {
           code: "ENOENT",

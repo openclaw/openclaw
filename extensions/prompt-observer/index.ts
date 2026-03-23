@@ -37,6 +37,7 @@ type ResolvedPromptObserverConfig = {
 type BootstrapCacheEntry = {
   files: string[];
   updatedAt: number;
+  lastLoggedFingerprint?: string;
 };
 
 type ObserverLogger = Pick<OpenClawPluginApi["logger"], "info">;
@@ -267,9 +268,52 @@ function storeBootstrapFiles(params: {
   const now = Date.now();
   pruneBootstrapCache(now);
   for (const key of collectSessionKeys(params)) {
+    const previous = bootstrapFilesBySession.get(key);
     bootstrapFilesBySession.set(key, {
       files: [...params.files],
       updatedAt: now,
+      lastLoggedFingerprint: previous?.lastLoggedFingerprint,
+    });
+  }
+}
+
+function fingerprintBootstrapFiles(files: string[]): string {
+  return JSON.stringify(files);
+}
+
+function shouldLogBootstrapFiles(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  files: string[];
+}): boolean {
+  const sessionId =
+    typeof params.sessionId === "string" && params.sessionId.trim().length > 0
+      ? params.sessionId
+      : undefined;
+  const keys = sessionId ? [sessionId] : collectSessionKeys(params);
+  if (keys.length === 0) {
+    return true;
+  }
+  const fingerprint = fingerprintBootstrapFiles(params.files);
+  return !keys.some(
+    (key) => bootstrapFilesBySession.get(key)?.lastLoggedFingerprint === fingerprint,
+  );
+}
+
+function markBootstrapFilesLogged(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  files: string[];
+}): void {
+  const now = Date.now();
+  const fingerprint = fingerprintBootstrapFiles(params.files);
+  pruneBootstrapCache(now);
+  for (const key of collectSessionKeys(params)) {
+    const previous = bootstrapFilesBySession.get(key);
+    bootstrapFilesBySession.set(key, {
+      files: previous?.files ?? [...params.files],
+      updatedAt: now,
+      lastLoggedFingerprint: fingerprint,
     });
   }
 }
@@ -340,20 +384,36 @@ export default definePluginEntry({
               typeof event.context.sessionKey === "string" ? event.context.sessionKey : undefined,
             files: bootstrapFiles,
           });
-          emitObserverEvent(api.logger, {
-            event: "prompt_observer.bootstrap_files",
-            pluginId: api.id,
-            sessionId:
-              typeof event.context.sessionId === "string" ? event.context.sessionId : undefined,
-            sessionKey:
-              typeof event.context.sessionKey === "string" ? event.context.sessionKey : undefined,
-            agentId: typeof event.context.agentId === "string" ? event.context.agentId : undefined,
-            workspaceDir:
-              typeof event.context.workspaceDir === "string"
-                ? event.context.workspaceDir
-                : undefined,
-            bootstrapFiles,
-          });
+          const sessionId =
+            typeof event.context.sessionId === "string" ? event.context.sessionId : undefined;
+          const sessionKey =
+            typeof event.context.sessionKey === "string" ? event.context.sessionKey : undefined;
+          if (
+            shouldLogBootstrapFiles({
+              sessionId,
+              sessionKey,
+              files: bootstrapFiles,
+            })
+          ) {
+            emitObserverEvent(api.logger, {
+              event: "prompt_observer.bootstrap_files",
+              pluginId: api.id,
+              sessionId,
+              sessionKey,
+              agentId:
+                typeof event.context.agentId === "string" ? event.context.agentId : undefined,
+              workspaceDir:
+                typeof event.context.workspaceDir === "string"
+                  ? event.context.workspaceDir
+                  : undefined,
+              bootstrapFiles,
+            });
+            markBootstrapFilesLogged({
+              sessionId,
+              sessionKey,
+              files: bootstrapFiles,
+            });
+          }
         },
         {
           name: "prompt-observer-bootstrap-files",

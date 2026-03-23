@@ -38,6 +38,7 @@ const {
   createEmptyPluginRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  getActivePluginRegistryVersion,
   getGlobalHookRunner,
   loadOpenClawPlugins,
   resetGlobalHookRunner,
@@ -1214,6 +1215,37 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
     expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+  });
+
+  it("does not re-activate an already-active cached registry", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "cache-hook-runner-active",
+      filename: "cache-hook-runner-active.cjs",
+      body: `module.exports = { id: "cache-hook-runner-active", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-hook-runner-active"],
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    const firstHookRunner = getGlobalHookRunner();
+    const firstVersion = getActivePluginRegistryVersion();
+
+    const second = loadOpenClawPlugins(options);
+
+    expect(second).toBe(first);
+    expect(getGlobalHookRunner()).toBe(firstHookRunner);
+    expect(getActivePluginRegistryVersion()).toBe(firstVersion);
 
     resetGlobalHookRunner();
   });

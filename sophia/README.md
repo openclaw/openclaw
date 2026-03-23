@@ -20,79 +20,79 @@ Sophia's workspace files and deployment config for running on OpenClaw.
 
 ### Step 1 — Deploy from this fork
 
+Use the Render Blueprint URL for the repository you are currently reviewing. Replace
+`<owner>/<repo>` with the GitHub repository path of that repo:
 Go to:
 
 ```
-https://render.com/deploy?repo=https://github.com/davidelaverga/openclaw
+https://render.com/deploy?repo=https://github.com/<owner>/<repo>
+```
+
+Example:
+
+```
+https://render.com/deploy?repo=https://github.com/openclaw/openclaw
 ```
 
 Set `SETUP_PASSWORD` when prompted. Select Starter plan or above (persistent disk required).
 
 ### Step 2 — Add API keys as environment variables
 
-In **Render Dashboard → your service → Environment**, add:
+In **Render Dashboard → your service → Environment** (or in the `Sophia-Claw` env group referenced by `render.yaml`), add:
+
+- `SETUP_PASSWORD` — password for `/setup`
 
 - `ANTHROPIC_API_KEY` — your Anthropic API key
 - `OPENAI_API_KEY` — your OpenAI API key (for memory embeddings)
+- `DEEPGRAM_API_KEY` — your Deepgram API key (inbound voice note transcription)
+- `ELEVENLABS_API_KEY` — your ElevenLabs API key (outbound voice replies)
 
 These are injected into the container process automatically. Never commit real keys to this repo.
 
-### Step 3 — Run the setup wizard
+### Step 3 — Know which config Render is actually using
+
+This deployment does **not** use `/data/.openclaw/openclaw.json` as its primary config file.
+
+Render starts OpenClaw with:
+
+```bash
+OPENCLAW_CONFIG_PATH=/app/sophia/openclaw.render.json
+OPENCLAW_STATE_DIR=/data/.openclaw
+```
+
+That means:
+
+- `sophia/openclaw.render.json` is the repo-backed source of truth for Sophia's deployment config
+- secrets stay in Render environment variables
+- config changes should be committed to git and deployed via a new Render deploy
+- Render Shell is for operational tasks like WhatsApp login or inspection, not for `openclaw config set` mutations you want to keep
+
+### Step 4 — Run the setup wizard
 
 Navigate to `https://<your-service>.onrender.com/setup`, enter your password, select Anthropic as model provider and paste your key.
 
-### Step 4 — Set up Sophia's workspace via Render Shell
+### Step 5 — Let OpenClaw seed Sophia's workspace
 
-Open **Render Dashboard → your service → Shell**, then:
+Sophia's workspace lives on the persistent disk at `/data/.openclaw/sophia`, but the initial seed files live in this repo under `sophia/`.
 
-```bash
-# Create the workspace directory on the persistent disk
-mkdir -p /data/.openclaw/sophia/memory
+When the workspace is prepared, OpenClaw copies missing seed files from `/app/sophia/` into `/data/.openclaw/sophia/`, including:
 
-# Copy workspace files from the container (repo files are baked into the image)
-cp /app/sophia/SOUL.md /data/.openclaw/sophia/
-cp /app/sophia/IDENTITY.md /data/.openclaw/sophia/
-cp /app/sophia/USER.md /data/.openclaw/sophia/
-cp /app/sophia/AGENTS.md /data/.openclaw/sophia/
-cp /app/sophia/tone_skills.md /data/.openclaw/sophia/
-cp /app/sophia/MEMORY.md /data/.openclaw/sophia/
-cp /app/sophia/HEARTBEAT.md /data/.openclaw/sophia/
-cp /app/sophia/memory/heartbeat-state.json /data/.openclaw/sophia/memory/
-```
+- `SOUL.md`
+- `IDENTITY.md`
+- `USER.md`
+- `AGENTS.md`
+- `tone_skills.md`
+- `MEMORY.md`
+- `HEARTBEAT.md`
+- `memory/`
+- `avatars/`
 
-### Step 5 — Apply Sophia config
+Existing files on the persistent disk are **not** overwritten automatically, which is important for stateful files like `MEMORY.md`, `USER.md`, and anything Sophia updates over time.
 
-Still in Render Shell, apply the Sophia-specific configuration:
+If you want to force the initial seed immediately after deploy, you can open **Render Dashboard → your service → Shell** and run:
 
 ```bash
-# Set workspace path
-openclaw config set agents.defaults.workspace /data/.openclaw/sophia
-
-# Set model
-openclaw config set agents.defaults.model.primary anthropic/claude-sonnet-4-6
-
-# Set identity
-openclaw config set agents.list.0.identity.name Sophia
-openclaw config set agents.list.0.identity.theme "AI companion"
-
-# Set memory search (uses OPENAI_API_KEY from env)
-openclaw config set agents.defaults.memorySearch.provider openai
-openclaw config set agents.defaults.memorySearch.model text-embedding-3-small
-
-# Set heartbeat
-openclaw config set agents.defaults.heartbeat.every 2h
-openclaw config set agents.defaults.heartbeat.target whatsapp
-
-# Enable cron
-openclaw config set cron.enabled true
-
-# Configure WhatsApp
-openclaw config set channels.whatsapp.enabled true
-openclaw config set channels.whatsapp.dmPolicy pairing
-openclaw config set channels.whatsapp.groupPolicy allowlist
-
-# IMPORTANT: Replace with your real phone number
-openclaw config set channels.whatsapp.allowFrom '["+393519168570"]'
+openclaw agent --message "Hello Sophia"
 ```
 
 ### Step 6 — Link WhatsApp
@@ -112,20 +112,28 @@ openclaw channels status --probe
 openclaw agent --message "Hello Sophia"
 ```
 
-Sophia should respond in character. Check **Render Dashboard → Logs** for real-time monitoring.
+Then verify the voice layer end to end in WhatsApp:
+
+- send a text message and confirm Sophia replies in text
+- send a voice note and confirm Sophia replies with a voice note
+- confirm the 💙 ack reaction appears promptly
+
+Check **Render Dashboard → Logs** for real-time monitoring.
 
 ## What persists across redeploys
 
 Everything under `/data/` survives:
 
-- `/data/.openclaw/openclaw.json` — your config
-- `/data/.openclaw/sophia/` — all workspace and memory files
+- `/data/.openclaw/sophia/` — workspace, memory, seeded files, and avatars
 - `/data/.openclaw/credentials/` — WhatsApp session (no re-scan needed)
 - `/data/.openclaw/sessions/` — conversation history
+  The main deployment config does **not** live under `/data/`; it is loaded from `sophia/openclaw.render.json` inside the deployed image on each release.
 
-## Updating workspace files
+## Updating config and workspace files
 
 Two options:
 
-1. **Quick edits**: Edit directly in Render Shell on `/data/.openclaw/sophia/`
-2. **Version-controlled**: Update files in this repo, redeploy, then re-copy from `/app/sophia/` to `/data/.openclaw/sophia/` (be careful not to overwrite MEMORY.md or USER.md if Sophia has updated them)
+1. **Version-controlled changes**: Update `sophia/openclaw.render.json`, `sophia/*.md`, or `sophia/avatars/*` in this repo, then redeploy Render.
+2. **Quick operational edits**: Edit files directly on `/data/.openclaw/sophia/` in Render Shell when you need an immediate local-only change.
+
+If you change repo-backed seed files and want them to replace existing persistent files, do it deliberately in Render Shell. Automatic seeding only fills in missing files; it does not overwrite existing ones.

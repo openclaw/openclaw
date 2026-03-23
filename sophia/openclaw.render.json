@@ -1,7 +1,9 @@
 {
   "env": {
     "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
-    "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+    "DEEPGRAM_API_KEY": "${DEEPGRAM_API_KEY}",
+    "ELEVENLABS_API_KEY": "${ELEVENLABS_API_KEY}"
   },
   "agents": {
     "defaults": {
@@ -27,6 +29,35 @@
         }
       }
     ]
+  },
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "language": "multi",
+        "providerOptions": {
+          "deepgram": {
+            "smart_format": true
+          }
+        },
+        "models": [
+          {
+            "provider": "deepgram",
+            "model": "nova-3"
+          }
+        ]
+      }
+    }
+  },
+  "messages": {
+    "tts": {
+      "auto": "inbound",
+      "provider": "elevenlabs",
+      "elevenlabs": {
+        "voiceId": "aFueGIISJUmscc05ZNfD",
+        "modelId": "eleven_v3"
+      }
+    }
   },
   "cron": {
     "enabled": true
@@ -88,7 +119,12 @@
       "enabled": true,
       "dmPolicy": "pairing",
       "allowFrom": ["+393894991082"],
-      "groupPolicy": "allowlist"
+      "groupPolicy": "allowlist",
+      "ackReaction": {
+        "emoji": "💙",
+        "direct": true,
+        "group": "mentions"
+      }
     }
   }
 }

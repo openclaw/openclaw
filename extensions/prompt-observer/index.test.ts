@@ -167,6 +167,112 @@ describe("prompt-observer plugin", () => {
     ]);
   });
 
+  it("dedupes repeated identical bootstrap logs while preserving llm_input correlation", () => {
+    const api = createTestApi({
+      mode: "summary",
+    });
+    register.register(api as never);
+
+    const bootstrapHook = getInternalHook(api, "agent:bootstrap");
+    const llmInputHook = getTypedHook(api, "llm_input");
+
+    for (let index = 0; index < 3; index += 1) {
+      bootstrapHook({
+        type: "agent",
+        action: "bootstrap",
+        context: {
+          workspaceDir: "/tmp/workspace",
+          bootstrapFiles: [{ path: "SOUL.md" }, { path: "BOOTSTRAP.md" }],
+          sessionId: "session-dedupe",
+          sessionKey: "telegram:dedupe",
+          agentId: "sophia",
+        },
+      });
+    }
+
+    expect(api.logger.info).toHaveBeenCalledTimes(1);
+    expect(parseLoggedPayload(api, 0)).toMatchObject({
+      event: "prompt_observer.bootstrap_files",
+      bootstrapFiles: ["SOUL.md", "BOOTSTRAP.md"],
+      sessionId: "session-dedupe",
+      sessionKey: "telegram:dedupe",
+    });
+
+    llmInputHook(
+      {
+        runId: "run-dedupe",
+        sessionId: "session-dedupe",
+        provider: "openai",
+        model: "gpt-5",
+        systemPrompt: "system",
+        prompt: "prompt",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      {
+        agentId: "sophia",
+        sessionId: "session-dedupe",
+        sessionKey: "telegram:dedupe",
+        trigger: "user",
+        channelId: "telegram",
+      },
+    );
+
+    expect(api.logger.info).toHaveBeenCalledTimes(2);
+    expect(parseLoggedPayload(api, 1)).toMatchObject({
+      event: "prompt_observer.llm_input",
+      runId: "run-dedupe",
+      bootstrapFiles: ["SOUL.md", "BOOTSTRAP.md"],
+    });
+  });
+
+  it("logs bootstrap files again for a new sessionId even when the sessionKey is reused", () => {
+    const api = createTestApi({
+      mode: "summary",
+    });
+    register.register(api as never);
+
+    const bootstrapHook = getInternalHook(api, "agent:bootstrap");
+
+    bootstrapHook({
+      type: "agent",
+      action: "bootstrap",
+      context: {
+        workspaceDir: "/tmp/workspace",
+        bootstrapFiles: [{ path: "SOUL.md" }, { path: "BOOTSTRAP.md" }],
+        sessionId: "session-1",
+        sessionKey: "telegram:sticky",
+        agentId: "sophia",
+      },
+    });
+
+    bootstrapHook({
+      type: "agent",
+      action: "bootstrap",
+      context: {
+        workspaceDir: "/tmp/workspace",
+        bootstrapFiles: [{ path: "SOUL.md" }, { path: "BOOTSTRAP.md" }],
+        sessionId: "session-2",
+        sessionKey: "telegram:sticky",
+        agentId: "sophia",
+      },
+    });
+
+    expect(api.logger.info).toHaveBeenCalledTimes(2);
+    expect(parseLoggedPayload(api, 0)).toMatchObject({
+      event: "prompt_observer.bootstrap_files",
+      sessionId: "session-1",
+      sessionKey: "telegram:sticky",
+      bootstrapFiles: ["SOUL.md", "BOOTSTRAP.md"],
+    });
+    expect(parseLoggedPayload(api, 1)).toMatchObject({
+      event: "prompt_observer.bootstrap_files",
+      sessionId: "session-2",
+      sessionKey: "telegram:sticky",
+      bootstrapFiles: ["SOUL.md", "BOOTSTRAP.md"],
+    });
+  });
+
   it("filters tool events by configured tool names and logs sanitized results", () => {
     const api = createTestApi({
       mode: "full",
