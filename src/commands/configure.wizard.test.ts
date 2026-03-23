@@ -209,6 +209,56 @@ describe("runConfigureWizard", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("preserves high contextTokens when configure only touches workspace", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/old",
+            contextTokens: 150000,
+            bootstrapTotalMaxChars: 150000,
+          },
+        },
+      },
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+
+    const selectQueue = ["local", "workspace", "__continue"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+    mocks.clackText.mockResolvedValue("/tmp/new");
+    mocks.clackConfirm.mockResolvedValue(false);
+
+    await runConfigureWizard(
+      { command: "configure" },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            workspace: "/tmp/new",
+            contextTokens: 150000,
+            bootstrapTotalMaxChars: 150000,
+          }),
+        }),
+      }),
+    );
+  });
+
   it("persists provider-owned web search config changes returned by applySearchKey", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: false,

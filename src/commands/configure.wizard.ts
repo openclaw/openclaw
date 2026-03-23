@@ -47,6 +47,46 @@ import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
+function preserveSafeAgentDefaults(params: {
+  nextConfig: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+}): OpenClawConfig {
+  const nextDefaults = params.nextConfig.agents?.defaults;
+  const baseDefaults = params.baseConfig.agents?.defaults;
+  const baseContextTokens =
+    typeof baseDefaults?.contextTokens === "number" ? baseDefaults.contextTokens : undefined;
+  const nextContextTokens =
+    typeof nextDefaults?.contextTokens === "number" ? nextDefaults.contextTokens : undefined;
+  const baseBootstrapTotalMaxChars =
+    typeof baseDefaults?.bootstrapTotalMaxChars === "number"
+      ? baseDefaults.bootstrapTotalMaxChars
+      : undefined;
+  const nextBootstrapTotalMaxChars =
+    typeof nextDefaults?.bootstrapTotalMaxChars === "number"
+      ? nextDefaults.bootstrapTotalMaxChars
+      : undefined;
+
+  return {
+    ...params.nextConfig,
+    agents: {
+      ...params.nextConfig.agents,
+      defaults: {
+        ...nextDefaults,
+        ...(nextContextTokens !== undefined
+          ? { contextTokens: nextContextTokens }
+          : baseContextTokens !== undefined
+            ? { contextTokens: baseContextTokens }
+            : {}),
+        ...(nextBootstrapTotalMaxChars !== undefined
+          ? { bootstrapTotalMaxChars: nextBootstrapTotalMaxChars }
+          : baseBootstrapTotalMaxChars !== undefined
+            ? { bootstrapTotalMaxChars: baseBootstrapTotalMaxChars }
+            : {}),
+      },
+    },
+  };
+}
+
 async function resolveGatewaySecretInputForWizard(params: {
   cfg: OpenClawConfig;
   value: unknown;
@@ -456,6 +496,10 @@ export async function runConfigureWizard(
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
+      nextConfig = preserveSafeAgentDefaults({
+        nextConfig,
+        baseConfig,
+      });
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
         mode,
