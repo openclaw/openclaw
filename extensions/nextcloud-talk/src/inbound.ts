@@ -37,14 +37,17 @@ export type NextcloudTalkMentionEntry = {
 };
 
 export type ParsedNextcloudTalkBody = {
+  /** Human-readable text with `{mentionN}` placeholders stripped. */
   text: string;
+  /** True when the original message was structured JSON (as opposed to plain text). */
+  structured: boolean;
   mentionEntries: NextcloudTalkMentionEntry[];
 };
 
 export function parseStructuredNextcloudTalkBody(raw: string): ParsedNextcloudTalkBody {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) {
-    return { text: raw, mentionEntries: [] };
+    return { text: raw, structured: false, mentionEntries: [] };
   }
 
   try {
@@ -61,7 +64,7 @@ export function parseStructuredNextcloudTalkBody(raw: string): ParsedNextcloudTa
         }
       >;
     };
-    const text = typeof parsed.message === "string" ? parsed.message : raw;
+    const rawMessage = typeof parsed.message === "string" ? parsed.message : raw;
     const parameters =
       parsed.parameters && typeof parsed.parameters === "object" ? parsed.parameters : {};
     const mentionEntries = Object.entries(parameters).map(([key, value]) => ({
@@ -76,9 +79,18 @@ export function parseStructuredNextcloudTalkBody(raw: string): ParsedNextcloudTa
             : undefined,
       name: typeof value?.name === "string" ? value.name : undefined,
     }));
-    return { text, mentionEntries };
+    // Strip placeholder tokens like `{mention0}` or `{mention-user1}` injected by
+    // Nextcloud Talk so that command parsing and agent dispatch see clean text.
+    const placeholderKeys = Object.keys(parameters);
+    const text =
+      placeholderKeys.length > 0
+        ? placeholderKeys
+            .reduce((acc, key) => acc.replace(new RegExp(`\\{${key}\\}`, "g"), ""), rawMessage)
+            .trim()
+        : rawMessage.trim();
+    return { text, structured: true, mentionEntries };
   } catch {
-    return { text: raw, mentionEntries: [] };
+    return { text: raw, structured: false, mentionEntries: [] };
   }
 }
 
@@ -152,7 +164,8 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
   const parsedBody = parseStructuredNextcloudTalkBody(rawBody);
-  const effectiveBody = parsedBody.text.trim() || rawBody;
+  // For structured bodies, use the stripped text; fall back to rawBody for plain text.
+  const effectiveBody = parsedBody.structured ? parsedBody.text : rawBody;
   if (!effectiveBody) {
     return;
   }
@@ -291,6 +304,14 @@ export async function handleNextcloudTalkInbound(params: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
+    return;
+  }
+
+  // A structured message that is nothing but mention placeholders produces an empty
+  // effectiveBody after stripping.  Treat it as a mention-only ping with no actionable
+  // content and drop it silently — the agent has nothing to respond to.
+  if (parsedBody.structured && effectiveBody === "") {
+    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (mention-only, no message body)`);
     return;
   }
 
