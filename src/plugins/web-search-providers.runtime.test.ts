@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "./web-search-providers.runtime.js";
+
+type RegistryModule = typeof import("./registry.js");
+type RuntimeModule = typeof import("./runtime.js");
+type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -15,69 +13,85 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "firecrawl", id: "firecrawl", order: 60 },
   { pluginId: "exa", id: "exa", order: 65 },
   { pluginId: "tavily", id: "tavily", order: 70 },
+  { pluginId: "duckduckgo", id: "duckduckgo", order: 100 },
 ] as const;
 
-const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
-  loadOpenClawPluginsMock: vi.fn((params?: { config?: { plugins?: Record<string, unknown> } }) => {
-    const plugins = params?.config?.plugins as
-      | {
-          enabled?: boolean;
-          allow?: string[];
-          entries?: Record<string, { enabled?: boolean }>;
-        }
-      | undefined;
-    if (plugins?.enabled === false) {
-      return { webSearchProviders: [] };
-    }
-    const allow = Array.isArray(plugins?.allow) && plugins.allow.length > 0 ? plugins.allow : null;
-    const entries = plugins?.entries ?? {};
-    const webSearchProviders = BUNDLED_WEB_SEARCH_PROVIDERS.filter((provider) => {
-      if (allow && !allow.includes(provider.pluginId)) {
-        return false;
-      }
-      if (entries[provider.pluginId]?.enabled === false) {
-        return false;
-      }
-      return true;
-    }).map((provider) => ({
-      pluginId: provider.pluginId,
-      pluginName: provider.pluginId,
-      source: "test" as const,
-      provider: {
-        id: provider.id,
-        label: provider.id,
-        hint: `${provider.id} provider`,
-        envVars: [`${provider.id.toUpperCase()}_API_KEY`],
-        placeholder: `${provider.id}-...`,
-        signupUrl: `https://example.com/${provider.id}`,
-        autoDetectOrder: provider.order,
-        credentialPath: `plugins.entries.${provider.pluginId}.config.webSearch.apiKey`,
-        getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
-        createTool: () => ({
-          description: provider.id,
-          parameters: {},
-          execute: async () => ({}),
-        }),
-      },
-    }));
-    return { webSearchProviders };
-  }),
-}));
+let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
+let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
+let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
+let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
+let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 
-vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: loadOpenClawPluginsMock,
-}));
+function buildMockedWebSearchProviders(params?: {
+  config?: { plugins?: Record<string, unknown> };
+}) {
+  const plugins = params?.config?.plugins as
+    | {
+        enabled?: boolean;
+        allow?: string[];
+        entries?: Record<string, { enabled?: boolean }>;
+      }
+    | undefined;
+  if (plugins?.enabled === false) {
+    return [];
+  }
+  const allow = Array.isArray(plugins?.allow) && plugins.allow.length > 0 ? plugins.allow : null;
+  const entries = plugins?.entries ?? {};
+  const webSearchProviders = BUNDLED_WEB_SEARCH_PROVIDERS.filter((provider) => {
+    if (allow && !allow.includes(provider.pluginId)) {
+      return false;
+    }
+    if (entries[provider.pluginId]?.enabled === false) {
+      return false;
+    }
+    return true;
+  }).map((provider) => ({
+    pluginId: provider.pluginId,
+    pluginName: provider.pluginId,
+    source: "test" as const,
+    provider: {
+      id: provider.id,
+      label: provider.id,
+      hint: `${provider.id} provider`,
+      envVars: [`${provider.id.toUpperCase()}_API_KEY`],
+      placeholder: `${provider.id}-...`,
+      signupUrl: `https://example.com/${provider.id}`,
+      autoDetectOrder: provider.order,
+      credentialPath: `plugins.entries.${provider.pluginId}.config.webSearch.apiKey`,
+      getCredentialValue: () => "configured",
+      setCredentialValue: () => {},
+      createTool: () => ({
+        description: provider.id,
+        parameters: {},
+        execute: async () => ({}),
+      }),
+    },
+  }));
+  return webSearchProviders;
+}
 
 describe("resolvePluginWebSearchProviders", () => {
-  beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createEmptyPluginRegistry } = await import("./registry.js"));
+    const loaderModule = await import("./loader.js");
+    loadOpenClawPluginsMock = vi
+      .spyOn(loaderModule, "loadOpenClawPlugins")
+      .mockImplementation((params) => {
+        const registry = createEmptyPluginRegistry();
+        registry.webSearchProviders = buildMockedWebSearchProviders(params);
+        return registry;
+      });
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
+    ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
+      await import("./web-search-providers.runtime.js"));
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
   });
 
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.restoreAllMocks();
   });
 
   it("loads bundled providers through the plugin loader in auto-detect order", () => {
@@ -92,6 +106,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
       "exa:exa",
       "tavily:tavily",
+      "duckduckgo:duckduckgo",
     ]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
