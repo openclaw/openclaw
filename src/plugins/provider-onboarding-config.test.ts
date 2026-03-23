@@ -75,10 +75,7 @@ describe("provider onboarding preset appliers", () => {
           { id: "default", name: "Catalog Default" },
           { id: "backup", name: "Catalog Backup" },
         ],
-        aliases: [
-          "catalog/default",
-          { modelRef: "catalog/default", alias: "Catalog Default" },
-        ],
+        aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
       }),
     });
 
