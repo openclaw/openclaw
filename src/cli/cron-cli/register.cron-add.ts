@@ -73,7 +73,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--session <target>", "Session target (main|isolated)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
-      .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
+      .option(
+        "--at <when>",
+        "Run once at time (ISO with offset, or +duration). Use --tz for offset-less datetimes",
+      )
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
       .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
@@ -119,7 +122,9 @@ export function registerCronAddCommand(cron: Command) {
               throw new Error("--stagger/--exact are only valid with --cron");
             }
             if (at) {
-              const atIso = parseAt(at);
+              const tzRaw =
+                typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined;
+              const atIso = parseAt(at, tzRaw);
               if (!atIso) {
                 throw new Error("Invalid --at; use ISO time or duration like 20m");
               }
