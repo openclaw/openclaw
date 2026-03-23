@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models/openai-compatible: restore streamed usage accounting for allowlisted OpenAI-compatible providers while keeping generic providers conservative by default and preserving carveouts for known-bad endpoints. (#50045) Thanks @xiwuqi.
+
 ### Fixes
 
 - Plugins/message tool: make Discord `components` and Slack `blocks` optional again, and route Feishu `message(..., media=...)` sends through the outbound media path, so pin/unpin/react flows stop failing schema validation and Feishu file/image attachments actually send. Fixes #52970 and #52962. Thanks @vincentkoc.
