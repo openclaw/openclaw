@@ -36,6 +36,23 @@ function createCatalogContext(
   };
 }
 
+function createTestModel(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 4_096,
+  };
+}
+
 describe("defineSingleProviderPluginEntry", () => {
   it("registers a single provider with default wizard metadata", async () => {
     const entry = defineSingleProviderPluginEntry({
