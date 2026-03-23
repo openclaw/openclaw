@@ -97,6 +97,7 @@
   "provider-auth-login",
   "plugin-entry",
   "provider-catalog",
+  "provider-entry",
   "provider-env-vars",
   "provider-google",
   "provider-models",
