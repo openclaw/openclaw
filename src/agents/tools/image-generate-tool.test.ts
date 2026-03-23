@@ -429,6 +429,8 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("google (default gemini-3.1-flash-image-preview)");
     expect(text).toContain("gemini-3.1-flash-image-preview");
     expect(text).toContain("gemini-3-pro-image-preview");
+    expect(text).toContain("auth: set GEMINI_API_KEY / GOOGLE_API_KEY to use google/*");
+    expect(text).toContain("auth: set OPENAI_API_KEY to use openai/*");
     expect(text).toContain("editing up to 5 refs");
     expect(text).toContain("aspect ratios 1:1, 16:9");
     expect(result).toMatchObject({
@@ -437,6 +439,7 @@ describe("createImageGenerateTool", () => {
           expect.objectContaining({
             id: "google",
             defaultModel: "gemini-3.1-flash-image-preview",
+            authEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
             models: expect.arrayContaining([
               "gemini-3.1-flash-image-preview",
               "gemini-3-pro-image-preview",
@@ -447,6 +450,10 @@ describe("createImageGenerateTool", () => {
                 maxInputImages: 5,
               }),
             }),
+          }),
+          expect.objectContaining({
+            id: "openai",
+            authEnvVars: ["OPENAI_API_KEY"],
           }),
         ]),
       },

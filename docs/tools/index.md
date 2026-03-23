@@ -66,6 +66,8 @@ These tools ship with OpenClaw and are available without installing any plugins:
 | `image` / `image_generate`   | Analyze or generate images                               |                                   |
 | `sessions_*` / `agents_list` | Session management, sub-agents                           | [Sub-agents](/tools/subagents)    |
 
+For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
+
 ### Plugin-provided tools
 
 Plugins can register additional tools. Some examples:
