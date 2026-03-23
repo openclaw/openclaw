@@ -2,14 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Breaking
-
-### Changes
-
-### Fixes
-
 ## 2026.3.23
 
 ### Breaking
