@@ -60,6 +60,8 @@ export { extractSlackToolSend, listSlackMessageActions } from "../../extensions/
 export { buildSlackThreadingToolContext } from "../../extensions/slack/api.js";
 export { parseSlackBlocksInput } from "../../extensions/slack/api.js";
 export { handleSlackHttpRequest } from "../../extensions/slack/api.js";
+export { createSlackWebClient } from "../../extensions/slack/src/client.js";
+export { normalizeAllowListLower } from "../../extensions/slack/src/monitor/allow-list.js";
 export {
   handleSlackAction,
   listSlackDirectoryGroupsLive,
