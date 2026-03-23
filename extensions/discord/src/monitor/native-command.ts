@@ -88,39 +88,6 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
-type DiscordNativeInteraction =
-  | CommandInteraction
-  | ButtonInteraction
-  | StringSelectMenuInteraction
-  | AutocompleteInteraction;
-type DiscordNativeAccessDenial =
-  | "channel_disabled"
-  | "channel_not_allowed"
-  | "dm_disabled"
-  | "dm_policy"
-  | "group_dm_disabled"
-  | "unauthorized";
-type DiscordNativeAccessState = {
-  user: NonNullable<DiscordNativeInteraction["user"]>;
-  sender: ReturnType<typeof resolveDiscordSenderIdentity>;
-  channel: DiscordNativeInteraction["channel"];
-  channelName?: string;
-  channelSlug: string;
-  rawChannelId: string;
-  memberRoleIds: string[];
-  allowNameMatching: boolean;
-  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
-  threadParentId?: string;
-  threadParentName?: string;
-  threadParentSlug: string;
-  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  isThreadChannel: boolean;
-  commandAuthorized: boolean;
-  denial?: DiscordNativeAccessDenial;
-  dmAccess?: Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
-};
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
@@ -153,232 +120,6 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
     allowNameMatching: false,
   });
   return { configured: true, allowed: match.allowed } as const;
-}
-
-async function resolveDiscordNativeAutocompleteAuthorized(params: {
-  interaction: AutocompleteInteraction;
-  cfg: ReturnType<typeof loadConfig>;
-  discordConfig: DiscordConfig;
-  accountId: string;
-}): Promise<boolean> {
-  const access = await resolveDiscordNativeInteractionAccessState(params);
-  return access?.commandAuthorized ?? false;
-}
-
-async function resolveDiscordNativeInteractionAccessState(params: {
-  interaction: DiscordNativeInteraction;
-  cfg: ReturnType<typeof loadConfig>;
-  discordConfig: DiscordConfig;
-  accountId: string;
-}): Promise<DiscordNativeAccessState | null> {
-  const { interaction, cfg, discordConfig, accountId } = params;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const user = interaction.user;
-  if (!user) {
-    return null;
-  }
-  const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channel = interaction.channel;
-  const channelType = channel?.type;
-  const isDirectMessage = channelType === ChannelType.DM;
-  const isGroupDm = channelType === ChannelType.GroupDM;
-  const isThreadChannel =
-    channelType === ChannelType.PublicThread ||
-    channelType === ChannelType.PrivateThread ||
-    channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
-  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const rawChannelId = channel?.id ?? "";
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
-    : [];
-  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    allowNameMatching,
-  });
-  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
-    cfg,
-    accountId,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    chatType: isDirectMessage
-      ? "direct"
-      : isThreadChannel
-        ? "thread"
-        : interaction.guild
-          ? "channel"
-          : "group",
-    conversationId: rawChannelId || undefined,
-  });
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: interaction.guild ?? undefined,
-    guildId: interaction.guild?.id ?? undefined,
-    guildEntries: discordConfig?.guilds,
-  });
-  let threadParentId: string | undefined;
-  let threadParentName: string | undefined;
-  let threadParentSlug = "";
-  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
-    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: interaction.client,
-      threadChannel: {
-        id: rawChannelId,
-        name: channelName,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
-        parent: undefined,
-      },
-      channelInfo,
-    });
-    threadParentId = parentInfo.id;
-    threadParentName = parentInfo.name;
-    threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
-  }
-  const channelConfig = interaction.guild
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: rawChannelId,
-        channelName,
-        channelSlug,
-        parentId: threadParentId,
-        parentName: threadParentName,
-        parentSlug: threadParentSlug,
-        scope: isThreadChannel ? "thread" : "channel",
-      })
-    : null;
-  const baseState = {
-    user,
-    sender,
-    channel,
-    channelName,
-    channelSlug,
-    rawChannelId,
-    memberRoleIds,
-    allowNameMatching,
-    guildInfo,
-    threadParentId,
-    threadParentName,
-    threadParentSlug,
-    channelConfig,
-    isDirectMessage,
-    isGroupDm,
-    isThreadChannel,
-  } satisfies Omit<DiscordNativeAccessState, "commandAuthorized" | "denial" | "dmAccess">;
-  if (channelConfig?.enabled === false) {
-    return {
-      ...baseState,
-      commandAuthorized: false,
-      denial: "channel_disabled",
-    };
-  }
-  if (interaction.guild && channelConfig?.allowed === false) {
-    return {
-      ...baseState,
-      commandAuthorized: false,
-      denial: "channel_not_allowed",
-    };
-  }
-  if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
-    const allowByPolicy = isDiscordGroupAllowedByPolicy({
-      groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
-    });
-    if (!allowByPolicy) {
-      return {
-        ...baseState,
-        commandAuthorized: false,
-        denial: "channel_not_allowed",
-      };
-    }
-  }
-  const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
-  if (isDirectMessage) {
-    if (!dmEnabled || dmPolicy === "disabled") {
-      return {
-        ...baseState,
-        commandAuthorized: false,
-        denial: "dm_disabled",
-      };
-    }
-    const dmAccess = await resolveDiscordDmCommandAccess({
-      accountId,
-      dmPolicy,
-      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      allowNameMatching,
-      useAccessGroups,
-    });
-    return {
-      ...baseState,
-      commandAuthorized: dmAccess.decision === "allow" && dmAccess.commandAuthorized,
-      ...(dmAccess.decision !== "allow" ? { denial: "dm_policy" as const } : {}),
-      dmAccess,
-    };
-  }
-  if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {
-    return {
-      ...baseState,
-      commandAuthorized: false,
-      denial: "group_dm_disabled",
-    };
-  }
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
-    memberRoleIds,
-    sender,
-    allowNameMatching,
-  });
-  const authorizers = useAccessGroups
-    ? [
-        {
-          configured: commandsAllowFromAccess.configured,
-          allowed: commandsAllowFromAccess.allowed,
-        },
-        { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [
-        {
-          configured: commandsAllowFromAccess.configured,
-          allowed: commandsAllowFromAccess.allowed,
-        },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ];
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers,
-    modeWhenAccessGroupsOff: "configured",
-  });
-  return {
-    ...baseState,
-    commandAuthorized,
-    ...(!commandAuthorized ? { denial: "unauthorized" as const } : {}),
-  };
 }
 
 function buildDiscordCommandOptions(params: {
@@ -570,23 +311,14 @@ export function createDiscordNativeCommand(params: {
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
     cfg,
-    resolveChoiceContext: async (interaction) => {
-      const authorized = await resolveDiscordNativeAutocompleteAuthorized({
+    resolveChoiceContext: async (interaction) =>
+      resolveDiscordNativeChoiceContext({
         interaction,
         cfg,
         discordConfig,
         accountId,
-      });
-      if (!authorized) {
-        return null;
-      }
-      return resolveDiscordNativeChoiceContext({
-        interaction,
-        cfg,
-        accountId,
         threadBindings,
-      });
-    },
+      }),
   });
   const options = commandOptions
     ? (commandOptions satisfies CommandOptions)
@@ -677,76 +409,202 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const access = await resolveDiscordNativeInteractionAccessState({
-    interaction,
-    cfg,
-    discordConfig,
-    accountId,
-  });
-  if (!access) {
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const user = interaction.user;
+  if (!user) {
     return;
   }
-  const {
-    user,
-    sender,
-    channel,
-    channelName,
-    channelSlug,
-    rawChannelId,
-    memberRoleIds,
+  const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
+  const channel = interaction.channel;
+  const channelType = channel?.type;
+  const isDirectMessage = channelType === ChannelType.DM;
+  const isGroupDm = channelType === ChannelType.GroupDM;
+  const isThreadChannel =
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread;
+  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const rawChannelId = channel?.id ?? "";
+  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    : [];
+  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
     allowNameMatching,
-    guildInfo,
-    threadParentId,
-    threadParentName,
-    threadParentSlug,
-    channelConfig,
-    isDirectMessage,
-    isGroupDm,
-    isThreadChannel,
-    commandAuthorized,
-  } = access;
-  switch (access.denial) {
-    case "channel_disabled":
-      await respond("This channel is disabled.");
-      return;
-    case "channel_not_allowed":
+  });
+  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    accountId,
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    chatType: isDirectMessage
+      ? "direct"
+      : isThreadChannel
+        ? "thread"
+        : interaction.guild
+          ? "channel"
+          : "group",
+    conversationId: rawChannelId || undefined,
+  });
+  const guildInfo = resolveDiscordGuildEntry({
+    guild: interaction.guild ?? undefined,
+    guildId: interaction.guild?.id ?? undefined,
+    guildEntries: discordConfig?.guilds,
+  });
+  let threadParentId: string | undefined;
+  let threadParentName: string | undefined;
+  let threadParentSlug = "";
+  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
+    // Threads inherit parent channel config unless explicitly overridden.
+    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
+    const parentInfo = await resolveDiscordThreadParentInfo({
+      client: interaction.client,
+      threadChannel: {
+        id: rawChannelId,
+        name: channelName,
+        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        parent: undefined,
+      },
+      channelInfo,
+    });
+    threadParentId = parentInfo.id;
+    threadParentName = parentInfo.name;
+    threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+  }
+  const channelConfig = interaction.guild
+    ? resolveDiscordChannelConfigWithFallback({
+        guildInfo,
+        channelId: rawChannelId,
+        channelName,
+        channelSlug,
+        parentId: threadParentId,
+        parentName: threadParentName,
+        parentSlug: threadParentSlug,
+        scope: isThreadChannel ? "thread" : "channel",
+      })
+    : null;
+  if (channelConfig?.enabled === false) {
+    await respond("This channel is disabled.");
+    return;
+  }
+  if (interaction.guild && channelConfig?.allowed === false) {
+    await respond("This channel is not allowed.");
+    return;
+  }
+  if (useAccessGroups && interaction.guild) {
+    const channelAllowlistConfigured =
+      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+    const channelAllowed = channelConfig?.allowed !== false;
+    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: discordConfig?.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+    });
+    const allowByPolicy = isDiscordGroupAllowedByPolicy({
+      groupPolicy,
+      guildAllowlisted: Boolean(guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed,
+    });
+    if (!allowByPolicy) {
       await respond("This channel is not allowed.");
       return;
-    case "dm_disabled":
+    }
+  }
+  const dmEnabled = discordConfig?.dm?.enabled ?? true;
+  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
+  let commandAuthorized = true;
+  if (isDirectMessage) {
+    if (!dmEnabled || dmPolicy === "disabled") {
       await respond("Discord DMs are disabled.");
       return;
-    case "group_dm_disabled":
-      await respond("Discord group DMs are disabled.");
+    }
+    const dmAccess = await resolveDiscordDmCommandAccess({
+      accountId,
+      dmPolicy,
+      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching,
+      useAccessGroups,
+    });
+    commandAuthorized = dmAccess.commandAuthorized;
+    if (dmAccess.decision !== "allow") {
+      await handleDiscordDmCommandDecision({
+        dmAccess,
+        accountId,
+        sender: {
+          id: user.id,
+          tag: sender.tag,
+          name: sender.name,
+        },
+        onPairingCreated: async (code) => {
+          await respond(
+            buildPairingReply({
+              channel: "discord",
+              idLine: `Your Discord user id: ${user.id}`,
+              code,
+            }),
+            { ephemeral: true },
+          );
+        },
+        onUnauthorized: async () => {
+          await respond("You are not authorized to use this command.", { ephemeral: true });
+        },
+      });
       return;
-    case "dm_policy":
-      if (access.dmAccess) {
-        await handleDiscordDmCommandDecision({
-          dmAccess: access.dmAccess,
-          accountId,
-          sender: {
-            id: user.id,
-            tag: sender.tag,
-            name: sender.name,
+    }
+  }
+  if (!isDirectMessage) {
+    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
+      memberRoleIds,
+      sender,
+      allowNameMatching,
+    });
+    const authorizers = useAccessGroups
+      ? [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
           },
-          onPairingCreated: async (code) => {
-            await respond(
-              buildPairingReply({
-                channel: "discord",
-                idLine: `Your Discord user id: ${user.id}`,
-                code,
-              }),
-              { ephemeral: true },
-            );
+          { configured: ownerAllowList != null, allowed: ownerOk },
+          { configured: hasAccessRestrictions, allowed: memberAllowed },
+        ]
+      : [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
           },
-          onUnauthorized: async () => {
-            await respond("You are not authorized to use this command.", { ephemeral: true });
-          },
-        });
-      }
-      return;
-    case "unauthorized":
+          { configured: hasAccessRestrictions, allowed: memberAllowed },
+        ];
+    commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups,
+      authorizers,
+      modeWhenAccessGroupsOff: "configured",
+    });
+    if (!commandAuthorized) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return;
+    }
+  }
+  if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {
+    await respond("Discord group DMs are disabled.");
+    return;
   }
 
   const menu = resolveCommandArgMenu({
