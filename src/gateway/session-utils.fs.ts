@@ -396,6 +396,43 @@ function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
   return buf.toString("utf-8", 0, bytesRead);
 }
 
+/**
+ * Remove leading `System: ...` lines injected by drainFormattedSystemEvents.
+ * These are gateway-controlled event context lines (cron reminders, heartbeat
+ * triggers, channel summaries) prepended to the user message before it is
+ * written to the transcript. They look like:
+ *
+ *   System: [2026-03-22 06:00:00 GMT+1] Check BOTH
+ *
+ * They must never become the session's derived title; only the actual user
+ * content that follows them should be used.
+ *
+ * Returns the remaining text (trimmed) after stripping all leading System:
+ * lines and blank separators, or the original text if nothing was stripped.
+ */
+function stripLeadingSystemEventLines(text: string): string {
+  const lines = text.split("\n");
+  let i = 0;
+  // Skip lines that start with "System: " (case-sensitive — that's how they're written)
+  // and blank lines that act as separators between the System block and the body.
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    if (trimmed === "" || trimmed.startsWith("System: ")) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  if (i === 0) {
+    // Nothing was stripped — return original text unchanged (fast path, no allocation).
+    return text;
+  }
+  const remaining = lines.slice(i).join("\n").trim();
+  // If nothing meaningful remains after stripping, return the original so the caller
+  // can decide whether to fall through to a different user message.
+  return remaining || text;
+}
+
 function extractFirstUserMessageFromTranscriptChunk(
   chunk: string,
   opts?: { includeInterSession?: boolean },
@@ -420,7 +457,14 @@ function extractFirstUserMessageFromTranscriptChunk(
         // so the derived title reflects the actual user message, not metadata.
         const cleaned = stripInboundMetadata(text).trim();
         if (cleaned) {
-          return cleaned;
+          // Strip gateway-injected System: event lines that are prepended to the user
+          // message body by drainFormattedSystemEvents (e.g. cron/heartbeat sessions
+          // start with "System: [2026-03-22 06:00:00 GMT+1] Check BOTH\n\n<actual body>").
+          // Those lines are control-plane context, not the user's topic.
+          const withoutSystemLines = stripLeadingSystemEventLines(cleaned);
+          if (withoutSystemLines) {
+            return withoutSystemLines;
+          }
         }
       }
     } catch {

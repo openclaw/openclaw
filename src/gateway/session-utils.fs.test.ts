@@ -177,6 +177,59 @@ describe("readFirstUserMessageFromTranscript", () => {
     const result = readFirstUserMessageFromTranscript(sessionId, storePath);
     expect(result).toBe("Second message");
   });
+
+  test("strips leading System: event lines from cron/heartbeat user messages", () => {
+    // Cron/heartbeat sessions have System: [timestamp] lines prepended to the user
+    // message body by drainFormattedSystemEvents. The derived title should use the
+    // actual body text, not the gateway-injected System: context prefix.
+    const sessionId = "test-session-cron-title";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const body =
+      "System: [2026-03-23 06:27:38 GMT+1] Check BOTH\n\nRead HEARTBEAT.md and process tasks.";
+    const lines = [JSON.stringify({ message: { role: "user", content: body } })];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("Read HEARTBEAT.md and process tasks.");
+  });
+
+  test("strips multiple leading System: lines and blank separators", () => {
+    const sessionId = "test-session-cron-multi-system";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const body =
+      "System: [2026-03-23 06:27:38 GMT+1] Check BOTH\nSystem: [2026-03-23 06:27:38 GMT+1] Node: gateway online\n\nActual user content here.";
+    const lines = [JSON.stringify({ message: { role: "user", content: body } })];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("Actual user content here.");
+  });
+
+  test("returns System: line as title when there is no body after it (pure system event session)", () => {
+    // When the user message is only System: lines with no body, fall back gracefully
+    // to the original text rather than returning null.
+    const sessionId = "test-session-cron-only-system";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const body = "System: [2026-03-23 06:27:38 GMT+1] Check BOTH";
+    const lines = [JSON.stringify({ message: { role: "user", content: body } })];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    // Falls back to the original text when nothing remains after stripping.
+    expect(result).toBe("System: [2026-03-23 06:27:38 GMT+1] Check BOTH");
+  });
+
+  test("does not strip System: lines that appear mid-message (only leading ones)", () => {
+    const sessionId = "test-session-cron-mid-system";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const body = "What time is it?\nSystem: [2026-03-23] some event\nMore text.";
+    const lines = [JSON.stringify({ message: { role: "user", content: body } })];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    // Nothing stripped — "What time is it?" is not a System: line.
+    expect(result).toBe("What time is it?\nSystem: [2026-03-23] some event\nMore text.");
+  });
 });
 
 describe("readLastMessagePreviewFromTranscript", () => {
