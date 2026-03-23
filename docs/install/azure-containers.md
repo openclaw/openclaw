@@ -200,7 +200,9 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
 
   </Step>
 
-  <Step title="Grant ACR pull permission to the managed identity">
+  <Step title="Grant ACR pull permission and restart the container">
+    The initial container start will fail because the managed identity does not have ACR pull permission yet. Grant the role, then trigger a new revision to retry the image pull:
+
     ```bash
     IDENTITY_PRINCIPAL="$(az containerapp show -g "${RG}" -n "${ACA_APP}" \
       --query identity.principalId -o tsv)"
@@ -211,6 +213,11 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
       --assignee "${IDENTITY_PRINCIPAL}" \
       --role AcrPull \
       --scope "${ACR_ID}"
+
+    # Force a new revision so the now-authorized identity retries the image pull
+    az containerapp update \
+      -g "${RG}" -n "${ACA_APP}" \
+      --image "${ACR_NAME}.azurecr.io/openclaw:latest"
     ```
 
   </Step>
@@ -288,7 +295,7 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
       -n "provider-api-key" \
       --value "<YOUR_API_KEY>"
 
-    KEY_VAULT_URI="$(az keyvault show -n "${KV_NAME}" --query properties.vaultUri -o tsv)"
+    KEY_VAULT_URI="$(az keyvault show -g "${RG}" -n "${KV_NAME}" --query properties.vaultUri -o tsv)"
 
     az containerapp secret set \
       -g "${RG}" -n "${ACA_APP}" \
