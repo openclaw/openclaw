@@ -71,15 +71,15 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                          | API key                                     |
-| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| Provider                               | Result style                        | Filters                                          | API key                                     |
+| -------------------------------------- | ----------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Brave](/tools/brave-search)           | Structured search-style snippets    | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
+| [Firecrawl](/tools/firecrawl)          | Structured snippets                 | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | AI-synthesized answer + citations   | --                                               | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | AI-synthesized answer + citations   | --                                               | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | AI-synthesized grounded answer      | `query`, `count`                                 | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured search-style snippets    | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured snippets                 | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
 
@@ -177,11 +177,20 @@ examples.
 | `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
 
+### Provider behavior matrix
+
+| Provider                     | What `web_search` usually returns                                                  | Parameter notes                                                                                               |
+| ---------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [Brave](/tools/brave-search) | Structured search-style results with titles, URLs, and snippets                    | Supports country/language/date-style filters. `ui_lang` is Brave-only. Brave `llm-context` mode is narrower. |
+| [Kimi](/tools/kimi-search)   | An AI-synthesized grounded answer with citations from Moonshot's native web search | Only `query` and `count` are supported. Country/language/freshness/date filters are provider-dependent and are not supported by Kimi. |
+
 <Warning>
-  Not all parameters work with all providers. Brave `llm-context` mode
-  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
-  Firecrawl and Tavily only support `query` and `count` through `web_search`
-  -- use their dedicated tools for advanced options.
+  Not all parameters work with all providers. Country/language/freshness/date
+  filters are provider-dependent: Brave and Perplexity support them, while Kimi,
+  Gemini, and Grok reject them. Brave `llm-context` mode rejects `ui_lang`,
+  `freshness`, `date_after`, and `date_before`. Firecrawl and Tavily only
+  support `query` and `count` through `web_search` -- use their dedicated tools
+  for advanced options.
 </Warning>
 
 ## Examples

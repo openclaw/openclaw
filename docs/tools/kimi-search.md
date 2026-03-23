@@ -61,10 +61,16 @@ Gateway environment. For a gateway install, put it in `~/.openclaw/.env`.
 Kimi uses Moonshot web search to synthesize answers with inline citations,
 similar to Gemini and Grok's grounded response approach.
 
+Unlike Brave, which typically returns structured search-style results, Kimi may
+return a grounded answer synthesized from Moonshot's native `$web_search` flow.
+If you need raw search-style snippets plus filters like country or language,
+Brave or Perplexity are a better fit.
+
 ## Supported parameters
 
 Kimi search supports the standard `query` and `count` parameters.
-Provider-specific filters are not currently supported.
+Country/language/freshness/date-style filters are provider-dependent and are
+not currently supported by Kimi through `web_search`.
 
 ## Related
 
