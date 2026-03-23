@@ -20,6 +20,7 @@ vi.mock("./graph-upload.js", async () => {
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import {
   type MSTeamsAdapter,
+  type MSTeamsRenderedMessage,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
@@ -406,6 +407,54 @@ describe("msteams messenger", () => {
 
       expect(attempts).toEqual(["hello", "hello"]);
       expect(ids).toEqual(["id:hello"]);
+    });
+
+    it("delivers all blocks in a multi-block reply via a single continueConversation call (#29379)", async () => {
+      // Regression: multiple text blocks (e.g. text -> tool -> text) must all
+      // reach the user. Previously each deliver() call opened a separate
+      // continueConversation(); Teams silently drops blocks 2+ in that case.
+      // The fix batches all rendered messages into one sendMSTeamsMessages call
+      // so they share a single continueConversation().
+      const conversationCallTexts: string[][] = [];
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, _reference, logic) => {
+          const batchTexts: string[] = [];
+          await logic({
+            sendActivity: async (activity: unknown) => {
+              const { text } = activity as { text?: string };
+              batchTexts.push(text ?? "");
+              return { id: `id:${text ?? ""}` };
+            },
+          });
+          conversationCallTexts.push(batchTexts);
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      // Three blocks (text + code + text) sent together in one call.
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: baseRef,
+        messages: [
+          { text: "Let me look that up..." },
+          { text: "```\nresult = 42\n```" },
+          { text: "The answer is 42." },
+        ],
+      });
+
+      // All three blocks delivered.
+      expect(ids).toHaveLength(3);
+      // All three arrive in a single continueConversation() call, not three.
+      expect(conversationCallTexts).toHaveLength(1);
+      expect(conversationCallTexts[0]).toEqual([
+        "Let me look that up...",
+        "```\nresult = 42\n```",
+        "The answer is 42.",
+      ]);
     });
   });
 });
