@@ -7,33 +7,11 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
-
-function createEmptyPluginRegistry(): PluginRegistry {
-  return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    webSearchProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
-  };
-}
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -105,9 +83,13 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
-const pluginRuntimeState = vi.hoisted(() => ({
-  registry: createEmptyPluginRegistry(),
-}));
+const pluginRuntimeState = vi.hoisted(
+  () =>
+    ({
+      // The runtime mock is initialized before imports; beforeEach installs the real shared stub.
+      registry: null as unknown as PluginRegistry,
+    }) satisfies { registry: PluginRegistry },
+);
 
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
