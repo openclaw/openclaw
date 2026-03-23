@@ -95,14 +95,6 @@ type RuntimeAuthState = {
 const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
-// Keep overload pacing noticeable enough to avoid tight retry bursts, but short
-// enough that fallback still feels responsive within a single turn.
-const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 1_500,
-  factor: 2,
-  jitter: 0.2,
-};
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -828,6 +820,17 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      // Read config override if available — default 30s ceiling.
+      // A higher ceiling preserves the retry budget under sustained overload;
+      // operators with many auth profiles can lower this for faster rotation.
+      const overloadBackoffMaxMs =
+        params.config?.agents?.defaults?.embeddedPi?.overloadBackoffMaxMs ?? 30_000;
+      const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
+        initialMs: 250,
+        maxMs: overloadBackoffMaxMs,
+        factor: 2,
+        jitter: 0.2,
+      };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;

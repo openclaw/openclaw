@@ -182,6 +182,13 @@ export type AgentDefaultsConfig = {
      * - trusted: trust project settings as-is
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
+    /**
+     * Maximum backoff delay in milliseconds before rotating to the next auth profile
+     * after an API overloaded_error. Defaults to 30000 (30 seconds).
+     * Higher values preserve the retry budget under sustained load;
+     * lower values rotate faster but risk exhausting retries sooner.
+     */
+    overloadBackoffMaxMs?: number;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
