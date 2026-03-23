@@ -1,3 +1,8 @@
 {
-  "id": "deepgram"
+  "id": "deepgram",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }
