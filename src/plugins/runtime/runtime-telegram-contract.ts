@@ -25,6 +25,7 @@ export type {
   TelegramInlineButtons,
 } from "../../../extensions/telegram/api.js";
 export type { StickerMetadata } from "../../../extensions/telegram/api.js";
+export type { TelegramApiOverride } from "../../../extensions/telegram/runtime-api.js";
 
 export { emptyPluginConfigSchema } from "../config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";

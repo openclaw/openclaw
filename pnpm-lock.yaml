@@ -656,6 +656,9 @@ importers:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
+      jimp:
+        specifier: ^1.6.0
+        version: 1.6.0
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -7858,7 +7861,6 @@ snapshots:
       mime: 3.0.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/diff@1.6.0':
     dependencies:
@@ -7868,10 +7870,8 @@ snapshots:
       pixelmatch: 5.3.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
-  '@jimp/file-ops@1.6.0':
-    optional: true
+  '@jimp/file-ops@1.6.0': {}
 
   '@jimp/js-bmp@1.6.0':
     dependencies:
@@ -7881,7 +7881,6 @@ snapshots:
       bmp-ts: 1.0.9
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/js-gif@1.6.0':
     dependencies:
@@ -7891,7 +7890,6 @@ snapshots:
       omggif: 1.0.10
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/js-jpeg@1.6.0':
     dependencies:
@@ -7900,7 +7898,6 @@ snapshots:
       jpeg-js: 0.4.4
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/js-png@1.6.0':
     dependencies:
@@ -7909,7 +7906,6 @@ snapshots:
       pngjs: 7.0.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/js-tiff@1.6.0':
     dependencies:
@@ -7918,14 +7914,12 @@ snapshots:
       utif2: 4.1.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-blit@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       '@jimp/utils': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-blur@1.6.0':
     dependencies:
@@ -7933,13 +7927,11 @@ snapshots:
       '@jimp/utils': 1.6.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-circle@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-color@1.6.0':
     dependencies:
@@ -7950,7 +7942,6 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-contain@1.6.0':
     dependencies:
@@ -7962,7 +7953,6 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-cover@1.6.0':
     dependencies:
@@ -7973,7 +7963,6 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-crop@1.6.0':
     dependencies:
@@ -7983,32 +7972,27 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-displace@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       '@jimp/utils': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-dither@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
-    optional: true
 
   '@jimp/plugin-fisheye@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       '@jimp/utils': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-flip@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-hash@1.6.0':
     dependencies:
@@ -8024,13 +8008,11 @@ snapshots:
       any-base: 1.1.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-mask@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-print@1.6.0':
     dependencies:
@@ -8046,13 +8028,11 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-quantize@1.6.0':
     dependencies:
       image-q: 4.0.0
       zod: 3.25.76
-    optional: true
 
   '@jimp/plugin-resize@1.6.0':
     dependencies:
@@ -8061,7 +8041,6 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-rotate@1.6.0':
     dependencies:
@@ -8073,7 +8052,6 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/plugin-threshold@1.6.0':
     dependencies:
@@ -8085,18 +8063,15 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@jimp/types@1.6.0':
     dependencies:
       zod: 3.25.76
-    optional: true
 
   '@jimp/utils@1.6.0':
     dependencies:
       '@jimp/types': 1.6.0
       tinycolor2: 1.6.0
-    optional: true
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -9973,8 +9948,7 @@ snapshots:
 
   '@types/node@10.17.60': {}
 
-  '@types/node@16.9.1':
-    optional: true
+  '@types/node@16.9.1': {}
 
   '@types/node@20.19.37':
     dependencies:
@@ -10268,8 +10242,7 @@ snapshots:
 
   ansis@4.2.0: {}
 
-  any-base@1.1.0:
-    optional: true
+  any-base@1.1.0: {}
 
   any-promise@1.3.0: {}
 
@@ -10352,8 +10325,7 @@ snapshots:
   audio-type@2.4.0:
     optional: true
 
-  await-to-js@3.0.0:
-    optional: true
+  await-to-js@3.0.0: {}
 
   axios@1.13.6:
     dependencies:
@@ -10427,8 +10399,7 @@ snapshots:
       execa: 4.1.0
       which: 2.0.2
 
-  bmp-ts@1.0.9:
-    optional: true
+  bmp-ts@1.0.9: {}
 
   body-parser@2.2.2:
     dependencies:
@@ -10898,8 +10869,7 @@ snapshots:
       signal-exit: 3.0.7
       strip-final-newline: 2.0.0
 
-  exif-parser@0.1.12:
-    optional: true
+  exif-parser@0.1.12: {}
 
   expect-type@1.3.0: {}
 
@@ -11157,7 +11127,6 @@ snapshots:
     dependencies:
       image-q: 4.0.0
       omggif: 1.0.10
-    optional: true
 
   gitignore-to-glob@0.3.0: {}
 
@@ -11352,7 +11321,6 @@ snapshots:
   image-q@4.0.0:
     dependencies:
       '@types/node': 16.9.1
-    optional: true
 
   immediate@3.0.6: {}
 
@@ -11514,7 +11482,6 @@ snapshots:
       '@jimp/utils': 1.6.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   jiti@2.6.1: {}
 
@@ -11522,8 +11489,7 @@ snapshots:
 
   jose@6.2.2: {}
 
-  jpeg-js@0.4.4:
-    optional: true
+  jpeg-js@0.4.4: {}
 
   js-stringify@1.0.2: {}
 
@@ -11917,8 +11883,7 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
-  mime@3.0.0:
-    optional: true
+  mime@3.0.0: {}
 
   mimic-fn@2.1.0: {}
 
@@ -12134,8 +12099,7 @@ snapshots:
     dependencies:
       jwt-decode: 4.0.0
 
-  omggif@1.0.10:
-    optional: true
+  omggif@1.0.10: {}
 
   on-exit-leak-free@2.1.2: {}
 
@@ -12310,17 +12274,14 @@ snapshots:
 
   pako@2.1.0: {}
 
-  parse-bmfont-ascii@1.0.6:
-    optional: true
+  parse-bmfont-ascii@1.0.6: {}
 
-  parse-bmfont-binary@1.0.6:
-    optional: true
+  parse-bmfont-binary@1.0.6: {}
 
   parse-bmfont-xml@1.1.6:
     dependencies:
       xml-parse-from-string: 1.0.1
       xml2js: 0.5.0
-    optional: true
 
   parse-ms@3.0.0: {}
 
@@ -12396,7 +12357,6 @@ snapshots:
   pixelmatch@5.3.0:
     dependencies:
       pngjs: 6.0.0
-    optional: true
 
   pkce-challenge@5.0.1: {}
 
@@ -12408,8 +12368,7 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.2
 
-  pngjs@6.0.0:
-    optional: true
+  pngjs@6.0.0: {}
 
   pngjs@7.0.0: {}
 
@@ -12791,8 +12750,7 @@ snapshots:
   sandwich-stream@2.0.2:
     optional: true
 
-  sax@1.6.0:
-    optional: true
+  sax@1.6.0: {}
 
   saxes@6.0.0:
     dependencies:
@@ -12935,8 +12893,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  simple-xml-to-json@1.2.4:
-    optional: true
+  simple-xml-to-json@1.2.4: {}
 
   simple-yenc@1.0.4:
     optional: true
@@ -13182,8 +13139,7 @@ snapshots:
 
   tinybench@2.9.0: {}
 
-  tinycolor2@1.6.0:
-    optional: true
+  tinycolor2@1.6.0: {}
 
   tinyexec@1.0.4: {}
 
@@ -13353,7 +13309,6 @@ snapshots:
   utif2@4.1.0:
     dependencies:
       pako: 1.0.11
-    optional: true
 
   util-deprecate@1.0.2: {}
 
@@ -13494,17 +13449,14 @@ snapshots:
 
   xml-name-validator@5.0.0: {}
 
-  xml-parse-from-string@1.0.1:
-    optional: true
+  xml-parse-from-string@1.0.1: {}
 
   xml2js@0.5.0:
     dependencies:
       sax: 1.6.0
       xmlbuilder: 11.0.1
-    optional: true
 
-  xmlbuilder@11.0.1:
-    optional: true
+  xmlbuilder@11.0.1: {}
 
   xmlchars@2.2.0: {}
 
@@ -13565,8 +13517,7 @@ snapshots:
 
   zod@3.25.75: {}
 
-  zod@3.25.76:
-    optional: true
+  zod@3.25.76: {}
 
   zod@4.3.6: {}
 
