@@ -134,3 +134,12 @@ export type {
   PluginVideoDescriptionRequest,
   PluginTextToSpeechRequest,
 } from "../plugins/types.js";
+
+// Provider capability and embedding types
+export type {
+  ProviderCapability,
+  ProviderEmbedRequest,
+  ProviderEmbedResult,
+  ProviderEmbedBatchRequest,
+  ProviderEmbedBatchResult,
+} from "../plugins/types.js";
