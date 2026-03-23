@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildGoogleImageGenerationProvider } from "../../../extensions/google/image-generation-provider.js";
 import * as modelAuth from "../../agents/model-auth.js";
+import { buildGoogleImageGenerationProvider } from "../../../extensions/google/image-generation-provider.js";
 
 describe("Google image-generation provider", () => {
   afterEach(() => {
