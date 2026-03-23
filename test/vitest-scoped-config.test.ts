@@ -20,6 +20,13 @@ describe("createScopedVitestConfig", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"]);
     expect(config.test?.isolate).toBe(false);
   });
+
+  it("passes through a scoped root dir when provided", () => {
+    const config = createScopedVitestConfig(["src/example.test.ts"], {
+      dir: "src",
+    });
+    expect(config.test?.dir).toBe("src");
+  });
 });
 
 describe("scoped vitest configs", () => {
