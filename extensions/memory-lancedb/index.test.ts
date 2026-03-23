@@ -148,14 +148,7 @@ describe("memory plugin e2e", () => {
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => ({ limit }));
-
-    vi.resetModules();
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
-      },
-    }));
-    vi.doMock("@lancedb/lancedb", () => ({
+    const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
@@ -165,6 +158,16 @@ describe("memory plugin e2e", () => {
           delete: vi.fn(async () => undefined),
         })),
       })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
     }));
 
     try {
@@ -214,6 +217,7 @@ describe("memory plugin e2e", () => {
       }
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
+      expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
@@ -221,7 +225,7 @@ describe("memory plugin e2e", () => {
       });
     } finally {
       vi.doUnmock("openai");
-      vi.doUnmock("@lancedb/lancedb");
+      vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
   });
