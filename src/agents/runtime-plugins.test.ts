@@ -13,16 +13,16 @@ vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistryKey: hoisted.getActivePluginRegistryKey,
 }));
 
-const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
-
 describe("ensureRuntimePluginsLoaded", () => {
   beforeEach(() => {
     hoisted.loadOpenClawPlugins.mockReset();
     hoisted.getActivePluginRegistryKey.mockReset();
     hoisted.getActivePluginRegistryKey.mockReturnValue(null);
+    vi.resetModules();
   });
 
-  it("does not reactivate plugins when a process already has an active registry", () => {
+  it("does not reactivate plugins when a process already has an active registry", async () => {
+    const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
     hoisted.getActivePluginRegistryKey.mockReturnValue("gateway-registry");
 
     ensureRuntimePluginsLoaded({
@@ -34,7 +34,9 @@ describe("ensureRuntimePluginsLoaded", () => {
     expect(hoisted.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
-  it("loads runtime plugins when no active registry exists", () => {
+  it("loads runtime plugins when no active registry exists", async () => {
+    const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
+
     ensureRuntimePluginsLoaded({
       config: {} as never,
       workspaceDir: "/tmp/workspace",

@@ -2835,11 +2835,6 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
-            log.warn(
-              `[hooks][checkpoints] attempt llm_input runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("llm_input") === true}`,
-            );
-          }
           if (hookRunner?.hasHooks("llm_input")) {
             hookRunner
               .runLlmInput(
@@ -3112,11 +3107,6 @@ export async function runEmbeddedAttempt(
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
-        if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
-          log.warn(
-            `[hooks][checkpoints] attempt agent_end runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("agent_end") === true}`,
-          );
-        }
         if (hookRunner?.hasHooks("agent_end")) {
           hookRunner
             .runAgentEnd(
@@ -3176,11 +3166,6 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
-      if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
-        log.warn(
-          `[hooks][checkpoints] attempt llm_output runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("llm_output") === true}`,
-        );
-      }
       if (hookRunner?.hasHooks("llm_output")) {
         hookRunner
           .runLlmOutput(

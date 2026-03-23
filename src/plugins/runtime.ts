@@ -28,16 +28,6 @@ const state: RegistryState = (() => {
 })();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
-  if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
-    const stack = new Error().stack
-      ?.split("\n")
-      .slice(2, 5)
-      .map((line) => line.trim())
-      .join(" | ");
-    console.warn(
-      `[plugins][checkpoints] activate registry key=${cacheKey ?? "none"} plugins=${registry.plugins.length} typedHooks=${registry.typedHooks.length}${stack ? ` caller=${stack}` : ""}`,
-    );
-  }
   state.registry = registry;
   if (!state.httpRouteRegistryPinned) {
     state.httpRouteRegistry = registry;
