@@ -257,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/minimax-portal-auth/**"
+"extensions: hexaclaw":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/hexaclaw/**"
 "extensions: huggingface":
   - changed-files:
       - any-glob-to-any-file:

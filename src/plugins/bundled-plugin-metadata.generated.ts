@@ -1224,6 +1224,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "hexaclaw",
+    idHint: "hexaclaw",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/hexaclaw-provider",
+    packageVersion: "2026.3.23",
+    packageDescription: "OpenClaw HexaClaw provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "hexaclaw",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["hexaclaw"],
+      providerAuthEnvVars: {
+        hexaclaw: ["HEXACLAW_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "hexaclaw",
+          method: "api-key",
+          choiceId: "hexaclaw-api-key",
+          choiceLabel: "HexaClaw API key",
+          groupId: "hexaclaw",
+          groupLabel: "HexaClaw",
+          groupHint: "API key",
+          optionKey: "hexaclawApiKey",
+          cliFlag: "--hexaclaw-api-key",
+          cliOption: "--hexaclaw-api-key <key>",
+          cliDescription: "HexaClaw API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "huggingface",
     idHint: "huggingface",
     source: {

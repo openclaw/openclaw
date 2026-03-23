@@ -388,6 +388,8 @@ importers:
 
   extensions/groq: {}
 
+  extensions/hexaclaw: {}
+
   extensions/huggingface: {}
 
   extensions/imessage: {}

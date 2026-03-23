@@ -1,0 +1,27 @@
+{
+  "id": "hexaclaw",
+  "providers": ["hexaclaw"],
+  "providerAuthEnvVars": {
+    "hexaclaw": ["HEXACLAW_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "hexaclaw",
+      "method": "api-key",
+      "choiceId": "hexaclaw-api-key",
+      "choiceLabel": "HexaClaw API key",
+      "groupId": "hexaclaw",
+      "groupLabel": "HexaClaw",
+      "groupHint": "API key",
+      "optionKey": "hexaclawApiKey",
+      "cliFlag": "--hexaclaw-api-key",
+      "cliOption": "--hexaclaw-api-key <key>",
+      "cliDescription": "HexaClaw API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
