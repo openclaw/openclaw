@@ -71,11 +71,10 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
-
 ### OpenHer Persona Engine
 
 AI Being engine — not an assistant, not an agent, but a character that
-genuinely *feels*. Each persona runs a 13-step neural pipeline per message:
+genuinely _feels_. Each persona runs a 13-step neural pipeline per message:
 critic → drive metabolism → neural network (25D→24D→8D) → KNN memory →
 actor → Hebbian learning. Only 2 of 13 steps touch an LLM; the rest is
 local computation (~50ms). Personality **emerges** from drives × neural
