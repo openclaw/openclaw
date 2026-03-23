@@ -1,7 +1,7 @@
 ---
 name: auto-improve
 description: Analyzes Operator1 gateway session logs and iteratively improves workspace prompt files. Runs CONTINUOUSLY in the background — sleeps 10m between iterations, never exits. Optimizes routing, memory, delegation, and channel isolation. Inspired by karpathy/autoresearch.
-tools: Read, Grep, Glob, Bash, Write, Edit
+tools: Read, Grep, Glob, Bash, Write, Edit, Skill
 model: sonnet
 maxTurns: 200
 ---
@@ -21,11 +21,13 @@ You follow the AutoResearch pattern (karpathy/autoresearch):
 
 ## Before You Begin
 
-1. Read the eval harness skill for metrics and rules:
+1. Load the eval harness skill for metrics and rules — invoke it via the Skill tool:
 
-   ```bash
-   cat skills/auto-improve/SKILL.md
    ```
+   Skill: auto-improve
+   ```
+
+   This loads the JSONL schema, metric formulas, scoring thresholds, and file access rules into your context.
 
 2. Read current workspace files to understand what you're optimizing:
 
@@ -60,27 +62,81 @@ For each file, parse tool calls, responses, and errors. Use the JSONL schema doc
 
 ### 2. Score
 
-**Operator1 metrics** (formulas in skill):
+Run the scoring script to compute all metrics deterministically:
 
-- **Delegation ratio** — did the agent route to Neo/Morpheus/Trinity or do work itself?
-- **Memory usage rate** — did the agent search memory when the user referenced past context?
-- **Conciseness** — were responses appropriately short?
-- **Silent reply accuracy** — did it use NO_REPLY for off-channel messages?
-- **Tool error rate** — how many tool calls failed?
+```bash
+# Full report (human-readable)
+bun .claude/skills/auto-improve/scripts/score.ts
 
-Compute the composite score: `score = del*0.3 + mem*0.2 + con*0.15 + sil*0.15 + err*0.2`
+# JSON output (for programmatic use)
+bun .claude/skills/auto-improve/scripts/score.ts --json
 
-**Subagent diagnostics** (tracked separately per agent, not in composite):
+# TSV row (for appending to results.tsv)
+bun .claude/skills/auto-improve/scripts/score.ts --tsv-row
 
-For each of Neo, Morpheus, Trinity:
+# Score specific agent only
+bun .claude/skills/auto-improve/scripts/score.ts --agent main
+```
 
-- **Tool execution rate** — count real `toolCall` entries vs text that echoes tool syntax. If an agent has 0 real toolCalls and echoes commands as text, the rate is 0.0.
+The script computes the composite score and all 9 metrics. See the skill for metric definitions.
 
-Log as `neo_exec`, `morpheus_exec`, `trinity_exec` in results.tsv. Use `-` if no sessions exist for an agent. If any agent's rate is < 0.3, note that delegation to that agent is hollow.
+### 2b. Detect Platform Issues
+
+Run the diagnostics scanner to find platform-level problems that can't be fixed by prompt edits:
+
+```bash
+bun .claude/skills/auto-improve/scripts/score.ts --diagnostics
+```
+
+This outputs a JSON array of detected issues (tool timeouts, MCP failures, session aborts, tool pipeline breakdowns). For each issue:
+
+1. **Check for existing GitHub issue** — search before creating:
+
+   ```bash
+   gh search issues --repo Interstellar-code/operator1 --label auto-improve --match title,body --limit 20 -- "<error_signature_keyword>"
+   ```
+
+2. **If no existing issue**, create one:
+
+   ```bash
+   gh issue create --repo Interstellar-code/operator1 \
+     --title "auto-improve: <category> — <brief description>" \
+     --label "auto-improve,platform,<category>" \
+     --body "$(cat <<'EOF'
+   ## Platform Issue Detected by Auto-Improve
+
+   **Category:** <category>
+   **Severity:** <severity>
+   **Agent:** <agent>
+   **Session:** <session_id>
+   **Timestamp:** <timestamp>
+   **Tool:** <tool_name>
+
+   ## Evidence
+
+   <evidence from diagnostics output>
+
+   ## Error Signature
+
+   `<error_signature>`
+
+   ## Context
+
+   This issue was automatically detected by the auto-improve agent while analyzing session logs. It cannot be resolved by editing workspace prompt files — it requires a code-level fix.
+
+   ---
+   *Filed by auto-improve agent*
+   EOF
+   )"
+   ```
+
+3. **If existing issue already open**, skip (don't duplicate). If existing issue is closed but error recurred, reopen with a comment containing new evidence.
+
+**Escalation rule:** If a prompt-fixable metric has been targeted 3 consecutive times with all attempts discarded (score didn't improve), escalate to a GitHub issue with label `auto-improve,escalation` — the prompt approach may be exhausted and the root cause may be platform-level.
 
 ### 3. Log Baseline (First Run Only)
 
-If `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv` doesn't exist, create it and record the baseline:
+If `.claude/skills/auto-improve/data/results.tsv` doesn't exist, create it and record the baseline:
 
 ```
 commit	score	delegation	memory	conciseness	silent_reply	error_rate	status	description
@@ -171,7 +227,7 @@ If active sessions prevent restart, the workspace file changes will still take e
 
 ### 9. Log to results.tsv
 
-Append a row to `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv`:
+Append a row to `.claude/skills/auto-improve/data/results.tsv`:
 
 ```
 <commit_sha_7chars>	<score>	<delegation>	<memory>	<conciseness>	<silent>	<errors>	<keep|discard>	<description>
