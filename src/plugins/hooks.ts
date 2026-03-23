@@ -138,23 +138,30 @@ export type HookFailurePolicy = "fail-open" | "fail-closed";
 const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Hooks exempt from the per-handler timeout.  Two categories:
+ * Dedicated timeout for memory-critical hooks (before_agent_start, agent_end).
+ * These drive memory recall and auto-capture in memory-lancedb, which performs
+ * embed() calls with upstream budgets of 60 s remote / 5 min local.  Most
+ * calls are remote and complete in under 60 s; 2 minutes provides sufficient
+ * headroom while still protecting against genuinely hung handlers.
+ */
+const MEMORY_HOOK_TIMEOUT_MS = 120_000;
+
+/** Hooks that use `MEMORY_HOOK_TIMEOUT_MS` instead of the configured timeout. */
+const MEMORY_HOOK_NAMES: ReadonlySet<PluginHookName> = new Set([
+  "before_agent_start",
+  "agent_end",
+]);
+
+/**
+ * Hooks exempt from the per-handler timeout.
  *
- * 1. Security/policy gates (message_sending, before_tool_call) — must never
- *    be silently skipped because `handleHookError` would swallow the error
- *    and allow the action through (fail-open).
- *
- * 2. Memory-critical hooks (before_agent_start, agent_end) — these drive
- *    memory recall and auto-capture in memory-lancedb, which performs
- *    embed() calls with their own upstream timeout budgets (60 s remote /
- *    5 min local).  The generic 30 s hook timeout would silently drop
- *    memory operations that are well within the system's normal budget.
+ * Security/policy gates (message_sending, before_tool_call) — must never
+ * be silently skipped because `handleHookError` would swallow the error
+ * and allow the action through (fail-open).
  */
 const TIMEOUT_EXEMPT_HOOKS: ReadonlySet<PluginHookName> = new Set([
   "message_sending",
   "before_tool_call",
-  "before_agent_start",
-  "agent_end",
 ]);
 
 export type HookRunnerOptions = {
@@ -262,7 +269,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     if (!hookTimeoutMs || TIMEOUT_EXEMPT_HOOKS.has(hookName)) {
       return fn();
     }
-    return withTimeout(() => fn(), hookTimeoutMs, `${hookName} handler from ${pluginId}`);
+    const effectiveTimeout = MEMORY_HOOK_NAMES.has(hookName) ? MEMORY_HOOK_TIMEOUT_MS : hookTimeoutMs;
+    return withTimeout(() => fn(), effectiveTimeout, `${hookName} handler from ${pluginId}`);
   }
 
   const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;

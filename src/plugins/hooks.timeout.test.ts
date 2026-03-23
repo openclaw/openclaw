@@ -362,16 +362,16 @@ describe("hook handler timeout", () => {
     expect(result?.blockReason).toBe("denied");
   });
 
-  // -- Memory-critical hooks --
+  // -- Memory-critical hooks (dedicated 2-minute timeout) --
 
-  it("does not timeout before_agent_start hooks (memory recall)", async () => {
+  it("allows before_agent_start handlers up to the memory timeout (120 s)", async () => {
     addTestHook({
       registry,
       pluginId: "memory-recall-plugin",
       hookName: "before_agent_start",
       handler: (() =>
         new Promise((resolve) => {
-          // Simulates a slow remote embedding recall (~45 s, within the 60 s budget)
+          // Simulates a slow remote embedding recall (~45 s, within the 120 s budget)
           setTimeout(() => resolve({ prependContext: "recalled memories" }), 45_000);
         })) as PluginHookRegistration["handler"],
     });
@@ -384,7 +384,37 @@ describe("hook handler timeout", () => {
     expect(result?.prependContext).toBe("recalled memories");
   });
 
-  it("does not timeout agent_end hooks (memory auto-capture)", async () => {
+  it("times out before_agent_start hooks that exceed the memory timeout", async () => {
+    const errors: string[] = [];
+
+    addTestHook({
+      registry,
+      pluginId: "hung-memory-plugin",
+      hookName: "before_agent_start",
+      handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, {
+      hookTimeoutMs: 100,
+      catchErrors: true,
+      logger: {
+        debug: () => {},
+        warn: (msg) => errors.push(msg),
+        error: (msg) => errors.push(msg),
+      },
+    });
+
+    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    // Advance past the 120 s memory timeout
+    await vi.advanceTimersByTimeAsync(121_000);
+
+    const result = await promise;
+    expect(result).toBeUndefined();
+    expect(errors.some((e) => e.includes("hung-memory-plugin"))).toBe(true);
+    expect(errors.some((e) => e.includes("timed out"))).toBe(true);
+  });
+
+  it("allows agent_end handlers up to the memory timeout (120 s)", async () => {
     let captureCompleted = false;
 
     addTestHook({
@@ -393,7 +423,7 @@ describe("hook handler timeout", () => {
       hookName: "agent_end",
       handler: (() =>
         new Promise<void>((resolve) => {
-          // Simulates sequential embed() calls exceeding the generic 30 s timeout
+          // Simulates sequential embed() calls within the 120 s budget
           setTimeout(() => {
             captureCompleted = true;
             resolve();
@@ -407,5 +437,34 @@ describe("hook handler timeout", () => {
     await promise;
 
     expect(captureCompleted).toBe(true);
+  });
+
+  it("times out agent_end hooks that exceed the memory timeout", async () => {
+    const errors: string[] = [];
+
+    addTestHook({
+      registry,
+      pluginId: "hung-capture-plugin",
+      hookName: "agent_end",
+      handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, {
+      hookTimeoutMs: 100,
+      catchErrors: true,
+      logger: {
+        debug: () => {},
+        warn: (msg) => errors.push(msg),
+        error: (msg) => errors.push(msg),
+      },
+    });
+
+    const promise = runner.runAgentEnd({ messages: [], success: true }, stubCtx);
+    // Advance past the 120 s memory timeout
+    await vi.advanceTimersByTimeAsync(121_000);
+    await promise;
+
+    expect(errors.some((e) => e.includes("hung-capture-plugin"))).toBe(true);
+    expect(errors.some((e) => e.includes("timed out"))).toBe(true);
   });
 });
