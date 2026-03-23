@@ -1,11 +1,11 @@
 import { vi } from "vitest";
 
 export function createFeishuClientMockModule(): {
-  createFeishuWSClient: () => { start: () => void };
+  createFeishuWSClient: () => { start: () => void; close: () => void };
   createEventDispatcher: () => { register: () => void };
 } {
   return {
-    createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
+    createFeishuWSClient: vi.fn(() => ({ start: vi.fn(), close: vi.fn() })),
     createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
   };
 }
