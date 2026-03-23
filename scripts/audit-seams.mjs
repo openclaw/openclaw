@@ -607,7 +607,10 @@ function findRelatedTests(relativePath, testIndex) {
   const byFile = new Map();
   for (const match of matches) {
     const existing = byFile.get(match.file);
-    if (!existing || matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)) {
+    if (
+      !existing ||
+      matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)
+    ) {
       byFile.set(match.file, match);
     }
   }
@@ -636,14 +639,12 @@ function determineSeamTestStatus(seamKinds, relatedTestMatches) {
   ) {
     return {
       status: "partial",
-      reason:
-        `Nearby tests exist (best match: ${bestMatch}), but this inventory does not prove cross-layer seam coverage end to end.`,
+      reason: `Nearby tests exist (best match: ${bestMatch}), but this inventory does not prove cross-layer seam coverage end to end.`,
     };
   }
   return {
     status: "heuristic-nearby",
-    reason:
-      `Nearby tests exist (best match: ${bestMatch}), but this remains a filename/path heuristic rather than proof of seam assertions.`,
+    reason: `Nearby tests exist (best match: ${bestMatch}), but this remains a filename/path heuristic rather than proof of seam assertions.`,
   };
 }
 
