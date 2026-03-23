@@ -110,15 +110,15 @@ After each phase merge, verify:
 
 ### Task 1: Phase 1 -- Bug Fixes (Safety First)
 
-**Status:** To-do | **Priority:** Critical | **Assignee:** rohit sharma | **Est:** 4h
+**Status:** Done | **Priority:** Critical | **Assignee:** rohit sharma | **Est:** 4h
 
 Production crash guards and heartbeat reliability fixes. Zero new features -- pure hardening.
 
-- [ ] 1.1 os.userInfo() crash guard -- add try-catch fallback in `src/infra/home.ts` for Docker/CI containers where UID has no passwd entry
-- [ ] 1.2 AGENT_HOME env var injection -- audit agent subprocess launch in heartbeat runner; add `AGENT_HOME` to env so subagents write state to correct directory
-- [ ] 1.3 Heartbeat process_lost guard -- port Paperclip's fix to prevent false `process_lost` failures on queued/non-child heartbeat runs in `src/infra/team-runner.ts`
-- [ ] 1.4 dotenv cwd fallback -- confirm `.env` load is hardened when `~/.openclaw/.env` is missing; apply Paperclip's fallback pattern if not
-- [ ] 1.5 archivedAt type coercion -- audit `op1_projects` update path for string vs INTEGER timestamp coercion on archive
+- [x] 1.1 os.userInfo() crash guard -- add try-catch fallback in `src/infra/home.ts` for Docker/CI containers where UID has no passwd entry
+- [x] 1.2 AGENT_HOME env var injection -- audit agent subprocess launch in heartbeat runner; add `AGENT_HOME` to env so subagents write state to correct directory
+- [x] 1.3 Heartbeat process_lost guard -- port Paperclip's fix to prevent false `process_lost` failures on queued/non-child heartbeat runs in `src/infra/team-runner.ts`
+- [x] 1.4 dotenv cwd fallback -- ALREADY HARDENED: `src/infra/dotenv.ts` checks `fs.existsSync` before loading global .env; uses `override: false` to prevent double-application
+- [x] 1.5 archivedAt type coercion -- NOT APPLICABLE: `op1_projects` has no `archivedAt` column; archive() only sets `status = "archived"`; no string/integer coercion issue
 
 ### Task 2: Phase 2 -- Pi Adapter Tool Result Fixes
 

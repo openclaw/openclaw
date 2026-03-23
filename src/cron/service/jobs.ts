@@ -369,12 +369,23 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
 
   const runningAt = job.state.runningAtMs;
   if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
-    state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
-      "cron: clearing stuck running marker",
-    );
-    job.state.runningAtMs = undefined;
-    changed = true;
+    // Only clear if this job is not actively executing in this process instance.
+    // A long-running job (> STUCK_RUN_MS) should not be double-executed because
+    // a concurrent locked() operation (e.g. a manual cron.run RPC) runs the
+    // stuck-marker reaper and clears its runningAtMs mid-execution.
+    if (state.activeJobExecutions?.has(job.id)) {
+      state.deps.log.debug(
+        { jobId: job.id, runningAtMs: runningAt },
+        "cron: skipping stuck-marker clear for actively-executing job",
+      );
+    } else {
+      state.deps.log.warn(
+        { jobId: job.id, runningAtMs: runningAt },
+        "cron: clearing stuck running marker",
+      );
+      job.state.runningAtMs = undefined;
+      changed = true;
+    }
   }
 
   return { changed, skip: false };

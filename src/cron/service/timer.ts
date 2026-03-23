@@ -631,6 +631,10 @@ export async function onTimer(state: CronServiceState) {
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
+      // Register as actively executing so the stuck-marker reaper (triggered by
+      // concurrent locked() operations like manual cron.run RPCs) does not clear
+      // runningAtMs mid-flight and cause a duplicate execution for long-running jobs.
+      state.activeJobExecutions.add(id);
       try {
         const result = await executeJobCoreWithTimeout(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
@@ -647,6 +651,8 @@ export async function onTimer(state: CronServiceState) {
           startedAt,
           endedAt: state.deps.nowMs(),
         };
+      } finally {
+        state.activeJobExecutions.delete(id);
       }
     };
 

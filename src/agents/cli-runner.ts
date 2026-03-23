@@ -69,6 +69,8 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  /** Agent home directory; injected as AGENT_HOME so subagent skills resolve paths correctly. */
+  agentDir?: string;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -289,6 +291,11 @@ export async function runCliAgent(params: {
           const next = { ...process.env, ...backend.env };
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
+          }
+          // Propagate agent home directory so subagent skills can resolve
+          // paths like HEARTBEAT.md relative to their workspace.
+          if (params.agentDir) {
+            next.AGENT_HOME = params.agentDir;
           }
           return next;
         })();

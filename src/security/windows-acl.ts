@@ -71,7 +71,15 @@ function normalizeSid(value: string): string {
 }
 
 export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
-  const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
+  let systemUsername: string | undefined;
+  try {
+    // os.userInfo() throws a SystemError when the current UID has no
+    // /etc/passwd entry (e.g. `docker run --user 1234` with a minimal image).
+    systemUsername = os.userInfo().username?.trim() || undefined;
+  } catch {
+    // fall through; systemUsername stays undefined
+  }
+  const username = env?.USERNAME?.trim() || systemUsername;
   if (!username) {
     return null;
   }

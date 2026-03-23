@@ -587,6 +587,7 @@ export async function runCronIsolatedAgentTurn(params: {
               agentId,
               sessionFile,
               workspaceDir,
+              agentDir,
               config: cfgWithAgentDefaults,
               prompt: promptText,
               provider: providerOverride,

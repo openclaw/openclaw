@@ -363,6 +363,7 @@ function runAgentAttempt(params: {
         agentId: params.sessionAgentId,
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
         config: params.cfg,
         prompt: effectivePrompt,
         provider: params.providerOverride,

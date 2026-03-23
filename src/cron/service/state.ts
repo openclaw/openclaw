@@ -127,6 +127,13 @@ export type CronServiceState = {
   warnedDisabled: boolean;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
+  /**
+   * Set of job IDs actively executing in this process instance.
+   * Used by normalizeJobTickState to prevent the stuck-marker reaper from
+   * clearing runningAtMs for jobs that are currently running here, which
+   * would cause duplicate executions for long-running jobs (> STUCK_RUN_MS).
+   */
+  activeJobExecutions: Set<string>;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -139,6 +146,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     warnedDisabled: false,
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
+    activeJobExecutions: new Set(),
   };
 }
 

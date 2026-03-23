@@ -230,6 +230,7 @@ export async function runAgentTurnWithFallback(params: {
                   agentId: params.followupRun.run.agentId,
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
+                  agentDir: params.followupRun.run.agentDir,
                   config: params.followupRun.run.config,
                   prompt: params.commandBody,
                   provider,
