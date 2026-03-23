@@ -263,9 +263,12 @@ function buildInboundReplayKey(params: {
 }): string | undefined {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
-  if (!messageId) {
+  const associatedMessageGuid = message.associatedMessageGuid?.trim();
+  const stableIdentity = messageId || associatedMessageGuid;
+  if (!stableIdentity) {
     return undefined;
   }
+  const stableIdentityKind = messageId ? "msg" : "assoc";
 
   const chatKey =
     message.chatGuid?.trim() ??
@@ -281,7 +284,6 @@ function buildInboundReplayKey(params: {
     typeof message.dateEdited === "number" && Number.isFinite(message.dateEdited)
       ? String(message.dateEdited)
       : "";
-  const associatedMessageGuid = message.associatedMessageGuid?.trim() ?? "";
   const associatedMessageType =
     typeof message.associatedMessageType === "number" &&
     Number.isFinite(message.associatedMessageType)
@@ -299,10 +301,11 @@ function buildInboundReplayKey(params: {
     target.account.accountId,
     message.senderId,
     chatKey,
-    messageId,
+    stableIdentityKind,
+    stableIdentity,
     itemType,
     dateEdited,
-    associatedMessageGuid,
+    associatedMessageGuid ?? "",
     associatedMessageType,
     replyToId,
     replyToSenderFingerprint,
@@ -319,16 +322,26 @@ function buildInboundReplayScopeKey(params: {
 }): string | undefined {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
-  if (!messageId) {
+  const associatedMessageGuid = message.associatedMessageGuid?.trim();
+  const stableIdentity = messageId || associatedMessageGuid;
+  if (!stableIdentity) {
     return undefined;
   }
+  const stableIdentityKind = messageId ? "msg" : "assoc";
   const chatKey =
     message.chatGuid?.trim() ??
     message.chatIdentifier?.trim() ??
     (typeof message.chatId === "number" && Number.isFinite(message.chatId)
       ? String(message.chatId)
       : "");
-  return ["bluebubbles", target.account.accountId, message.senderId, chatKey, messageId].join("|");
+  return [
+    "bluebubbles",
+    target.account.accountId,
+    message.senderId,
+    chatKey,
+    stableIdentityKind,
+    stableIdentity,
+  ].join("|");
 }
 
 function pruneRecentInboundWebhookReplayScopes(now: number): void {

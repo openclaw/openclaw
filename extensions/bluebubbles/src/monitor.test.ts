@@ -1246,6 +1246,51 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     });
 
+    it("processes associated-guid-only updated-message retries once", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const sender = "+15551234567";
+      const associatedMessageGuid = "assoc-only-replay-1";
+
+      const payload = {
+        type: "updated-message",
+        data: {
+          text: "Edited body",
+          handle: { address: sender },
+          isGroup: false,
+          isFromMe: false,
+          associatedMessageGuid,
+          dateEdited: Date.now(),
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", payload),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", payload),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
     it("does not mark replay as seen when enqueue fails", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};

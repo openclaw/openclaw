@@ -137,8 +137,41 @@ export function createBlueBubblesDebounceRegistry(params: {
   processMessage: (message: NormalizedWebhookMessage, target: WebhookTarget) => Promise<void>;
 }): BlueBubblesDebounceRegistry {
   const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
+  const stableUpdatedMessageTails = new Map<string, Promise<void>>();
+  const resolveStableUpdatedMessageIdentity = (message: NormalizedWebhookMessage) => {
+    const messageId = message.messageId?.trim();
+    if (messageId) {
+      return `msg:${messageId}`;
+    }
+    const associatedMessageGuid = message.associatedMessageGuid?.trim();
+    if (associatedMessageGuid) {
+      return `assoc:${associatedMessageGuid}`;
+    }
+    return undefined;
+  };
   const hasStableUpdatedMessageIdentity = (message: NormalizedWebhookMessage): boolean =>
-    Boolean(message.messageId?.trim() || message.associatedMessageGuid?.trim());
+    Boolean(resolveStableUpdatedMessageIdentity(message));
+  const serializeStableUpdatedMessage = async (
+    serialKey: string,
+    task: () => Promise<void>,
+  ): Promise<void> => {
+    const previous = stableUpdatedMessageTails.get(serialKey) ?? Promise.resolve();
+    let releaseCurrentTail: (() => void) | undefined;
+    const currentMarker = new Promise<void>((resolve) => {
+      releaseCurrentTail = resolve;
+    });
+    const currentTail = previous.catch(() => undefined).then(() => currentMarker);
+    stableUpdatedMessageTails.set(serialKey, currentTail);
+    try {
+      await previous.catch(() => undefined);
+      await task();
+    } finally {
+      releaseCurrentTail?.();
+      if (stableUpdatedMessageTails.get(serialKey) === currentTail) {
+        stableUpdatedMessageTails.delete(serialKey);
+      }
+    }
+  };
   const settleReplayLifecycle = (
     entries: BlueBubblesDebounceEntry[],
     result: "success" | "failure",
@@ -260,18 +293,29 @@ export function createBlueBubblesDebounceRegistry(params: {
 
       const wrappedDebouncer: BlueBubblesDebouncer = {
         enqueue: async (entry) => {
-          if (
-            entry.eventType === "updated-message" &&
-            hasStableUpdatedMessageIdentity(entry.message)
-          ) {
-            const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
-            if (associatedMessageGuid) {
-              await debouncer.flushKey(
-                `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
-              );
+          const stableIdentity =
+            entry.eventType === "updated-message"
+              ? resolveStableUpdatedMessageIdentity(entry.message)
+              : undefined;
+          const runEnqueue = async () => {
+            if (stableIdentity) {
+              const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
+              if (associatedMessageGuid) {
+                await debouncer.flushKey(
+                  `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
+                );
+              }
             }
+            await debouncer.enqueue(entry);
+          };
+          if (!stableIdentity) {
+            await runEnqueue();
+            return;
           }
-          await debouncer.enqueue(entry);
+          await serializeStableUpdatedMessage(
+            `bluebubbles:${account.accountId}:${stableIdentity}`,
+            runEnqueue,
+          );
         },
         flushKey: (key) => debouncer.flushKey(key),
       };
