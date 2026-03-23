@@ -1,16 +1,15 @@
-import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
 import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
 import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
-import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
-import { getApiKeyForModel } from "../agents/model-auth.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
+
+let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -128,7 +127,8 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 }
 
 describe("tts", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ completeSimple } = await import("@mariozechner/pi-ai"));
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
       { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
@@ -391,10 +391,10 @@ describe("tts", () => {
   describe("summarizeText", () => {
     let summarizeTextForTest: typeof summarizeText;
     let resolveTtsConfigForTest: typeof resolveTtsConfig;
-    let completeSimpleForTest: typeof completeSimple;
-    let getApiKeyForModelForTest: typeof getApiKeyForModel;
-    let resolveModelAsyncForTest: typeof resolveModelAsync;
-    let ensureCustomApiRegisteredForTest: typeof ensureCustomApiRegistered;
+    let completeSimpleForTest: typeof import("@mariozechner/pi-ai").completeSimple;
+    let getApiKeyForModelForTest: typeof import("../agents/model-auth.js").getApiKeyForModel;
+    let resolveModelAsyncForTest: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
+    let ensureCustomApiRegisteredForTest: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
 
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
