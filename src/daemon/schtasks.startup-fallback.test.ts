@@ -60,6 +60,7 @@ function expectStartupFallbackSpawn(env: Record<string, string>) {
 }
 
 function expectGatewayTermination(pid: number) {
+  // Windows cleanup shells out to taskkill.exe directly; non-Windows uses killProcessTree.
   if (process.platform === "win32") {
     expect(killProcessTree).not.toHaveBeenCalled();
     return;

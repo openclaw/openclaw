@@ -2,6 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "./home-dir.js";
 
+const DEFAULT_WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".com"];
+
+function getWindowsExecutableExtensions(env: NodeJS.ProcessEnv | undefined): string[] {
+  const raw =
+    env?.PATHEXT ??
+    env?.Pathext ??
+    process.env.PATHEXT ??
+    process.env.Pathext ??
+    DEFAULT_WINDOWS_EXECUTABLE_EXTENSIONS.join(";");
+  const extensions = raw
+    .split(";")
+    .map((ext) => ext.trim().toLowerCase())
+    .filter(Boolean);
+  return extensions.length > 0 ? extensions : DEFAULT_WINDOWS_EXECUTABLE_EXTENSIONS;
+}
+
 function resolveWindowsExecutableExtensions(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
@@ -12,47 +28,17 @@ function resolveWindowsExecutableExtensions(
   if (path.extname(executable).length > 0) {
     return [""];
   }
-  return [
-    "",
-    ...(
-      env?.PATHEXT ??
-      env?.Pathext ??
-      process.env.PATHEXT ??
-      process.env.Pathext ??
-      ".EXE;.CMD;.BAT;.COM"
-    )
-      .split(";")
-      .map((ext) => ext.toLowerCase()),
-  ];
+  return getWindowsExecutableExtensions(env);
 }
 
-function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set<string> {
-  return new Set(
-    (
-      env?.PATHEXT ??
-      env?.Pathext ??
-      process.env.PATHEXT ??
-      process.env.Pathext ??
-      ".EXE;.CMD;.BAT;.COM"
-    )
-      .split(";")
-      .map((ext) => ext.toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-export function isExecutableFile(filePath: string): boolean {
+export function isExecutableFile(filePath: string, env?: NodeJS.ProcessEnv): boolean {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) {
       return false;
     }
     if (process.platform === "win32") {
-      const ext = path.extname(filePath).toLowerCase();
-      if (!ext) {
-        return true;
-      }
-      return resolveWindowsExecutableExtSet(undefined).has(ext);
+      return getWindowsExecutableExtensions(env).includes(path.extname(filePath).toLowerCase());
     }
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
@@ -71,7 +57,7 @@ export function resolveExecutableFromPathEnv(
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
-      if (isExecutableFile(candidate)) {
+      if (isExecutableFile(candidate, env)) {
         return candidate;
       }
     }
@@ -88,11 +74,11 @@ export function resolveExecutablePath(
     : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
-      return isExecutableFile(expanded) ? expanded : undefined;
+      return isExecutableFile(expanded, options?.env) ? expanded : undefined;
     }
     const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
     const candidate = path.resolve(base, expanded);
-    return isExecutableFile(candidate) ? candidate : undefined;
+    return isExecutableFile(candidate, options?.env) ? candidate : undefined;
   }
   const envPath =
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";

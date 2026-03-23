@@ -10,17 +10,18 @@ import path from "node:path";
  */
 export async function resolveStableNodePath(nodePath: string): Promise<string> {
   const cellarMatch = nodePath.match(
-    /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node$/,
+    /^(.+?)[\\/]+Cellar[\\/]+([^\\/]+)[\\/]+[^\\/]+[\\/]+bin[\\/]+(node(?:\.exe)?)$/i,
   );
   if (!cellarMatch) {
     return nodePath;
   }
   const prefix = cellarMatch[1]; // e.g. /opt/homebrew
   const formula = cellarMatch[2]; // e.g. "node" or "node@22"
+  const binaryName = cellarMatch[3] ?? "node";
   const pathModule = nodePath.includes("\\") ? path.win32 : path.posix;
 
   // Try the Homebrew opt symlink first — works for both default and versioned formulas.
-  const optPath = pathModule.join(prefix, "opt", formula, "bin", "node");
+  const optPath = pathModule.join(prefix, "opt", formula, "bin", binaryName);
   try {
     await fs.access(optPath);
     return optPath;
@@ -30,7 +31,7 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
 
   // For the default "node" formula, also try the direct bin symlink.
   if (formula === "node") {
-    const binPath = pathModule.join(prefix, "bin", "node");
+    const binPath = pathModule.join(prefix, "bin", binaryName);
     try {
       await fs.access(binPath);
       return binPath;

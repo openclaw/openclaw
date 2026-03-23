@@ -95,7 +95,7 @@ export function expandHomePrefix(
   if (!home) {
     return input;
   }
-  return input.replace(/^~(?=$|[\\/])/, home);
+  return path.resolve(input.replace(/^~(?=$|[\\/])/, home));
 }
 
 export function resolveHomeRelativePath(
