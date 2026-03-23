@@ -1,5 +1,5 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
@@ -25,6 +25,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
+  readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
@@ -52,9 +53,11 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
-    () => [],
-  );
+  const storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+    "telegram",
+    process.env,
+    accountId,
+  ).catch(() => []);
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,

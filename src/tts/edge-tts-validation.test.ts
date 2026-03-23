@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { edgeTTS } from "./tts-core.js";
 
 let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
 
@@ -12,10 +13,6 @@ vi.mock("node-edge-tts", () => ({
     }
   },
 }));
-
-type TtsCoreModule = typeof import("./tts-core.js");
-
-let edgeTTS: TtsCoreModule["edgeTTS"];
 
 const baseEdgeConfig = {
   enabled: true,
@@ -28,11 +25,6 @@ const baseEdgeConfig = {
 
 describe("edgeTTS – empty audio validation", () => {
   let tempDir: string;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ edgeTTS } = await import("./tts-core.js"));
-  });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });

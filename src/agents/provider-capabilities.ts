@@ -5,6 +5,7 @@ import { normalizeProviderId } from "./model-selection.js";
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
   anthropicToolChoiceMode: "native" | "openai-string-modes";
+  openAiPayloadNormalizationMode: "default" | "moonshot-thinking";
   providerFamily: "default" | "openai" | "anthropic";
   preserveAnthropicThinkingSignatures: boolean;
   openAiCompatTurnValidation: boolean;
@@ -24,6 +25,7 @@ export type ProviderCapabilityLookupOptions = {
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   anthropicToolSchemaMode: "native",
   anthropicToolChoiceMode: "native",
+  openAiPayloadNormalizationMode: "default",
   providerFamily: "default",
   preserveAnthropicThinkingSignatures: true,
   openAiCompatTurnValidation: true,
@@ -35,6 +37,10 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 };
 
 const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
   "amazon-bedrock": {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
@@ -57,6 +63,9 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "ministral",
       "mistralai",
     ],
+  },
+  moonshot: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
   },
   opencode: {
     openAiCompatTurnValidation: false,
@@ -134,6 +143,16 @@ export function supportsOpenAiCompatTurnValidation(
   options?: ProviderCapabilityLookupOptions,
 ): boolean {
   return resolveProviderCapabilities(provider, options).openAiCompatTurnValidation;
+}
+
+export function usesMoonshotThinkingPayloadCompat(
+  provider?: string | null,
+  options?: ProviderCapabilityLookupOptions,
+): boolean {
+  return (
+    resolveProviderCapabilities(provider, options).openAiPayloadNormalizationMode ===
+    "moonshot-thinking"
+  );
 }
 
 export function sanitizesGeminiThoughtSignatures(

@@ -52,6 +52,13 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+- Scheduler note:
+  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
+  - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
+  - The shared extension lane still defaults to `threads`; the wrapper keeps explicit fork-only exceptions in `test/fixtures/test-parallel.behavior.json` when a file cannot safely share a non-isolated worker.
+  - The channel suite (`vitest.channels.config.ts`) now also defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
+  - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -64,9 +71,24 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
-  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
-  - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
+  - Base Vitest config still defaults to `forks`.
+  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
+  - Extension scoped config defaults to `threads`.
+  - Channel scoped config defaults to `threads`.
+  - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
+  - `pnpm test` also passes `--isolate=false` at the wrapper level.
+  - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
+  - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
+- Fast-local iteration note:
+  - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
+  - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
+  - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
+  - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
+- Perf-debug note:
+  - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
+  - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.
+  - `pnpm test:perf:profile:main` writes a main-thread CPU profile for Vitest/Vite startup and transform overhead.
+  - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the unit suite with file parallelism disabled.
 
 ### E2E (gateway smoke)
 
@@ -74,8 +96,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
-  - Uses Vitest `vmForks` for faster file startup.
-  - Uses adaptive workers (CI: 2-4, local: 4-8).
+  - Uses Vitest `forks` for deterministic cross-file isolation.
+  - Uses adaptive workers (CI: up to 2, local: 1 by default).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
   - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
@@ -120,6 +142,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Prefer running narrowed subsets instead of “everything”
   - Live runs will source `~/.profile` to pick up missing API keys
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
+- Progress/heartbeat output:
+  - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
+  - `vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
+  - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
+  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ## Which suite should I run?
 
@@ -176,7 +203,7 @@ Live tests are split into two layers so we can isolate failures:
   - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
-### Layer 2: Gateway + dev agent smoke (what “@openclaw” actually does)
+### Layer 2: Gateway + dev agent smoke (what "@openclaw" actually does)
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Goal:
@@ -304,7 +331,7 @@ This is the “common models” run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
 - OpenAI Codex: `openai-codex/gpt-5.4`
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
@@ -318,7 +345,7 @@ Run gateway smoke with tools + image:
 Pick at least one per provider family:
 
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`
@@ -395,7 +422,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
-## Docker runners (optional “works in Linux” checks)
+## Docker runners (optional "works in Linux" checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
@@ -456,6 +483,55 @@ Future evals should stay deterministic first:
 - A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
 - A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
 - Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
+
+## Contract tests (plugin and channel shape)
+
+Contract tests verify that every registered plugin and channel conforms to its
+interface contract. They iterate over all discovered plugins and run a suite of
+shape and behavior assertions.
+
+### Commands
+
+- All contracts: `pnpm test:contracts`
+- Channel contracts only: `pnpm test:contracts:channels`
+- Provider contracts only: `pnpm test:contracts:plugins`
+
+### Channel contracts
+
+Located in `src/channels/plugins/contracts/*.contract.test.ts`:
+
+- **plugin** - Basic plugin shape (id, name, capabilities)
+- **setup** - Setup wizard contract
+- **session-binding** - Session binding behavior
+- **outbound-payload** - Message payload structure
+- **inbound** - Inbound message handling
+- **actions** - Channel action handlers
+- **threading** - Thread ID handling
+- **directory** - Directory/roster API
+- **group-policy** - Group policy enforcement
+- **status** - Channel status probes
+- **registry** - Plugin registry shape
+
+### Provider contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`:
+
+- **auth** - Auth flow contract
+- **auth-choice** - Auth choice/selection
+- **catalog** - Model catalog API
+- **discovery** - Plugin discovery
+- **loader** - Plugin loading
+- **runtime** - Provider runtime
+- **shape** - Plugin shape/interface
+- **wizard** - Setup wizard
+
+### When to run
+
+- After changing plugin-sdk exports or subpaths
+- After adding or modifying a channel or provider plugin
+- After refactoring plugin registration or discovery
+
+Contract tests run in CI and do not require real API keys.
 
 ## Adding regressions (guidance)
 

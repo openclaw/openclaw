@@ -6,6 +6,15 @@ function normalizeConversationId(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function resolveExplicitConversationTargetId(target: string): string | undefined {
+  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
+    if (target.toLowerCase().startsWith(prefix)) {
+      return normalizeConversationId(target.slice(prefix.length));
+    }
+  }
+  return undefined;
+}
+
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
@@ -21,11 +30,11 @@ export function resolveConversationIdFromTargets(params: {
     if (!target) {
       continue;
     }
-    if (target.startsWith("channel:")) {
-      const channelId = normalizeConversationId(target.slice("channel:".length));
-      if (channelId) {
-        return channelId;
-      }
+    const explicitConversationId = resolveExplicitConversationTargetId(target);
+    if (explicitConversationId) {
+      return explicitConversationId;
+    }
+    if (target.includes(":") && explicitConversationId === undefined) {
       continue;
     }
     const mentionMatch = target.match(/^<#(\d+)>$/);

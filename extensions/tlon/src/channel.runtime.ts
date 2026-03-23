@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
-import { configureClient } from "@tloncorp/api";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import type {
-  ChannelAccountSnapshot,
-  ChannelOutboundAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
@@ -16,6 +12,7 @@ import {
   parseTlonTarget,
   resolveTlonOutboundTarget,
 } from "./targets.js";
+import { configureClient } from "./tlon-api.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
@@ -170,6 +167,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
       shipName: account.ship.replace(/^~/, ""),
       verbose: false,
       getCode: async () => account.code,
+      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
     });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;

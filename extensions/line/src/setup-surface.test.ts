@@ -1,32 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/line";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import {
-  listLineAccountIds,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../../src/line/accounts.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import {
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
-import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
+import type { OpenClawConfig } from "../api.js";
+import { linePlugin } from "./channel.js";
 
-const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: {
-    id: "line",
-    meta: { label: "LINE" },
-    config: {
-      listAccountIds: listLineAccountIds,
-      defaultAccountId: resolveDefaultLineAccountId,
-      resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-        resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom,
-    },
-    setup: lineSetupAdapter,
-  } as Parameters<typeof buildChannelSetupWizardAdapterFromSetupWizard>[0]["plugin"],
-  wizard: lineSetupWizard,
-});
+const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
@@ -42,14 +24,11 @@ describe("line setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const result = await lineConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: lineConfigure,
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeEnv(),
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");

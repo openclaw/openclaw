@@ -7,8 +7,8 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
 
@@ -248,7 +248,6 @@ describe("applyPluginAutoEnable", () => {
         ...process.env,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
     });
@@ -296,7 +295,6 @@ describe("applyPluginAutoEnable", () => {
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
       },
       manifestRegistry: makeRegistry([]),
     });
@@ -493,7 +491,6 @@ describe("applyPluginAutoEnable", () => {
           ...process.env,
           OPENCLAW_HOME: undefined,
           OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
         },
       });

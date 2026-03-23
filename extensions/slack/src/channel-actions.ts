@@ -1,14 +1,14 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
-  createSlackMessageToolBlocksSchema,
   type ChannelMessageActionAdapter,
   type ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-contract";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction } from "./action-runtime.js";
+import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend, listSlackMessageActions } from "./message-actions.js";
-import { isSlackInteractiveRepliesEnabled } from "./runtime-api.js";
+import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
 import { resolveSlackChannelId } from "./targets.js";
 
 type SlackActionInvoke = (

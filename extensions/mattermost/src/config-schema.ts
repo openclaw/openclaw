@@ -1,5 +1,5 @@
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
-import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,

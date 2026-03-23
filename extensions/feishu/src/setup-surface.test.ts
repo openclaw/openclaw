@@ -1,18 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import {
+  createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
 }));
 
 import { feishuPlugin } from "./channel.js";
-
-const baseConfigureContext = {
-  runtime: {} as never,
-  accountOverrides: {},
-  shouldPromptAccountIds: false,
-  forceAllowFrom: false,
-};
 
 const baseStatusContext = {
   accountOverrides: {},
@@ -43,7 +42,7 @@ async function withEnvVars(values: Record<string, string | undefined>, run: () =
 }
 
 async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
-  return await feishuConfigureAdapter.getStatus({
+  return await feishuGetStatus({
     cfg: {
       channels: {
         feishu: {
@@ -56,10 +55,9 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
   });
 }
 
-const feishuConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: feishuPlugin,
-  wizard: feishuPlugin.setupWizard!,
-});
+const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
+const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
+type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
@@ -68,18 +66,17 @@ describe("feishu setup wizard", () => {
       .mockResolvedValueOnce("cli_from_prompt")
       .mockResolvedValueOnce("secret_from_prompt")
       .mockResolvedValueOnce("oc_group_1");
-
-    const prompter = {
-      note: vi.fn(async () => undefined),
+    const prompter = createTestWizardPrompter({
       text,
       confirm: vi.fn(async () => true),
       select: vi.fn(
         async ({ initialValue }: { initialValue?: string }) => initialValue ?? "allowlist",
-      ),
-    } as never;
+      ) as never,
+    });
 
     await expect(
-      feishuConfigureAdapter.configure({
+      runSetupWizardConfigure({
+        configure: feishuConfigure,
         cfg: {
           channels: {
             feishu: {
@@ -89,7 +86,7 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        ...baseConfigureContext,
+        runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
       }),
     ).resolves.toBeTruthy();
   });
@@ -97,7 +94,7 @@ describe("feishu setup wizard", () => {
 
 describe("feishu setup wizard status", () => {
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
-    const status = await feishuConfigureAdapter.getStatus({
+    const status = await feishuGetStatus({
       cfg: {
         channels: {
           feishu: {

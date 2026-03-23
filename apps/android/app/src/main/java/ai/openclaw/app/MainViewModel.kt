@@ -129,7 +129,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setForeground(value: Boolean) {
     foreground = value
-    runtimeRef.value?.setForeground(value)
+    val runtime =
+      if (value && prefs.onboardingCompleted.value) {
+        ensureRuntime()
+      } else {
+        runtimeRef.value
+      }
+    runtime?.setForeground(value)
   }
 
   fun setDisplayName(value: String) {
