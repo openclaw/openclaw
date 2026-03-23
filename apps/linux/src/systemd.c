@@ -64,6 +64,41 @@ static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
 }
 
+static void get_unit_preference_score(const gchar *candidate, gboolean *out_active, gboolean *out_enabled) {
+    gboolean active = FALSE, enabled = FALSE;
+    if (manager_proxy) {
+        g_autoptr(GError) err1 = NULL;
+        g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
+                                                            g_variant_new("(s)", candidate), 
+                                                            G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
+        if (fs_res) {
+            const gchar *state_str = NULL;
+            g_variant_get(fs_res, "(&s)", &state_str);
+            if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
+        }
+        
+        g_autoptr(GError) err2 = NULL;
+        g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
+                                                           g_variant_new("(s)", candidate),
+                                                           G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
+        if (u_res) {
+            const gchar *path = NULL;
+            g_variant_get(u_res, "(&o)", &path);
+            if (path) {
+                g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
+                if (uproxy) {
+                    g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
+                    if (as_var) {
+                        if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
+                    }
+                }
+            }
+        }
+    }
+    if (out_active) *out_active = active;
+    if (out_enabled) *out_enabled = enabled;
+}
+
 const gchar* systemd_get_canonical_unit_name(void) {
     if (cached_unit_name) return cached_unit_name;
 
@@ -98,40 +133,41 @@ const gchar* systemd_get_canonical_unit_name(void) {
     }
     g_dir_close(dir);
 
+    gchar *env_override = NULL;
+    const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
+    const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
+    
+    env_override = systemd_normalize_unit_override(raw_unit);
+    
+    if (!env_override && raw_profile) {
+        env_override = systemd_normalize_profile(raw_profile);
+    }
+    
+    if (env_override) {
+        gboolean found = FALSE;
+        for (guint i = 0; i < marked_units->len; i++) {
+            if (g_strcmp0(env_override, (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
+                found = TRUE;
+                break;
+            }
+        }
+        if (!found) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Environment requested unit '%s' but it was not discovered as a valid gateway.", env_override);
+        }
+        cached_unit_name = env_override;
+        g_ptr_array_free(marked_units, TRUE);
+        return cached_unit_name;
+    }
+
     if (marked_units->len == 1) {
         cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
     } else if (marked_units->len > 1) {
         /*
          * v1 multi-unit selection rule precedence:
-         * 1. OPENCLAW_SYSTEMD_UNIT (explicit absolute unit name)
-         * 2. OPENCLAW_PROFILE (derived as openclaw-gateway-<profile>.service)
-         * 3. Prefer a candidate that is active.
-         * 4. Otherwise, prefer a candidate that is enabled.
-         * 5. Otherwise, deterministically select the first lexical candidate.
+         * 1. Prefer a candidate that is active.
+         * 2. Otherwise, prefer a candidate that is enabled.
+         * 3. Otherwise, deterministically select the first lexical candidate.
          */
-        gchar *env_override = NULL;
-        const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
-        const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
-        
-        env_override = systemd_normalize_unit_override(raw_unit);
-        
-        if (!env_override && raw_profile) {
-            env_override = systemd_normalize_profile(raw_profile);
-        }
-        
-        if (env_override) {
-            for (guint i = 0; i < marked_units->len; i++) {
-                if (g_strcmp0(env_override, (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
-                    cached_unit_name = g_strdup(env_override);
-                    g_free(env_override);
-                    g_ptr_array_free(marked_units, TRUE);
-                    return cached_unit_name;
-                }
-            }
-            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Environment requested unit '%s' but it was not discovered as a valid gateway; falling back to discovery.", env_override);
-            g_free(env_override);
-        }
-        
         const gchar *best_candidate = NULL;
         gboolean best_is_active = FALSE;
         gboolean best_is_enabled = FALSE;
@@ -143,36 +179,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
             const gchar *candidate = g_ptr_array_index(marked_units, i);
             gboolean active = FALSE, enabled = FALSE;
             
-            // Inline get_unit_preference_score
-            if (manager_proxy) {
-                g_autoptr(GError) err1 = NULL;
-                g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
-                                                                    g_variant_new("(s)", candidate), 
-                                                                    G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
-                if (fs_res) {
-                    const gchar *state_str = NULL;
-                    g_variant_get(fs_res, "(&s)", &state_str);
-                    if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
-                }
-                
-                g_autoptr(GError) err2 = NULL;
-                g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
-                                                                   g_variant_new("(s)", candidate),
-                                                                   G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
-                if (u_res) {
-                    const gchar *path = NULL;
-                    g_variant_get(u_res, "(&o)", &path);
-                    if (path) {
-                        g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
-                        if (uproxy) {
-                            g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
-                            if (as_var) {
-                                if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
-                            }
-                        }
-                    }
-                }
-            }
+            get_unit_preference_score(candidate, &active, &enabled);
             
             if (!best_candidate) {
                 best_candidate = candidate;
@@ -201,6 +208,82 @@ const gchar* systemd_get_canonical_unit_name(void) {
 
     g_ptr_array_free(marked_units, TRUE);
     return cached_unit_name;
+}
+
+static gchar** parse_single_env_file(const gchar *env_file, const gchar *home_dir, gboolean is_optional, gchar **file_env) {
+    gchar *expanded_h = NULL;
+    const gchar *target_file = env_file;
+    
+    if (strstr(target_file, "%h")) {
+        gchar **parts = g_strsplit(target_file, "%h", -1);
+        expanded_h = g_strjoinv(home_dir, parts);
+        g_strfreev(parts);
+        target_file = expanded_h;
+    }
+    
+    gchar *resolved_path = NULL;
+    if (!g_path_is_absolute(target_file)) {
+        gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+        resolved_path = g_build_filename(systemd_user_dir, target_file, NULL);
+        g_free(systemd_user_dir);
+        target_file = resolved_path;
+    }
+    
+    gchar *file_contents = NULL;
+    if (g_file_get_contents(target_file, &file_contents, NULL, NULL)) {
+        gchar **env_lines = g_strsplit(file_contents, "\n", -1);
+        for (gint j = 0; env_lines[j] != NULL; j++) {
+            gchar *env_line = g_strstrip(env_lines[j]);
+            if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
+            
+            gchar *eq = strchr(env_line, '=');
+            if (eq) {
+                gchar *key = g_strndup(env_line, eq - env_line);
+                gchar *val = g_strstrip(eq + 1);
+                gsize val_len = strlen(val);
+                if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
+                                     (val[0] == '\'' && val[val_len-1] == '\''))) {
+                    val[val_len-1] = '\0';
+                    val++;
+                }
+                file_env = g_environ_setenv(file_env, key, val, TRUE);
+                g_free(key);
+            }
+        }
+        g_strfreev(env_lines);
+        g_free(file_contents);
+    } else if (!is_optional) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", target_file);
+    }
+    
+    g_free(expanded_h);
+    g_free(resolved_path);
+    
+    return file_env;
+}
+
+static gchar** parse_environment_file(const gchar *env_val, const gchar *home_dir, gchar **file_env) {
+    gint argc = 0;
+    gchar **argv = NULL;
+    
+    // Parse the line as a shell command to handle multiple files and quotes
+    if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
+        for (gint k = 0; k < argc; k++) {
+            gchar *env_file = argv[k];
+            gboolean is_optional = FALSE;
+            
+            if (env_file[0] == '-') {
+                is_optional = TRUE;
+                env_file++;
+            }
+            
+            if (env_file[0] == '\0') continue;
+            
+            file_env = parse_single_env_file(env_file, home_dir, is_optional, file_env);
+        }
+        g_strfreev(argv);
+    }
+    return file_env;
 }
 
 static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out, gchar **working_directory_out) {
@@ -273,70 +356,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                 }
             } else if (g_str_has_prefix(line, "EnvironmentFile=")) {
                 gchar *env_val = line + 16;
-                gint argc = 0;
-                gchar **argv = NULL;
-                
-                // Parse the line as a shell command to handle multiple files and quotes
-                if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
-                    for (gint k = 0; k < argc; k++) {
-                        gchar *env_file = argv[k];
-                        gboolean is_optional = FALSE;
-                        
-                        if (env_file[0] == '-') {
-                            is_optional = TRUE;
-                            env_file++;
-                        }
-                        
-                        if (env_file[0] == '\0') continue;
-                        
-                        gchar *expanded_h = NULL;
-                        if (strstr(env_file, "%h")) {
-                            gchar **parts = g_strsplit(env_file, "%h", -1);
-                            expanded_h = g_strjoinv(home_dir, parts);
-                            g_strfreev(parts);
-                            env_file = expanded_h;
-                        }
-                        
-                        gchar *resolved_path = NULL;
-                        if (!g_path_is_absolute(env_file)) {
-                            gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
-                            resolved_path = g_build_filename(systemd_user_dir, env_file, NULL);
-                            g_free(systemd_user_dir);
-                            env_file = resolved_path;
-                        }
-                        
-                        gchar *file_contents = NULL;
-                        if (g_file_get_contents(env_file, &file_contents, NULL, NULL)) {
-                            gchar **env_lines = g_strsplit(file_contents, "\n", -1);
-                            for (gint j = 0; env_lines[j] != NULL; j++) {
-                                gchar *env_line = g_strstrip(env_lines[j]);
-                                if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
-                                
-                                gchar *eq = strchr(env_line, '=');
-                                if (eq) {
-                                    gchar *key = g_strndup(env_line, eq - env_line);
-                                    gchar *val = g_strstrip(eq + 1);
-                                    gsize val_len = strlen(val);
-                                    if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
-                                                         (val[0] == '\'' && val[val_len-1] == '\''))) {
-                                        val[val_len-1] = '\0';
-                                        val++;
-                                    }
-                                    file_env = g_environ_setenv(file_env, key, val, TRUE);
-                                    g_free(key);
-                                }
-                            }
-                            g_strfreev(env_lines);
-                            g_free(file_contents);
-                        } else if (!is_optional) {
-                            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", env_file);
-                        }
-                        
-                        g_free(expanded_h);
-                        g_free(resolved_path);
-                    }
-                    g_strfreev(argv);
-                }
+                file_env = parse_environment_file(env_val, home_dir, file_env);
             }
         }
     }

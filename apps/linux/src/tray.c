@@ -63,6 +63,10 @@ static void handle_helper_action(const gchar *action) {
     } else if (g_strcmp0(action, "RESTART") == 0) {
         systemd_restart_gateway();
     } else if (g_strcmp0(action, "REFRESH") == 0) {
+        // Run systemd discovery lane first so health lanes don't bail
+        // due to stale "Not Installed" state
+        extern void systemd_refresh(void);
+        systemd_refresh();
         // Triggers async lanes. The health module itself enforces the
         // single in-flight lock, so we don't pile up subprocesses here.
         health_probe_gateway_eager();

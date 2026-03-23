@@ -70,6 +70,8 @@ typedef struct {
 } ProbeState;
 
 void state_init(void);
+void probe_state_clear(ProbeState *ps);
+void health_state_clear(HealthState *hs);
 void state_update_systemd(const SystemdState *sys_state);
 
 void state_set_health_in_flight(gboolean in_flight);

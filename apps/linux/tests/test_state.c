@@ -177,6 +177,15 @@ static void test_restart_clears_payload_fields(void) {
     hs.probe_url = g_strdup("http://localhost");
     state_update_health(&hs);
     
+    ProbeState ps = {0};
+    ps.last_updated = 12345;
+    ps.ran = TRUE;
+    ps.reachable = TRUE;
+    ps.connect_ok = TRUE;
+    ps.rpc_ok = TRUE;
+    ps.summary = g_strdup("Everything OK");
+    state_update_probe(&ps);
+    
     // Restart (stop then start)
     sys.active = FALSE;
     state_update_systemd(&sys);
@@ -188,8 +197,15 @@ static void test_restart_clears_payload_fields(void) {
     g_assert_null(state_get_health()->bind_host);
     g_assert_null(state_get_health()->probe_url);
     
+    g_assert_cmpint(state_get_probe()->ran, ==, FALSE);
+    g_assert_cmpint(state_get_probe()->reachable, ==, FALSE);
+    g_assert_cmpint(state_get_probe()->connect_ok, ==, FALSE);
+    g_assert_cmpint(state_get_probe()->rpc_ok, ==, FALSE);
+    g_assert_null(state_get_probe()->summary);
+    
     g_free(hs.bind_host);
     g_free(hs.probe_url);
+    g_free(ps.summary);
 }
 
 static void test_repeated_running_stopped_transitions(void) {
