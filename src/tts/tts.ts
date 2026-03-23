@@ -349,6 +349,17 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
     return base;
   }
+  // Preserve override precedence even when callers mix the legacy microsoft alias
+  // and the edge alias across global and account-level config.
+  const mergedMicrosoftAlias =
+    base.microsoft || base.edge || override.microsoft || override.edge
+      ? {
+          ...base.edge,
+          ...base.microsoft,
+          ...override.edge,
+          ...override.microsoft,
+        }
+      : undefined;
   return {
     ...base,
     ...override,
@@ -369,10 +380,12 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
         }
       : {}),
     ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
-    ...(base.microsoft || override.microsoft
-      ? { microsoft: { ...base.microsoft, ...override.microsoft } }
+    ...(mergedMicrosoftAlias
+      ? {
+          microsoft: mergedMicrosoftAlias,
+          edge: mergedMicrosoftAlias,
+        }
       : {}),
-    ...(base.edge || override.edge ? { edge: { ...base.edge, ...override.edge } } : {}),
   };
 }
 

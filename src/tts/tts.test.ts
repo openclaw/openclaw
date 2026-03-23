@@ -972,6 +972,40 @@ describe("tts", () => {
       expect(config.edge.outputFormat).toBe("audio-24khz-48kbitrate-mono-mp3");
     });
 
+    it("merges edge account overrides into global microsoft alias config", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "microsoft",
+            microsoft: {
+              voice: "zh-CN-XiaoyiNeural",
+              lang: "zh-CN",
+              outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              "my-bot": {
+                tts: {
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "my-bot");
+      expect(config.provider).toBe("microsoft");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("zh-CN");
+      expect(config.edge.outputFormat).toBe("audio-24khz-48kbitrate-mono-mp3");
+    });
+
     it("returns global config for non-existent channel/account", () => {
       const config = tts.resolveTtsConfigForAccount(baseCfg, "nonexistent", "unknown");
       expect(config.edge.voice).toBe("zh-CN-XiaoyiNeural");
