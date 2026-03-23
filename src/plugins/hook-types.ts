@@ -254,7 +254,7 @@ export type PluginHookLlmOutputEvent = {
 // error message is broadcast to the user. Allows plugins to replace the error
 // text with a friendlier, localised message.
 export type PluginHookAgentErrorEvent = {
-  /** The raw error message that would be sent to the user. */
+  /** The processed error message that would be sent to the user (after built-in friendly-error formatting). */
   error: string;
 };
 
