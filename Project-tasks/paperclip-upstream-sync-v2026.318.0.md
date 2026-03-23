@@ -178,7 +178,7 @@ Incremental adapter and infrastructure improvements.
 
 ### Task 6: Phase 6 -- Review Items (Decisions Required)
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 10h
+**Status:** In Progress | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 10h
 
 Items requiring architectural decisions before implementation.
 
