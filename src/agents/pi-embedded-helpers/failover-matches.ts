@@ -50,6 +50,12 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    // Provider-side abort: GLM-5 (ZAI) and some OpenAI-compat providers return a
+    // bare "aborted" message when they cancel the request server-side (rate limit,
+    // quota, or internal cancellation). This is NOT a user-initiated abort — those
+    // set aborted=true and skip the promptError block entirely. Treat as transient
+    // so the fallback chain can retry on another model/profile.
+    /^aborted$/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
