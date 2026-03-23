@@ -89,7 +89,7 @@ function resolveInboundMediaCloneIdentity(ctx: MsgContext): string {
     .filter((value): value is string => Boolean(value))
     .map((value) => value.trim())
     .filter(Boolean)
-    .sort();
+    .toSorted();
   return rawMedia.join("|");
 }
 
