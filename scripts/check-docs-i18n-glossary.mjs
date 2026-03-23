@@ -57,7 +57,7 @@ function detectLangs() {
 
 /** Build a regex that matches English doc paths and excludes translated subdirs. */
 function buildDocFileRe(langs) {
-  const exclude = langs.map((l) => `(?!${l.replace("-", "\\-")}\\/)`).join("");
+  const exclude = langs.map((l) => `(?!${l}\\/)`).join("");
   return new RegExp(`^docs\\/${exclude}.+\\.(md|mdx)$`, "i");
 }
 
