@@ -932,25 +932,12 @@ describe("agents.files.get/set symlink safety", () => {
 
   function mockWorkspaceEscapeSymlink() {
     const workspace = "/workspace/test-agent";
-    const workspaceReal = path.resolve(workspace);
-    const candidate = path.resolve(workspaceReal, "AGENTS.md");
-    const outside = path.resolve("/outside/secret.txt");
-    mocks.fsRealpath.mockImplementation(async (p: string) => {
-      const resolved = path.resolve(p);
-      if (resolved === workspaceReal) {
-        return workspaceReal;
-      }
-      if (resolved === candidate) {
-        return outside;
-      }
-      return resolved;
-    });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = typeof args[0] === "string" ? args[0] : "";
-      if (path.resolve(p) === candidate) {
-        return makeSymlinkStat();
-      }
-      throw createEnoentError();
+    agentsTesting.setDepsForTests({
+      resolveAgentWorkspaceFilePath: async ({ name }) => ({
+        kind: "invalid",
+        requestPath: path.join(workspace, name),
+        reason: "path escapes workspace root",
+      }),
     });
   }
 
@@ -970,27 +957,25 @@ describe("agents.files.get/set symlink safety", () => {
 
   it("allows in-workspace symlink reads and writes through symlink aliases", async () => {
     const workspace = "/workspace/test-agent";
-    const workspaceReal = path.resolve(workspace);
-    const candidate = path.resolve(workspaceReal, "AGENTS.md");
-    const target = path.resolve(workspaceReal, "policies", "AGENTS.md");
+    const target = path.resolve(workspace, "policies", "AGENTS.md");
     const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
 
-    mocks.fsRealpath.mockImplementation(async (p: string) => {
-      const resolved = path.resolve(p);
-      if (resolved === workspaceReal) {
-        return workspaceReal;
-      }
-      if (resolved === candidate) {
-        return target;
-      }
-      return resolved;
+    agentsTesting.setDepsForTests({
+      readLocalFileSafely: async () => ({
+        buffer: Buffer.from("inside\n"),
+        realPath: target,
+        stat: targetStat,
+      }),
+      resolveAgentWorkspaceFilePath: async ({ name }) => ({
+        kind: "ready",
+        requestPath: path.join(workspace, name),
+        ioPath: target,
+        workspaceReal: workspace,
+      }),
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (path.resolve(p) === candidate) {
-        return makeSymlinkStat({ dev: 9, ino: 41 });
-      }
-      if (path.resolve(p) === target) {
+      if (p === target) {
         return targetStat;
       }
       throw createEnoentError();
@@ -1029,7 +1014,7 @@ describe("agents.files.get/set symlink safety", () => {
     );
     expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
       expect.objectContaining({
-        rootDir: workspaceReal,
+        rootDir: workspace,
         relativePath: path.join("policies", "AGENTS.md"),
       }),
     );
