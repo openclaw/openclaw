@@ -75,7 +75,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       try {
         params.onError?.(err, items);
       } catch {
-        // Keep the keyed chain alive even if the error handler fails.
+        // Flush failures are reported via onError, but this helper stays
+        // non-throwing so keyed chains can continue processing later items.
       }
     }
   };
@@ -158,7 +159,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffers.has(key) || keyChains.has(key)) {
       return true;
     }
-    return Math.max(buffers.size, keyChains.size) < maxTrackedKeys;
+    return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
   };
 
   const enqueue = async (item: T) => {
