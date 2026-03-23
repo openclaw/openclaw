@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
@@ -147,7 +149,18 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   channelSetups: [],
   providers: [],
-  speechProviders: [],
+  speechProviders: [
+    {
+      pluginId: "openai",
+      source: "test",
+      provider: buildOpenAISpeechProvider(),
+    },
+    {
+      pluginId: "elevenlabs",
+      source: "test",
+      provider: buildElevenLabsSpeechProvider(),
+    },
+  ],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
   webSearchProviders: [],

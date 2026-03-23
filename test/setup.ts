@@ -22,6 +22,9 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
+import { resetContextWindowCacheForTest } from "../src/agents/context.js";
+import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config.js";
+import { resetSessionWriteLockStateForTest } from "../src/agents/session-write-lock.js";
 import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
@@ -36,7 +39,10 @@ import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
 const testEnv = withIsolatedTestHome();
-afterAll(() => testEnv.cleanup());
+
+afterAll(() => {
+  testEnv.cleanup();
+});
 
 installProcessWarningFilter();
 
@@ -110,60 +116,6 @@ function resolveSlackStubReplyToMode(params: {
   }
   return entry?.replyToMode ?? "off";
 }
-
-type VitestEvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
-};
-
-type VitestEvaluatedModules = {
-  idToModuleMap: Map<string, VitestEvaluatedModuleNode>;
-};
-
-const resetVitestWorkerModules = (resetMocks: boolean) => {
-  const workerState = (
-    globalThis as typeof globalThis & {
-      __vitest_worker__?: {
-        evaluatedModules?: VitestEvaluatedModules;
-      };
-    }
-  ).__vitest_worker__;
-  const modules = workerState?.evaluatedModules;
-  if (!modules) {
-    return;
-  }
-
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
-
-  modules.idToModuleMap.forEach((node, modulePath) => {
-    if (skipPaths.some((pattern) => pattern.test(modulePath))) {
-      return;
-    }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
-    node.importers.clear();
-  });
-};
-
-const resetVitestWorkerFileState = () => {
-  const mocker = (
-    globalThis as typeof globalThis & {
-      __vitest_mocker__?: {
-        reset?: () => void;
-      };
-    }
-  ).__vitest_mocker__;
-  mocker?.reset?.();
-  resetVitestWorkerModules(true);
-};
 
 const createStubOutbound = (
   id: ChannelId,
@@ -381,22 +333,16 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  resetContextWindowCacheForTest();
+  resetModelsJsonReadyCacheForTest();
+  resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
     installDefaultPluginRegistry();
     globalRegistryState.key = null;
     globalRegistryState.version += 1;
   }
-  // Always normalize timer/date state. Some suites call `vi.setSystemTime()`
-  // without leaving fake timers enabled, which still leaks mocked time into
-  // later files under `--isolate=false`.
-  vi.useRealTimers();
-  // Non-isolated runs reuse the same module graph across files. Clear it so
-  // hoisted per-file mocks still apply when later files import the same modules.
-  vi.resetModules();
 });
 
 afterAll(() => {
-  // Mirror Vitest's isolate-mode file cleanup so `--isolate=false` does not
-  // carry hoisted mocks or stale module graphs into the next test file.
-  resetVitestWorkerFileState();
+  resetSessionWriteLockStateForTest();
 });
