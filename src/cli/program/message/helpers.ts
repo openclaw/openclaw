@@ -63,6 +63,10 @@ function classifyGatewayError(err: unknown): "unreachable" | "server" {
   if (msg.startsWith("gateway closed")) return "server";
   // Explicit auth failures
   if (msg.includes("unauthorized") || msg.includes("forbidden")) return "server";
+  // Timeout AFTER connect: callGateway emits "gateway timeout after <n>ms" when the
+  // gateway was reached but the request took too long. The send may have already been
+  // delivered, so treat this as "server" to avoid a duplicate-send on the local fallback.
+  if (msg.startsWith("gateway timeout")) return "server";
   return "unreachable";
 }
 
@@ -164,11 +168,17 @@ export function createMessageCliHelpers(
         // so programmatic consumers that parse action/channel/dryRun/handledBy/payload
         // continue to work correctly.
         if (opts.json) {
-          const channel =
-            typeof normalized.channel === "string" ? normalized.channel : "unknown";
+          // Prefer the channel resolved by the gateway (from the send RPC result) over the
+          // raw CLI flag — the gateway normalises aliases and casing, and may fill in a
+          // default when --channel was omitted.
+          const result = gatewayResult.result as Record<string, unknown> | null | undefined;
+          const resolvedChannel =
+            (typeof result?.channel === "string" && result.channel) ||
+            (typeof normalized.channel === "string" && normalized.channel) ||
+            "unknown";
           const envelope = {
             action: "send",
-            channel,
+            channel: resolvedChannel,
             dryRun: false,
             handledBy: "gateway" as const,
             payload: gatewayResult.result,
