@@ -1240,7 +1240,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
+          state.daemonStart = null;
           return;
         }
 
