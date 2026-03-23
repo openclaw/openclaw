@@ -22,6 +22,13 @@ const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Pr
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
 
+export function rememberFollowupDrainCallback(
+  key: string,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): void {
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+}
+
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
@@ -78,7 +85,7 @@ export function scheduleFollowupDrain(
   }
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
-  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+  rememberFollowupDrainCallback(key, runFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };

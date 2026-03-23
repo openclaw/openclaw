@@ -215,13 +215,25 @@ export async function runReplyAgent(params: {
     queueMode: resolvedQueue.mode,
   });
 
+  const queuedRunFollowupTurn = createFollowupRunner({
+    opts,
+    typing,
+    typingMode,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    defaultModel,
+    agentCfgContextTokens,
+  });
+
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    enqueueFollowupRun(queueKey, followupRun, resolvedQueue, "message-id", queuedRunFollowupTurn);
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;

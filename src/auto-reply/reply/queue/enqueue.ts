@@ -1,6 +1,6 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -59,6 +59,7 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -91,6 +92,9 @@ export function enqueueFollowupRun(
   queue.items.push(run);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
+  }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
   }
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
