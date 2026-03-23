@@ -18,23 +18,11 @@ import {
   memoryConfigSchema,
   vectorDimsForModel,
 } from "./config.js";
+import { loadLanceDbModule } from "./lancedb-runtime.js";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-let lancedbImportPromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
-const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
-  if (!lancedbImportPromise) {
-    lancedbImportPromise = import("@lancedb/lancedb");
-  }
-  try {
-    return await lancedbImportPromise;
-  } catch (err) {
-    // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
-  }
-};
 
 type MemoryEntry = {
   id: string;
@@ -79,7 +67,7 @@ class MemoryDB {
   }
 
   private async doInitialize(): Promise<void> {
-    const lancedb = await loadLanceDB();
+    const lancedb = await loadLanceDbModule();
     this.db = await lancedb.connect(this.dbPath);
     const tables = await this.db.tableNames();
 
