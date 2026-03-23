@@ -65,8 +65,8 @@ vi.mock("./server-context.js", async (importOriginal) => {
   };
 });
 
-const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
-  await import("./server.js");
+let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
+let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
 
 describe("browser control evaluate gating", () => {
   beforeEach(async () => {
@@ -83,6 +83,9 @@ describe("browser control evaluate gating", () => {
     pwMocks.evaluateViaPlaywright.mockClear();
     routeCtxMocks.profileCtx.ensureTabAvailable.mockClear();
     routeCtxMocks.profileCtx.stopRunningBrowser.mockClear();
+    vi.resetModules();
+    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
+      await import("./server.js"));
   });
 
   afterEach(async () => {
@@ -104,6 +107,7 @@ describe("browser control evaluate gating", () => {
     }
 
     await stopBrowserControlServer();
+    vi.resetModules();
   });
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
