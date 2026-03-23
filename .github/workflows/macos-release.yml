@@ -193,25 +193,32 @@ jobs:
           fi
           echo "SIGN_IDENTITY=$SIGN_IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Write notary key file
+      - name: Write notary and Sparkle key files
         env:
           APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           NOTARYTOOL_KEY_PATH="$RUNNER_TEMP/openclaw-notary.p8"
-          export NOTARYTOOL_KEY_PATH
+          SPARKLE_PRIVATE_KEY_PATH="$RUNNER_TEMP/openclaw-sparkle-ed25519.pem"
+          export NOTARYTOOL_KEY_PATH SPARKLE_PRIVATE_KEY_PATH
           python3 - <<'PY'
           import os
           from pathlib import Path
 
-          value = os.environ["APP_STORE_CONNECT_API_KEY_P8"].replace("\\n", "\n")
-          Path(os.environ["NOTARYTOOL_KEY_PATH"]).write_text(value, encoding="utf-8")
+          def write_secret(path_env: str, value_env: str) -> None:
+              value = os.environ[value_env].replace("\\n", "\n")
+              Path(os.environ[path_env]).write_text(value, encoding="utf-8")
+
+          write_secret("NOTARYTOOL_KEY_PATH", "APP_STORE_CONNECT_API_KEY_P8")
+          write_secret("SPARKLE_PRIVATE_KEY_PATH", "SPARKLE_PRIVATE_KEY")
           PY
           echo "NOTARYTOOL_KEY=$NOTARYTOOL_KEY_PATH" >> "$GITHUB_ENV"
           echo "NOTARYTOOL_KEY_ID=$APP_STORE_CONNECT_KEY_ID" >> "$GITHUB_ENV"
           echo "NOTARYTOOL_ISSUER=$APP_STORE_CONNECT_ISSUER_ID" >> "$GITHUB_ENV"
+          echo "SPARKLE_PRIVATE_KEY_FILE=$SPARKLE_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and package macOS release
         env:
@@ -236,6 +243,36 @@ jobs:
             "dist/OpenClaw-$VERSION.dSYM.zip" \
             --clobber \
             --repo "$GITHUB_REPOSITORY"
+
+      - name: Checkout main branch for appcast seed
+        uses: actions/checkout@v6
+        with:
+          path: openclaw-main
+          ref: main
+          fetch-depth: 0
+
+      - name: Seed appcast from main
+        run: |
+          set -euo pipefail
+          APPCAST_SOURCE="openclaw-main/appcast.xml"
+          if [[ -f "$APPCAST_SOURCE" ]]; then
+            cp "$APPCAST_SOURCE" appcast.xml
+          else
+            echo "No existing appcast at $APPCAST_SOURCE; generating a fresh feed."
+          fi
+
+      - name: Generate signed appcast artifact
+        env:
+          SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/openclaw/openclaw/releases/download/${{ inputs.tag }}/
+          SPARKLE_RELEASE_VERSION: ${{ steps.package_version.outputs.value }}
+        run: scripts/make_appcast.sh "dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip" "${{ env.SPARKLE_FEED_URL }}"
+
+      - name: Upload appcast artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-appcast-${{ inputs.tag }}
+          path: appcast.xml
+          if-no-files-found: error
 
       - name: Clean up signing keychain
         if: always()
