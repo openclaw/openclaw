@@ -3,13 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy } from "./config.js";
-import {
-  resolveHookConfig,
-  resolveHookEnableState,
-  resolveHookEntries,
-  type HookEnableStateReason,
-} from "./policy.js";
+import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -35,10 +29,8 @@ export type HookStatusEntry = {
   homepage?: string;
   events: string[];
   always: boolean;
-  enabledByConfig: boolean;
-  requirementsSatisfied: boolean;
-  loadable: boolean;
-  blockedReason?: HookEnableStateReason | "missing requirements";
+  disabled: boolean;
+  eligible: boolean;
   managedByPlugin: boolean;
   requirements: Requirements;
   missing: Requirements;
@@ -92,7 +84,7 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const enableState = resolveHookEnableState({ entry, config, hookConfig });
+  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
   const isEnvSatisfied = (envName: string) =>
@@ -109,10 +101,7 @@ function buildHookStatus(
       isConfigSatisfied,
     });
 
-  const enabledByConfig = enableState.enabled;
-  const loadable = enabledByConfig && requirementsSatisfied;
-  const blockedReason =
-    enableState.reason ?? (requirementsSatisfied ? undefined : "missing requirements");
+  const eligible = !disabled && requirementsSatisfied;
 
   return {
     name: entry.hook.name,
@@ -127,10 +116,8 @@ function buildHookStatus(
     homepage,
     events,
     always,
-    enabledByConfig,
-    requirementsSatisfied,
-    loadable,
-    blockedReason,
+    disabled,
+    eligible,
     managedByPlugin,
     requirements: required,
     missing,
@@ -149,9 +136,7 @@ export function buildWorkspaceHookStatus(
   },
 ): HookStatusReport {
   const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
-  const hookEntries = resolveHookEntries(
-    opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts),
-  );
+  const hookEntries = opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts);
 
   return {
     workspaceDir,

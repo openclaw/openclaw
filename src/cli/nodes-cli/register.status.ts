@@ -147,7 +147,7 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (opts.json) {
             const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
-            defaultRuntime.writeJson({ ...obj, ts, nodes: filtered });
+            defaultRuntime.log(JSON.stringify({ ...obj, ts, nodes: filtered }, null, 2));
             return;
           }
 
@@ -223,7 +223,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             nodeId,
           });
           if (opts.json) {
-            defaultRuntime.writeJson(result);
+            defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
 
@@ -350,7 +350,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPaired });
+            defaultRuntime.log(
+              JSON.stringify({ pending: pendingRows, paired: filteredPaired }, null, 2),
+            );
             return;
           }
 

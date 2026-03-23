@@ -1,28 +1,16 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.3.22",
+  "version": "2026.3.13",
   "description": "OpenClaw Zalo channel plugin",
   "type": "module",
   "dependencies": {
-    "undici": "7.24.5",
+    "undici": "7.24.0",
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.3.22"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalo",
       "label": "Zalo",
@@ -39,11 +27,7 @@
     "install": {
       "npmSpec": "@openclaw/zalo",
       "localPath": "extensions/zalo",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.22"
-    },
-    "release": {
-      "publishToNpm": true
+      "defaultChoice": "npm"
     }
   }
 }

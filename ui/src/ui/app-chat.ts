@@ -1,16 +1,14 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -29,10 +27,6 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
-  chatModelOverrides: Record<string, ChatModelOverride | null>;
-  chatModelsLoading: boolean;
-  chatModelCatalog: ModelCatalogEntry[];
-  updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
@@ -121,8 +115,6 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  // Reset scroll state before sending to ensure auto-scroll works for the response
-  resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
@@ -143,8 +135,7 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
-  // Force scroll after sending to ensure viewport is at bottom for incoming stream
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
   }
@@ -304,18 +295,10 @@ async function dispatchSlashCommand(
     return;
   }
 
-  const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
+  const result = await executeSlashCommand(host.client, host.sessionKey, name, args);
 
   if (result.content) {
     injectCommandResult(host, result.content);
-  }
-
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
-    host.chatModelOverrides = {
-      ...host.chatModelOverrides,
-      [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
-    };
   }
 
   if (result.action === "refresh") {
@@ -358,28 +341,13 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: 0,
       limit: 0,
-      includeGlobal: true,
-      includeUnknown: true,
+      includeGlobal: false,
+      includeUnknown: false,
     }),
     refreshChatAvatar(host),
-    refreshChatModels(host),
   ]);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-  }
-}
-
-async function refreshChatModels(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
   }
 }
 

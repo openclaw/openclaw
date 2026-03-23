@@ -5,10 +5,9 @@ import {
   type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
-  resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
   sleep,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -61,8 +60,6 @@ export type MSTeamsAdapter = {
     res: unknown,
     logic: (context: unknown) => Promise<void>,
   ) => Promise<void>;
-  updateActivity: (context: unknown, activity: object) => Promise<void>;
-  deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
 };
 
 export type MSTeamsReplyRenderOptions = {
@@ -219,39 +216,41 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const reply = resolveSendableOutboundReplyParts(payload, {
-      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-    });
+    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
+      payload.text ?? "",
+      tableMode,
+    );
 
-    if (!reply.hasContent) {
+    if (!text && mediaList.length === 0) {
       continue;
     }
 
-    if (!reply.hasMedia) {
-      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    if (mediaList.length === 0) {
+      pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       continue;
     }
 
     if (mediaMode === "inline") {
       // For inline mode, combine text with first media as attachment
-      const firstMedia = reply.mediaUrls[0];
+      const firstMedia = mediaList[0];
       if (firstMedia) {
-        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
+        out.push({ text: text || undefined, mediaUrl: firstMedia });
         // Additional media URLs as separate messages
-        for (let i = 1; i < reply.mediaUrls.length; i++) {
-          if (reply.mediaUrls[i]) {
-            out.push({ mediaUrl: reply.mediaUrls[i] });
+        for (let i = 1; i < mediaList.length; i++) {
+          if (mediaList[i]) {
+            out.push({ mediaUrl: mediaList[i] });
           }
         }
       } else {
-        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+        pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       }
       continue;
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
-    for (const mediaUrl of reply.mediaUrls) {
+    pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
+    for (const mediaUrl of mediaList) {
       if (!mediaUrl) {
         continue;
       }
@@ -321,10 +320,8 @@ async function buildActivity(
 
       if (!isPersonal && !isImage && tokenProvider && sharePointSiteId) {
         // Non-image in group chat/channel with SharePoint site configured:
-        // Upload to SharePoint and use native file card attachment.
-        // Use the cached Graph-native chat ID when available — Bot Framework conversation IDs
-        // for personal DMs use a format (e.g. `a:1xxx`) that Graph API rejects.
-        const chatId = conversationRef.graphChatId ?? conversationRef.conversation?.id;
+        // Upload to SharePoint and use native file card attachment
+        const chatId = conversationRef.conversation?.id;
 
         // Upload to SharePoint
         const uploaded = await uploadAndShareSharePoint({

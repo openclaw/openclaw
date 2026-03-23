@@ -241,6 +241,7 @@ export function resolveGatewayAuth(params: {
     configToken: tokenRef ? undefined : authConfig.token,
     configPassword: passwordRef ? undefined : authConfig.password,
     env,
+    includeLegacyEnv: false,
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });

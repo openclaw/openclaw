@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/extensions/mock-http-response.js";
+import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
@@ -8,19 +8,6 @@ import { createDiffStoreHarness } from "./test-helpers.js";
 describe("createDiffsHttpHandler", () => {
   let store: DiffArtifactStore;
   let cleanupRootDir: () => Promise<void>;
-
-  async function handleLocalGet(url: string) {
-    const handler = createDiffsHttpHandler({ store });
-    const res = createMockServerResponse();
-    const handled = await handler(
-      localReq({
-        method: "GET",
-        url,
-      }),
-      res,
-    );
-    return { handled, res };
-  }
 
   beforeEach(async () => {
     ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-http-"));
@@ -32,7 +19,16 @@ describe("createDiffsHttpHandler", () => {
 
   it("serves a stored diff document", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(artifact.viewerPath);
+
+    const handler = createDiffsHttpHandler({ store });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      localReq({
+        method: "GET",
+        url: artifact.viewerPath,
+      }),
+      res,
+    );
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
@@ -42,8 +38,15 @@ describe("createDiffsHttpHandler", () => {
 
   it("rejects invalid tokens", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(
-      artifact.viewerPath.replace(artifact.token, "bad-token"),
+
+    const handler = createDiffsHttpHandler({ store });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      localReq({
+        method: "GET",
+        url: artifact.viewerPath.replace(artifact.token, "bad-token"),
+      }),
+      res,
     );
 
     expect(handled).toBe(true);

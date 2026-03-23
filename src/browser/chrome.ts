@@ -1,8 +1,7 @@
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -18,13 +17,7 @@ import {
   CHROME_STOP_TIMEOUT_MS,
   CHROME_WS_READY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
-import {
-  appendCdpPath,
-  assertCdpEndpointAllowed,
-  fetchCdpChecked,
-  isWebSocketUrl,
-  openCdpWebSocket,
-} from "./cdp.helpers.js";
+import { appendCdpPath, fetchCdpChecked, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -70,7 +63,7 @@ export type RunningChrome = {
   userDataDir: string;
   cdpPort: number;
   startedAt: number;
-  proc: ChildProcess;
+  proc: ChildProcessWithoutNullStreams;
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
@@ -83,44 +76,6 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
 
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
-}
-
-export function buildOpenClawChromeLaunchArgs(params: {
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  userDataDir: string;
-}): string[] {
-  const { resolved, profile, userDataDir } = params;
-  const args: string[] = [
-    `--remote-debugging-port=${profile.cdpPort}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-sync",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-features=Translate,MediaRouter",
-    "--disable-session-crashed-bubble",
-    "--hide-crash-restore-bubble",
-    "--password-store=basic",
-  ];
-
-  if (resolved.headless) {
-    args.push("--headless=new");
-    args.push("--disable-gpu");
-  }
-  if (resolved.noSandbox) {
-    args.push("--no-sandbox");
-    args.push("--disable-setuid-sandbox");
-  }
-  if (process.platform === "linux") {
-    args.push("--disable-dev-shm-usage");
-  }
-  if (resolved.extraArgs.length > 0) {
-    args.push(...resolved.extraArgs);
-  }
-
-  return args;
 }
 
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
@@ -141,19 +96,13 @@ async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean
 export async function isChromeReachable(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
-  try {
-    await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-    if (isWebSocketUrl(cdpUrl)) {
-      // Direct WebSocket endpoint — probe via WS handshake.
-      return await canOpenWebSocket(cdpUrl, timeoutMs);
-    }
-    const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-    return Boolean(version);
-  } catch {
-    return false;
+  if (isWebSocketUrl(cdpUrl)) {
+    // Direct WebSocket endpoint — probe via WS handshake.
+    return await canOpenWebSocket(cdpUrl, timeoutMs);
   }
+  const version = await fetchChromeVersion(cdpUrl, timeoutMs);
+  return Boolean(version);
 }
 
 type ChromeVersion = {
@@ -165,12 +114,10 @@ type ChromeVersion = {
 async function fetchChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
     const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
     const data = (await res.json()) as ChromeVersion;
@@ -188,14 +135,12 @@ async function fetchChromeVersion(
 export async function getChromeWebSocketUrl(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
-  await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   if (isWebSocketUrl(cdpUrl)) {
     // Direct WebSocket endpoint — the cdpUrl is already the WebSocket URL.
     return cdpUrl;
   }
-  const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+  const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
   if (!wsUrl) {
     return null;
@@ -282,9 +227,8 @@ export async function isChromeCdpReady(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
-  const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs, ssrfPolicy).catch(() => null);
+  const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs);
   if (!wsUrl) {
     return false;
   }
@@ -318,23 +262,49 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args = buildOpenClawChromeLaunchArgs({
-      resolved,
-      profile,
-      userDataDir,
-    });
-    // stdio tuple: discard stdout to prevent buffer saturation in constrained
-    // environments (e.g. Docker), while keeping stderr piped for diagnostics.
-    // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
-    // the tuple overload resolution varies across @types/node versions.
+    const args: string[] = [
+      `--remote-debugging-port=${profile.cdpPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-sync",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-features=Translate,MediaRouter",
+      "--disable-session-crashed-bubble",
+      "--hide-crash-restore-bubble",
+      "--password-store=basic",
+    ];
+
+    if (resolved.headless) {
+      // Best-effort; older Chromes may ignore.
+      args.push("--headless=new");
+      args.push("--disable-gpu");
+    }
+    if (resolved.noSandbox) {
+      args.push("--no-sandbox");
+      args.push("--disable-setuid-sandbox");
+    }
+    if (process.platform === "linux") {
+      args.push("--disable-dev-shm-usage");
+    }
+
+    // Append user-configured extra arguments (e.g., stealth flags, window size)
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
+
+    // Always open a blank tab to ensure a target exists.
+    args.push("about:blank");
+
     return spawn(exe.path, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: "pipe",
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
-    }) as unknown as ChildProcessWithoutNullStreams;
+    });
   };
 
   const startedAt = Date.now();

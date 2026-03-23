@@ -4,6 +4,9 @@ import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
+// Avoid pulling optional runtime deps during isolated runs.
+vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
+
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
 describe("runHeartbeatOnce", () => {
@@ -44,7 +47,7 @@ describe("runHeartbeatOnce", () => {
         await runHeartbeatOnce({
           cfg,
           deps: {
-            slack: sendSlack,
+            sendSlack,
             getQueueSize: () => 0,
             nowMs: () => 0,
           },

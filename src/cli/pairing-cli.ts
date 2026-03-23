@@ -80,7 +80,7 @@ export function registerPairingCli(program: Command) {
         ? await listChannelPairingRequests(channel, process.env, accountId)
         : await listChannelPairingRequests(channel);
       if (opts.json) {
-        defaultRuntime.writeJson({ channel, requests });
+        defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
         return;
       }
       if (requests.length === 0) {

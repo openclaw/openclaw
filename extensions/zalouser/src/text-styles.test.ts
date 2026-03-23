@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import { TextStyle } from "./zca-constants.js";
+import { TextStyle } from "./zca-client.js";
 
 describe("parseZalouserTextStyles", () => {
   it("renders inline markdown emphasis as Zalo style ranges", () => {

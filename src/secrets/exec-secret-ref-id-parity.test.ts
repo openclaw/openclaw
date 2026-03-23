@@ -99,9 +99,6 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("tools.web.fetch.")) {
       return "tools.web.fetch";
     }
-    if (id.startsWith("plugins.entries.") && id.includes(".config.webSearch.apiKey")) {
-      return "tools.web.search";
-    }
     if (id.startsWith("tools.web.search.")) {
       return "tools.web.search";
     }

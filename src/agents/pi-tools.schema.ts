@@ -1,8 +1,6 @@
-import type { ModelCompatConfig } from "../config/types.models.js";
-import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
+import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -67,7 +65,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 export function normalizeToolParameters(
   tool: AnyAgentTool,
-  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
+  options?: { modelProvider?: string; modelId?: string },
 ): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
@@ -90,13 +88,13 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
+  const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (hasXaiSchemaProfile) {
+    if (isXai) {
       return stripXaiUnsupportedKeywords(s);
     }
     return s;

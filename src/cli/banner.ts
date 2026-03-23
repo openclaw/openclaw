@@ -1,8 +1,8 @@
+import { loadConfig } from "../config/config.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { readCliBannerTaglineMode } from "./banner-config-lite.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -48,7 +48,12 @@ function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
   if (explicit) {
     return explicit;
   }
-  return readCliBannerTaglineMode(options.env);
+  try {
+    return parseTaglineMode(loadConfig().cli?.banner?.taglineMode);
+  } catch {
+    // Fall back to default random behavior when config is missing/invalid.
+    return undefined;
+  }
 }
 
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {

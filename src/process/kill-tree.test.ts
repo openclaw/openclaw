@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { killProcessTree } from "./kill-tree.js";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -7,8 +8,6 @@ const { spawnMock } = vi.hoisted(() => ({
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
-
-let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 
 async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -25,9 +24,7 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> 
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ killProcessTree } = await import("./kill-tree.js"));
+  beforeEach(() => {
     spawnMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();

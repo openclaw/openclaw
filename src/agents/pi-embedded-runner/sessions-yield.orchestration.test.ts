@@ -3,25 +3,20 @@
  * with no pending tool calls, so the parent session is idle when subagent
  * results arrive.
  */
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import "./run.overflow-compaction.mocks.shared.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { mockedGlobalHookRunner } from "./run.overflow-compaction.mocks.shared.js";
 import {
-  loadRunOverflowCompactionHarness,
-  mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-} from "./run.overflow-compaction.harness.js";
+} from "./run.overflow-compaction.shared-test.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./runs.js";
 
-let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
-
 describe("sessions_yield orchestration", () => {
-  beforeAll(async () => {
-    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
-  });
-
   beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
+    vi.clearAllMocks();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 

@@ -11,7 +11,6 @@ export type GatewayRpcOpts = {
 export type DaemonStatusOptions = {
   rpc: GatewayRpcOpts;
   probe: boolean;
-  requireRpc: boolean;
   json: boolean;
 } & FindExtraGatewayServicesOptions;
 

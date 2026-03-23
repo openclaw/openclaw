@@ -1,9 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 import { log } from "./logger.js";
-import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type OpenAIReasoningEffort = "low" | "medium" | "high";
@@ -41,40 +39,6 @@ function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
   } catch {
     return baseUrl.toLowerCase().includes("api.openai.com");
   }
-}
-
-function isOpenAICodexBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "chatgpt.com";
-  } catch {
-    return baseUrl.toLowerCase().includes("chatgpt.com");
-  }
-}
-
-function shouldApplyOpenAIAttributionHeaders(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): "openai" | "openai-codex" | undefined {
-  if (
-    model.provider === "openai" &&
-    (model.api === "openai-completions" || model.api === "openai-responses") &&
-    isOpenAIPublicApiBaseUrl(model.baseUrl)
-  ) {
-    return "openai";
-  }
-  if (
-    model.provider === "openai-codex" &&
-    (model.api === "openai-codex-responses" || model.api === "openai-responses") &&
-    isOpenAICodexBaseUrl(model.baseUrl)
-  ) {
-    return "openai-codex";
-  }
-  return undefined;
 }
 
 function shouldForceResponsesStore(model: {
@@ -154,23 +118,10 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
-function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
-  if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
-    return false;
-  }
-  // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
-  // prompt cache fields for that direct path.
-  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
-    return false;
-  }
-  return !isDirectOpenAIBaseUrl(model.baseUrl);
-}
-
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
   stripStore: boolean;
-  stripPromptCache: boolean;
   useServerCompaction: boolean;
   compactThreshold: number;
 }): void {
@@ -179,10 +130,6 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
   if (params.stripStore) {
     delete params.payloadObj.store;
-  }
-  if (params.stripPromptCache) {
-    delete params.payloadObj.prompt_cache_key;
-    delete params.payloadObj.prompt_cache_retention;
   }
   if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
     params.payloadObj.context_management = [
@@ -314,8 +261,7 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    const stripPromptCache = shouldStripResponsesPromptCache(model);
-    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
+    if (!forceStore && !useServerCompaction && !stripStore) {
       return underlying(model, context, options);
     }
 
@@ -331,7 +277,6 @@ export function createOpenAIResponsesContextManagementWrapper(
             payloadObj: payload as Record<string, unknown>,
             forceStore,
             stripStore,
-            stripPromptCache,
             useServerCompaction,
             compactThreshold,
           });
@@ -380,10 +325,18 @@ export function createOpenAIServiceTierWrapper(
     ) {
       return underlying(model, context, options);
     }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      if (payloadObj.service_tier === undefined) {
-        payloadObj.service_tier = serviceTier;
-      }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = serviceTier;
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
     });
   };
 }
@@ -409,24 +362,5 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
       openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
-  };
-}
-
-export function createOpenAIAttributionHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const attributionProvider = shouldApplyOpenAIAttributionHeaders(model);
-    if (!attributionProvider) {
-      return underlying(model, context, options);
-    }
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        ...resolveProviderAttributionHeaders(attributionProvider),
-      },
-    });
   };
 }

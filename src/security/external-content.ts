@@ -91,10 +91,6 @@ export type ExternalContentSource =
   | "web_fetch"
   | "unknown";
 
-// Hook-origin async runs need immutable ingress provenance because routed
-// session keys can be normalized outside the hook:* namespace.
-export type HookExternalContentSource = "gmail" | "webhook";
-
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
@@ -105,25 +101,6 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   web_fetch: "Web Fetch",
   unknown: "External",
 };
-
-export function resolveHookExternalContentSource(
-  sessionKey: string,
-): HookExternalContentSource | undefined {
-  const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
-    return "gmail";
-  }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return undefined;
-}
-
-export function mapHookExternalContentSource(
-  source: HookExternalContentSource,
-): Extract<ExternalContentSource, "email" | "webhook"> {
-  return source === "gmail" ? "email" : "webhook";
-}
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -174,18 +151,10 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
-const MARKER_IGNORABLE_CHAR_RE = /\u200B|\u200C|\u200D|\u2060|\uFEFF|\u00AD/g;
-
 function foldMarkerText(input: string): string {
-  return (
-    input
-      // Strip invisible format characters that can split marker tokens without changing
-      // how downstream models interpret the apparent boundary text.
-      .replace(MARKER_IGNORABLE_CHAR_RE, "")
-      .replace(
-        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
-        (char) => foldMarkerChar(char),
-      )
+  return input.replace(
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
+    (char) => foldMarkerChar(char),
   );
 }
 
@@ -273,13 +242,12 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitized = replaceMarkers(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
-  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
 
   if (sender) {
-    metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
+    metadataLines.push(`From: ${sender}`);
   }
   if (subject) {
-    metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
+    metadataLines.push(`Subject: ${subject}`);
   }
 
   const metadata = metadataLines.join("\n");
@@ -338,15 +306,29 @@ export function buildSafeExternalPrompt(params: {
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
-  return resolveHookExternalContentSource(sessionKey) !== undefined;
+  const normalized = sessionKey.trim().toLowerCase();
+  return (
+    normalized.startsWith("hook:gmail:") ||
+    normalized.startsWith("hook:webhook:") ||
+    normalized.startsWith("hook:") // Generic hook prefix
+  );
 }
 
 /**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  const source = resolveHookExternalContentSource(sessionKey);
-  return source ? mapHookExternalContentSource(source) : "unknown";
+  const normalized = sessionKey.trim().toLowerCase();
+  if (normalized.startsWith("hook:gmail:")) {
+    return "email";
+  }
+  if (normalized.startsWith("hook:webhook:")) {
+    return "webhook";
+  }
+  if (normalized.startsWith("hook:")) {
+    return "webhook";
+  }
+  return "unknown";
 }
 
 /**

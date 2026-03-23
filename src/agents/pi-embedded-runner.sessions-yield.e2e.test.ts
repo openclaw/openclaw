@@ -8,17 +8,12 @@
  * Follows the same pattern as pi-embedded-runner.e2e.test.ts.
  */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded-runner/runs.js";
-import {
-  cleanupEmbeddedPiRunnerTestWorkspace,
-  createEmbeddedPiRunnerOpenAiConfig,
-  createEmbeddedPiRunnerTestWorkspace,
-  type EmbeddedPiRunnerTestWorkspace,
-  immediateEnqueue,
-} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
 function createMockUsage(input: number, output: number) {
   return {
@@ -131,7 +126,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
+let tempRoot: string | undefined;
 let agentDir: string;
 let workspaceDir: string;
 
@@ -141,14 +136,44 @@ beforeAll(async () => {
   responsePlan = [];
   observedContexts = [];
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  e2eWorkspace = await createEmbeddedPiRunnerTestWorkspace("openclaw-yield-e2e-");
-  ({ agentDir, workspaceDir } = e2eWorkspace);
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-yield-e2e-"));
+  agentDir = path.join(tempRoot, "agent");
+  workspaceDir = path.join(tempRoot, "workspace");
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(workspaceDir, { recursive: true });
 }, 180_000);
 
 afterAll(async () => {
-  await cleanupEmbeddedPiRunnerTestWorkspace(e2eWorkspace);
-  e2eWorkspace = undefined;
+  if (!tempRoot) {
+    return;
+  }
+  await fs.rm(tempRoot, { recursive: true, force: true });
+  tempRoot = undefined;
 });
+
+const makeConfig = (modelIds: string[]) =>
+  ({
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          apiKey: "sk-test",
+          baseUrl: "https://example.com",
+          models: modelIds.map((id) => ({
+            id,
+            name: `Mock ${id}`,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 16_000,
+            maxTokens: 2048,
+          })),
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
+const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const readSessionMessages = async (sessionFile: string) => {
   const raw = await fs.readFile(sessionFile, "utf-8");
@@ -180,7 +205,7 @@ describe("sessions_yield e2e", () => {
 
       const sessionId = "yield-e2e-parent";
       const sessionFile = path.join(workspaceDir, "session-yield-e2e.jsonl");
-      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-yield"]);
+      const cfg = makeConfig(["mock-yield"]);
 
       const result = await runEmbeddedPiAgent({
         sessionId,
@@ -279,7 +304,7 @@ describe("sessions_yield e2e", () => {
 
       const sessionId = "yield-e2e-abort";
       const sessionFile = path.join(workspaceDir, "session-yield-abort.jsonl");
-      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-yield-abort"]);
+      const cfg = makeConfig(["mock-yield-abort"]);
 
       const result = await runEmbeddedPiAgent({
         sessionId,

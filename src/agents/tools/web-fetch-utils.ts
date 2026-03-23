@@ -206,33 +206,27 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
   return false;
 }
 
-export async function extractBasicHtmlContent(params: {
-  html: string;
-  extractMode: ExtractMode;
-}): Promise<{ text: string; title?: string } | null> {
-  const cleanHtml = await sanitizeHtml(params.html);
-  const rendered = htmlToMarkdown(cleanHtml);
-  if (params.extractMode === "text") {
-    const text =
-      stripInvisibleUnicode(markdownToText(rendered.text)) ||
-      stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
-    return text ? { text, title: rendered.title } : null;
-  }
-  const text = stripInvisibleUnicode(rendered.text);
-  return text ? { text, title: rendered.title } : null;
-}
-
 export async function extractReadableContent(params: {
   html: string;
   url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
+  const fallback = (): { text: string; title?: string } => {
+    const rendered = htmlToMarkdown(cleanHtml);
+    if (params.extractMode === "text") {
+      const text =
+        stripInvisibleUnicode(markdownToText(rendered.text)) ||
+        stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
+      return { text, title: rendered.title };
+    }
+    return { text: stripInvisibleUnicode(rendered.text), title: rendered.title };
+  };
   if (
     cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
     exceedsEstimatedHtmlNestingDepth(cleanHtml, READABILITY_MAX_ESTIMATED_NESTING_DEPTH)
   ) {
-    return null;
+    return fallback();
   }
   try {
     const { Readability, parseHTML } = await loadReadabilityDeps();
@@ -245,17 +239,16 @@ export async function extractReadableContent(params: {
     const reader = new Readability(document, { charThreshold: 0 });
     const parsed = reader.parse();
     if (!parsed?.content) {
-      return null;
+      return fallback();
     }
     const title = parsed.title || undefined;
     if (params.extractMode === "text") {
       const text = stripInvisibleUnicode(normalizeWhitespace(parsed.textContent ?? ""));
-      return text ? { text, title } : null;
+      return text ? { text, title } : fallback();
     }
     const rendered = htmlToMarkdown(parsed.content);
-    const text = stripInvisibleUnicode(rendered.text);
-    return text ? { text, title: title ?? rendered.title } : null;
+    return { text: stripInvisibleUnicode(rendered.text), title: title ?? rendered.title };
   } catch {
-    return null;
+    return fallback();
   }
 }

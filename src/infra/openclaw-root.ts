@@ -5,14 +5,11 @@ import { fileURLToPath } from "node:url";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 
-function parsePackageName(raw: string): string | null {
-  const parsed = JSON.parse(raw) as { name?: unknown };
-  return typeof parsed.name === "string" ? parsed.name : null;
-}
-
 async function readPackageName(dir: string): Promise<string | null> {
   try {
-    return parsePackageName(await fs.readFile(path.join(dir, "package.json"), "utf-8"));
+    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
   } catch {
     return null;
   }
@@ -20,7 +17,9 @@ async function readPackageName(dir: string): Promise<string | null> {
 
 function readPackageNameSync(dir: string): string | null {
   try {
-    return parsePackageName(fsSync.readFileSync(path.join(dir, "package.json"), "utf-8"));
+    const raw = fsSync.readFileSync(path.join(dir, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
   } catch {
     return null;
   }

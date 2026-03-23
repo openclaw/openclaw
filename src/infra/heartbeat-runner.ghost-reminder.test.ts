@@ -9,6 +9,9 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
+// Avoid pulling optional runtime deps during isolated runs.
+vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
+
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
@@ -115,7 +118,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           agentId: "main",
           reason: params.reason,
           deps: {
-            telegram: sendTelegram,
+            sendTelegram,
           },
         });
         const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {

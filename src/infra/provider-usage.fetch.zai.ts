@@ -46,12 +46,11 @@ export async function fetchZaiUsage(
 
   const data = (await res.json()) as ZaiUsageResponse;
   if (!data.success || data.code !== 200) {
-    const errorMessage = typeof data.msg === "string" ? data.msg.trim() : "";
     return {
       provider: "zai",
       displayName: PROVIDER_LABELS.zai,
       windows: [],
-      error: errorMessage || "API error",
+      error: data.msg || "API error",
     };
   }
 

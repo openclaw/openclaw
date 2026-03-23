@@ -85,13 +85,6 @@ describe("handleControlUiHttpRequest", () => {
     return { assetsDir, filePath };
   }
 
-  async function createHardlinkedAssetFile(rootPath: string) {
-    const { filePath } = await writeAssetFile(rootPath, "app.js", "console.log('hi');");
-    const hardlinkPath = path.join(path.dirname(filePath), "app.hl.js");
-    await fs.link(filePath, hardlinkPath);
-    return hardlinkPath;
-  }
-
   async function withBasePathRootFixture<T>(params: {
     siblingDir: string;
     fn: (paths: { root: string; sibling: string }) => Promise<T>;
@@ -360,7 +353,10 @@ describe("handleControlUiHttpRequest", () => {
   it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        await createHardlinkedAssetFile(tmp);
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
 
         const { res, end, handled } = runControlUiRequest({
           url: "/assets/app.hl.js",
@@ -378,7 +374,10 @@ describe("handleControlUiHttpRequest", () => {
   it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        await createHardlinkedAssetFile(tmp);
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
 
         const { res, end, handled } = runControlUiRequest({
           url: "/assets/app.hl.js",

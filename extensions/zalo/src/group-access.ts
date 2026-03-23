@@ -1,10 +1,9 @@
+import type { GroupPolicy, SenderGroupAccessDecision } from "openclaw/plugin-sdk/zalo";
 import {
   evaluateSenderGroupAccess,
   isNormalizedSenderAllowed,
   resolveOpenProviderRuntimeGroupPolicy,
-  type GroupPolicy,
-  type SenderGroupAccessDecision,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/zalo";
 
 const ZALO_ALLOW_FROM_PREFIX_RE = /^(zalo|zl):/i;
 

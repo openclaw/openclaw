@@ -38,7 +38,7 @@ async function runBrowserSetRequest(params: {
       { timeoutMs: 20000 },
     );
     if (params.parent?.json) {
-      defaultRuntime.writeJson(result);
+      defaultRuntime.log(JSON.stringify(result, null, 2));
       return;
     }
     defaultRuntime.log(params.successMessage);
@@ -139,7 +139,7 @@ export function registerBrowserStateCommands(
           { timeoutMs: 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log("headers set");

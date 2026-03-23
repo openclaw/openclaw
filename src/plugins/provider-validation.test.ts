@@ -32,21 +32,12 @@ describe("normalizeRegisteredProvider", () => {
         id: " demo ",
         label: " Demo Provider ",
         aliases: [" alias-one ", "alias-one", ""],
-        deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
         envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
         auth: [
           {
             id: " primary ",
             label: " Primary ",
             kind: "custom",
-            wizard: {
-              choiceId: " demo-primary ",
-              modelAllowlist: {
-                allowedKeys: [" demo/model ", "demo/model"],
-                initialSelections: [" demo/model "],
-                message: " Demo models ",
-              },
-            },
             run: async () => ({ profiles: [] }),
           },
           {
@@ -58,7 +49,7 @@ describe("normalizeRegisteredProvider", () => {
           { id: "   ", label: "Missing", kind: "custom", run: async () => ({ profiles: [] }) },
         ],
         wizard: {
-          setup: {
+          onboarding: {
             choiceId: " demo-choice ",
             methodId: " missing ",
           },
@@ -75,24 +66,10 @@ describe("normalizeRegisteredProvider", () => {
       id: "demo",
       label: "Demo Provider",
       aliases: ["alias-one"],
-      deprecatedProfileIds: ["demo:legacy"],
       envVars: ["DEMO_API_KEY"],
-      auth: [
-        {
-          id: "primary",
-          label: "Primary",
-          wizard: {
-            choiceId: "demo-primary",
-            modelAllowlist: {
-              allowedKeys: ["demo/model"],
-              initialSelections: ["demo/model"],
-              message: "Demo models",
-            },
-          },
-        },
-      ],
+      auth: [{ id: "primary", label: "Primary" }],
       wizard: {
-        setup: {
+        onboarding: {
           choiceId: "demo-choice",
         },
         modelPicker: {
@@ -112,7 +89,7 @@ describe("normalizeRegisteredProvider", () => {
       {
         level: "warn",
         message:
-          'provider "demo" setup method "missing" not found; falling back to available methods',
+          'provider "demo" onboarding method "missing" not found; falling back to available methods',
       },
       {
         level: "warn",
@@ -130,7 +107,7 @@ describe("normalizeRegisteredProvider", () => {
       source: "/tmp/demo/index.ts",
       provider: makeProvider({
         wizard: {
-          setup: {
+          onboarding: {
             choiceId: "demo",
           },
           modelPicker: {
@@ -143,37 +120,8 @@ describe("normalizeRegisteredProvider", () => {
 
     expect(provider?.wizard).toBeUndefined();
     expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'provider "demo" setup metadata ignored because it has no auth methods',
+      'provider "demo" onboarding metadata ignored because it has no auth methods',
       'provider "demo" model-picker metadata ignored because it has no auth methods',
-    ]);
-  });
-
-  it("prefers catalog when a provider registers both catalog and discovery", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
-
-    const provider = normalizeRegisteredProvider({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
-      provider: makeProvider({
-        catalog: {
-          run: async () => null,
-        },
-        discovery: {
-          run: async () => ({
-            provider: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          }),
-        },
-      }),
-      pushDiagnostic,
-    });
-
-    expect(provider?.catalog).toBeDefined();
-    expect(provider?.discovery).toBeUndefined();
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'provider "demo" registered both catalog and discovery; using catalog',
     ]);
   });
 });

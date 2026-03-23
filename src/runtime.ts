@@ -7,11 +7,6 @@ export type RuntimeEnv = {
   exit: (code: number) => void;
 };
 
-export type OutputRuntimeEnv = RuntimeEnv & {
-  writeStdout: (value: string) => void;
-  writeJson: (value: unknown, space?: number) => void;
-};
-
 function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.VITEST !== "true") {
     return true;
@@ -23,49 +18,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   return typeof maybeMockedLog.mock === "object";
 }
 
-function shouldEmitRuntimeStdout(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.VITEST !== "true") {
-    return true;
-  }
-  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
-    return true;
-  }
-  const stdout = process.stdout as NodeJS.WriteStream & {
-    write: {
-      mock?: unknown;
-    };
-  };
-  return typeof stdout.write.mock === "object";
-}
-
-function isPipeClosedError(err: unknown): boolean {
-  const code = (err as { code?: string })?.code;
-  return code === "EPIPE" || code === "EIO";
-}
-
-function hasRuntimeOutputWriter(
-  runtime: RuntimeEnv | OutputRuntimeEnv,
-): runtime is OutputRuntimeEnv {
-  return typeof (runtime as Partial<OutputRuntimeEnv>).writeStdout === "function";
-}
-
-function writeStdout(value: string): void {
-  if (!shouldEmitRuntimeStdout()) {
-    return;
-  }
-  clearActiveProgressLine();
-  const line = value.endsWith("\n") ? value : `${value}\n`;
-  try {
-    process.stdout.write(line);
-  } catch (err) {
-    if (isPipeClosedError(err)) {
-      return;
-    }
-    throw err;
-  }
-}
-
-function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdout" | "writeJson"> {
+function createRuntimeIo(): Pick<RuntimeEnv, "log" | "error"> {
   return {
     log: (...args: Parameters<typeof console.log>) => {
       if (!shouldEmitRuntimeLog()) {
@@ -78,14 +31,10 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
       clearActiveProgressLine();
       console.error(...args);
     },
-    writeStdout,
-    writeJson: (value: unknown, space = 2) => {
-      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
-    },
   };
 }
 
-export const defaultRuntime: OutputRuntimeEnv = {
+export const defaultRuntime: RuntimeEnv = {
   ...createRuntimeIo(),
   exit: (code) => {
     restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
@@ -94,31 +43,11 @@ export const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
-export function createNonExitingRuntime(): OutputRuntimeEnv {
+export function createNonExitingRuntime(): RuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
       throw new Error(`exit ${code}`);
     },
   };
-}
-
-export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {
-  if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeStdout(value);
-    return;
-  }
-  runtime.log(value);
-}
-
-export function writeRuntimeJson(
-  runtime: RuntimeEnv | OutputRuntimeEnv,
-  value: unknown,
-  space = 2,
-): void {
-  if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeJson(value, space);
-    return;
-  }
-  runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
 }

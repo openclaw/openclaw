@@ -225,12 +225,18 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.writeJson({
-            setupCode,
-            gatewayUrl: resolved.payload.url,
-            auth: resolved.authLabel,
-            urlSource: resolved.urlSource,
-          });
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                setupCode,
+                gatewayUrl: resolved.payload.url,
+                auth: resolved.authLabel,
+                urlSource: resolved.urlSource,
+              },
+              null,
+              2,
+            ),
+          );
           return;
         }
 

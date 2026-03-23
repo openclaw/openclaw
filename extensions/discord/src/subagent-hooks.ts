@@ -1,10 +1,10 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { resolveDiscordAccount } from "./accounts.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
 import {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
+  resolveDiscordAccount,
   unbindThreadBindingsBySessionKey,
-} from "./monitor/thread-bindings.js";
+} from "openclaw/plugin-sdk/discord";
 
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {

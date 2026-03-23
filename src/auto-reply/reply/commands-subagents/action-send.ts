@@ -37,9 +37,8 @@ export async function handleSubagentsSendAction(
     return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
   }
 
-  const controller = resolveCommandSubagentController(params, ctx.requesterKey);
-
   if (steerRequested) {
+    const controller = resolveCommandSubagentController(params, ctx.requesterKey);
     const result = await steerControlledSubagentRun({
       cfg: params.cfg,
       controller,
@@ -62,7 +61,6 @@ export async function handleSubagentsSendAction(
 
   const result = await sendControlledSubagentMessage({
     cfg: params.cfg,
-    controller,
     entry: targetResolution.entry,
     message,
   });
@@ -71,9 +69,6 @@ export async function handleSubagentsSendAction(
   }
   if (result.status === "error") {
     return stopWithText(`⚠️ Subagent error: ${result.error} (run ${result.runId.slice(0, 8)}).`);
-  }
-  if (result.status === "forbidden") {
-    return stopWithText(`⚠️ ${result.error ?? "send failed"}`);
   }
   return stopWithText(
     result.replyText ??

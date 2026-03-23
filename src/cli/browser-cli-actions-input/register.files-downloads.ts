@@ -38,7 +38,7 @@ async function runBrowserPostAction<T>(params: {
       { timeoutMs: params.timeoutMs },
     );
     if (params.parent?.json) {
-      defaultRuntime.writeJson(result);
+      defaultRuntime.log(JSON.stringify(result, null, 2));
       return;
     }
     defaultRuntime.log(params.describeSuccess(result));

@@ -25,8 +25,6 @@ import kotlinx.serialization.json.put
 
 class DeviceHandler(
   private val appContext: Context,
-  private val smsEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_SMS,
-  private val callLogEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
 ) {
   private data class BatterySnapshot(
     val status: Int,
@@ -175,8 +173,8 @@ class DeviceHandler(
           put(
             "sms",
             permissionStateJson(
-              granted = smsEnabled && hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
-              promptableWhenDenied = smsEnabled && canSendSms,
+              granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
+              promptableWhenDenied = canSendSms,
             ),
           )
           put(
@@ -212,13 +210,6 @@ class DeviceHandler(
             permissionStateJson(
               granted = hasPermission(Manifest.permission.READ_CALENDAR),
               promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "callLog",
-            permissionStateJson(
-              granted = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
-              promptableWhenDenied = callLogEnabled,
             ),
           )
           put(

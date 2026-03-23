@@ -3,35 +3,30 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearTimeout as clearNativeTimeout,
-  setTimeout as scheduleNativeTimeout,
-} from "node:timers";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
-type MockWatcher = {
-  on: (event: string, cb: (...args: unknown[]) => void) => MockWatcher;
-  close: () => Promise<void>;
-  __emit: (event: string, ...args: unknown[]) => void;
-};
+const chokidarMockState = vi.hoisted(() => ({
+  watchers: [] as Array<{
+    on: (event: string, cb: (...args: unknown[]) => void) => unknown;
+    close: () => Promise<void>;
+    __emit: (event: string, ...args: unknown[]) => void;
+  }>,
+}));
 
 const CANVAS_WS_OPEN_TIMEOUT_MS = 2_000;
 const CANVAS_RELOAD_TIMEOUT_MS = 4_000;
 const CANVAS_RELOAD_TEST_TIMEOUT_MS = 12_000;
 
-function isLoopbackBindDenied(error: unknown) {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "EPERM" || code === "EACCES";
-}
-
-function createMockWatcherState() {
-  const watchers: MockWatcher[] = [];
+// Tests: avoid chokidar polling/fsevents; trigger "all" events manually.
+vi.mock("chokidar", () => {
   const createWatcher = () => {
     const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
-    const api: MockWatcher = {
+    const api = {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         const list = handlers.get(event) ?? [];
         list.push(cb);
@@ -45,26 +40,22 @@ function createMockWatcherState() {
         }
       },
     };
-    watchers.push(api);
+    chokidarMockState.watchers.push(api);
     return api;
   };
+
+  const watch = () => createWatcher();
   return {
-    watchers,
-    watchFactory: () => createWatcher(),
+    default: { watch },
+    watch,
   };
-}
+});
 
 describe("canvas host", () => {
   const quietRuntime = {
     ...defaultRuntime,
     log: (..._args: Parameters<typeof console.log>) => {},
   };
-  let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
-  let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let realFetch: typeof import("undici").fetch;
-  let WebSocketClient: typeof import("ws").WebSocket;
-  let WebSocketServerClass: typeof import("ws").WebSocketServer;
-  let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -84,32 +75,17 @@ describe("canvas host", () => {
       port: 0,
       listenHost: "127.0.0.1",
       allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof startCanvasHost
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
       ...overrides,
     });
 
   const fetchCanvasHtml = async (port: number) => {
-    const res = await realFetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
+    const res = await fetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
     const html = await res.text();
     return { res, html };
   };
 
   beforeAll(async () => {
-    ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
-    const undiciModule = await vi.importActual<typeof import("undici")>("undici");
-    realFetch = undiciModule.fetch;
-    const wsModule = await vi.importActual<typeof import("ws")>("ws");
-    WebSocketClient = wsModule.WebSocket;
-    WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
-  });
-
-  beforeEach(() => {
-    vi.useRealTimers();
-    watcherState = createMockWatcherState();
   });
 
   afterAll(async () => {
@@ -126,15 +102,8 @@ describe("canvas host", () => {
 
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
-    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
-    try {
-      server = await startFixtureCanvasHost(dir);
-    } catch (error) {
-      if (isLoopbackBindDenied(error)) {
-        return;
-      }
-      throw error;
-    }
+
+    const server = await startFixtureCanvasHost(dir);
 
     try {
       const { res, html } = await fetchCanvasHtml(server.port);
@@ -150,15 +119,8 @@ describe("canvas host", () => {
   it("skips live reload injection when disabled", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
-    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
-    try {
-      server = await startFixtureCanvasHost(dir, { liveReload: false });
-    } catch (error) {
-      if (isLoopbackBindDenied(error)) {
-        return;
-      }
-      throw error;
-    }
+
+    const server = await startFixtureCanvasHost(dir, { liveReload: false });
 
     try {
       const { res, html } = await fetchCanvasHtml(server.port);
@@ -166,7 +128,7 @@ describe("canvas host", () => {
       expect(html).toContain("no-reload");
       expect(html).not.toContain(CANVAS_WS_PATH);
 
-      const wsRes = await realFetch(`http://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
+      const wsRes = await fetch(`http://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
       expect(wsRes.status).toBe(404);
     } finally {
       await server.close();
@@ -182,10 +144,6 @@ describe("canvas host", () => {
       rootDir: dir,
       basePath: CANVAS_HOST_PATH,
       allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
     });
 
     const server = createServer((req, res) => {
@@ -204,37 +162,18 @@ describe("canvas host", () => {
       }
       socket.destroy();
     });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (error: Error) => {
-          server.off("listening", onListening);
-          reject(error);
-        };
-        const onListening = () => {
-          server.off("error", onError);
-          resolve();
-        };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen(0, "127.0.0.1");
-      });
-    } catch (error) {
-      await handler.close();
-      if (isLoopbackBindDenied(error)) {
-        return;
-      }
-      throw error;
-    }
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
 
     try {
-      const res = await realFetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
+      const res = await fetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("v1");
       expect(html).toContain(CANVAS_WS_PATH);
 
-      const miss = await realFetch(`http://127.0.0.1:${port}/`);
+      const miss = await fetch(`http://127.0.0.1:${port}/`);
       expect(miss.status).toBe(404);
     } finally {
       await new Promise<void>((resolve, reject) =>
@@ -270,19 +209,11 @@ describe("canvas host", () => {
       const index = path.join(dir, "index.html");
       await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
-      const watcherStart = watcherState.watchers.length;
-      let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
-      try {
-        server = await startFixtureCanvasHost(dir);
-      } catch (error) {
-        if (isLoopbackBindDenied(error)) {
-          return;
-        }
-        throw error;
-      }
+      const watcherStart = chokidarMockState.watchers.length;
+      const server = await startFixtureCanvasHost(dir);
 
       try {
-        const watcher = watcherState.watchers[watcherStart];
+        const watcher = chokidarMockState.watchers[watcherStart];
         expect(watcher).toBeTruthy();
 
         const { res, html } = await fetchCanvasHtml(server.port);
@@ -290,29 +221,29 @@ describe("canvas host", () => {
         expect(html).toContain("v1");
         expect(html).toContain(CANVAS_WS_PATH);
 
-        const ws = new WebSocketClient(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
+        const ws = new WebSocket(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
         await new Promise<void>((resolve, reject) => {
-          const timer = scheduleNativeTimeout(
+          const timer = setTimeout(
             () => reject(new Error("ws open timeout")),
             CANVAS_WS_OPEN_TIMEOUT_MS,
           );
           ws.on("open", () => {
-            clearNativeTimeout(timer);
+            clearTimeout(timer);
             resolve();
           });
           ws.on("error", (err) => {
-            clearNativeTimeout(timer);
+            clearTimeout(timer);
             reject(err);
           });
         });
 
         const msg = new Promise<string>((resolve, reject) => {
-          const timer = scheduleNativeTimeout(
+          const timer = setTimeout(
             () => reject(new Error("reload timeout")),
             CANVAS_RELOAD_TIMEOUT_MS,
           );
           ws.on("message", (data) => {
-            clearNativeTimeout(timer);
+            clearTimeout(timer);
             resolve(rawDataToString(data));
           });
         });
@@ -320,7 +251,7 @@ describe("canvas host", () => {
         await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
         watcher.__emit("all", "change", index);
         expect(await msg).toBe("reload");
-        ws.terminate();
+        ws.close();
       } finally {
         await server.close();
       }
@@ -336,7 +267,6 @@ describe("canvas host", () => {
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
     let createdLink = false;
-    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>> | undefined;
 
     try {
       await fs.stat(bundlePath);
@@ -348,38 +278,31 @@ describe("canvas host", () => {
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
     createdLink = true;
 
-    try {
-      try {
-        server = await startFixtureCanvasHost(dir);
-      } catch (error) {
-        if (isLoopbackBindDenied(error)) {
-          return;
-        }
-        throw error;
-      }
+    const server = await startFixtureCanvasHost(dir);
 
-      const res = await realFetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const bundleRes = await realFetch(
+      const bundleRes = await fetch(
         `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
       );
       const js = await bundleRes.text();
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
-      const traversalRes = await realFetch(
+      const traversalRes = await fetch(
         `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
       );
       expect(traversalRes.status).toBe(404);
       expect(await traversalRes.text()).toBe("not found");
-      const symlinkRes = await realFetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(await symlinkRes.text()).toBe("not found");
     } finally {
-      await server?.close();
+      await server.close();
       if (createdLink) {
         await fs.rm(linkPath, { force: true });
       }

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
   resolveSpawnCommand,
   spawnAndCollect,
@@ -61,58 +61,6 @@ describe("resolveSpawnCommand", () => {
     expect(resolved).toEqual({
       command: "acpx",
       args: ["--help"],
-    });
-  });
-
-  it("routes node shebang wrappers through the current node runtime on posix", async () => {
-    const dir = await createTempDir();
-    const scriptPath = path.join(dir, "acpx");
-    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
-    await chmod(scriptPath, 0o755);
-
-    const resolved = resolveSpawnCommand(
-      {
-        command: scriptPath,
-        args: ["--help"],
-      },
-      undefined,
-      {
-        platform: "linux",
-        env: {},
-        execPath: "/custom/node",
-      },
-    );
-
-    expect(resolved).toEqual({
-      command: "/custom/node",
-      args: [scriptPath, "--help"],
-    });
-  });
-
-  it("routes PATH-resolved node shebang wrappers through the current node runtime on posix", async () => {
-    const dir = await createTempDir();
-    const binDir = path.join(dir, "bin");
-    const scriptPath = path.join(binDir, "acpx");
-    await mkdir(binDir, { recursive: true });
-    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
-    await chmod(scriptPath, 0o755);
-
-    const resolved = resolveSpawnCommand(
-      {
-        command: "acpx",
-        args: ["--help"],
-      },
-      undefined,
-      {
-        platform: "linux",
-        env: { PATH: binDir },
-        execPath: "/custom/node",
-      },
-    );
-
-    expect(resolved).toEqual({
-      command: "/custom/node",
-      args: [scriptPath, "--help"],
     });
   });
 
@@ -306,44 +254,6 @@ describe("waitForExit", () => {
 });
 
 describe("spawnAndCollect", () => {
-  type SpawnedEnvSnapshot = {
-    openai?: string;
-    github?: string;
-    hf?: string;
-    openclaw?: string;
-    shell?: string;
-  };
-
-  function stubProviderAuthEnv(env: Record<string, string>) {
-    for (const [key, value] of Object.entries(env)) {
-      vi.stubEnv(key, value);
-    }
-  }
-
-  async function collectSpawnedEnvSnapshot(options?: {
-    stripProviderAuthEnvVars?: boolean;
-    openAiEnvKey?: string;
-    githubEnvKey?: string;
-    hfEnvKey?: string;
-  }): Promise<SpawnedEnvSnapshot> {
-    const openAiEnvKey = options?.openAiEnvKey ?? "OPENAI_API_KEY";
-    const githubEnvKey = options?.githubEnvKey ?? "GITHUB_TOKEN";
-    const hfEnvKey = options?.hfEnvKey ?? "HF_TOKEN";
-    const result = await spawnAndCollect({
-      command: process.execPath,
-      args: [
-        "-e",
-        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))`,
-      ],
-      cwd: process.cwd(),
-      stripProviderAuthEnvVars: options?.stripProviderAuthEnvVars,
-    });
-
-    expect(result.code).toBe(0);
-    expect(result.error).toBeNull();
-    return JSON.parse(result.stdout) as SpawnedEnvSnapshot;
-  }
-
   it("returns abort error immediately when signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -382,15 +292,31 @@ describe("spawnAndCollect", () => {
   });
 
   it("strips shared provider auth env vars from spawned acpx children", async () => {
-    stubProviderAuthEnv({
-      OPENAI_API_KEY: "openai-secret",
-      GITHUB_TOKEN: "gh-secret",
-      HF_TOKEN: "hf-secret",
-      OPENCLAW_API_KEY: "keep-me",
-    });
-    const parsed = await collectSpawnedEnvSnapshot({
+    vi.stubEnv("OPENAI_API_KEY", "openai-secret");
+    vi.stubEnv("GITHUB_TOKEN", "gh-secret");
+    vi.stubEnv("HF_TOKEN", "hf-secret");
+    vi.stubEnv("OPENCLAW_API_KEY", "keep-me");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OPENAI_API_KEY,github:process.env.GITHUB_TOKEN,hf:process.env.HF_TOKEN,openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))",
+      ],
+      cwd: process.cwd(),
       stripProviderAuthEnvVars: true,
     });
+
+    expect(result.code).toBe(0);
+    expect(result.error).toBeNull();
+
+    const parsed = JSON.parse(result.stdout) as {
+      openai?: string;
+      github?: string;
+      hf?: string;
+      openclaw?: string;
+      shell?: string;
+    };
     expect(parsed.openai).toBeUndefined();
     expect(parsed.github).toBeUndefined();
     expect(parsed.hf).toBeUndefined();
@@ -399,16 +325,29 @@ describe("spawnAndCollect", () => {
   });
 
   it("strips provider auth env vars case-insensitively", async () => {
-    stubProviderAuthEnv({
-      OpenAI_Api_Key: "openai-secret",
-      Github_Token: "gh-secret",
-      OPENCLAW_API_KEY: "keep-me",
-    });
-    const parsed = await collectSpawnedEnvSnapshot({
+    vi.stubEnv("OpenAI_Api_Key", "openai-secret");
+    vi.stubEnv("Github_Token", "gh-secret");
+    vi.stubEnv("OPENCLAW_API_KEY", "keep-me");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OpenAI_Api_Key,github:process.env.Github_Token,openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))",
+      ],
+      cwd: process.cwd(),
       stripProviderAuthEnvVars: true,
-      openAiEnvKey: "OpenAI_Api_Key",
-      githubEnvKey: "Github_Token",
     });
+
+    expect(result.code).toBe(0);
+    expect(result.error).toBeNull();
+
+    const parsed = JSON.parse(result.stdout) as {
+      openai?: string;
+      github?: string;
+      openclaw?: string;
+      shell?: string;
+    };
     expect(parsed.openai).toBeUndefined();
     expect(parsed.github).toBeUndefined();
     expect(parsed.openclaw).toBe("keep-me");
@@ -416,13 +355,30 @@ describe("spawnAndCollect", () => {
   });
 
   it("preserves provider auth env vars for explicit custom commands by default", async () => {
-    stubProviderAuthEnv({
-      OPENAI_API_KEY: "openai-secret",
-      GITHUB_TOKEN: "gh-secret",
-      HF_TOKEN: "hf-secret",
-      OPENCLAW_API_KEY: "keep-me",
+    vi.stubEnv("OPENAI_API_KEY", "openai-secret");
+    vi.stubEnv("GITHUB_TOKEN", "gh-secret");
+    vi.stubEnv("HF_TOKEN", "hf-secret");
+    vi.stubEnv("OPENCLAW_API_KEY", "keep-me");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OPENAI_API_KEY,github:process.env.GITHUB_TOKEN,hf:process.env.HF_TOKEN,openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))",
+      ],
+      cwd: process.cwd(),
     });
-    const parsed = await collectSpawnedEnvSnapshot();
+
+    expect(result.code).toBe(0);
+    expect(result.error).toBeNull();
+
+    const parsed = JSON.parse(result.stdout) as {
+      openai?: string;
+      github?: string;
+      hf?: string;
+      openclaw?: string;
+      shell?: string;
+    };
     expect(parsed.openai).toBe("openai-secret");
     expect(parsed.github).toBe("gh-secret");
     expect(parsed.hf).toBe("hf-secret");

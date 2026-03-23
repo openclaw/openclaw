@@ -76,7 +76,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
       createVoiceCallRuntime({
         config: createBaseConfig(),
         coreConfig: {},
-        agentRuntime: {} as never,
       }),
     ).rejects.toThrow("init failed");
 
@@ -96,7 +95,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const runtime = await createVoiceCallRuntime({
       config: createBaseConfig(),
       coreConfig: {} as CoreConfig,
-      agentRuntime: {} as never,
     });
 
     await runtime.stop();

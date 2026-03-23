@@ -1,5 +1,4 @@
 import net from "node:net";
-import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 
 export async function requestJsonlSocket<T>(params: {
   socketPath: string;
@@ -26,7 +25,7 @@ export async function requestJsonlSocket<T>(params: {
       resolve(value);
     };
 
-    const timer = setNodeTimeout(() => finish(null), timeoutMs);
+    const timer = setTimeout(() => finish(null), timeoutMs);
 
     client.on("error", () => finish(null));
     client.connect(socketPath, () => {
@@ -48,7 +47,7 @@ export async function requestJsonlSocket<T>(params: {
           if (result === undefined) {
             continue;
           }
-          clearNodeTimeout(timer);
+          clearTimeout(timer);
           finish(result);
           return;
         } catch {

@@ -9,59 +9,43 @@ sidebarTitle: "Onboarding Overview"
 
 # Onboarding Overview
 
-OpenClaw has two onboarding paths. Both configure auth, the Gateway, and
-optional channels — they just differ in how you interact with the setup.
+OpenClaw supports multiple onboarding paths depending on where the Gateway runs
+and how you prefer to configure providers.
 
-## Which path should I use?
+## Choose your onboarding path
 
-|                | CLI onboarding                         | macOS app onboarding      |
-| -------------- | -------------------------------------- | ------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                |
-| **Interface**  | Terminal wizard                        | Guided UI in the app      |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup |
-| **Automation** | `--non-interactive` for scripts        | Manual only               |
-| **Command**    | `openclaw onboard`                     | Launch the app            |
+- **CLI wizard** for macOS, Linux, and Windows (via WSL2).
+- **macOS app** for a guided first run on Apple silicon or Intel Macs.
 
-Most users should start with **CLI onboarding** — it works everywhere and gives
-you the most control.
+## CLI onboarding wizard
 
-## What onboarding configures
-
-Regardless of which path you choose, onboarding sets up:
-
-1. **Model provider and auth** — API key, OAuth, or setup token for your chosen provider
-2. **Workspace** — directory for agent files, bootstrap templates, and memory
-3. **Gateway** — port, bind address, auth mode
-4. **Channels** (optional) — WhatsApp, Telegram, Discord, and more
-5. **Daemon** (optional) — background service so the Gateway starts automatically
-
-## CLI onboarding
-
-Run in any terminal:
+Run the wizard in a terminal:
 
 ```bash
 openclaw onboard
 ```
 
-Add `--install-daemon` to also install the background service in one step.
+Use the CLI wizard when you want full control of the Gateway, workspace,
+channels, and skills. Docs:
 
-Full reference: [Onboarding (CLI)](/start/wizard)
-CLI command docs: [`openclaw onboard`](/cli/onboard)
+- [Onboarding Wizard (CLI)](/start/wizard)
+- [`openclaw onboard` command](/cli/onboard)
 
 ## macOS app onboarding
 
-Open the OpenClaw app. The first-run wizard walks you through the same steps
-with a visual interface.
+Use the OpenClaw app when you want a fully guided setup on macOS. Docs:
 
-Full reference: [Onboarding (macOS App)](/start/onboarding)
+- [Onboarding (macOS App)](/start/onboarding)
 
-## Custom or unlisted providers
+## Custom Provider
 
-If your provider is not listed in onboarding, choose **Custom Provider** and
-enter:
+If you need an endpoint that is not listed, including hosted providers that
+expose standard OpenAI or Anthropic APIs, choose **Custom Provider** in the
+CLI wizard. You will be asked to:
 
-- API compatibility mode (OpenAI-compatible, Anthropic-compatible, or auto-detect)
-- Base URL and API key
-- Model ID and optional alias
+- Pick OpenAI-compatible, Anthropic-compatible, or **Unknown** (auto-detect).
+- Enter a base URL and API key (if required by the provider).
+- Provide a model ID and optional alias.
+- Choose an Endpoint ID so multiple custom endpoints can coexist.
 
-Multiple custom endpoints can coexist — each gets its own endpoint ID.
+For detailed steps, follow the CLI onboarding docs above.

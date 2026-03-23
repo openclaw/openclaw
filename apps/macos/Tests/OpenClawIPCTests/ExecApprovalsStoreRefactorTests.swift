@@ -21,12 +21,13 @@ struct ExecApprovalsStoreRefactorTests {
         try await self.withTempStateDir { _ in
             _ = ExecApprovalsStore.ensureFile()
             let url = ExecApprovalsStore.fileURL()
-            let firstIdentity = try Self.fileIdentity(at: url)
+            let firstWriteDate = try Self.modificationDate(at: url)
 
+            try await Task.sleep(nanoseconds: 1_100_000_000)
             _ = ExecApprovalsStore.ensureFile()
-            let secondIdentity = try Self.fileIdentity(at: url)
+            let secondWriteDate = try Self.modificationDate(at: url)
 
-            #expect(firstIdentity == secondIdentity)
+            #expect(firstWriteDate == secondWriteDate)
         }
     }
 
@@ -80,12 +81,12 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
-    private static func fileIdentity(at url: URL) throws -> Int {
+    private static func modificationDate(at url: URL) throws -> Date {
         let attributes = try FileManager().attributesOfItem(atPath: url.path)
-        guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
-            struct MissingIdentifierError: Error {}
-            throw MissingIdentifierError()
+        guard let date = attributes[.modificationDate] as? Date else {
+            struct MissingDateError: Error {}
+            throw MissingDateError()
         }
-        return identifier
+        return date
     }
 }

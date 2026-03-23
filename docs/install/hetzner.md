@@ -72,158 +72,269 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
-<Steps>
-  <Step title="Provision the VPS">
-    Create an Ubuntu or Debian VPS in Hetzner.
+## 1) Provision the VPS
 
-    Connect as root:
+Create an Ubuntu or Debian VPS in Hetzner.
 
-    ```bash
-    ssh root@YOUR_VPS_IP
-    ```
+Connect as root:
 
-    This guide assumes the VPS is stateful.
-    Do not treat it as disposable infrastructure.
+```bash
+ssh root@YOUR_VPS_IP
+```
 
-  </Step>
+This guide assumes the VPS is stateful.
+Do not treat it as disposable infrastructure.
 
-  <Step title="Install Docker (on the VPS)">
-    ```bash
-    apt-get update
-    apt-get install -y git curl ca-certificates
-    curl -fsSL https://get.docker.com | sh
-    ```
+---
 
-    Verify:
+## 2) Install Docker (on the VPS)
 
-    ```bash
-    docker --version
-    docker compose version
-    ```
+```bash
+apt-get update
+apt-get install -y git curl ca-certificates
+curl -fsSL https://get.docker.com | sh
+```
 
-  </Step>
+Verify:
 
-  <Step title="Clone the OpenClaw repository">
-    ```bash
-    git clone https://github.com/openclaw/openclaw.git
-    cd openclaw
-    ```
+```bash
+docker --version
+docker compose version
+```
 
-    This guide assumes you will build a custom image to guarantee binary persistence.
+---
 
-  </Step>
+## 3) Clone the OpenClaw repository
 
-  <Step title="Create persistent host directories">
-    Docker containers are ephemeral.
-    All long-lived state must live on the host.
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+```
 
-    ```bash
-    mkdir -p /root/.openclaw/workspace
+This guide assumes you will build a custom image to guarantee binary persistence.
 
-    # Set ownership to the container user (uid 1000):
-    chown -R 1000:1000 /root/.openclaw
-    ```
+---
 
-  </Step>
+## 4) Create persistent host directories
 
-  <Step title="Configure environment variables">
-    Create `.env` in the repository root.
+Docker containers are ephemeral.
+All long-lived state must live on the host.
 
-    ```bash
-    OPENCLAW_IMAGE=openclaw:latest
-    OPENCLAW_GATEWAY_TOKEN=change-me-now
-    OPENCLAW_GATEWAY_BIND=lan
-    OPENCLAW_GATEWAY_PORT=18789
+```bash
+mkdir -p /root/.openclaw/workspace
 
-    OPENCLAW_CONFIG_DIR=/root/.openclaw
-    OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
+# Set ownership to the container user (uid 1000):
+chown -R 1000:1000 /root/.openclaw
+```
 
-    GOG_KEYRING_PASSWORD=change-me-now
-    XDG_CONFIG_HOME=/home/node/.openclaw
-    ```
+---
 
-    Generate strong secrets:
+## 5) Configure environment variables
 
-    ```bash
-    openssl rand -hex 32
-    ```
+Create `.env` in the repository root.
 
-    **Do not commit this file.**
+```bash
+OPENCLAW_IMAGE=openclaw:latest
+OPENCLAW_GATEWAY_TOKEN=change-me-now
+OPENCLAW_GATEWAY_BIND=lan
+OPENCLAW_GATEWAY_PORT=18789
 
-  </Step>
+OPENCLAW_CONFIG_DIR=/root/.openclaw
+OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
 
-  <Step title="Docker Compose configuration">
-    Create or update `docker-compose.yml`.
+GOG_KEYRING_PASSWORD=change-me-now
+XDG_CONFIG_HOME=/home/node/.openclaw
+```
 
-    ```yaml
-    services:
-      openclaw-gateway:
-        image: ${OPENCLAW_IMAGE}
-        build: .
-        restart: unless-stopped
-        env_file:
-          - .env
-        environment:
-          - HOME=/home/node
-          - NODE_ENV=production
-          - TERM=xterm-256color
-          - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
-          - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
-          - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-          - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
-          - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
-          - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        volumes:
-          - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-          - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-        ports:
-          # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
-          # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-          - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
-        command:
-          [
-            "node",
-            "dist/index.js",
-            "gateway",
-            "--bind",
-            "${OPENCLAW_GATEWAY_BIND}",
-            "--port",
-            "${OPENCLAW_GATEWAY_PORT}",
-            "--allow-unconfigured",
-          ]
-    ```
+Generate strong secrets:
 
-    `--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
+```bash
+openssl rand -hex 32
+```
 
-  </Step>
+**Do not commit this file.**
 
-  <Step title="Shared Docker VM runtime steps">
-    Use the shared runtime guide for the common Docker host flow:
+---
 
-    - [Bake required binaries into the image](/install/docker-vm-runtime#bake-required-binaries-into-the-image)
-    - [Build and launch](/install/docker-vm-runtime#build-and-launch)
-    - [What persists where](/install/docker-vm-runtime#what-persists-where)
-    - [Updates](/install/docker-vm-runtime#updates)
+## 6) Docker Compose configuration
 
-  </Step>
+Create or update `docker-compose.yml`.
 
-  <Step title="Hetzner-specific access">
-    After the shared build and launch steps, tunnel from your laptop:
+```yaml
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE}
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - HOME=/home/node
+      - NODE_ENV=production
+      - TERM=xterm-256color
+      - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
+      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
+      - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    ports:
+      # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
+      # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND}",
+        "--port",
+        "${OPENCLAW_GATEWAY_PORT}",
+        "--allow-unconfigured",
+      ]
+```
 
-    ```bash
-    ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
-    ```
+`--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
 
-    Open:
+---
 
-    `http://127.0.0.1:18789/`
+## 7) Bake required binaries into the image (critical)
 
-    Paste your gateway token.
+Installing binaries inside a running container is a trap.
+Anything installed at runtime will be lost on restart.
 
-  </Step>
-</Steps>
+All external binaries required by skills must be installed at image build time.
 
-The shared persistence map lives in [Docker VM Runtime](/install/docker-vm-runtime#what-persists-where).
+The examples below show three common binaries only:
+
+- `gog` for Gmail access
+- `goplaces` for Google Places
+- `wacli` for WhatsApp
+
+These are examples, not a complete list.
+You may install as many binaries as needed using the same pattern.
+
+If you add new skills later that depend on additional binaries, you must:
+
+1. Update the Dockerfile
+2. Rebuild the image
+3. Restart the containers
+
+**Example Dockerfile**
+
+```dockerfile
+FROM node:24-bookworm
+
+RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
+
+# Example binary 1: Gmail CLI
+RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+
+# Example binary 2: Google Places CLI
+RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+
+# Example binary 3: WhatsApp CLI
+RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+
+# Add more binaries below using the same pattern
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY scripts ./scripts
+
+RUN corepack enable
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+RUN pnpm ui:install
+RUN pnpm ui:build
+
+ENV NODE_ENV=production
+
+CMD ["node","dist/index.js"]
+```
+
+---
+
+## 8) Build and launch
+
+```bash
+docker compose build
+docker compose up -d openclaw-gateway
+```
+
+Verify binaries:
+
+```bash
+docker compose exec openclaw-gateway which gog
+docker compose exec openclaw-gateway which goplaces
+docker compose exec openclaw-gateway which wacli
+```
+
+Expected output:
+
+```
+/usr/local/bin/gog
+/usr/local/bin/goplaces
+/usr/local/bin/wacli
+```
+
+---
+
+## 9) Verify Gateway
+
+```bash
+docker compose logs -f openclaw-gateway
+```
+
+Success:
+
+```
+[gateway] listening on ws://0.0.0.0:18789
+```
+
+From your laptop:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
+```
+
+Open:
+
+`http://127.0.0.1:18789/`
+
+Paste your gateway token.
+
+---
+
+## What persists where (source of truth)
+
+OpenClaw runs in Docker, but Docker is not the source of truth.
+All long-lived state must survive restarts, rebuilds, and reboots.
+
+| Component           | Location                          | Persistence mechanism  | Notes                            |
+| ------------------- | --------------------------------- | ---------------------- | -------------------------------- |
+| Gateway config      | `/home/node/.openclaw/`           | Host volume mount      | Includes `openclaw.json`, tokens |
+| Model auth profiles | `/home/node/.openclaw/`           | Host volume mount      | OAuth tokens, API keys           |
+| Skill configs       | `/home/node/.openclaw/skills/`    | Host volume mount      | Skill-level state                |
+| Agent workspace     | `/home/node/.openclaw/workspace/` | Host volume mount      | Code and agent artifacts         |
+| WhatsApp session    | `/home/node/.openclaw/`           | Host volume mount      | Preserves QR login               |
+| Gmail keyring       | `/home/node/.openclaw/`           | Host volume + password | Requires `GOG_KEYRING_PASSWORD`  |
+| External binaries   | `/usr/local/bin/`                 | Docker image           | Must be baked at build time      |
+| Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
+| OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
+| Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
+
+---
 
 ## Infrastructure as Code (Terraform)
 
@@ -243,9 +354,3 @@ For teams preferring infrastructure-as-code workflows, a community-maintained Te
 This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
 
 > **Note:** Community-maintained. For issues or contributions, see the repository links above.
-
-## Next steps
-
-- Set up messaging channels: [Channels](/channels)
-- Configure the Gateway: [Gateway configuration](/gateway/configuration)
-- Keep OpenClaw up to date: [Updating](/install/updating)

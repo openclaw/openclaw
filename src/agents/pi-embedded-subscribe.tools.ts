@@ -142,7 +142,6 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "exec",
   "gateway",
   "image",
-  "image_generate",
   "memory_get",
   "memory_search",
   "message",
@@ -162,26 +161,8 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const record = result as Record<string, unknown>;
-  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? (record.details as Record<string, unknown>)
-    : undefined;
-}
-
-function isExternalToolResult(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  if (!details) {
-    return false;
-  }
-  return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
-}
-
-export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
-  if (!toolName || isExternalToolResult(result)) {
+export function isToolResultMediaTrusted(toolName?: string): boolean {
+  if (!toolName) {
     return false;
   }
   const normalized = normalizeToolName(toolName);
@@ -191,12 +172,11 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
 export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
-  result?: unknown,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  if (isToolResultMediaTrusted(toolName, result)) {
+  if (isToolResultMediaTrusted(toolName)) {
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
@@ -206,72 +186,25 @@ export function filterToolResultMediaUrls(
  * Extract media file paths from a tool result.
  *
  * Strategy (first match wins):
- * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse legacy `MEDIA:` tokens from text content blocks.
- * 3. Fall back to `details.path` when image content exists (legacy imageResult).
+ * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
+ * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export type ToolResultMediaArtifact = {
-  mediaUrls: string[];
-  audioAsVoice?: boolean;
-};
-
-function readToolResultDetailsMedia(
-  result: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const details = readToolResultDetails(result);
-  const media =
-    details?.media && typeof details.media === "object" && !Array.isArray(details.media)
-      ? (details.media as Record<string, unknown>)
-      : undefined;
-  return media;
-}
-
-function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
-    urls.push(media.mediaUrl.trim());
-  }
-  if (Array.isArray(media.mediaUrls)) {
-    urls.push(
-      ...media.mediaUrls
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
-  }
-  return Array.from(new Set(urls));
-}
-
-export function extractToolResultMediaArtifact(
-  result: unknown,
-): ToolResultMediaArtifact | undefined {
+export function extractToolResultMediaPaths(result: unknown): string[] {
   if (!result || typeof result !== "object") {
-    return undefined;
+    return [];
   }
   const record = result as Record<string, unknown>;
-  const detailsMedia = readToolResultDetailsMedia(record);
-  if (detailsMedia) {
-    const mediaUrls = collectStructuredMediaUrls(detailsMedia);
-    if (mediaUrls.length > 0) {
-      return {
-        mediaUrls,
-        ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
-      };
-    }
-  }
-
   const content = Array.isArray(record.content) ? record.content : null;
   if (!content) {
-    return undefined;
+    return [];
   }
 
-  // Extract legacy MEDIA: paths from text content blocks using the shared
-  // parser so directive matching and validation stay in sync with outbound
-  // reply parsing.
+  // Extract MEDIA: paths from text content blocks using the shared parser so
+  // directive matching and validation stay in sync with outbound reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
   for (const item of content) {
@@ -292,24 +225,19 @@ export function extractToolResultMediaArtifact(
   }
 
   if (paths.length > 0) {
-    return { mediaUrls: paths };
+    return paths;
   }
 
-  // Fall back to legacy details.path when image content exists but no
-  // structured media details or MEDIA: text.
+  // Fall back to details.path when image content exists but no MEDIA: text.
   if (hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
-      return { mediaUrls: [p] };
+      return [p];
     }
   }
 
-  return undefined;
-}
-
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
+  return [];
 }
 
 export function isToolResultError(result: unknown): boolean {

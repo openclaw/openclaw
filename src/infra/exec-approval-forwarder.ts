@@ -1,28 +1,30 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { compileConfigRegex } from "../security/config-regex.js";
-import { testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
+import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { buildTelegramExecApprovalButtons } from "../telegram/approval-buttons.js";
+import { sendTypingTelegram } from "../telegram/send.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
-import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
+import { buildExecApprovalPendingReplyPayload } from "./exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
@@ -62,8 +64,8 @@ function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
     if (sessionKey.includes(pattern)) {
       return true;
     }
-    const compiled = compileConfigRegex(pattern);
-    return compiled?.regex ? testRegexWithBoundedInput(compiled.regex, sessionKey) : false;
+    const regex = compileSafeRegex(pattern);
+    return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
   });
 }
 
@@ -109,23 +111,91 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
-function shouldSkipForwardingFallback(params: {
+function resolveChannelAccountConfig<T>(
+  accounts: Record<string, T> | undefined,
+  accountId?: string,
+): T | undefined {
+  if (!accounts || !accountId?.trim()) {
+    return undefined;
+  }
+  const normalized = normalizeAccountId(accountId);
+  const direct = accounts[normalized];
+  if (direct) {
+    return direct;
+  }
+  const fallbackKey = Object.keys(accounts).find(
+    (key) => key.toLowerCase() === normalized.toLowerCase(),
+  );
+  return fallbackKey ? accounts[fallbackKey] : undefined;
+}
+
+// Discord has component-based exec approvals; skip text fallback only when the
+// Discord-specific handler is enabled for the same target account.
+function shouldSkipDiscordForwarding(
+  target: ExecApprovalForwardTarget,
+  cfg: OpenClawConfig,
+): boolean {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  if (channel !== "discord") {
+    return false;
+  }
+  const discord = cfg.channels?.discord as
+    | {
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+        accounts?: Record<
+          string,
+          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        >;
+      }
+    | undefined;
+  if (!discord) {
+    return false;
+  }
+  const account = resolveChannelAccountConfig(discord.accounts, target.accountId);
+  const execApprovals = account?.execApprovals ?? discord.execApprovals;
+  return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
+}
+
+function shouldSkipTelegramForwarding(params: {
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  if (!channel) {
+  if (channel !== "telegram") {
     return false;
   }
-  const adapter = getChannelPlugin(channel)?.execApprovals;
-  return (
-    adapter?.shouldSuppressForwardingFallback?.({
-      cfg: params.cfg,
-      target: params.target,
-      request: params.request,
-    }) ?? false
-  );
+  const requestChannel = normalizeMessageChannel(params.request.request.turnSourceChannel ?? "");
+  if (requestChannel !== "telegram") {
+    return false;
+  }
+  const telegram = params.cfg.channels?.telegram;
+  if (!telegram) {
+    return false;
+  }
+  const telegramConfig = telegram as
+    | {
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+        accounts?: Record<
+          string,
+          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        >;
+      }
+    | undefined;
+  if (!telegramConfig) {
+    return false;
+  }
+  const accountId =
+    params.target.accountId?.trim() || params.request.request.turnSourceAccountId?.trim();
+  const account = accountId
+    ? (resolveChannelAccountConfig<{
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+      }>(telegramConfig.accounts, accountId) as
+        | { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        | undefined)
+    : undefined;
+  const execApprovals = account?.execApprovals ?? telegramConfig.execApprovals;
+  return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
 }
 
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
@@ -211,26 +281,37 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
-  const resolvedTarget = resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: params.request,
+  const sessionKey = params.request.request.sessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
+  if (!entry) {
+    return null;
+  }
+  const target = resolveSessionDeliveryTarget({
+    entry,
+    requestedChannel: "last",
     turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
     turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
     turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
   });
-  if (!resolvedTarget?.channel || !resolvedTarget.to) {
+  if (!target.channel || !target.to) {
     return null;
   }
-  const channel = resolvedTarget.channel;
-  if (!isDeliverableMessageChannel(channel)) {
+  if (!isDeliverableMessageChannel(target.channel)) {
     return null;
   }
   return {
-    channel,
-    to: resolvedTarget.to,
-    accountId: resolvedTarget.accountId,
-    threadId: resolvedTarget.threadId,
+    channel: target.channel,
+    to: target.to,
+    accountId: target.accountId,
+    threadId: target.threadId,
   };
 }
 
@@ -239,7 +320,6 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
   deliver: typeof deliverOutboundPayloads;
-  beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -252,7 +332,25 @@ async function deliverToTargets(params: {
     }
     try {
       const payload = params.buildPayload(target);
-      await params.beforeDeliver?.(target, payload);
+      if (
+        channel === "telegram" &&
+        payload.channelData &&
+        typeof payload.channelData === "object" &&
+        !Array.isArray(payload.channelData) &&
+        payload.channelData.execApproval
+      ) {
+        const threadId =
+          typeof target.threadId === "number"
+            ? target.threadId
+            : typeof target.threadId === "string"
+              ? Number.parseInt(target.threadId, 10)
+              : undefined;
+        await sendTypingTelegram(target.to, {
+          cfg: params.cfg,
+          accountId: target.accountId,
+          ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+        }).catch(() => {});
+      }
       await params.deliver({
         cfg: params.cfg,
         channel,
@@ -269,43 +367,39 @@ async function deliverToTargets(params: {
 }
 
 function buildRequestPayloadForTarget(
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
   request: ExecApprovalRequest,
   nowMsValue: number,
   target: ForwardTarget,
 ): ReplyPayload {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  const pluginPayload = channel
-    ? getChannelPlugin(channel)?.execApprovals?.buildPendingPayload?.({
-        cfg,
-        request,
-        target,
-        nowMs: nowMsValue,
-      })
-    : null;
-  if (pluginPayload) {
-    return pluginPayload;
+  if (channel === "telegram") {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: request.id,
+      approvalSlug: request.id.slice(0, 8),
+      approvalCommandId: request.id,
+      command: resolveExecApprovalCommandDisplay(request.request).commandText,
+      cwd: request.request.cwd ?? undefined,
+      host: request.request.host === "node" ? "node" : "gateway",
+      nodeId: request.request.nodeId ?? undefined,
+      expiresAtMs: request.expiresAtMs,
+      nowMs: nowMsValue,
+    });
+    const buttons = buildTelegramExecApprovalButtons(request.id);
+    if (!buttons) {
+      return payload;
+    }
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        telegram: {
+          buttons,
+        },
+      },
+    };
   }
   return { text: buildRequestMessage(request, nowMsValue) };
-}
-
-function buildResolvedPayloadForTarget(
-  cfg: OpenClawConfig,
-  resolved: ExecApprovalResolved,
-  target: ForwardTarget,
-): ReplyPayload {
-  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  const pluginPayload = channel
-    ? getChannelPlugin(channel)?.execApprovals?.buildResolvedPayload?.({
-        cfg,
-        resolved,
-        target,
-      })
-    : null;
-  if (pluginPayload) {
-    return pluginPayload;
-  }
-  return { text: buildResolvedMessage(resolved) };
 }
 
 function resolveForwardTargets(params: {
@@ -371,7 +465,11 @@ export function createExecApprovalForwarder(
             resolveSessionTarget,
           })
         : []),
-    ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, request }));
+    ].filter(
+      (target) =>
+        !shouldSkipDiscordForwarding(target, cfg) &&
+        !shouldSkipTelegramForwarding({ target, cfg, request }),
+    );
 
     if (filteredTargets.length === 0) {
       return false;
@@ -406,17 +504,6 @@ export function createExecApprovalForwarder(
       cfg,
       targets: filteredTargets,
       buildPayload: (target) => buildRequestPayloadForTarget(cfg, request, nowMs(), target),
-      beforeDeliver: async (target, payload) => {
-        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-        if (!channel) {
-          return;
-        }
-        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
-          cfg,
-          target,
-          payload,
-        });
-      },
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {
@@ -453,17 +540,17 @@ export function createExecApprovalForwarder(
               resolveSessionTarget,
             })
           : []),
-      ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, request }));
+      ].filter(
+        (target) =>
+          !shouldSkipDiscordForwarding(target, cfg) &&
+          !shouldSkipTelegramForwarding({ target, cfg, request }),
+      );
     }
     if (!targets || targets.length === 0) {
       return;
     }
-    await deliverToTargets({
-      cfg,
-      targets,
-      buildPayload: (target) => buildResolvedPayloadForTarget(cfg, resolved, target),
-      deliver,
-    });
+    const text = buildResolvedMessage(resolved);
+    await deliverToTargets({ cfg, targets, buildPayload: () => ({ text }), deliver });
   };
 
   const stop = () => {

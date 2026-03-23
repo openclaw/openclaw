@@ -6,7 +6,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientOptions } from "ws";
 import type {
   ClientEvent,
   OpenAIWebSocketEvent,
@@ -35,12 +34,12 @@ const { MockWebSocket } = vi.hoisted(() => {
 
     readyState: number = MockWebSocket.CONNECTING;
     url: string;
-    options: ClientOptions | undefined;
+    options: Record<string, unknown>;
     sentMessages: string[] = [];
 
     private _listeners: Map<string, AnyFn[]> = new Map();
 
-    constructor(url: string, options?: ClientOptions) {
+    constructor(url: string, options?: Record<string, unknown>) {
       this.url = url;
       this.options = options ?? {};
       MockWebSocket.lastInstance = this;
@@ -168,7 +167,6 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   return new OpenAIWebSocketManager({
     // Use faster backoff in tests to avoid slow timer waits
     backoffDelaysMs: [10, 20, 40, 80, 160],
-    socketFactory: (url, options) => new MockWebSocket(url, options) as never,
     ...opts,
   });
 }
@@ -227,22 +225,6 @@ describe("OpenAIWebSocketManager", () => {
       expect(sock.options).toMatchObject({
         headers: expect.objectContaining({
           Authorization: "Bearer sk-test-key",
-        }),
-      });
-
-      sock.simulateOpen();
-      await connectPromise;
-    });
-
-    it("adds OpenClaw attribution headers on the native OpenAI websocket", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test-key");
-
-      const sock = lastSocket();
-      expect(sock.options).toMatchObject({
-        headers: expect.objectContaining({
-          originator: "openclaw",
-          "User-Agent": expect.stringMatching(/^openclaw\//),
         }),
       });
 

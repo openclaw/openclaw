@@ -171,61 +171,6 @@ function subscribeAssistantEvents() {
   return { assistantEvents, stop };
 }
 
-async function runAcpTurnWithAssistantEvents(chunks: string[]) {
-  const { assistantEvents, stop } = subscribeAssistantEvents();
-  const runTurn = createRunTurnFromTextDeltas(chunks);
-
-  mockAcpManager({
-    runTurn: (params: unknown) => runTurn(params),
-  });
-
-  try {
-    await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
-  } finally {
-    stop();
-  }
-
-  const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
-  return { assistantEvents, logLines };
-}
-
-async function runAcpTurnWithTextDeltas(params: { message?: string; chunks: string[] }) {
-  const runTurn = createRunTurnFromTextDeltas(params.chunks);
-  mockAcpManager({
-    runTurn: (input: unknown) => runTurn(input),
-  });
-  await agentCommand(
-    {
-      message: params.message ?? "ping",
-      sessionKey: "agent:codex:acp:test",
-    },
-    runtime,
-  );
-  return { runTurn };
-}
-
-function expectPersistedAcpTranscript(params: {
-  storePath: string;
-  userContent: string;
-  assistantText: string;
-}) {
-  const persistedStore = JSON.parse(fs.readFileSync(params.storePath, "utf-8")) as Record<
-    string,
-    { sessionFile?: string }
-  >;
-  const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
-  const messages = readSessionMessages("acp-session-1", params.storePath, sessionFile);
-  expect(messages).toHaveLength(2);
-  expect(messages[0]).toMatchObject({
-    role: "user",
-    content: params.userContent,
-  });
-  expect(messages[1]).toMatchObject({
-    role: "assistant",
-    content: [{ type: "text", text: params.assistantText }],
-  });
-}
-
 async function runAcpSessionWithPolicyOverrides(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
@@ -264,7 +209,13 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("routes ACP sessions through AcpSessionManager instead of embedded agent", async () => {
     await withAcpSessionEnv(async () => {
-      const { runTurn } = await runAcpTurnWithTextDeltas({ chunks: ["ACP_", "OK"] });
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "OK"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
 
       expect(runTurn).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -283,32 +234,64 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("persists ACP child session history to the transcript store", async () => {
     await withAcpSessionEnvInfo(async ({ storePath }) => {
-      await runAcpTurnWithTextDeltas({ chunks: ["ACP_", "OK"] });
-      expectPersistedAcpTranscript({
-        storePath,
-        userContent: "ping",
-        assistantText: "ACP_OK",
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "OK"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+      const messages = readSessionMessages("acp-session-1", storePath, sessionFile);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "ping",
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "ACP_OK" }],
       });
     });
   });
 
   it("preserves exact ACP transcript text without trimming whitespace", async () => {
     await withAcpSessionEnvInfo(async ({ storePath }) => {
-      await runAcpTurnWithTextDeltas({
-        message: "  ping\n",
-        chunks: ["  ACP_OK\n"],
+      const runTurn = createRunTurnFromTextDeltas(["  ACP_OK\n"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
       });
-      expectPersistedAcpTranscript({
-        storePath,
-        userContent: "  ping\n",
-        assistantText: "  ACP_OK\n",
+
+      await agentCommand({ message: "  ping\n", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+      const messages = readSessionMessages("acp-session-1", storePath, sessionFile);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "  ping\n",
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "  ACP_OK\n" }],
       });
     });
   });
 
   it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
     await withAcpSessionEnv(async () => {
-      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas([
         "NO",
         "NO_",
         "NO_RE",
@@ -316,7 +299,19 @@ describe("agentCommand ACP runtime routing", () => {
         "Actual answer",
       ]);
 
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
       expect(assistantEvents).toEqual([{ text: "Actual answer", delta: "Actual answer" }]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
       expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
       expect(logLines.some((line) => line.includes("Actual answer"))).toBe(true);
     });
@@ -324,13 +319,31 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("keeps silent-only ACP turns out of assistant output", async () => {
     await withAcpSessionEnv(async () => {
-      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
-        "NO",
-        "NO_",
-        "NO_RE",
-        "NO_REPLY",
-      ]);
-      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
+      const assistantEvents: string[] = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "assistant") {
+          return;
+        }
+        if (typeof evt.data?.text === "string") {
+          assistantEvents.push(evt.data.text);
+        }
+      });
+
+      const runTurn = createRunTurnFromTextDeltas(["NO", "NO_", "NO_RE", "NO_REPLY"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
       expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
       expect(logLines.some((line) => line.includes("No reply from agent."))).toBe(true);
     });
@@ -338,12 +351,18 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("preserves repeated identical ACP delta chunks", async () => {
     await withAcpSessionEnv(async () => {
-      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
-        "b",
-        "o",
-        "o",
-        "k",
-      ]);
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas(["b", "o", "o", "k"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
 
       expect(assistantEvents).toEqual([
         { text: "b", delta: "b" },
@@ -351,15 +370,30 @@ describe("agentCommand ACP runtime routing", () => {
         { text: "boo", delta: "o" },
         { text: "book", delta: "k" },
       ]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
       expect(logLines.some((line) => line.includes("book"))).toBe(true);
     });
   });
 
   it("re-emits buffered NO prefix when ACP text becomes visible content", async () => {
     await withAcpSessionEnv(async () => {
-      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO", "W"]);
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas(["NO", "W"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
 
       expect(assistantEvents).toEqual([{ text: "NOW", delta: "NOW" }]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
       expect(logLines.some((line) => line.includes("NOW"))).toBe(true);
     });
   });

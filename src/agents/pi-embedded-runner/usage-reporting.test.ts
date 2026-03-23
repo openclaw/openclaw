@@ -1,20 +1,22 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  loadRunOverflowCompactionHarness,
-  mockedEnsureRuntimePluginsLoaded,
-  mockedRunEmbeddedAttempt,
-} from "./run.overflow-compaction.harness.js";
+import "./run.overflow-compaction.mocks.shared.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
+const runtimePluginMocks = vi.hoisted(() => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
+}));
+
+import { runEmbeddedPiAgent } from "./run.js";
+import { runEmbeddedAttempt } from "./run/attempt.js";
+
+const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
 
 describe("runEmbeddedPiAgent usage reporting", () => {
-  beforeAll(async () => {
-    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
-  });
-
   beforeEach(() => {
-    mockedEnsureRuntimePluginsLoaded.mockReset();
-    mockedRunEmbeddedAttempt.mockReset();
+    vi.clearAllMocks();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
@@ -37,43 +39,10 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
-  });
-
-  it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: ["Response 1"],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-
-    await runEmbeddedPiAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
-      workspaceDir: "/tmp/workspace",
-      prompt: "hello",
-      timeoutMs: 30000,
-      runId: "run-gateway-bind",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {

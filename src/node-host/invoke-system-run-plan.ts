@@ -135,7 +135,6 @@ const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
 ]);
 
 const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
-const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
 
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
@@ -163,26 +162,6 @@ const NPM_EXEC_FLAG_OPTIONS = new Set([
   "--yes",
   "-q",
   "-y",
-]);
-
-const PNPM_OPTIONS_WITH_VALUE = new Set([
-  "--config",
-  "--dir",
-  "--filter",
-  "--reporter",
-  "--stream",
-  "--test-pattern",
-  "--workspace-concurrency",
-  "-C",
-]);
-
-const PNPM_FLAG_OPTIONS = new Set([
-  "--aggregate-output",
-  "--color",
-  "--recursive",
-  "--silent",
-  "--workspace-root",
-  "-r",
 ]);
 
 type FileOperandCollection = {
@@ -320,8 +299,6 @@ function normalizePackageManagerExecToken(token: string): string {
   if (!normalized) {
     return normalized;
   }
-  // Approval binding only promises best-effort recovery of the effective runtime
-  // command for common package-manager shims; it is not full package-manager semantics.
   return normalized.replace(/\.(?:c|m)?js$/i, "");
 }
 
@@ -338,30 +315,17 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       continue;
     }
     if (!token.startsWith("-")) {
-      if (token === "exec") {
-        if (idx + 1 >= argv.length) {
-          return null;
-        }
-        const tail = argv.slice(idx + 1);
-        return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
+      if (token !== "exec" || idx + 1 >= argv.length) {
+        return null;
       }
-      if (token === "node") {
-        const tail = argv.slice(idx + 1);
-        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
-        return ["node", ...normalizedTail];
-      }
-      return null;
+      const tail = argv.slice(idx + 1);
+      return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
     }
-    const [flag] = token.toLowerCase().split("=", 2);
-    if (PNPM_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
+    if ((token === "-C" || token === "--dir" || token === "--filter") && !token.includes("=")) {
+      idx += 2;
       continue;
     }
-    if (PNPM_FLAG_OPTIONS.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    return null;
+    idx += 1;
   }
   return null;
 }
@@ -669,33 +633,6 @@ function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
   return false;
 }
 
-function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
-  let afterDoubleDash = false;
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim() ?? "";
-    if (!token) {
-      continue;
-    }
-    if (afterDoubleDash) {
-      return false;
-    }
-    if (token === "--") {
-      afterDoubleDash = true;
-      continue;
-    }
-    if (token === "-I" || token === "-M" || token === "-m") {
-      return true;
-    }
-    if (token.startsWith("-I") || token.startsWith("-M") || token.startsWith("-m")) {
-      return true;
-    }
-    if (PERL_UNSAFE_APPROVAL_FLAGS.has(token)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isMutableScriptRunner(executable: string): boolean {
   return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
 }
@@ -735,9 +672,6 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     }
   }
   if (executable === "ruby" && hasRubyUnsafeApprovalFlag(unwrapped.argv)) {
-    return null;
-  }
-  if (executable === "perl" && hasPerlUnsafeApprovalFlag(unwrapped.argv)) {
     return null;
   }
   if (!isMutableScriptRunner(executable)) {

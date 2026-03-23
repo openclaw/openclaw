@@ -30,23 +30,7 @@ type PatternToken =
 
 const SAFE_REGEX_CACHE_MAX = 256;
 const SAFE_REGEX_TEST_WINDOW = 2048;
-export type SafeRegexRejectReason = "empty" | "unsafe-nested-repetition" | "invalid-regex";
-
-export type SafeRegexCompileResult =
-  | {
-      regex: RegExp;
-      source: string;
-      flags: string;
-      reason: null;
-    }
-  | {
-      regex: null;
-      source: string;
-      flags: string;
-      reason: SafeRegexRejectReason;
-    };
-
-const safeRegexCache = new Map<string, SafeRegexCompileResult>();
+const safeRegexCache = new Map<string, RegExp | null>();
 
 function createParseFrame(): ParseFrame {
   return {
@@ -318,44 +302,31 @@ export function hasNestedRepetition(source: string): boolean {
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
-export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
+export function compileSafeRegex(source: string, flags = ""): RegExp | null {
   const trimmed = source.trim();
   if (!trimmed) {
-    return { regex: null, source: trimmed, flags, reason: "empty" };
+    return null;
   }
   const cacheKey = `${flags}::${trimmed}`;
   if (safeRegexCache.has(cacheKey)) {
-    return (
-      safeRegexCache.get(cacheKey) ?? {
-        regex: null,
-        source: trimmed,
-        flags,
-        reason: "invalid-regex",
-      }
-    );
+    return safeRegexCache.get(cacheKey) ?? null;
   }
 
-  let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
-  } else {
+  let compiled: RegExp | null = null;
+  if (!hasNestedRepetition(trimmed)) {
     try {
-      result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
+      compiled = new RegExp(trimmed, flags);
     } catch {
-      result = { regex: null, source: trimmed, flags, reason: "invalid-regex" };
+      compiled = null;
     }
   }
 
-  safeRegexCache.set(cacheKey, result);
+  safeRegexCache.set(cacheKey, compiled);
   if (safeRegexCache.size > SAFE_REGEX_CACHE_MAX) {
     const oldestKey = safeRegexCache.keys().next().value;
     if (oldestKey) {
       safeRegexCache.delete(oldestKey);
     }
   }
-  return result;
-}
-
-export function compileSafeRegex(source: string, flags = ""): RegExp | null {
-  return compileSafeRegexDetailed(source, flags).regex;
+  return compiled;
 }

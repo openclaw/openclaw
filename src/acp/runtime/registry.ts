@@ -1,4 +1,3 @@
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { AcpRuntimeError } from "./errors.js";
 import type { AcpRuntime } from "./types.js";
 
@@ -14,13 +13,20 @@ type AcpRuntimeRegistryGlobalState = {
 
 const ACP_RUNTIME_REGISTRY_STATE_KEY = Symbol.for("openclaw.acpRuntimeRegistryState");
 
+function createAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
+  return {
+    backendsById: new Map<string, AcpRuntimeBackend>(),
+  };
+}
+
 function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
-  return resolveGlobalSingleton<AcpRuntimeRegistryGlobalState>(
-    ACP_RUNTIME_REGISTRY_STATE_KEY,
-    () => ({
-      backendsById: new Map<string, AcpRuntimeBackend>(),
-    }),
-  );
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    [ACP_RUNTIME_REGISTRY_STATE_KEY]?: AcpRuntimeRegistryGlobalState;
+  };
+  if (!runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY]) {
+    runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY] = createAcpRuntimeRegistryGlobalState();
+  }
+  return runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY];
 }
 
 const ACP_BACKENDS_BY_ID = resolveAcpRuntimeRegistryGlobalState().backendsById;

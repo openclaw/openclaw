@@ -1,4 +1,3 @@
-/** Normalize webhook paths into the canonical registry form used by route lookup. */
 export function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -11,7 +10,6 @@ export function normalizeWebhookPath(raw: string): string {
   return withSlash;
 }
 
-/** Resolve the effective webhook path from explicit path, URL, or default fallback. */
 export function resolveWebhookPath(params: {
   webhookPath?: string;
   webhookUrl?: string;

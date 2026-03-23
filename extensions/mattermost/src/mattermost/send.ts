@@ -1,9 +1,9 @@
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
-  createMattermostDirectChannelWithRetry,
+  createMattermostDirectChannel,
   createMattermostPost,
   fetchMattermostChannelByName,
   fetchMattermostMe,
@@ -12,7 +12,6 @@ import {
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
-  type CreateDmChannelRetryOptions,
 } from "./client.js";
 import {
   buildButtonProps,
@@ -33,8 +32,6 @@ export type MattermostSendOpts = {
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
-  /** Retry options for DM channel creation */
-  dmRetryOptions?: CreateDmChannelRetryOptions;
 };
 
 export type MattermostSendResult = {
@@ -185,40 +182,11 @@ async function resolveChannelIdByName(params: {
   throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
 }
 
-type ResolveTargetChannelIdParams = {
+async function resolveTargetChannelId(params: {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
-  dmRetryOptions?: CreateDmChannelRetryOptions;
-  logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
-};
-
-function mergeDmRetryOptions(
-  base?: CreateDmChannelRetryOptions,
-  override?: CreateDmChannelRetryOptions,
-): CreateDmChannelRetryOptions | undefined {
-  const merged: CreateDmChannelRetryOptions = {
-    maxRetries: override?.maxRetries ?? base?.maxRetries,
-    initialDelayMs: override?.initialDelayMs ?? base?.initialDelayMs,
-    maxDelayMs: override?.maxDelayMs ?? base?.maxDelayMs,
-    timeoutMs: override?.timeoutMs ?? base?.timeoutMs,
-    onRetry: override?.onRetry,
-  };
-
-  if (
-    merged.maxRetries === undefined &&
-    merged.initialDelayMs === undefined &&
-    merged.maxDelayMs === undefined &&
-    merged.timeoutMs === undefined &&
-    merged.onRetry === undefined
-  ) {
-    return undefined;
-  }
-
-  return merged;
-}
-
-async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
+}): Promise<string> {
   if (params.target.kind === "channel") {
     return params.target.id;
   }
@@ -246,20 +214,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
     baseUrl: params.baseUrl,
     botToken: params.token,
   });
-
-  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
-    ...params.dmRetryOptions,
-    onRetry: (attempt, delayMs, error) => {
-      // Call user's onRetry if provided
-      params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
-      // Log if verbose mode is enabled
-      if (params.logger) {
-        params.logger.warn?.(
-          `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
-        );
-      }
-    },
-  });
+  const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
   dmChannelCache.set(dmKey, channel.id);
   return channel.id;
 }
@@ -277,7 +232,6 @@ async function resolveMattermostSendContext(
   opts: MattermostSendOpts = {},
 ): Promise<MattermostSendContext> {
   const core = getCore();
-  const logger = core.logging.getChildLogger({ module: "mattermost" });
   const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
@@ -308,23 +262,10 @@ async function resolveMattermostSendContext(
       : opaqueTarget?.kind === "channel"
         ? { kind: "channel" as const, id: opaqueTarget.id }
         : parseMattermostTarget(trimmedTo);
-  // Build retry options from account config, allowing opts to override
-  const accountRetryConfig: CreateDmChannelRetryOptions | undefined = account.config.dmChannelRetry
-    ? {
-        maxRetries: account.config.dmChannelRetry.maxRetries,
-        initialDelayMs: account.config.dmChannelRetry.initialDelayMs,
-        maxDelayMs: account.config.dmChannelRetry.maxDelayMs,
-        timeoutMs: account.config.dmChannelRetry.timeoutMs,
-      }
-    : undefined;
-  const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
-
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
     token,
-    dmRetryOptions,
-    logger: core.logging.shouldLogVerbose() ? logger : undefined,
   });
 
   return {

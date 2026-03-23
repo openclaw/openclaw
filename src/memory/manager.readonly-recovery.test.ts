@@ -5,33 +5,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { MemoryIndexManager } from "./manager.js";
+import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
-
-type ReadonlyRecoveryHarness = {
-  closed: boolean;
-  syncing: Promise<void> | null;
-  queuedSessionFiles: Set<string>;
-  queuedSessionSync: Promise<void> | null;
-  db: DatabaseSync;
-  vectorReady: Promise<boolean> | null;
-  vector: {
-    enabled: boolean;
-    available: boolean | null;
-    loadError?: string;
-    dims?: number;
-  };
-  readonlyRecoveryAttempts: number;
-  readonlyRecoverySuccesses: number;
-  readonlyRecoveryFailures: number;
-  readonlyRecoveryLastError?: string;
-  ensureProviderInitialized: ReturnType<typeof vi.fn>;
-  enqueueTargetedSessionSync: ReturnType<typeof vi.fn>;
-  runSync: ReturnType<typeof vi.fn>;
-  openDatabase: ReturnType<typeof vi.fn>;
-  ensureSchema: ReturnType<typeof vi.fn>;
-  readMeta: ReturnType<typeof vi.fn>;
-};
 
 describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
@@ -46,9 +21,7 @@ describe("memory manager readonly recovery", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            cache: { enabled: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
+            store: { path: indexPath },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -57,69 +30,27 @@ describe("memory manager readonly recovery", () => {
     } as OpenClawConfig;
   }
 
-  async function createRealManager() {
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemoryConfig(),
-      agentId: "main",
-      purpose: "status",
-    });
+  async function createManager() {
+    manager = await getRequiredMemoryIndexManager({ cfg: createMemoryConfig(), agentId: "main" });
     return manager;
   }
 
-  function createReadonlyRecoveryHarness() {
-    const reopenedClose = vi.fn();
-    const initialClose = vi.fn();
-    const reopenedDb = { close: reopenedClose } as unknown as DatabaseSync;
-    const initialDb = { close: initialClose } as unknown as DatabaseSync;
-    const harness: ReadonlyRecoveryHarness = {
-      closed: false,
-      syncing: null,
-      queuedSessionFiles: new Set<string>(),
-      queuedSessionSync: null,
-      db: initialDb,
-      vectorReady: null,
-      vector: {
-        enabled: false,
-        available: null,
-        loadError: "stale",
-        dims: 123,
+  function createSyncSpies(instance: MemoryIndexManager) {
+    const runSyncSpy = vi.spyOn(
+      instance as unknown as {
+        runSync: (params?: { reason?: string; force?: boolean }) => Promise<void>;
       },
-      readonlyRecoveryAttempts: 0,
-      readonlyRecoverySuccesses: 0,
-      readonlyRecoveryFailures: 0,
-      readonlyRecoveryLastError: undefined,
-      ensureProviderInitialized: vi.fn(async () => {}),
-      enqueueTargetedSessionSync: vi.fn(async () => {}),
-      runSync: vi.fn(),
-      openDatabase: vi.fn(() => reopenedDb),
-      ensureSchema: vi.fn(),
-      readMeta: vi.fn(() => undefined),
-    };
-    Object.setPrototypeOf(harness, MemoryIndexManager.prototype);
-    return {
-      harness,
-      initialDb,
-      initialClose,
-      reopenedDb,
-      reopenedClose,
-    };
+      "runSync",
+    );
+    const openDatabaseSpy = vi.spyOn(
+      instance as unknown as { openDatabase: () => DatabaseSync },
+      "openDatabase",
+    );
+    return { runSyncSpy, openDatabaseSpy };
   }
 
-  function expectReadonlyRecoveryStatus(
-    instance: {
-      readonlyRecoveryAttempts: number;
-      readonlyRecoverySuccesses: number;
-      readonlyRecoveryFailures: number;
-      readonlyRecoveryLastError?: string;
-    },
-    lastError: string,
-  ) {
-    expect({
-      attempts: instance.readonlyRecoveryAttempts,
-      successes: instance.readonlyRecoverySuccesses,
-      failures: instance.readonlyRecoveryFailures,
-      lastError: instance.readonlyRecoveryLastError,
-    }).toEqual({
+  function expectReadonlyRecoveryStatus(lastError: string) {
+    expect(manager?.status().custom?.readonlyRecovery).toEqual({
       attempts: 1,
       successes: 1,
       failures: 0,
@@ -128,17 +59,15 @@ describe("memory manager readonly recovery", () => {
   }
 
   async function expectReadonlyRetry(params: { firstError: unknown; expectedLastError: string }) {
-    const { harness, initialClose } = createReadonlyRecoveryHarness();
-    harness.runSync.mockRejectedValueOnce(params.firstError).mockResolvedValueOnce(undefined);
+    const currentManager = await createManager();
+    const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
+    runSyncSpy.mockRejectedValueOnce(params.firstError).mockResolvedValueOnce(undefined);
 
-    await MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
-      reason: "test",
-    });
+    await currentManager.sync({ reason: "test" });
 
-    expect(harness.runSync).toHaveBeenCalledTimes(2);
-    expect(harness.openDatabase).toHaveBeenCalledTimes(1);
-    expect(initialClose).toHaveBeenCalledTimes(1);
-    expectReadonlyRecoveryStatus(harness, params.expectedLastError);
+    expect(runSyncSpy).toHaveBeenCalledTimes(2);
+    expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
+    expectReadonlyRecoveryStatus(params.expectedLastError);
   }
 
   beforeEach(async () => {
@@ -150,7 +79,6 @@ describe("memory manager readonly recovery", () => {
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
     if (manager) {
       await manager.close();
       manager = null;
@@ -173,21 +101,17 @@ describe("memory manager readonly recovery", () => {
   });
 
   it("does not retry non-readonly sync errors", async () => {
-    const { harness, initialClose } = createReadonlyRecoveryHarness();
-    harness.runSync.mockRejectedValueOnce(new Error("embedding timeout"));
+    const currentManager = await createManager();
+    const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
+    runSyncSpy.mockRejectedValueOnce(new Error("embedding timeout"));
 
-    await expect(
-      MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
-        reason: "test",
-      }),
-    ).rejects.toThrow("embedding timeout");
-    expect(harness.runSync).toHaveBeenCalledTimes(1);
-    expect(harness.openDatabase).not.toHaveBeenCalled();
-    expect(initialClose).not.toHaveBeenCalled();
+    await expect(currentManager.sync({ reason: "test" })).rejects.toThrow("embedding timeout");
+    expect(runSyncSpy).toHaveBeenCalledTimes(1);
+    expect(openDatabaseSpy).toHaveBeenCalledTimes(0);
   });
 
   it("sets busy_timeout on memory sqlite connections", async () => {
-    const currentManager = await createRealManager();
+    const currentManager = await createManager();
     const db = (currentManager as unknown as { db: DatabaseSync }).db;
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }

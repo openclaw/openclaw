@@ -2,16 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
+  collectBundledExtensionRootDependencyGapErrors,
   collectForbiddenPackPaths,
-  collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
-}
-
-function makePackResult(filename: string, unpackedSize: number) {
-  return { filename, unpackedSize };
 }
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -36,6 +32,87 @@ describe("collectAppcastSparkleVersionErrors", () => {
   });
 });
 
+describe("collectBundledExtensionRootDependencyGapErrors", () => {
+  it("allows known gaps but still flags unallowlisted ones", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0" },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
+            },
+          },
+          {
+            id: "feishu",
+            packageJson: {
+              dependencies: { "@larksuiteoapi/node-sdk": "^1.59.0" },
+              openclaw: { install: { npmSpec: "@openclaw/feishu" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'feishu' root dependency mirror drift | missing in root package: @larksuiteoapi/node-sdk | new gaps: @larksuiteoapi/node-sdk",
+    ]);
+  });
+
+  it("flags newly introduced bundled extension dependency gaps", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0", undici: "^7.0.0" },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'googlechat' root dependency mirror drift | missing in root package: google-auth-library, undici | new gaps: undici",
+    ]);
+  });
+
+  it("flags stale allowlist entries once a gap is resolved", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: { "google-auth-library": "^1.0.0" } },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0" },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'googlechat' root dependency mirror drift | missing in root package: (none) | remove stale allowlist entries: google-auth-library",
+    ]);
+  });
+});
+
 describe("collectBundledExtensionManifestErrors", () => {
   it("flags invalid bundled extension install metadata", () => {
     expect(
@@ -54,90 +131,35 @@ describe("collectBundledExtensionManifestErrors", () => {
     ]);
   });
 
-  it("flags invalid bundled extension minHostVersion metadata", () => {
+  it("flags invalid release-check allowlist metadata", () => {
     expect(
       collectBundledExtensionManifestErrors([
         {
           id: "broken",
           packageJson: {
             openclaw: {
-              install: { npmSpec: "@openclaw/broken", minHostVersion: "2026.3.14" },
+              install: { npmSpec: "@openclaw/broken" },
+              releaseChecks: {
+                rootDependencyMirrorAllowlist: ["ok", ""],
+              },
             },
           },
         },
       ]),
     ).toEqual([
-      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
+      "bundled extension 'broken' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must contain only non-empty strings",
     ]);
-  });
-
-  it("allows install metadata without npmSpec when only non-publish metadata is present", () => {
-    expect(
-      collectBundledExtensionManifestErrors([
-        {
-          id: "irc",
-          packageJson: {
-            openclaw: {
-              install: { minHostVersion: ">=2026.3.14" },
-            },
-          },
-        },
-      ]),
-    ).toEqual([]);
-  });
-
-  it("flags non-object install metadata instead of throwing", () => {
-    expect(
-      collectBundledExtensionManifestErrors([
-        {
-          id: "broken",
-          packageJson: {
-            openclaw: {
-              install: 123,
-            },
-          },
-        },
-      ]),
-    ).toEqual(["bundled extension 'broken' manifest invalid | openclaw.install must be an object"]);
   });
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it("allows bundled plugin runtime deps under dist/extensions but still blocks other node_modules", () => {
+  it("flags nested node_modules leaking into npm pack output", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        "dist/extensions/discord/node_modules/@buape/carbon/index.js",
         "extensions/tlon/node_modules/.bin/tlon",
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
-  });
-});
-
-describe("collectPackUnpackedSizeErrors", () => {
-  it("accepts pack results within the unpacked size budget", () => {
-    expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
-    ).toEqual([]);
-  });
-
-  it("flags oversized pack results that risk low-memory startup failures", () => {
-    expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
-    ).toEqual([
-      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 167772160 bytes (160.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-    ]);
-  });
-
-  it("fails closed when npm pack output omits unpackedSize for every result", () => {
-    expect(
-      collectPackUnpackedSizeErrors([
-        { filename: "openclaw-2026.3.14.tgz" },
-        { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
-      ]),
-    ).toEqual([
-      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
-    ]);
   });
 });

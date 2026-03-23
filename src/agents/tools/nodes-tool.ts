@@ -310,6 +310,7 @@ export function createNodesTool(options?: {
                 expectedHost: resolvedNode.remoteIp,
                 invalidPayloadMessage: "invalid camera.snap payload",
               });
+              content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (options?.modelHasVision && payload.base64) {
                 content.push({
                   type: "image",
@@ -326,17 +327,7 @@ export function createNodesTool(options?: {
               });
             }
 
-            const result: AgentToolResult<unknown> = {
-              content,
-              details: {
-                snaps: details,
-                media: {
-                  mediaUrls: details
-                    .map((entry) => entry.path)
-                    .filter((path): path is string => typeof path === "string"),
-                },
-              },
-            };
+            const result: AgentToolResult<unknown> = { content, details };
             return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
           case "photos_latest": {
@@ -410,6 +401,7 @@ export function createNodesTool(options?: {
                 invalidPayloadMessage: "invalid photos.latest payload",
               });
 
+              content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (options?.modelHasVision && photo.base64) {
                 content.push({
                   type: "image",
@@ -432,17 +424,7 @@ export function createNodesTool(options?: {
               });
             }
 
-            const result: AgentToolResult<unknown> = {
-              content,
-              details: {
-                photos: details,
-                media: {
-                  mediaUrls: details
-                    .map((entry) => entry.path)
-                    .filter((path): path is string => typeof path === "string"),
-                },
-              },
-            };
+            const result: AgentToolResult<unknown> = { content, details };
             return await sanitizeToolResultImages(result, "nodes:photos_latest", imageSanitization);
           }
           case "camera_list":

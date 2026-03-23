@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import type { SandboxBackendCommandResult } from "./backend.js";
-import { runDockerSandboxShellCommand } from "./docker-backend.js";
+import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
@@ -24,7 +23,7 @@ type RunCommandOptions = {
 };
 
 export type SandboxResolvedPath = {
-  hostPath?: string;
+  hostPath: string;
   relativePath: string;
   containerPath: string;
 };
@@ -249,22 +248,21 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private async runCommand(
     script: string,
     options: RunCommandOptions = {},
-  ): Promise<SandboxBackendCommandResult> {
-    const backend = this.sandbox.backend;
-    if (backend) {
-      return await backend.runShellCommand({
-        script,
-        args: options.args,
-        stdin: options.stdin,
-        allowFailure: options.allowFailure,
-        signal: options.signal,
-      });
-    }
-    return await runDockerSandboxShellCommand({
-      containerName: this.sandbox.containerName,
+  ): Promise<ExecDockerRawResult> {
+    const dockerArgs = [
+      "exec",
+      "-i",
+      this.sandbox.containerName,
+      "sh",
+      "-c",
       script,
-      args: options.args,
-      stdin: options.stdin,
+      "moltbot-sandbox-fs",
+    ];
+    if (options.args?.length) {
+      dockerArgs.push(...options.args);
+    }
+    return execDockerRaw(dockerArgs, {
+      input: options.stdin,
       allowFailure: options.allowFailure,
       signal: options.signal,
     });
@@ -281,7 +279,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private async runCheckedCommand(
     plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
-  ): Promise<SandboxBackendCommandResult> {
+  ): Promise<ExecDockerRawResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
       await this.pathGuard.assertPathChecks(plan.checks);
@@ -297,7 +295,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private async runPlannedCommand(
     plan: SandboxFsCommandPlan,
     signal?: AbortSignal,
-  ): Promise<SandboxBackendCommandResult> {
+  ): Promise<ExecDockerRawResult> {
     return await this.runCheckedCommand({ ...plan, signal });
   }
 

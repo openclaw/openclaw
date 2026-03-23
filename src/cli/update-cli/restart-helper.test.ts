@@ -287,7 +287,6 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
@@ -303,7 +302,6 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
@@ -319,7 +317,6 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
       });
     });
   });

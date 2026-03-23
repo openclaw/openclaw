@@ -1,4 +1,4 @@
-import { definePluginEntry, type OpenClawConfig, type OpenClawPluginApi } from "./api.js";
+import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/thread-ownership";
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -39,79 +39,95 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   return { id, name };
 }
 
-export default definePluginEntry({
-  id: "thread-ownership",
-  name: "Thread Ownership",
-  description: "Slack thread claim coordination for multi-agent setups",
-  register(api: OpenClawPluginApi) {
-    const pluginCfg = (api.pluginConfig ?? {}) as ThreadOwnershipConfig;
-    const forwarderUrl = (
-      pluginCfg.forwarderUrl ??
-      process.env.SLACK_FORWARDER_URL ??
-      "http://slack-forwarder:8750"
-    ).replace(/\/$/, "");
+export default function register(api: OpenClawPluginApi) {
+  const pluginCfg = (api.pluginConfig ?? {}) as ThreadOwnershipConfig;
+  const forwarderUrl = (
+    pluginCfg.forwarderUrl ??
+    process.env.SLACK_FORWARDER_URL ??
+    "http://slack-forwarder:8750"
+  ).replace(/\/$/, "");
 
-    const abTestChannels = new Set(
-      pluginCfg.abTestChannels ??
-        process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
-        [],
-    );
+  const abTestChannels = new Set(
+    pluginCfg.abTestChannels ??
+      process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
+      [],
+  );
 
-    const { id: agentId, name: agentName } = resolveOwnershipAgent(api.config);
-    const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
+  const { id: agentId, name: agentName } = resolveOwnershipAgent(api.config);
+  const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
 
-    api.on("message_received", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+  // ---------------------------------------------------------------------------
+  // message_received: track @-mentions so the agent can reply even if it
+  // doesn't own the thread.
+  // ---------------------------------------------------------------------------
+  api.on("message_received", async (event, ctx) => {
+    if (ctx.channelId !== "slack") return;
 
-      const text = event.content ?? "";
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
-      const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
-      if (!threadTs || !channelId) return;
+    const text = event.content ?? "";
+    const threadTs = (event.metadata?.threadTs as string) ?? "";
+    const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
 
-      const mentioned =
-        (agentName && text.includes(`@${agentName}`)) ||
-        (botUserId && text.includes(`<@${botUserId}>`));
-      if (mentioned) {
-        cleanExpiredMentions();
-        mentionedThreads.set(`${channelId}:${threadTs}`, Date.now());
-      }
-    });
+    if (!threadTs || !channelId) return;
 
-    api.on("message_sending", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+    // Check if this agent was @-mentioned.
+    const mentioned =
+      (agentName && text.includes(`@${agentName}`)) ||
+      (botUserId && text.includes(`<@${botUserId}>`));
 
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
-      const channelId = (event.metadata?.channelId as string) ?? event.to;
-      if (!threadTs) return;
-      if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) return;
-
+    if (mentioned) {
       cleanExpiredMentions();
-      if (mentionedThreads.has(`${channelId}:${threadTs}`)) return;
+      mentionedThreads.set(`${channelId}:${threadTs}`, Date.now());
+    }
+  });
 
-      try {
-        const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_id: agentId }),
-          signal: AbortSignal.timeout(3000),
-        });
+  // ---------------------------------------------------------------------------
+  // message_sending: check thread ownership before sending to Slack.
+  // Returns { cancel: true } if another agent owns the thread.
+  // ---------------------------------------------------------------------------
+  api.on("message_sending", async (event, ctx) => {
+    if (ctx.channelId !== "slack") return;
 
-        if (resp.ok) {
-          return;
-        }
-        if (resp.status === 409) {
-          const body = (await resp.json()) as { owner?: string };
-          api.logger.info?.(
-            `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
-          );
-          return { cancel: true };
-        }
-        api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
-      } catch (err) {
-        api.logger.warn?.(
-          `thread-ownership: ownership check failed (${String(err)}), allowing send`,
-        );
+    const threadTs = (event.metadata?.threadTs as string) ?? "";
+    const channelId = (event.metadata?.channelId as string) ?? event.to;
+
+    // Top-level messages (no thread) are always allowed.
+    if (!threadTs) return;
+
+    // Only enforce in A/B test channels (if set is empty, skip entirely).
+    if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) return;
+
+    // If this agent was @-mentioned in this thread recently, skip ownership check.
+    cleanExpiredMentions();
+    if (mentionedThreads.has(`${channelId}:${threadTs}`)) return;
+
+    // Try to claim ownership via the forwarder HTTP API.
+    try {
+      const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId }),
+        signal: AbortSignal.timeout(3000),
+      });
+
+      if (resp.ok) {
+        // We own it (or just claimed it), proceed.
+        return;
       }
-    });
-  },
-});
+
+      if (resp.status === 409) {
+        // Another agent owns this thread — cancel the send.
+        const body = (await resp.json()) as { owner?: string };
+        api.logger.info?.(
+          `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+        );
+        return { cancel: true };
+      }
+
+      // Unexpected status — fail open.
+      api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
+    } catch (err) {
+      // Network error — fail open.
+      api.logger.warn?.(`thread-ownership: ownership check failed (${String(err)}), allowing send`);
+    }
+  });
+}

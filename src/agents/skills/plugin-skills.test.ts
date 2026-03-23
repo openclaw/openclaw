@@ -27,7 +27,6 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         channels: [],
         providers: [],
         skills: ["./skills"],
-        hooks: [],
         origin: "workspace",
         rootDir: params.acpxRoot,
         source: params.acpxRoot,
@@ -39,7 +38,6 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         channels: [],
         providers: [],
         skills: ["./skills"],
-        hooks: [],
         origin: "workspace",
         rootDir: params.helperRoot,
         source: params.helperRoot,
@@ -52,7 +50,6 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
 function createSinglePluginRegistry(params: {
   pluginRoot: string;
   skills: string[];
-  format?: "openclaw" | "bundle";
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -60,11 +57,9 @@ function createSinglePluginRegistry(params: {
       {
         id: "helper",
         name: "Helper",
-        format: params.format,
         channels: [],
         providers: [],
         skills: params.skills,
-        hooks: [],
         origin: "workspace",
         rootDir: params.pluginRoot,
         source: params.pluginRoot,
@@ -121,12 +116,6 @@ describe("resolvePluginSkillDirs", () => {
       workspaceDir,
       config: {
         acp: { enabled: acpEnabled },
-        plugins: {
-          entries: {
-            acpx: { enabled: true },
-            helper: { enabled: true },
-          },
-        },
       } as OpenClawConfig,
     });
 
@@ -148,13 +137,7 @@ describe("resolvePluginSkillDirs", () => {
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            helper: { enabled: true },
-          },
-        },
-      } as OpenClawConfig,
+      config: {} as OpenClawConfig,
     });
 
     expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
@@ -179,46 +162,9 @@ describe("resolvePluginSkillDirs", () => {
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            helper: { enabled: true },
-          },
-        },
-      } as OpenClawConfig,
+      config: {} as OpenClawConfig,
     });
 
     expect(dirs).toEqual([]);
-  });
-
-  it("resolves Claude bundle command roots through the normal plugin skill path", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const pluginRoot = await tempDirs.make("openclaw-claude-bundle-");
-    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
-    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
-
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      createSinglePluginRegistry({
-        pluginRoot,
-        format: "bundle",
-        skills: ["./skills", "./commands"],
-      }),
-    );
-
-    const dirs = resolvePluginSkillDirs({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            helper: { enabled: true },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(dirs).toEqual([
-      path.resolve(pluginRoot, "skills"),
-      path.resolve(pluginRoot, "commands"),
-    ]);
   });
 });

@@ -1,10 +1,6 @@
 import "./isolated-agent.mocks.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -12,6 +8,27 @@ import {
   withTempCronHome,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
+
+function makeDeps() {
+  return {
+    sendMessageSlack: vi.fn(),
+    sendMessageWhatsApp: vi.fn(),
+    sendMessageTelegram: vi.fn(),
+    sendMessageDiscord: vi.fn(),
+    sendMessageSignal: vi.fn(),
+    sendMessageIMessage: vi.fn(),
+  };
+}
+
+function mockEmbeddedOk() {
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+}
 
 function lastEmbeddedLane(): string | undefined {
   const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
@@ -28,11 +45,11 @@ async function runLaneCase(home: string, lane?: string) {
       lastTo: "",
     },
   });
-  mockAgentPayloads([{ text: "ok" }]);
+  mockEmbeddedOk();
 
   await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath),
-    deps: createCliDeps(),
+    deps: makeDeps(),
     job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
     message: "do it",
     sessionKey: "cron:job-1",
@@ -42,44 +59,9 @@ async function runLaneCase(home: string, lane?: string) {
   return lastEmbeddedLane();
 }
 
-const envSnapshot = {
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-  HOMEDRIVE: process.env.HOMEDRIVE,
-  HOMEPATH: process.env.HOMEPATH,
-  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-} as const;
-
-function restoreSnapshotEnv() {
-  for (const [key, value] of Object.entries(envSnapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 describe("runCronIsolatedAgentTurn lane selection", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
-  });
-
-  afterEach(() => {
-    // Shared-worker runs can start collecting the next file before the generic
-    // runner cleanup resets env and session-store globals.
-    restoreSnapshotEnv();
-    vi.doUnmock("../agents/pi-embedded.js");
-    vi.doUnmock("../agents/model-catalog.js");
-    vi.doUnmock("../agents/model-selection.js");
-    vi.doUnmock("../agents/subagent-announce.js");
-    vi.doUnmock("../gateway/call.js");
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    vi.restoreAllMocks();
-    vi.resetModules();
   });
 
   it("moves the cron lane to nested for embedded runs", async () => {

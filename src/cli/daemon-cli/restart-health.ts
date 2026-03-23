@@ -65,8 +65,7 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
     auth: token || password ? { token, password } : undefined,
-    timeoutMs: 3_000,
-    includeDetails: false,
+    timeoutMs: 1_000,
   });
   return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
 }
@@ -124,22 +123,6 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
-  if (portUsage.status === "busy" && runtime.status !== "running") {
-    try {
-      const reachable = await confirmGatewayReachable(params.port);
-      if (reachable) {
-        return {
-          runtime,
-          portUsage,
-          healthy: true,
-          staleGatewayPids: [],
-        };
-      }
-    } catch {
-      // Probe is best-effort; keep the ownership-based diagnostics.
-    }
-  }
-
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter(
@@ -182,7 +165,7 @@ export async function inspectGatewayRestart(params: {
             return true;
           }
           if (runtimePid == null) {
-            return false;
+            return true;
           }
           return !listenerOwnedByRuntimePid({ listener, runtimePid });
         })

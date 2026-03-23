@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { __setModelCatalogImportForTest, resetModelCatalogCacheForTest } from "./model-catalog.js";
 
 export type PiSdkModule = typeof import("./pi-model-discovery.js");
@@ -15,13 +14,11 @@ vi.mock("./agent-paths.js", () => ({
 export function installModelCatalogTestHooks() {
   beforeEach(() => {
     resetModelCatalogCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
   });
 
   afterEach(() => {
     __setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
   });
 }

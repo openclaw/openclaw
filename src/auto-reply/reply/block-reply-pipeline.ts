@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -36,20 +35,30 @@ export function createAudioAsVoiceBuffer(params: {
 }
 
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
-  const reply = resolveSendableOutboundReplyParts(payload);
+  const text = payload.text?.trim() ?? "";
+  const mediaList = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
   return JSON.stringify({
-    text: reply.trimmedText,
-    mediaList: reply.mediaUrls,
+    text,
+    mediaList,
     replyToId: payload.replyToId ?? null,
   });
 }
 
 export function createBlockReplyContentKey(payload: ReplyPayload): string {
-  const reply = resolveSendableOutboundReplyParts(payload);
+  const text = payload.text?.trim() ?? "";
+  const mediaList = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
   // Content-only key used for final-payload suppression after block streaming.
   // This intentionally ignores replyToId so a streamed threaded payload and the
   // later final payload still collapse when they carry the same content.
-  return JSON.stringify({ text: reply.trimmedText, mediaList: reply.mediaUrls });
+  return JSON.stringify({ text, mediaList });
 }
 
 const withTimeout = async <T>(
@@ -208,7 +217,7 @@ export function createBlockReplyPipeline(params: {
     if (bufferPayload(payload)) {
       return;
     }
-    const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     if (hasMedia) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);

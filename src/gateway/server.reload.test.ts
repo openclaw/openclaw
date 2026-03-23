@@ -109,9 +109,6 @@ const hoisted = vi.hoisted(() => {
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     markChannelLoggedOut: vi.fn(),
-    isHealthMonitorEnabled: vi.fn(() => true),
-    isManuallyStopped: vi.fn(() => false),
-    resetRestartAttempts: vi.fn(),
   };
 
   const createChannelManager = vi.fn(() => providerManager);
@@ -221,52 +218,80 @@ describe("gateway hot reload", () => {
   });
 
   async function writeEnvRefConfig() {
-    await writeConfigFile({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    });
-  }
-
-  async function writeConfigFile(config: unknown) {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH is not set");
     }
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
   }
 
   async function writeTalkApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
-    await writeConfigFile({
-      talk: {
-        apiKey: { source: "env", provider: "default", id: refId },
-      },
-    });
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          talk: {
+            apiKey: { source: "env", provider: "default", id: refId },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
   }
 
   async function writeGatewayTraversalExecRefConfig() {
-    await writeConfigFile({
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "exec", provider: "vault", id: "a/../b" },
-        },
-      },
-      secrets: {
-        providers: {
-          vault: {
-            source: "exec",
-            command: process.execPath,
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "vault", id: "a/../b" },
+            },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+              },
+            },
           },
         },
-      },
-    });
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
   }
 
   async function writeGatewayTokenExecRefConfig(params: {
@@ -274,24 +299,36 @@ describe("gateway hot reload", () => {
     modePath: string;
     tokenValue: string;
   }) {
-    await writeConfigFile({
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "exec", provider: "vault", id: "gateway/token" },
-        },
-      },
-      secrets: {
-        providers: {
-          vault: {
-            source: "exec",
-            command: process.execPath,
-            allowSymlinkCommand: true,
-            args: [params.resolverScriptPath, params.modePath, params.tokenValue],
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "vault", id: "gateway/token" },
+            },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+                allowSymlinkCommand: true,
+                args: [params.resolverScriptPath, params.modePath, params.tokenValue],
+              },
+            },
           },
         },
-      },
-    });
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
   }
 
   async function writeDisabledSurfaceRefConfig() {
@@ -424,32 +461,6 @@ describe("gateway hot reload", () => {
     await fs.rm(authStorePath, { force: true });
   }
 
-  async function expectOneShotSecretReloadEvents(params: {
-    applyReload: () => Promise<unknown> | undefined;
-    sessionKey: string;
-    expectedError: RegExp | string;
-  }) {
-    await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    const degradedEvents = drainSystemEvents(params.sessionKey);
-    expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
-      true,
-    );
-
-    await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    expect(drainSystemEvents(params.sessionKey)).toEqual([]);
-  }
-
-  async function expectSecretReloadRecovered(params: {
-    applyReload: () => Promise<unknown> | undefined;
-    sessionKey: string;
-  }) {
-    await expect(params.applyReload()).resolves.toBeUndefined();
-    const recoveredEvents = drainSystemEvents(params.sessionKey);
-    expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
-      true,
-    );
-  }
-
   it("applies hot reload actions and emits restart signal", async () => {
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -501,16 +512,14 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
+      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(nextConfig);
 
       expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
       expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(
-        expect.objectContaining(nextConfig),
-      );
+      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(nextConfig);
 
       expect(hoisted.cronInstances.length).toBe(2);
       expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
@@ -567,22 +576,9 @@ describe("gateway hot reload", () => {
 
   it("fails startup when an active exec ref id contains traversal segments", async () => {
     await writeGatewayTraversalExecRefConfig();
-    const previousGatewayAuth = testState.gatewayAuth;
-    const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
-    testState.gatewayAuth = undefined;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    try {
-      await expect(withGatewayServer(async () => {})).rejects.toThrow(
-        /must not include "\." or "\.\." path segments/i,
-      );
-    } finally {
-      testState.gatewayAuth = previousGatewayAuth;
-      if (previousGatewayTokenEnv === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
-      }
-    }
+    await expect(withGatewayServer(async () => {})).rejects.toThrow(
+      /must not include "\." or "\.\." path segments/i,
+    );
   });
 
   it("allows startup when unresolved refs exist only on disabled surfaces", async () => {
@@ -653,17 +649,25 @@ describe("gateway hot reload", () => {
       };
 
       delete process.env.OPENAI_API_KEY;
-      await expectOneShotSecretReloadEvents({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-        expectedError: 'Environment variable "OPENAI_API_KEY" is missing or empty.',
-      });
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        'Environment variable "OPENAI_API_KEY" is missing or empty.',
+      );
+      const degradedEvents = drainSystemEvents(sessionKey);
+      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+        true,
+      );
+
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        'Environment variable "OPENAI_API_KEY" is missing or empty.',
+      );
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
 
       process.env.OPENAI_API_KEY = "sk-recovered"; // pragma: allowlist secret
-      await expectSecretReloadRecovered({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-      });
+      await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
+      const recoveredEvents = drainSystemEvents(sessionKey);
+      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+        true,
+      );
     });
   });
 
@@ -703,17 +707,25 @@ describe("gateway hot reload", () => {
       };
 
       delete process.env.GEMINI_API_KEY;
-      await expectOneShotSecretReloadEvents({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-        expectedError: "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
-      });
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      const degradedEvents = drainSystemEvents(sessionKey);
+      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+        true,
+      );
+
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
 
       process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
-      await expectSecretReloadRecovered({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-      });
+      await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
+      const recoveredEvents = drainSystemEvents(sessionKey);
+      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+        true,
+      );
     });
   });
 

@@ -1,16 +1,10 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
+#!/usr/bin/env node
 
-export function copyPluginSdkRootAlias(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const source = resolve(cwd, "src/plugin-sdk/root-alias.cjs");
-  const target = resolve(cwd, "dist/plugin-sdk/root-alias.cjs");
+import { copyFileSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
-  writeTextFileIfChanged(target, readFileSync(source, "utf8"));
-}
+const source = resolve("src/plugin-sdk/root-alias.cjs");
+const target = resolve("dist/plugin-sdk/root-alias.cjs");
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  copyPluginSdkRootAlias();
-}
+mkdirSync(dirname(target), { recursive: true });
+copyFileSync(source, target);

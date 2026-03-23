@@ -1,12 +1,12 @@
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   chunkMarkdownText: vi.fn((text: string) => [text]),
   fetchRemoteMedia: vi.fn(),
 }));
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/googlechat", () => ({
   getChatChannelMeta: () => ({ id: "googlechat", label: "Google Chat" }),
   missingTargetError: (provider: string, hint: string) =>
     new Error(`Delivering to ${provider} requires target ${hint}`),
@@ -45,12 +45,8 @@ vi.mock("./monitor.js", () => ({
   startGoogleChatMonitor: vi.fn(),
 }));
 
-vi.mock("./setup-core.js", () => ({
-  googlechatSetupAdapter: {},
-}));
-
-vi.mock("./setup-surface.js", () => ({
-  googlechatSetupWizard: {},
+vi.mock("./onboarding.js", () => ({
+  googlechatOnboardingAdapter: {},
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -76,7 +72,7 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace: vi.fn(),
 }));
 
-import { resolveChannelMediaMaxBytes } from "../runtime-api.js";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/googlechat";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage, uploadGoogleChatAttachment } from "./api.js";
 import { googlechatPlugin } from "./channel.js";

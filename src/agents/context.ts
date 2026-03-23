@@ -1,14 +1,13 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
 // the agent reports a model id. This includes custom models.json entries.
 
-import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
 type ModelRegistryLike = {
@@ -79,29 +78,11 @@ export function applyConfiguredContextWindows(params: {
   }
 }
 
+const MODEL_CACHE = new Map<string, number>();
 let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
-let modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
-
-function loadModelsConfigRuntime() {
-  modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
-  return modelsConfigRuntimePromise;
-}
-
-function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = path
-    .basename(argv[1] ?? "")
-    .trim()
-    .toLowerCase();
-  return (
-    entryBasename === "openclaw" ||
-    entryBasename === "openclaw.mjs" ||
-    entryBasename === "entry.js" ||
-    entryBasename === "entry.mjs"
-  );
-}
 
 function getCommandPathFromArgv(argv: string[]): string[] {
   const args = argv.slice(2);
@@ -127,36 +108,9 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
-const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
-  "backup",
-  "completion",
-  "config",
-  "directory",
-  "doctor",
-  "gateway",
-  "health",
-  "hooks",
-  "logs",
-  "plugins",
-  "secrets",
-  "status",
-  "update",
-  "webhooks",
-]);
-
-function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
-  // Keep this gate tied to the real OpenClaw CLI entrypoints.
-  //
-  // This module can also land inside shared dist chunks that are imported from
-  // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do
-  // eager warmup for those generic Node script imports, merely importing the
-  // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
-  // plugin discovery and breaks dist/source singleton assumptions.
-  if (!isLikelyOpenClawCliProcess(argv)) {
-    return false;
-  }
-  const [primary] = getCommandPathFromArgv(argv);
-  return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
+function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathFromArgv(argv);
+  return primary === "config" && secondary === "validate";
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
@@ -169,7 +123,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   try {
     const cfg = loadConfig();
     applyConfiguredContextWindows({
-      cache: MODEL_CONTEXT_TOKEN_CACHE,
+      cache: MODEL_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
     configuredConfig = cfg;
@@ -197,7 +151,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   loadPromise = (async () => {
     try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
     } catch {
       // Continue with best-effort discovery/overrides.
     }
@@ -213,7 +167,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
           ? modelRegistry.getAvailable()
           : modelRegistry.getAll();
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: MODEL_CACHE,
         models,
       });
     } catch {
@@ -221,7 +175,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     applyConfiguredContextWindows({
-      cache: MODEL_CONTEXT_TOKEN_CACHE,
+      cache: MODEL_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
   })().catch(() => {
@@ -230,23 +184,18 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(
-  modelId?: string,
-  options?: { allowAsyncLoad?: boolean },
-): number | undefined {
+export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading on demand, but don't block lookups.
-  if (options?.allowAsyncLoad !== false) {
-    void ensureContextWindowCacheLoaded();
-  }
-  return lookupCachedContextTokens(modelId);
+  // Best-effort: kick off loading, but don't block.
+  void ensureContextWindowCacheLoaded();
+  return MODEL_CACHE.get(modelId);
 }
 
-if (shouldEagerWarmContextWindowCache()) {
-  // Keep startup warmth for the real CLI, but avoid import-time side effects
-  // when this module is pulled in through library/plugin-sdk surfaces.
+if (!shouldSkipEagerContextWindowWarmup()) {
+  // Keep prior behavior where model limits begin loading during startup.
+  // This avoids a cold-start miss on the first context token lookup.
   void ensureContextWindowCacheLoaded();
 }
 
@@ -364,7 +313,6 @@ export function resolveContextTokensForModel(params: {
   model?: string;
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
-  allowAsyncLoad?: boolean;
 }): number | undefined {
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
@@ -413,7 +361,6 @@ export function resolveContextTokensForModel(params: {
   if (params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
@@ -422,9 +369,7 @@ export function resolveContextTokensForModel(params: {
 
   // Bare key fallback.  For model-only calls with slash-containing IDs
   // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
-  const bareResult = lookupContextTokens(params.model, {
-    allowAsyncLoad: params.allowAsyncLoad,
-  });
+  const bareResult = lookupContextTokens(params.model);
   if (bareResult !== undefined) {
     return bareResult;
   }
@@ -435,7 +380,6 @@ export function resolveContextTokensForModel(params: {
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;

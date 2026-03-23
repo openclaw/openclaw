@@ -93,40 +93,6 @@ describe("plugins.entries.*.hooks.allowPromptInjection", () => {
   });
 });
 
-describe("plugins.entries.*.subagent", () => {
-  it("accepts trusted subagent override settings", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["anthropic/claude-haiku-4-5"],
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid trusted subagent override settings", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            subagent: {
-              allowModelOverride: "yes",
-              allowedModels: [1],
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
 describe("web search provider config", () => {
   it("accepts kimi provider and config", () => {
     const res = validateConfigObject(
@@ -244,49 +210,6 @@ describe("gateway.channelHealthCheckMinutes", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
-    }
-  });
-
-  it("rejects stale thresholds shorter than the health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
-    }
-  });
-
-  it("accepts stale thresholds that match or exceed the health check interval", () => {
-    const equal = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 5,
-      },
-    });
-    expect(equal.ok).toBe(true);
-
-    const greater = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 6,
-      },
-    });
-    expect(greater.ok).toBe(true);
-  });
-
-  it("rejects stale thresholds shorter than the default health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
     }
   });
 });
@@ -436,33 +359,6 @@ describe("config strict validation", () => {
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
-  });
-
-  it("accepts documented agents.list[].params overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        list: [
-          {
-            id: "main",
-            model: "anthropic/claude-opus-4-6",
-            params: {
-              cacheRetention: "none",
-              temperature: 0.4,
-              maxTokens: 8192,
-            },
-          },
-        ],
-      },
-    });
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.list?.[0]?.params).toEqual({
-        cacheRetention: "none",
-        temperature: 0.4,
-        maxTokens: 8192,
-      });
-    }
   });
 
   it("flags legacy config entries without auto-migrating", async () => {

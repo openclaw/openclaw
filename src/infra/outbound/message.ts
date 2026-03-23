@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
@@ -40,7 +39,6 @@ type MessageSendParams = {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
-  forceDocument?: boolean;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number;
@@ -101,32 +99,6 @@ export type MessagePollResult = {
   };
   dryRun?: boolean;
 };
-
-function buildMessagePollResult(params: {
-  channel: string;
-  to: string;
-  normalized: {
-    question: string;
-    options: string[];
-    maxSelections: number;
-    durationSeconds?: number | null;
-    durationHours?: number | null;
-  };
-  result?: MessagePollResult["result"];
-  dryRun?: boolean;
-}): MessagePollResult {
-  return {
-    channel: params.channel,
-    to: params.to,
-    question: params.normalized.question,
-    options: params.normalized.options,
-    maxSelections: params.normalized.maxSelections,
-    durationSeconds: params.normalized.durationSeconds ?? null,
-    durationHours: params.normalized.durationHours ?? null,
-    via: "gateway",
-    ...(params.dryRun ? { dryRun: true } : { result: params.result }),
-  };
-}
 
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
@@ -204,7 +176,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     .filter(Boolean)
     .join("\n");
   const mirrorMediaUrls = normalizedPayloads.flatMap(
-    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+    (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
   );
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
@@ -247,7 +219,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
@@ -320,12 +291,17 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     : normalizePollInput(pollInput);
 
   if (params.dryRun) {
-    return buildMessagePollResult({
+    return {
       channel,
       to: params.to,
-      normalized,
+      question: normalized.question,
+      options: normalized.options,
+      maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds ?? null,
+      durationHours: normalized.durationHours ?? null,
+      via: "gateway",
       dryRun: true,
-    });
+    };
   }
 
   const result = await callMessageGateway<{
@@ -353,10 +329,15 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     },
   });
 
-  return buildMessagePollResult({
+  return {
     channel,
     to: params.to,
-    normalized,
+    question: normalized.question,
+    options: normalized.options,
+    maxSelections: normalized.maxSelections,
+    durationSeconds: normalized.durationSeconds ?? null,
+    durationHours: normalized.durationHours ?? null,
+    via: "gateway",
     result,
-  });
+  };
 }

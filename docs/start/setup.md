@@ -10,8 +10,10 @@ title: "Setup"
 
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
-For onboarding details, see [Onboarding (CLI)](/start/wizard).
+For wizard details, see [Onboarding Wizard](/start/wizard).
 </Note>
+
+Last updated: 2026-01-01
 
 ## TL;DR
 
@@ -21,11 +23,11 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 
 ## Prereqs (from source)
 
-- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported)
+- Node `>=22`
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
-## Tailoring strategy (so updates do not hurt)
+## Tailoring strategy (so updates don’t hurt)
 
 If you want “100% tailored to me” _and_ easy updates, keep your customization in:
 
@@ -94,8 +96,7 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
-config, and bundled-plugin metadata changes.
+`gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
 
 ### 2) Point the macOS app at your running Gateway
 

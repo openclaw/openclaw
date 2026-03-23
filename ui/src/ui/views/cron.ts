@@ -91,7 +91,6 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
-  onNavigateToChat?: (sessionKey: string) => void;
 };
 
 function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
@@ -375,7 +374,7 @@ export function renderCron(props: CronProps) {
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const supportsAnnounce =
-    props.form.sessionTarget !== "main" && props.form.payloadKind === "agentTurn";
+    props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
@@ -675,7 +674,7 @@ export function renderCron(props: CronProps) {
                   `
                 : html`
                     <div class="list" style="margin-top: 12px;">
-                      ${runs.map((entry) => renderRun(entry, props.basePath, props.onNavigateToChat))}
+                      ${runs.map((entry) => renderRun(entry, props.basePath))}
                     </div>
                   `
           }
@@ -1710,11 +1709,7 @@ function runDeliveryLabel(value: string): string {
   }
 }
 
-function renderRun(
-  entry: CronRunLogEntry,
-  basePath: string,
-  onNavigateToChat?: (sessionKey: string) => void,
-) {
+function renderRun(entry: CronRunLogEntry, basePath: string) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
       ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
@@ -1754,22 +1749,7 @@ function renderRun(
         }
         ${
           chatUrl
-            ? html`<div><a class="session-link" href=${chatUrl} @click=${(e: MouseEvent) => {
-                if (
-                  e.defaultPrevented ||
-                  e.button !== 0 ||
-                  e.metaKey ||
-                  e.ctrlKey ||
-                  e.shiftKey ||
-                  e.altKey
-                ) {
-                  return;
-                }
-                if (onNavigateToChat && entry.sessionKey) {
-                  e.preventDefault();
-                  onNavigateToChat(entry.sessionKey);
-                }
-              }}>${t("cron.runEntry.openRunChat")}</a></div>`
+            ? html`<div><a class="session-link" href=${chatUrl}>${t("cron.runEntry.openRunChat")}</a></div>`
             : nothing
         }
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}

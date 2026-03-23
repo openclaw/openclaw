@@ -1,10 +1,7 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
-import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { __testing as webFetchTesting } from "./web-fetch.js";
-import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 import { createWebFetchTool } from "./web-tools.js";
 
 type MockResponse = {
@@ -16,12 +13,18 @@ type MockResponse = {
   json?: () => Promise<unknown>;
 };
 
+function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
+  return {
+    get: (key) => map[key.toLowerCase()] ?? null,
+  };
+}
+
 function htmlResponse(html: string, url = "https://example.com/"): MockResponse {
   return {
     ok: true,
     status: 200,
     url,
-    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
+    headers: makeHeaders({ "content-type": "text/html; charset=utf-8" }),
     text: async () => html,
   };
 }
@@ -59,7 +62,7 @@ function textResponse(
     ok: true,
     status: 200,
     url,
-    headers: makeFetchHeaders({ "content-type": contentType }),
+    headers: makeHeaders({ "content-type": contentType }),
     text: async () => text,
   };
 }
@@ -74,10 +77,23 @@ function errorHtmlResponse(
     ok: false,
     status,
     url,
-    headers: contentType ? makeFetchHeaders({ "content-type": contentType }) : makeFetchHeaders({}),
+    headers: contentType ? makeHeaders({ "content-type": contentType }) : makeHeaders({}),
     text: async () => html,
   };
 }
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if ("url" in input && typeof input.url === "string") {
+    return input.url;
+  }
+  return "";
+}
+
 function installMockFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
@@ -109,9 +125,9 @@ function installPlainTextFetch(text: string) {
     Promise.resolve({
       ok: true,
       status: 200,
-      headers: makeFetchHeaders({ "content-type": "text/plain" }),
+      headers: makeHeaders({ "content-type": "text/plain" }),
       text: async () => text,
-      url: resolveRequestUrl(input),
+      url: requestUrl(input),
     } as Response),
   );
 }
@@ -199,9 +215,9 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeFetchHeaders({ "content-type": "text/plain" }),
+        headers: makeHeaders({ "content-type": "text/plain" }),
         text: async () => longText,
-        url: resolveRequestUrl(input),
+        url: requestUrl(input),
       } as Response),
     );
 
@@ -261,9 +277,9 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeFetchHeaders({ "content-type": "text/plain" }),
+        headers: makeHeaders({ "content-type": "text/plain" }),
         text: async () => "proxy body",
-        url: resolveRequestUrl(input),
+        url: requestUrl(input),
       } as Response),
     );
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -282,7 +298,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("falls back to firecrawl when readability returns no content", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
+      const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlResponse("firecrawl content")) as Promise<Response>;
       }
@@ -300,7 +316,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("normalizes firecrawl Authorization header values", async () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
+      const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev/v2/scrape")) {
         return Promise.resolve(firecrawlResponse("firecrawl normalized")) as Promise<Response>;
       }
@@ -317,7 +333,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(result?.details).toMatchObject({ extractor: "firecrawl" });
     const firecrawlCall = fetchSpy.mock.calls.find((call) =>
-      resolveRequestUrl(call[0]).includes("/v2/scrape"),
+      requestUrl(call[0]).includes("/v2/scrape"),
     );
     expect(firecrawlCall).toBeTruthy();
     const init = firecrawlCall?.[1];
@@ -325,45 +341,11 @@ describe("web_fetch extraction fallbacks", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("uses FIRECRAWL_BASE_URL env var when firecrawl.baseUrl is unset", async () => {
-    vi.stubEnv("FIRECRAWL_BASE_URL", "https://fc.example.com");
-
-    expect(webFetchTesting.resolveFirecrawlBaseUrl({})).toBe("https://fc.example.com");
-  });
-
-  it("uses guarded endpoint fetch for firecrawl requests", async () => {
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
-
-    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
-      if (url.includes("api.firecrawl.dev/v2/scrape")) {
-        return Promise.resolve(
-          firecrawlResponse("firecrawl guarded transport"),
-        ) as Promise<Response>;
-      }
-      return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
-      ) as Promise<Response>;
-    });
-
-    const tool = createFirecrawlTool();
-    const result = await executeFetch(tool, { url: "https://example.com/guarded-firecrawl" });
-
-    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
-    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
-      resolveRequestUrl(call[0]).includes("/v2/scrape"),
-    );
-    expect(firecrawlCall).toBeTruthy();
-    const requestInit = firecrawlCall?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
-    expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
-  });
-
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
-          htmlResponse("<html><body>hi</body></html>", resolveRequestUrl(input)),
+          htmlResponse("<html><body>hi</body></html>", requestUrl(input)),
         ) as Promise<Response>,
     );
 
@@ -379,7 +361,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("throws when readability is empty and firecrawl fails", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
+      const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlError()) as Promise<Response>;
       }
@@ -391,41 +373,19 @@ describe("web_fetch extraction fallbacks", () => {
     const tool = createFirecrawlTool();
     await expect(
       executeFetch(tool, { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability, Firecrawl, and basic HTML cleanup returned no content");
-  });
-
-  it("falls back to basic HTML cleanup after readability and before giving up", async () => {
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          htmlResponse(
-            "<!doctype html><html><head><title>Shell App</title></head><body><div id='app'></div></body></html>",
-            resolveRequestUrl(input),
-          ),
-        ) as Promise<Response>,
-    );
-
-    const tool = createFetchTool({
-      firecrawl: { enabled: false },
-    });
-    const result = await executeFetch(tool, { url: "https://example.com/shell" });
-    const details = result?.details as { extractor?: string; text?: string; title?: string };
-
-    expect(details.extractor).toBe("raw-html");
-    expect(details.text).toContain("Shell App");
-    expect(details.title).toContain("Shell App");
+    ).rejects.toThrow("Readability and Firecrawl returned no content");
   });
 
   it("uses firecrawl when direct fetch fails", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
+      const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlResponse("firecrawl fallback", url)) as Promise<Response>;
       }
       return Promise.resolve({
         ok: false,
         status: 403,
-        headers: makeFetchHeaders({ "content-type": "text/html" }),
+        headers: makeHeaders({ "content-type": "text/html" }),
         text: async () => "blocked",
       } as Response);
     });
@@ -444,7 +404,7 @@ describe("web_fetch extraction fallbacks", () => {
     const large = "a".repeat(80_000);
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse(large, resolveRequestUrl(input))) as Promise<Response>,
+        Promise.resolve(textResponse(large, requestUrl(input))) as Promise<Response>,
     );
 
     const tool = createFetchTool({
@@ -472,7 +432,7 @@ describe("web_fetch extraction fallbacks", () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
-          errorHtmlResponse(html, 404, resolveRequestUrl(input), "Text/HTML; charset=utf-8"),
+          errorHtmlResponse(html, 404, requestUrl(input), "Text/HTML; charset=utf-8"),
         ) as Promise<Response>,
     );
 
@@ -495,9 +455,7 @@ describe("web_fetch extraction fallbacks", () => {
       "<!DOCTYPE HTML><html><head><title>Oops</title></head><body><h1>Oops</h1></body></html>";
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(
-          errorHtmlResponse(html, 500, resolveRequestUrl(input), null),
-        ) as Promise<Response>,
+        Promise.resolve(errorHtmlResponse(html, 500, requestUrl(input), null)) as Promise<Response>,
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -513,7 +471,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("wraps firecrawl error details", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
+      const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve({
           ok: false,

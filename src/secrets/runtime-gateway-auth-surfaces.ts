@@ -96,6 +96,7 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   const plan = createGatewayCredentialPlan({
     config: params.config,
     env: params.env,
+    includeLegacyEnv: true,
     defaults: params.defaults,
   });
 

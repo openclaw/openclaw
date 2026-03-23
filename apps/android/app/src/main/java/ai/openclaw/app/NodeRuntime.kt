@@ -33,8 +33,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -43,12 +41,11 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-class NodeRuntime(
-  context: Context,
-  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
-) {
+class NodeRuntime(context: Context) {
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+  val prefs = SecurePrefs(appContext)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
@@ -89,8 +86,6 @@ class NodeRuntime(
 
   private val deviceHandler: DeviceHandler = DeviceHandler(
     appContext = appContext,
-    smsEnabled = BuildConfig.OPENCLAW_ENABLE_SMS,
-    callLogEnabled = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -110,10 +105,6 @@ class NodeRuntime(
   )
 
   private val calendarHandler: CalendarHandler = CalendarHandler(
-    appContext = appContext,
-  )
-
-  private val callLogHandler: CallLogHandler = CallLogHandler(
     appContext = appContext,
   )
 
@@ -139,9 +130,7 @@ class NodeRuntime(
     voiceWakeMode = { VoiceWakeMode.Off },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+    smsAvailable = { sms.canSendSms() },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
   )
@@ -160,13 +149,10 @@ class NodeRuntime(
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
-    callLogHandler = callLogHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
-    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+    smsAvailable = { sms.canSendSms() },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
@@ -224,8 +210,7 @@ class NodeRuntime(
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
-  private var gatewayDefaultAgentId: String? = null
-  private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
+  private var lastAutoA2uiUrl: String? = null
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
   private var operatorConnected = false
@@ -247,7 +232,7 @@ class NodeRuntime(
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
-          refreshHomeCanvasOverviewIfConnected()
+          refreshBrandingFromGateway()
           if (voiceReplySpeakerLazy.isInitialized()) {
             voiceReplySpeaker.refreshConfig()
           }
@@ -285,7 +270,7 @@ class NodeRuntime(
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
         updateStatus()
-        showLocalCanvasOnConnect()
+        maybeNavigateToA2uiOnConnect()
       },
       onDisconnected = { message ->
         _nodeConnected.value = false
@@ -411,7 +396,6 @@ class NodeRuntime(
     _mainSessionKey.value = trimmed
     talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
-    updateHomeCanvasState()
   }
 
   private fun updateStatus() {
@@ -431,7 +415,6 @@ class NodeRuntime(
         operator.isNotBlank() && operator != "Offline" -> operator
         else -> node
       }
-    updateHomeCanvasState()
   }
 
   private fun resolveMainSessionKey(): String {
@@ -439,29 +422,21 @@ class NodeRuntime(
     return if (trimmed.isEmpty()) "main" else trimmed
   }
 
-  private fun showLocalCanvasOnConnect() {
-    _canvasA2uiHydrated.value = false
-    _canvasRehydratePending.value = false
-    _canvasRehydrateErrorText.value = null
-    canvas.navigate("")
+  private fun maybeNavigateToA2uiOnConnect() {
+    val a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: return
+    val current = canvas.currentUrl()?.trim().orEmpty()
+    if (current.isEmpty() || current == lastAutoA2uiUrl) {
+      lastAutoA2uiUrl = a2uiUrl
+      canvas.navigate(a2uiUrl)
+    }
   }
 
   private fun showLocalCanvasOnDisconnect() {
+    lastAutoA2uiUrl = null
     _canvasA2uiHydrated.value = false
     _canvasRehydratePending.value = false
     _canvasRehydrateErrorText.value = null
     canvas.navigate("")
-  }
-
-  fun refreshHomeCanvasOverviewIfConnected() {
-    if (!operatorConnected) {
-      updateHomeCanvasState()
-      return
-    }
-    scope.launch {
-      refreshBrandingFromGateway()
-      refreshAgentsFromGateway()
-    }
   }
 
   fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
@@ -572,8 +547,43 @@ class NodeRuntime(
 
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
-        seedLastDiscoveredGateway(list)
-        autoConnectIfNeeded()
+        if (list.isNotEmpty()) {
+          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
+          // UX parity with iOS: only set once when unset.
+          if (lastDiscoveredStableId.value.trim().isEmpty()) {
+            prefs.setLastDiscoveredStableId(list.first().stableId)
+          }
+        }
+
+        if (didAutoConnect) return@collect
+        if (_isConnected.value) return@collect
+
+        if (manualEnabled.value) {
+          val host = manualHost.value.trim()
+          val port = manualPort.value
+          if (host.isNotEmpty() && port in 1..65535) {
+            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+            if (!manualTls.value) return@collect
+            val stableId = GatewayEndpoint.manual(host = host, port = port).stableId
+            val storedFingerprint = prefs.loadGatewayTlsFingerprint(stableId)?.trim().orEmpty()
+            if (storedFingerprint.isEmpty()) return@collect
+
+            didAutoConnect = true
+            connect(GatewayEndpoint.manual(host = host, port = port))
+          }
+          return@collect
+        }
+
+        val targetStableId = lastDiscoveredStableId.value.trim()
+        if (targetStableId.isEmpty()) return@collect
+        val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
+
+        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
+        if (storedFingerprint.isEmpty()) return@collect
+
+        didAutoConnect = true
+        connect(target)
       }
     }
 
@@ -592,57 +602,13 @@ class NodeRuntime(
           canvas.setDebugStatus(status, server ?: remote)
         }
     }
-
-    updateHomeCanvasState()
   }
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
-    if (value) {
-      reconnectPreferredGatewayOnForeground()
-    } else {
+    if (!value) {
       stopActiveVoiceSession()
     }
-  }
-
-  private fun seedLastDiscoveredGateway(list: List<GatewayEndpoint>) {
-    if (list.isEmpty()) return
-    if (lastDiscoveredStableId.value.trim().isNotEmpty()) return
-    prefs.setLastDiscoveredStableId(list.first().stableId)
-  }
-
-  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
-    if (manualEnabled.value) {
-      val host = manualHost.value.trim()
-      val port = manualPort.value
-      if (host.isEmpty() || port !in 1..65535) return null
-      return GatewayEndpoint.manual(host = host, port = port)
-    }
-
-    val targetStableId = lastDiscoveredStableId.value.trim()
-    if (targetStableId.isEmpty()) return null
-    val endpoint = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
-    val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
-    if (storedFingerprint.isEmpty()) return null
-    return endpoint
-  }
-
-  private fun autoConnectIfNeeded() {
-    if (didAutoConnect) return
-    if (_isConnected.value) return
-    val endpoint = resolvePreferredGatewayEndpoint() ?: return
-    didAutoConnect = true
-    connect(endpoint)
-  }
-
-  private fun reconnectPreferredGatewayOnForeground() {
-    if (_isConnected.value) return
-    if (_pendingGatewayTrust.value != null) return
-    if (connectedEndpoint != null) {
-      refreshGatewayConnection()
-      return
-    }
-    resolvePreferredGatewayEndpoint()?.let(::connect)
   }
 
   fun setDisplayName(value: String) {
@@ -962,175 +928,9 @@ class NodeRuntime(
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
-      updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore
     }
-  }
-
-  private suspend fun refreshAgentsFromGateway() {
-    if (!operatorConnected) return
-    try {
-      val res = operatorSession.request("agents.list", "{}")
-      val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
-      val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
-      val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
-      val agents =
-        (root["agents"] as? JsonArray)?.mapNotNull { item ->
-          val obj = item.asObjectOrNull() ?: return@mapNotNull null
-          val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-          if (id.isEmpty()) return@mapNotNull null
-          val name = obj["name"].asStringOrNull()?.trim()
-          val emoji = obj["identity"].asObjectOrNull()?.get("emoji").asStringOrNull()?.trim()
-          GatewayAgentSummary(
-            id = id,
-            name = name?.takeIf { it.isNotEmpty() },
-            emoji = emoji?.takeIf { it.isNotEmpty() },
-          )
-        } ?: emptyList()
-
-      gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
-      gatewayAgents = agents
-      applyMainSessionKey(mainKey)
-      updateHomeCanvasState()
-    } catch (_: Throwable) {
-      // ignore
-    }
-  }
-
-  private fun updateHomeCanvasState() {
-    val payload =
-      try {
-        json.encodeToString(makeHomeCanvasPayload())
-      } catch (_: Throwable) {
-        null
-      }
-    canvas.updateHomeCanvasState(payload)
-  }
-
-  private fun makeHomeCanvasPayload(): HomeCanvasPayload {
-    val state = resolveHomeCanvasGatewayState()
-    val gatewayName = normalized(_serverName.value)
-    val gatewayAddress = normalized(_remoteAddress.value)
-    val gatewayLabel = gatewayName ?: gatewayAddress ?: "Gateway"
-    val activeAgentId = resolveActiveAgentId()
-    val agents = homeCanvasAgents(activeAgentId)
-
-    return when (state) {
-      HomeCanvasGatewayState.Connected ->
-        HomeCanvasPayload(
-          gatewayState = "connected",
-          eyebrow = "Connected to $gatewayLabel",
-          title = "Your agents are ready",
-          subtitle =
-            "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
-          gatewayLabel = gatewayLabel,
-          activeAgentName = resolveActiveAgentName(activeAgentId),
-          activeAgentBadge = agents.firstOrNull { it.isActive }?.badge ?: "OC",
-          activeAgentCaption = "Selected on this phone",
-          agentCount = agents.size,
-          agents = agents.take(6),
-          footer = "The overview refreshes on reconnect and when this screen opens.",
-        )
-      HomeCanvasGatewayState.Connecting ->
-        HomeCanvasPayload(
-          gatewayState = "connecting",
-          eyebrow = "Reconnecting",
-          title = "OpenClaw is syncing back up",
-          subtitle =
-            "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
-          gatewayLabel = gatewayLabel,
-          activeAgentName = resolveActiveAgentName(activeAgentId),
-          activeAgentBadge = "OC",
-          activeAgentCaption = "Gateway session in progress",
-          agentCount = agents.size,
-          agents = agents.take(4),
-          footer = "If the gateway is reachable, reconnect should complete without intervention.",
-        )
-      HomeCanvasGatewayState.Error, HomeCanvasGatewayState.Offline ->
-        HomeCanvasPayload(
-          gatewayState = if (state == HomeCanvasGatewayState.Error) "error" else "offline",
-          eyebrow = "Welcome to OpenClaw",
-          title = "Your phone stays quiet until it is needed",
-          subtitle =
-            "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
-          gatewayLabel = gatewayLabel,
-          activeAgentName = "Main",
-          activeAgentBadge = "OC",
-          activeAgentCaption = "Connect to load your agents",
-          agentCount = agents.size,
-          agents = agents.take(4),
-          footer = "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
-        )
-    }
-  }
-
-  private fun resolveHomeCanvasGatewayState(): HomeCanvasGatewayState {
-    val lower = _statusText.value.trim().lowercase()
-    return when {
-      _isConnected.value -> HomeCanvasGatewayState.Connected
-      lower.contains("connecting") || lower.contains("reconnecting") -> HomeCanvasGatewayState.Connecting
-      lower.contains("error") || lower.contains("failed") -> HomeCanvasGatewayState.Error
-      else -> HomeCanvasGatewayState.Offline
-    }
-  }
-
-  private fun resolveActiveAgentId(): String {
-    val mainKey = _mainSessionKey.value.trim()
-    if (mainKey.startsWith("agent:")) {
-      val agentId = mainKey.removePrefix("agent:").substringBefore(':').trim()
-      if (agentId.isNotEmpty()) return agentId
-    }
-    return gatewayDefaultAgentId?.trim().orEmpty()
-  }
-
-  private fun resolveActiveAgentName(activeAgentId: String): String {
-    if (activeAgentId.isNotEmpty()) {
-      gatewayAgents.firstOrNull { it.id == activeAgentId }?.let { agent ->
-        return normalized(agent.name) ?: agent.id
-      }
-      return activeAgentId
-    }
-    return gatewayAgents.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: "Main"
-  }
-
-  private fun homeCanvasAgents(activeAgentId: String): List<HomeCanvasAgentCard> {
-    val defaultAgentId = gatewayDefaultAgentId?.trim().orEmpty()
-    return gatewayAgents
-      .map { agent ->
-        val isActive = activeAgentId.isNotEmpty() && agent.id == activeAgentId
-        val isDefault = defaultAgentId.isNotEmpty() && agent.id == defaultAgentId
-        HomeCanvasAgentCard(
-          id = agent.id,
-          name = normalized(agent.name) ?: agent.id,
-          badge = homeCanvasBadge(agent),
-          caption =
-            when {
-              isActive -> "Active on this phone"
-              isDefault -> "Default agent"
-              else -> "Ready"
-            },
-          isActive = isActive,
-        )
-      }.sortedWith(compareByDescending<HomeCanvasAgentCard> { it.isActive }.thenBy { it.name.lowercase() })
-  }
-
-  private fun homeCanvasBadge(agent: GatewayAgentSummary): String {
-    val emoji = normalized(agent.emoji)
-    if (emoji != null) return emoji
-    val initials =
-      (normalized(agent.name) ?: agent.id)
-        .split(' ', '-', '_')
-        .filter { it.isNotBlank() }
-        .take(2)
-        .mapNotNull { token -> token.firstOrNull()?.uppercaseChar()?.toString() }
-        .joinToString("")
-    return if (initials.isNotEmpty()) initials else "OC"
-  }
-
-  private fun normalized(value: String?): String? {
-    val trimmed = value?.trim().orEmpty()
-    return trimmed.ifEmpty { null }
   }
 
   private fun triggerCameraFlash() {
@@ -1151,40 +951,3 @@ class NodeRuntime(
   }
 
 }
-
-private enum class HomeCanvasGatewayState {
-  Connected,
-  Connecting,
-  Error,
-  Offline,
-}
-
-private data class GatewayAgentSummary(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-)
-
-@Serializable
-private data class HomeCanvasPayload(
-  val gatewayState: String,
-  val eyebrow: String,
-  val title: String,
-  val subtitle: String,
-  val gatewayLabel: String,
-  val activeAgentName: String,
-  val activeAgentBadge: String,
-  val activeAgentCaption: String,
-  val agentCount: Int,
-  val agents: List<HomeCanvasAgentCard>,
-  val footer: String,
-)
-
-@Serializable
-private data class HomeCanvasAgentCard(
-  val id: String,
-  val name: String,
-  val badge: String,
-  val caption: String,
-  val isActive: Boolean,
-)

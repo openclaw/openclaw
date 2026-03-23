@@ -1,5 +1,6 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelDock } from "../channels/dock.js";
+import { getChannelDock, listChannelDocks } from "../channels/dock.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -30,7 +31,6 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
   }
   const direct =
     normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
-    (explicitMessageChannel as ChannelId | undefined) ??
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
     normalizeAnyChannelId(ctx.OriginatingChannel);
@@ -47,25 +47,24 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
     }
     const normalized =
       normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
-      (normalizedCandidateChannel as ChannelId | undefined) ??
       normalizeAnyChannelId(candidate);
     if (normalized) {
       return normalized;
     }
   }
-  const configured = listChannelPlugins()
-    .map((plugin) => {
-      if (!plugin.config?.resolveAllowFrom) {
+  const configured = listChannelDocks()
+    .map((dock) => {
+      if (!dock.config?.resolveAllowFrom) {
         return null;
       }
-      const allowFrom = plugin.config.resolveAllowFrom({
+      const allowFrom = dock.config.resolveAllowFrom({
         cfg,
         accountId: ctx.AccountId,
       });
       if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
         return null;
       }
-      return plugin.id;
+      return dock.id;
     })
     .filter((value): value is ChannelId => Boolean(value));
   if (configured.length === 1) {
@@ -75,29 +74,29 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
 }
 
 function formatAllowFromList(params: {
-  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
   cfg: OpenClawConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }): string[] {
-  const { plugin, cfg, accountId, allowFrom } = params;
+  const { dock, cfg, accountId, allowFrom } = params;
   if (!allowFrom || allowFrom.length === 0) {
     return [];
   }
-  if (plugin?.config?.formatAllowFrom) {
-    return plugin.config.formatAllowFrom({ cfg, accountId, allowFrom });
+  if (dock?.config?.formatAllowFrom) {
+    return dock.config.formatAllowFrom({ cfg, accountId, allowFrom });
   }
   return normalizeStringEntries(allowFrom);
 }
 
 function normalizeAllowFromEntry(params: {
-  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
   cfg: OpenClawConfig;
   accountId?: string | null;
   value: string;
 }): string[] {
   const normalized = formatAllowFromList({
-    plugin: params.plugin,
+    dock: params.dock,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: [params.value],
@@ -106,7 +105,7 @@ function normalizeAllowFromEntry(params: {
 }
 
 function resolveOwnerAllowFromList(params: {
-  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
   cfg: OpenClawConfig;
   accountId?: string | null;
   providerId?: ChannelId;
@@ -140,7 +139,7 @@ function resolveOwnerAllowFromList(params: {
     filtered.push(trimmed);
   }
   return formatAllowFromList({
-    plugin: params.plugin,
+    dock: params.dock,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: filtered,
@@ -153,12 +152,12 @@ function resolveOwnerAllowFromList(params: {
  * Returns null if commands.allowFrom is not configured at all (fall back to channel allowFrom).
  */
 function resolveCommandsAllowFromList(params: {
-  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
   cfg: OpenClawConfig;
   accountId?: string | null;
   providerId?: ChannelId;
 }): string[] | null {
-  const { plugin, cfg, accountId, providerId } = params;
+  const { dock, cfg, accountId, providerId } = params;
   const commandsAllowFrom = cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
     return null; // Not configured, fall back to channel allowFrom
@@ -175,7 +174,7 @@ function resolveCommandsAllowFromList(params: {
   }
 
   return formatAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId,
     allowFrom: rawList,
@@ -212,7 +211,7 @@ function shouldUseFromAsSenderFallback(params: {
 }
 
 function resolveSenderCandidates(params: {
-  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
   providerId?: ChannelId;
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -221,7 +220,7 @@ function resolveSenderCandidates(params: {
   from?: string | null;
   chatType?: string | null;
 }): string[] {
-  const { plugin, cfg, accountId } = params;
+  const { dock, cfg, accountId } = params;
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
     const trimmed = (value ?? "").trim();
@@ -246,7 +245,7 @@ function resolveSenderCandidates(params: {
 
   const normalized: string[] = [];
   for (const sender of candidates) {
-    const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
+    const entries = normalizeAllowFromEntry({ dock, cfg, accountId, value: sender });
     for (const entry of entries) {
       if (!normalized.includes(entry)) {
         normalized.push(entry);
@@ -256,50 +255,6 @@ function resolveSenderCandidates(params: {
   return normalized;
 }
 
-function resolveFallbackAllowFrom(params: {
-  cfg: OpenClawConfig;
-  providerId?: ChannelId;
-  accountId?: string | null;
-}): Array<string | number> {
-  const providerId = params.providerId?.trim();
-  if (!providerId) {
-    return [];
-  }
-  const channels = params.cfg.channels as
-    | Record<
-        string,
-        | {
-            allowFrom?: Array<string | number>;
-            dm?: { allowFrom?: Array<string | number> };
-            accounts?: Record<
-              string,
-              {
-                allowFrom?: Array<string | number>;
-                dm?: { allowFrom?: Array<string | number> };
-              }
-            >;
-          }
-        | undefined
-      >
-    | undefined;
-  const channelCfg = channels?.[providerId];
-  const accountCfg = params.accountId ? channelCfg?.accounts?.[params.accountId] : undefined;
-  const allowFrom =
-    accountCfg?.allowFrom ??
-    accountCfg?.dm?.allowFrom ??
-    channelCfg?.allowFrom ??
-    channelCfg?.dm?.allowFrom;
-  return Array.isArray(allowFrom) ? allowFrom : [];
-}
-
-function resolveFallbackCommandOptions(providerId?: ChannelId): {
-  enforceOwnerForCommands: boolean;
-} {
-  return {
-    enforceOwnerForCommands: providerId === "whatsapp",
-  };
-}
-
 export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -307,40 +262,36 @@ export function resolveCommandAuthorization(params: {
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
   const providerId = resolveProviderFromContext(ctx, cfg);
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
+  const dock = providerId ? getChannelDock(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
 
   // Check if commands.allowFrom is configured (separate command authorization)
   const commandsAllowFromList = resolveCommandsAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId: ctx.AccountId,
     providerId,
   });
 
-  const allowFromRaw = plugin?.config?.resolveAllowFrom
-    ? plugin.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
-    : resolveFallbackAllowFrom({
-        cfg,
-        providerId,
-        accountId: ctx.AccountId,
-      });
+  const allowFromRaw = dock?.config?.resolveAllowFrom
+    ? dock.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
+    : [];
   const allowFromList = formatAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
   });
   const configOwnerAllowFromList = resolveOwnerAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId: ctx.AccountId,
     providerId,
     allowFrom: cfg.commands?.ownerAllowFrom,
   });
   const contextOwnerAllowFromList = resolveOwnerAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId: ctx.AccountId,
     providerId,
@@ -352,7 +303,7 @@ export function resolveCommandAuthorization(params: {
   const ownerCandidatesForCommands = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidatesForCommands.length === 0 && to) {
     const normalizedTo = normalizeAllowFromEntry({
-      plugin,
+      dock,
       cfg,
       accountId: ctx.AccountId,
       value: to,
@@ -377,7 +328,7 @@ export function resolveCommandAuthorization(params: {
   );
 
   const senderCandidates = resolveSenderCandidates({
-    plugin,
+    dock,
     providerId,
     cfg,
     accountId: ctx.AccountId,
@@ -394,10 +345,7 @@ export function resolveCommandAuthorization(params: {
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
-  const enforceOwner = Boolean(
-    plugin?.commands?.enforceOwnerForCommands ??
-    resolveFallbackCommandOptions(providerId).enforceOwnerForCommands,
-  );
+  const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const senderIsOwnerByIdentity = Boolean(matchedSender);
   const senderIsOwnerByScope =
     isInternalMessageChannel(ctx.Provider) &&

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {
@@ -77,36 +75,6 @@ describe("delivery context helpers", () => {
     expect(deliveryContextKey({ channel: "slack", to: "channel:C1", threadId: "123.456" })).toBe(
       "slack|channel:C1||123.456",
     );
-  });
-
-  it("formats channel-aware conversation targets", () => {
-    expect(formatConversationTarget({ channel: "discord", conversationId: "123" })).toBe(
-      "channel:123",
-    );
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "!room:example" })).toBe(
-      "room:!room:example",
-    );
-    expect(
-      formatConversationTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toBe("room:!room:example");
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "  " })).toBeUndefined();
-  });
-
-  it("resolves delivery targets for Matrix child threads", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toEqual({
-      to: "room:!room:example",
-      threadId: "$thread",
-    });
   });
 
   it("derives delivery context from a session entry", () => {

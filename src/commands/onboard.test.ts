@@ -3,18 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  runInteractiveSetup: vi.fn(async () => {}),
-  runNonInteractiveSetup: vi.fn(async () => {}),
+  runInteractiveOnboarding: vi.fn(async () => {}),
+  runNonInteractiveOnboarding: vi.fn(async () => {}),
   readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
   handleReset: vi.fn(async () => {}),
 }));
 
 vi.mock("./onboard-interactive.js", () => ({
-  runInteractiveSetup: mocks.runInteractiveSetup,
+  runInteractiveOnboarding: mocks.runInteractiveOnboarding,
 }));
 
 vi.mock("./onboard-non-interactive.js", () => ({
-  runNonInteractiveSetup: mocks.runNonInteractiveSetup,
+  runNonInteractiveOnboarding: mocks.runNonInteractiveOnboarding,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -26,7 +26,7 @@ vi.mock("./onboard-helpers.js", () => ({
   handleReset: mocks.handleReset,
 }));
 
-const { onboardCommand, setupWizardCommand } = await import("./onboard.js");
+const { onboardCommand } = await import("./onboard.js");
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -36,16 +36,16 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
-describe("setupWizardCommand", () => {
+describe("onboardCommand", () => {
   afterEach(() => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
-  it("fails fast for invalid secret-input-mode before setup starts", async () => {
+  it("fails fast for invalid secret-input-mode before onboarding starts", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
+    await onboardCommand(
       {
         secretInputMode: "invalid" as never, // pragma: allowlist secret
       },
@@ -56,34 +56,14 @@ describe("setupWizardCommand", () => {
       'Invalid --secret-input-mode. Use "plaintext" or "ref".',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("logs ASCII-safe Windows guidance before setup", async () => {
-    const runtime = makeRuntime();
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
-      await setupWizardCommand({}, runtime);
-
-      expect(runtime.log).toHaveBeenCalledWith(
-        [
-          "Windows detected - OpenClaw runs great on WSL2!",
-          "Native Windows might be trickier.",
-          "Quick setup: wsl --install (one command, one reboot)",
-          "Guide: https://docs.openclaw.ai/windows",
-        ].join("\n"),
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
+    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
   });
 
   it("defaults --reset to config+creds+sessions scope", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
+    await onboardCommand(
       {
         reset: true,
       },
@@ -111,7 +91,7 @@ describe("setupWizardCommand", () => {
       },
     });
 
-    await setupWizardCommand(
+    await onboardCommand(
       {
         reset: true,
       },
@@ -128,7 +108,7 @@ describe("setupWizardCommand", () => {
   it("accepts explicit --reset-scope full", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
+    await onboardCommand(
       {
         reset: true,
         resetScope: "full",
@@ -142,7 +122,7 @@ describe("setupWizardCommand", () => {
   it("fails fast for invalid --reset-scope", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
+    await onboardCommand(
       {
         reset: true,
         resetScope: "invalid" as never,
@@ -155,11 +135,7 @@ describe("setupWizardCommand", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("keeps onboardCommand as an alias for setupWizardCommand", () => {
-    expect(onboardCommand).toBe(setupWizardCommand);
+    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
   });
 });

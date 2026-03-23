@@ -26,7 +26,6 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
     markChannelLoggedOut: vi.fn(),
-    isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
   };
@@ -47,188 +46,172 @@ function createHealthyDiscordManager(startedAt: number, lastEventAt: number): Ch
   );
 }
 
-function withReadinessClock(run: () => void) {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
-  try {
-    run();
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
-function createReadinessHarness(params: {
-  startedAgoMs: number;
-  accounts: Record<string, Partial<ChannelAccountSnapshot>>;
-  cacheTtlMs?: number;
-}) {
-  const startedAt = Date.now() - params.startedAgoMs;
-  const manager = createManager(snapshotWith(params.accounts));
-  return {
-    manager,
-    readiness: createReadinessChecker({
-      channelManager: manager,
-      startedAt,
-      cacheTtlMs: params.cacheTtlMs,
-    }),
-  };
-}
-
 describe("createReadinessChecker", () => {
   it("reports ready when all managed channels are healthy", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - 5 * 60_000;
-      const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
 
-      const readiness = createReadinessChecker({ channelManager: manager, startedAt });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
-    });
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    vi.useRealTimers();
   });
 
   it("ignores disabled and unconfigured channels", () => {
-    withReadinessClock(() => {
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 5 * 60_000,
-        accounts: {
-          discord: {
-            running: false,
-            enabled: false,
-            configured: true,
-            lastStartAt: Date.now() - 5 * 60_000,
-          },
-          telegram: {
-            running: false,
-            enabled: true,
-            configured: false,
-            lastStartAt: Date.now() - 5 * 60_000,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        discord: {
+          running: false,
+          enabled: false,
+          configured: true,
+          lastStartAt: startedAt,
         },
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
-    });
+        telegram: {
+          running: false,
+          enabled: true,
+          configured: false,
+          lastStartAt: startedAt,
+        },
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    vi.useRealTimers();
   });
 
   it("uses startup grace before marking disconnected channels not ready", () => {
-    withReadinessClock(() => {
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 30_000,
-        accounts: {
-          discord: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: Date.now() - 30_000,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 30_000;
+    const manager = createManager(
+      snapshotWith({
+        discord: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt,
         },
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 30_000 });
-    });
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 30_000 });
+    vi.useRealTimers();
   });
 
   it("reports disconnected managed channels after startup grace", () => {
-    withReadinessClock(() => {
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 5 * 60_000,
-        accounts: {
-          discord: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: Date.now() - 5 * 60_000,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        discord: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt,
         },
-      });
-      expect(readiness()).toEqual({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
-    });
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
+    vi.useRealTimers();
   });
 
   it("keeps restart-pending channels ready during reconnect backoff", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - 5 * 60_000;
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 5 * 60_000,
-        accounts: {
-          discord: {
-            running: false,
-            restartPending: true,
-            reconnectAttempts: 3,
-            enabled: true,
-            configured: true,
-            lastStartAt: startedAt - 30_000,
-            lastStopAt: Date.now() - 5_000,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        discord: {
+          running: false,
+          restartPending: true,
+          reconnectAttempts: 3,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt - 30_000,
+          lastStopAt: Date.now() - 5_000,
         },
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
-    });
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    vi.useRealTimers();
   });
 
   it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - 31 * 60_000;
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 31 * 60_000,
-        accounts: {
-          discord: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: startedAt,
-            lastEventAt: Date.now() - 31 * 60_000,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 31 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        discord: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt,
+          lastEventAt: Date.now() - 31 * 60_000,
         },
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
-    });
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+    vi.useRealTimers();
   });
 
   it("keeps telegram long-polling channels ready without stale-socket classification", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - 31 * 60_000;
-      const { readiness } = createReadinessHarness({
-        startedAgoMs: 31 * 60_000,
-        accounts: {
-          telegram: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: startedAt,
-            lastEventAt: null,
-          },
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 31 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        telegram: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt,
+          lastEventAt: null,
         },
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
-    });
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+    vi.useRealTimers();
   });
 
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
-    withReadinessClock(() => {
-      const { manager, readiness } = createReadinessHarness({
-        startedAgoMs: 5 * 60_000,
-        accounts: {
-          discord: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: Date.now() - 5 * 60_000,
-            lastEventAt: Date.now() - 1_000,
-          },
-        },
-        cacheTtlMs: 1_000,
-      });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
-      vi.advanceTimersByTime(500);
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_500 });
-      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
 
-      vi.advanceTimersByTime(600);
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 301_100 });
-      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    const readiness = createReadinessChecker({
+      channelManager: manager,
+      startedAt,
+      cacheTtlMs: 1_000,
     });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    vi.advanceTimersByTime(500);
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_500 });
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(600);
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 301_100 });
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

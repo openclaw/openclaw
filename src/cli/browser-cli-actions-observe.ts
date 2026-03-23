@@ -39,10 +39,10 @@ export function registerBrowserActionObserveCommands(
           { timeoutMs: 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.writeJson(result.messages);
+        defaultRuntime.log(JSON.stringify(result.messages, null, 2));
       });
     });
 
@@ -65,7 +65,7 @@ export function registerBrowserActionObserveCommands(
           { timeoutMs: 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
@@ -107,7 +107,7 @@ export function registerBrowserActionObserveCommands(
           { timeoutMs: timeoutMs ?? 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(result.response.body);

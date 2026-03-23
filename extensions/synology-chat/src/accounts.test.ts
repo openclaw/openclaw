@@ -66,9 +66,6 @@ describe("resolveAccount", () => {
     expect(account.accountId).toBe("default");
     expect(account.enabled).toBe(true);
     expect(account.webhookPath).toBe("/webhook/synology");
-    expect(account.webhookPathSource).toBe("default");
-    expect(account.dangerouslyAllowNameMatching).toBe(false);
-    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
     expect(account.dmPolicy).toBe("allowlist");
     expect(account.rateLimitPerMinute).toBe(30);
     expect(account.botName).toBe("OpenClaw");
@@ -103,13 +100,8 @@ describe("resolveAccount", () => {
         "synology-chat": {
           token: "base-tok",
           botName: "BaseName",
-          dangerouslyAllowNameMatching: false,
           accounts: {
-            work: {
-              token: "work-tok",
-              botName: "WorkBot",
-              dangerouslyAllowNameMatching: true,
-            },
+            work: { token: "work-tok", botName: "WorkBot" },
           },
         },
       },
@@ -117,79 +109,6 @@ describe("resolveAccount", () => {
     const account = resolveAccount(cfg, "work");
     expect(account.token).toBe("work-tok");
     expect(account.botName).toBe("WorkBot");
-    expect(account.dangerouslyAllowNameMatching).toBe(true);
-  });
-
-  it("inherits dangerous name matching from base config when not overridden", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          dangerouslyAllowNameMatching: true,
-          accounts: {
-            work: { token: "work-tok" },
-          },
-        },
-      },
-    };
-
-    const account = resolveAccount(cfg, "work");
-    expect(account.dangerouslyAllowNameMatching).toBe(true);
-  });
-
-  it("allows a named account to disable inherited dangerous name matching", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          dangerouslyAllowNameMatching: true,
-          accounts: {
-            work: {
-              token: "work-tok",
-              dangerouslyAllowNameMatching: false,
-            },
-          },
-        },
-      },
-    };
-
-    const account = resolveAccount(cfg, "work");
-    expect(account.dangerouslyAllowNameMatching).toBe(false);
-  });
-
-  it("marks named multi-account webhookPath inheritance as dangerous-off by default", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "base-tok",
-          webhookPath: "/webhook/shared",
-          accounts: {
-            work: { token: "work-tok" },
-          },
-        },
-      },
-    };
-    const account = resolveAccount(cfg, "work");
-    expect(account.webhookPath).toBe("/webhook/shared");
-    expect(account.webhookPathSource).toBe("inherited-base");
-    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
-  });
-
-  it("allows named accounts to opt into inherited webhookPath resolution", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "base-tok",
-          webhookPath: "/webhook/shared",
-          dangerouslyAllowInheritedWebhookPath: true,
-          accounts: {
-            work: { token: "work-tok" },
-          },
-        },
-      },
-    };
-    const account = resolveAccount(cfg, "work");
-    expect(account.webhookPath).toBe("/webhook/shared");
-    expect(account.webhookPathSource).toBe("inherited-base");
-    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(true);
   });
 
   it("parses comma-separated allowedUserIds string", () => {

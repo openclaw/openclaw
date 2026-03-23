@@ -19,14 +19,11 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
 
 type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
 
-export { registerPluginHttpRoute };
-
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
 >;
 
-/** Register a webhook target and lazily install the matching plugin HTTP route on first use. */
 export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
   targetsByPath: Map<string, T[]>;
   target: T;
@@ -57,7 +54,6 @@ function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () 
   return created;
 }
 
-/** Add a normalized target to a path bucket and clean up route state when the last target leaves. */
 export function registerWebhookTarget<T extends { path: string }>(
   targetsByPath: Map<string, T[]>,
   target: T,
@@ -103,7 +99,6 @@ export function registerWebhookTarget<T extends { path: string }>(
   return { target: normalizedTarget, unregister };
 }
 
-/** Resolve all registered webhook targets for the incoming request path. */
 export function resolveWebhookTargets<T>(
   req: IncomingMessage,
   targetsByPath: Map<string, T[]>,
@@ -117,7 +112,6 @@ export function resolveWebhookTargets<T>(
   return { path, targets };
 }
 
-/** Run common webhook guards, then dispatch only when the request path resolves to live targets. */
 export async function withResolvedWebhookRequestPipeline<T>(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -189,7 +183,6 @@ function finalizeMatchedWebhookTarget<T>(matched: T | undefined): WebhookTargetM
   return { kind: "single", target: matched };
 }
 
-/** Match exactly one synchronous target or report whether resolution was empty or ambiguous. */
 export function resolveSingleWebhookTarget<T>(
   targets: readonly T[],
   isMatch: (target: T) => boolean,
@@ -208,7 +201,6 @@ export function resolveSingleWebhookTarget<T>(
   return finalizeMatchedWebhookTarget(matched);
 }
 
-/** Async variant of single-target resolution for auth checks that need I/O. */
 export async function resolveSingleWebhookTargetAsync<T>(
   targets: readonly T[],
   isMatch: (target: T) => Promise<boolean>,
@@ -227,7 +219,6 @@ export async function resolveSingleWebhookTargetAsync<T>(
   return finalizeMatchedWebhookTarget(matched);
 }
 
-/** Resolve an authorized target and send the standard unauthorized or ambiguous response on failure. */
 export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   targets: readonly T[];
   res: ServerResponse;
@@ -243,7 +234,6 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   return resolveWebhookTargetMatchOrReject(params, match);
 }
 
-/** Synchronous variant of webhook auth resolution for cheap in-memory match checks. */
 export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
   targets: readonly T[];
   res: ServerResponse;
@@ -280,7 +270,6 @@ function resolveWebhookTargetMatchOrReject<T>(
   return null;
 }
 
-/** Reject non-POST webhook requests with the conventional Allow header. */
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "POST") {
     return false;

@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStoreSummary } from "../../config/sessions/store-summary.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
@@ -16,7 +15,7 @@ function getSessionRecipients(cfg: OpenClawConfig) {
     return [];
   }
   const storePath = resolveStorePath(cfg.session?.store);
-  const store = loadSessionStoreSummary(storePath);
+  const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
     key.includes(":group:") || key.includes(":channel:") || key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");

@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listChannelDocks } from "../channels/dock.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
@@ -46,14 +46,14 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
   };
 }
 
-type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
+type ChannelDock = ReturnType<typeof listChannelDocks>[number];
 
-function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
+function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
   return defineChatCommand({
-    key: `dock:${plugin.id}`,
-    nativeName: `dock_${plugin.id}`,
-    description: `Switch to ${plugin.id} for replies.`,
-    textAliases: [`/dock-${plugin.id}`, `/dock_${plugin.id}`],
+    key: `dock:${dock.id}`,
+    nativeName: `dock_${dock.id}`,
+    description: `Switch to ${dock.id} for replies.`,
+    textAliases: [`/dock-${dock.id}`, `/dock_${dock.id}`],
     category: "docks",
   });
 }
@@ -195,14 +195,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/context",
       acceptsArgs: true,
       category: "status",
-    }),
-    defineChatCommand({
-      key: "btw",
-      nativeName: "btw",
-      description: "Ask a side question without changing future session context.",
-      textAlias: "/btw",
-      acceptsArgs: true,
-      category: "tools",
     }),
     defineChatCommand({
       key: "export-session",
@@ -451,56 +443,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.config,
-    }),
-    defineChatCommand({
-      key: "mcp",
-      nativeName: "mcp",
-      description: "Show or set OpenClaw MCP servers.",
-      textAlias: "/mcp",
-      category: "management",
-      args: [
-        {
-          name: "action",
-          description: "show | get | set | unset",
-          type: "string",
-          choices: ["show", "get", "set", "unset"],
-        },
-        {
-          name: "path",
-          description: "MCP server name",
-          type: "string",
-        },
-        {
-          name: "value",
-          description: "JSON config for set",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
-    }),
-    defineChatCommand({
-      key: "plugins",
-      nativeName: "plugins",
-      description: "List, show, enable, or disable plugins.",
-      textAliases: ["/plugins", "/plugin"],
-      category: "management",
-      args: [
-        {
-          name: "action",
-          description: "list | show | get | enable | disable",
-          type: "string",
-          choices: ["list", "show", "get", "enable", "disable"],
-        },
-        {
-          name: "path",
-          description: "Plugin id or name",
-          type: "string",
-        },
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
     }),
     defineChatCommand({
       key: "debug",
@@ -808,9 +750,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
-    ...listChannelPlugins()
-      .filter((plugin) => plugin.capabilities.nativeCommands)
-      .map((plugin) => defineDockCommand(plugin)),
+    ...listChannelDocks()
+      .filter((dock) => dock.capabilities.nativeCommands)
+      .map((dock) => defineDockCommand(dock)),
   ];
 
   registerAlias(commands, "whoami", "/id");
@@ -842,9 +784,9 @@ export function getNativeCommandSurfaces(): Set<string> {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
-    listChannelPlugins()
-      .filter((plugin) => plugin.capabilities.nativeCommands)
-      .map((plugin) => plugin.id),
+    listChannelDocks()
+      .filter((dock) => dock.capabilities.nativeCommands)
+      .map((dock) => dock.id),
   );
   cachedNativeRegistry = registry;
   return cachedNativeCommandSurfaces;

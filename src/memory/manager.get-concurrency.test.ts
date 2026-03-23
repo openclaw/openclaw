@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import {
+  closeAllMemoryIndexManagers,
+  MemoryIndexManager as RawMemoryIndexManager,
+} from "./manager.js";
 import "./test-runtime-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
-
-type MemoryIndexModule = typeof import("./index.js");
-type ManagerModule = typeof import("./manager.js");
 
 const hoisted = vi.hoisted(() => ({
   providerCreateCalls: 0,
@@ -19,7 +19,7 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => {
     hoisted.providerCreateCalls += 1;
     if (hoisted.providerDelayMs > 0) {
-      await sleep(hoisted.providerDelayMs);
+      await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
     }
     return {
       requestedProvider: "openai",
@@ -34,22 +34,10 @@ vi.mock("./embeddings.js", () => ({
   },
 }));
 
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-let closeAllMemoryIndexManagers: ManagerModule["closeAllMemoryIndexManagers"];
-let RawMemoryIndexManager: ManagerModule["MemoryIndexManager"];
-
 describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
-  beforeAll(async () => {
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-    ({ closeAllMemoryIndexManagers, MemoryIndexManager: RawMemoryIndexManager } =
-      await import("./manager.js"));
-  });
-
   beforeEach(async () => {
-    vi.clearAllMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
@@ -58,12 +46,12 @@ describe("memory manager cache hydration", () => {
   });
 
   afterEach(async () => {
-    await closeAllMemorySearchManagers();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  function createMemoryConcurrencyConfig(indexPath: string): OpenClawConfig {
-    return {
+  it("deduplicates concurrent manager creation for the same cache key", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfg = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -77,11 +65,6 @@ describe("memory manager cache hydration", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-  }
-
-  it("deduplicates concurrent manager creation for the same cache key", async () => {
-    const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = createMemoryConcurrencyConfig(indexPath);
 
     const results = await Promise.all(
       Array.from(
@@ -102,7 +85,20 @@ describe("memory manager cache hydration", () => {
 
   it("drains in-flight manager creation during global teardown", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = createMemoryConcurrencyConfig(indexPath);
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
 
     hoisted.providerDelayMs = 100;
 
@@ -118,20 +114,5 @@ describe("memory manager cache hydration", () => {
     expect(hoisted.providerCreateCalls).toBe(2);
 
     await secondManager?.close?.();
-  });
-
-  it("caches status-only managers separately from full managers", async () => {
-    const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = createMemoryConcurrencyConfig(indexPath);
-
-    const first = await RawMemoryIndexManager.get({ cfg, agentId: "main", purpose: "status" });
-    const second = await RawMemoryIndexManager.get({ cfg, agentId: "main", purpose: "status" });
-
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    expect(Object.is(second, first)).toBe(true);
-    expect(hoisted.providerCreateCalls).toBe(0);
-
-    await first?.close?.();
   });
 });

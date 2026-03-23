@@ -1,4 +1,4 @@
-import { TextStyle, type Style } from "./zca-constants.js";
+import { TextStyle, type Style } from "./zca-client.js";
 
 type InlineStyle = (typeof TextStyle)[keyof typeof TextStyle];
 

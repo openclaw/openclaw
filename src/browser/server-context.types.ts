@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
-import type { BrowserTransport } from "./client.js";
 import type { BrowserTab } from "./client.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 
@@ -54,11 +53,9 @@ export type ProfileContext = {
 
 export type ProfileStatus = {
   name: string;
-  transport: BrowserTransport;
-  cdpPort: number | null;
-  cdpUrl: string | null;
+  cdpPort: number;
+  cdpUrl: string;
   color: string;
-  driver: ResolvedBrowserProfile["driver"];
   running: boolean;
   tabCount: number;
   isDefault: boolean;

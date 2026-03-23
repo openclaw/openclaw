@@ -1,43 +1,40 @@
-import { readSnakeCaseParamRaw } from "./param-key.js";
-
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
 export type PollCreationParamDef = {
   kind: PollCreationParamKind;
+  telegramOnly?: boolean;
 };
 
-const SHARED_POLL_CREATION_PARAM_DEFS = {
+export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
   pollDurationHours: { kind: "number" },
   pollMulti: { kind: "boolean" },
-} satisfies Record<string, PollCreationParamDef>;
-
-const TELEGRAM_POLL_CREATION_PARAM_DEFS = {
-  pollDurationSeconds: { kind: "number" },
-  pollAnonymous: { kind: "boolean" },
-  pollPublic: { kind: "boolean" },
-} satisfies Record<string, PollCreationParamDef>;
-
-export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
-  ...SHARED_POLL_CREATION_PARAM_DEFS,
-  ...TELEGRAM_POLL_CREATION_PARAM_DEFS,
+  pollDurationSeconds: { kind: "number", telegramOnly: true },
+  pollAnonymous: { kind: "boolean", telegramOnly: true },
+  pollPublic: { kind: "boolean", telegramOnly: true },
 };
 
-export type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
-export type TelegramPollCreationParamName = keyof typeof TELEGRAM_POLL_CREATION_PARAM_DEFS;
 export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
-export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
-  SHARED_POLL_CREATION_PARAM_DEFS,
-) as SharedPollCreationParamName[];
-export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
-  TELEGRAM_POLL_CREATION_PARAM_DEFS,
-) as TelegramPollCreationParamName[];
+
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
-  return readSnakeCaseParamRaw(params, key);
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+    return params[snakeKey];
+  }
+  return undefined;
 }
 
 export function resolveTelegramPollVisibility(params: {
@@ -69,16 +66,12 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      // Treat zero-valued numeric defaults as unset, but preserve any non-zero
-      // numeric value as explicit poll intent so invalid durations still hit
-      // the poll-only validation path.
-      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
+      if (typeof value === "number" && Number.isFinite(value)) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        const parsed = Number(trimmed);
-        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
+        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
           return true;
         }
       }

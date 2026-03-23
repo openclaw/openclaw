@@ -160,7 +160,7 @@ Peter: _nervously checks credit card access_
 - **AGENTS.md** — Operating instructions
 - **USER.md** — Context about the creator
 
-## The Lobster Creed
+## The Lobster's Creed
 
 ```
 I am Molty.

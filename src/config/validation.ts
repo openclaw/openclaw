@@ -1,8 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
-import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
-import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -22,15 +20,11 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
-import {
-  listLegacyWebSearchConfigPaths,
-  normalizeLegacyWebSearchConfig,
-} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {
@@ -235,8 +229,7 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
-  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
+  const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -246,7 +239,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(normalizedRaw);
+  const validated = OpenClawSchema.safeParse(raw);
   if (!validated.success) {
     return {
       ok: false,
@@ -329,12 +322,7 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
-    path,
-    message:
-      `${path} is deprecated for web search provider config. ` +
-      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
-  }));
+  const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
@@ -353,56 +341,15 @@ function validateConfigObjectWithPluginsBase(
   };
 
   let registryInfo: RegistryInfo | null = null;
-  let compatConfig: OpenClawConfig | null | undefined;
-
-  const ensureCompatConfig = (): OpenClawConfig => {
-    if (compatConfig !== undefined) {
-      return compatConfig ?? config;
-    }
-
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const seenCompatPluginIds = new Set<string>();
-    const compatPluginIds = loadPluginManifestRegistry({
-      config,
-      workspaceDir: workspaceDir ?? undefined,
-      env: opts.env,
-    })
-      .plugins.filter((plugin) => {
-        if (seenCompatPluginIds.has(plugin.id)) {
-          return false;
-        }
-        seenCompatPluginIds.add(plugin.id);
-        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
-      })
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: compatPluginIds,
-    });
-    return compatConfig ?? config;
-  };
 
   const ensureRegistry = (): RegistryInfo => {
     if (registryInfo) {
       return registryInfo;
     }
 
-    const effectiveConfig = ensureCompatConfig();
-    const workspaceDir = resolveAgentWorkspaceDir(
-      effectiveConfig,
-      resolveDefaultAgentId(effectiveConfig),
-    );
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
     const registry = loadPluginManifestRegistry({
-      config: effectiveConfig,
+      config,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
     });
@@ -436,7 +383,7 @@ function validateConfigObjectWithPluginsBase(
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
-      info.normalizedPlugins = normalizePluginsConfig(ensureCompatConfig().plugins);
+      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
     }
     return info.normalizedPlugins;
   };
@@ -581,17 +528,8 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
-  // The default memory slot is inferred; only a user-configured slot should block startup.
-  const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
-  if (
-    hasExplicitMemorySlot &&
-    typeof memorySlot === "string" &&
-    memorySlot.trim() &&
-    !knownIds.has(memorySlot)
-  ) {
+  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 
@@ -649,9 +587,6 @@ function validateConfigObjectWithPluginsBase(
             });
           }
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
       } else {
         issues.push({
           path: `plugins.entries.${pluginId}`,

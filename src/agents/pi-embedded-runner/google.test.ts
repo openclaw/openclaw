@@ -11,18 +11,6 @@ describe("sanitizeToolsForGoogle", () => {
       execute: async () => ({ ok: true, content: [] }),
     }) as unknown as AgentTool;
 
-  const createSchemaToolWithFormat = () =>
-    createTool({
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
-        },
-      },
-    });
-
   const expectFormatRemoved = (
     sanitized: AgentTool,
     key: "additionalProperties" | "patternProperties",
@@ -37,7 +25,16 @@ describe("sanitizeToolsForGoogle", () => {
   };
 
   it("strips unsupported schema keywords for Google providers", () => {
-    const tool = createSchemaToolWithFormat();
+    const tool = createTool({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
     const [sanitized] = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "google-gemini-cli",
@@ -46,7 +43,16 @@ describe("sanitizeToolsForGoogle", () => {
   });
 
   it("returns original tools for non-google providers", () => {
-    const tool = createSchemaToolWithFormat();
+    const tool = createTool({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
     const sanitized = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "openai",

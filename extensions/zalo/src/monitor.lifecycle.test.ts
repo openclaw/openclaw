@@ -1,8 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const getWebhookInfoMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
@@ -33,34 +32,6 @@ async function waitForPollingLoopStart(): Promise<void> {
   await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
 }
 
-const TEST_ACCOUNT = {
-  accountId: "default",
-  config: {},
-} as unknown as ResolvedZaloAccount;
-
-const TEST_CONFIG = {} as OpenClawConfig;
-
-async function startLifecycleMonitor(
-  options: {
-    useWebhook?: boolean;
-    webhookSecret?: string;
-    webhookUrl?: string;
-  } = {},
-) {
-  const { monitorZaloProvider } = await import("./monitor.js");
-  const abort = new AbortController();
-  const runtime = createRuntimeEnv();
-  const run = monitorZaloProvider({
-    token: "test-token",
-    account: TEST_ACCOUNT,
-    config: TEST_CONFIG,
-    runtime,
-    abortSignal: abort.signal,
-    ...options,
-  });
-  return { abort, runtime, run };
-}
-
 describe("monitorZaloProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -68,9 +39,26 @@ describe("monitorZaloProvider lifecycle", () => {
   });
 
   it("stays alive in polling mode until abort", async () => {
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string) => void>(),
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+    } as unknown as ResolvedZaloAccount;
+    const config = {} as OpenClawConfig;
+
     let settled = false;
-    const { abort, runtime, run } = await startLifecycleMonitor();
-    const monitoredRun = run.then(() => {
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
+    }).then(() => {
       settled = true;
     });
 
@@ -82,7 +70,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(settled).toBe(false);
 
     abort.abort();
-    await monitoredRun;
+    await run;
 
     expect(settled).toBe(true);
     expect(runtime.log).toHaveBeenCalledWith(
@@ -96,7 +84,25 @@ describe("monitorZaloProvider lifecycle", () => {
       result: { url: "https://example.com/hooks/zalo" },
     });
 
-    const { abort, runtime, run } = await startLifecycleMonitor();
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string) => void>(),
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+    } as unknown as ResolvedZaloAccount;
+    const config = {} as OpenClawConfig;
+
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
+    });
 
     await waitForPollingLoopStart();
 
@@ -114,7 +120,25 @@ describe("monitorZaloProvider lifecycle", () => {
     const { ZaloApiError } = await import("./api.js");
     getWebhookInfoMock.mockRejectedValueOnce(new ZaloApiError("Not Found", 404, "Not Found"));
 
-    const { abort, runtime, run } = await startLifecycleMonitor();
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string) => void>(),
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+    } as unknown as ResolvedZaloAccount;
+    const config = {} as OpenClawConfig;
+
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
+    });
 
     await waitForPollingLoopStart();
 
@@ -141,13 +165,29 @@ describe("monitorZaloProvider lifecycle", () => {
         }),
     );
 
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string) => void>(),
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+    } as unknown as ResolvedZaloAccount;
+    const config = {} as OpenClawConfig;
+
     let settled = false;
-    const { abort, runtime, run } = await startLifecycleMonitor({
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
       useWebhook: true,
       webhookUrl: "https://example.com/hooks/zalo",
       webhookSecret: "supersecret", // pragma: allowlist secret
-    });
-    const monitoredRun = run.then(() => {
+    }).then(() => {
       settled = true;
     });
 
@@ -162,7 +202,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(registry.httpRoutes).toHaveLength(1);
 
     resolveDeleteWebhook?.();
-    await monitoredRun;
+    await run;
 
     expect(settled).toBe(true);
     expect(registry.httpRoutes).toHaveLength(0);

@@ -1,27 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
+import { extractPayloadText } from "./test-helpers.agent-results.js";
 import {
   connectDeviceAuthReq,
-  disconnectGatewayClient,
   connectGatewayClient,
   getFreeGatewayPort,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
 
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
-const GATEWAY_E2E_TIMEOUT_MS = 90_000;
+const GATEWAY_E2E_TIMEOUT_MS = 30_000;
 let gatewayTestSeq = 0;
 
 function nextGatewayId(prefix: string): string {
@@ -29,35 +24,16 @@ function nextGatewayId(prefix: string): string {
 }
 
 describe("gateway e2e", () => {
-  beforeEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
-  });
-
   beforeAll(async () => {
     ({ writeConfigFile, resolveConfigPath } = await import("../config/config.js"));
   });
 
   it(
-    "accepts a gateway agent request over ws and returns a run id",
+    "runs a mock OpenAI tool call end-to-end via gateway agent loop",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       const envSnapshot = captureEnv([
         "HOME",
-        "OPENCLAW_STATE_DIR",
         "OPENCLAW_CONFIG_PATH",
         "OPENCLAW_GATEWAY_TOKEN",
         "OPENCLAW_SKIP_CHANNELS",
@@ -71,8 +47,6 @@ describe("gateway e2e", () => {
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-mock-home-"));
       process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      delete process.env.OPENCLAW_CONFIG_PATH;
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
@@ -85,30 +59,21 @@ describe("gateway e2e", () => {
       const workspaceDir = path.join(tempHome, "openclaw");
       await fs.mkdir(workspaceDir, { recursive: true });
 
+      const nonceA = nextGatewayId("nonce-a");
+      const nonceB = nextGatewayId("nonce-b");
+      const toolProbePath = path.join(workspaceDir, `.openclaw-tool-probe.${nonceA}.txt`);
+      await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+
       const configDir = path.join(tempHome, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       const configPath = path.join(configDir, "openclaw.json");
-      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-            model: { primary: mockProvider.modelRef },
-            models: {
-              [mockProvider.modelRef]: {
-                params: {
-                  transport: "sse",
-                  openaiWsWarmup: false,
-                },
-              },
-            },
-          },
-        },
+        agents: { defaults: { workspace: workspaceDir } },
         models: {
           mode: "replace",
           providers: {
-            [mockProvider.providerId]: mockProvider.config,
+            openai: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
           },
         },
         gateway: { auth: { token } },
@@ -124,25 +89,34 @@ describe("gateway e2e", () => {
       try {
         const sessionKey = "agent:dev:mock-openai";
 
+        await client.request("sessions.patch", {
+          key: sessionKey,
+          model: "openai/gpt-5.2",
+        });
+
         const runId = nextGatewayId("run");
         const payload = await client.request<{
           status?: unknown;
-          runId?: unknown;
+          result?: unknown;
         }>(
           "agent",
           {
             sessionKey,
             idempotencyKey: `idem-${runId}`,
-            message: "Reply with ok.",
+            message:
+              `Call the read tool on "${toolProbePath}". ` +
+              `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
             deliver: false,
           },
-          { expectFinal: false },
+          { expectFinal: true },
         );
 
-        expect(payload?.status).toBe("accepted");
-        expect(typeof payload?.runId).toBe("string");
+        expect(payload?.status).toBe("ok");
+        const text = extractPayloadText(payload?.result);
+        expect(text).toContain(nonceA);
+        expect(text).toContain(nonceB);
       } finally {
-        await disconnectGatewayClient(client);
+        client.stop();
         await server.close({ reason: "mock openai test complete" });
         await fs.rm(tempHome, { recursive: true, force: true });
         restore();
@@ -242,7 +216,7 @@ describe("gateway e2e", () => {
           | undefined;
         expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
       } finally {
-        await disconnectGatewayClient(client);
+        client.stop();
         await server.close({ reason: "wizard e2e complete" });
       }
 

@@ -109,22 +109,15 @@ export async function start(state: CronServiceState) {
         startupInterruptedJobIds.add(job.id);
       }
     }
-    if (startupInterruptedJobIds.size > 0) {
-      await persist(state);
-    }
+    await persist(state);
   });
 
   await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
 
   await locked(state, async () => {
-    // Startup catch-up already persisted the latest in-memory store state, and
-    // this path runs before the scheduler begins servicing regular timer ticks.
-    // Avoid an extra reload/write cycle on startup.
-    await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
-    if (changed) {
-      await persist(state);
-    }
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    recomputeNextRuns(state);
+    await persist(state);
     armTimer(state);
     state.deps.log.info(
       {
@@ -367,23 +360,13 @@ type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
   | { ok: true; runnable: true };
 
-type ManualRunPreflightResult =
-  | { ok: false }
-  | Extract<PreparedManualRun, { ran: false }>
-  | {
-      ok: true;
-      runnable: true;
-      job: CronJob;
-      now: number;
-    };
-
 let nextManualRunId = 1;
 
-async function inspectManualRunPreflight(
+async function inspectManualRunDisposition(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-): Promise<ManualRunPreflightResult> {
+): Promise<ManualRunDisposition | { ok: false }> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
@@ -400,23 +383,8 @@ async function inspectManualRunPreflight(
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    return { ok: true, runnable: true, job, now } as const;
+    return { ok: true, runnable: true } as const;
   });
-}
-
-async function inspectManualRunDisposition(
-  state: CronServiceState,
-  id: string,
-  mode?: "due" | "force",
-): Promise<ManualRunDisposition | { ok: false }> {
-  const result = await inspectManualRunPreflight(state, id, mode);
-  if (!result.ok) {
-    return result;
-  }
-  if ("reason" in result) {
-    return result;
-  }
-  return { ok: true, runnable: true } as const;
 }
 
 async function prepareManualRun(
@@ -424,36 +392,37 @@ async function prepareManualRun(
   id: string,
   mode?: "due" | "force",
 ): Promise<PreparedManualRun> {
-  const preflight = await inspectManualRunPreflight(state, id, mode);
-  if (!preflight.ok) {
-    return preflight;
-  }
-  if ("reason" in preflight) {
-    return {
-      ok: true,
-      ran: false,
-      reason: preflight.reason,
-    } as const;
-  }
   return await locked(state, async () => {
-    // Reserve this run under lock, then execute outside lock so read ops
-    // (`list`, `status`) stay responsive while the run is in progress.
+    warnIfDisabled(state, "run");
+    await ensureLoaded(state, { skipRecompute: true });
+    // Normalize job tick state (clears stale runningAtMs markers) before
+    // checking if already running, so a stale marker from a crashed Phase-1
+    // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
+    recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
-    job.state.runningAtMs = preflight.now;
+    const now = state.deps.nowMs();
+    const due = isJobDue(job, now, { forced: mode === "force" });
+    if (!due) {
+      return { ok: true, ran: false, reason: "not-due" as const };
+    }
+
+    // Reserve this run under lock, then execute outside lock so read ops
+    // (`list`, `status`) stay responsive while the run is in progress.
+    job.state.runningAtMs = now;
     job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    emit(state, { jobId: job.id, action: "started", runAtMs: now });
     const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
     return {
       ok: true,
       ran: true,
       jobId: job.id,
-      startedAt: preflight.now,
+      startedAt: now,
       executionJob,
     } as const;
   });

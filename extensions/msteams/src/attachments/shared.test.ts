@@ -31,23 +31,6 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
-async function expectSafeFetchStatus(params: {
-  fetchMock: ReturnType<typeof vi.fn>;
-  url: string;
-  allowHosts: string[];
-  expectedStatus: number;
-  resolveFn?: typeof publicResolve;
-}) {
-  const res = await safeFetch({
-    url: params.url,
-    allowHosts: params.allowHosts,
-    fetchFn: params.fetchMock as unknown as typeof fetch,
-    resolveFn: params.resolveFn ?? publicResolve,
-  });
-  expect(res.status).toBe(params.expectedStatus);
-  return res;
-}
-
 describe("msteams attachment allowlists", () => {
   it("normalizes wildcard host lists", () => {
     expect(resolveAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
@@ -138,12 +121,13 @@ describe("safeFetch", () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       return new Response("ok", { status: 200 });
     });
-    await expectSafeFetchStatus({
-      fetchMock,
+    const res = await safeFetch({
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
+      fetchFn: fetchMock as unknown as typeof fetch,
+      resolveFn: publicResolve,
     });
+    expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
     expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
@@ -153,12 +137,13 @@ describe("safeFetch", () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://cdn.sharepoint.com/storage/file.pdf",
     });
-    await expectSafeFetchStatus({
-      fetchMock,
+    const res = await safeFetch({
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
+      fetchFn: fetchMock as unknown as typeof fetch,
+      resolveFn: publicResolve,
     });
+    expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

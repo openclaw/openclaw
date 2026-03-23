@@ -1,11 +1,10 @@
-import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
+import { normalizeFastMode } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 
 export type FastModeState = {
   enabled: boolean;
-  source: "session" | "agent" | "config" | "default";
+  source: "session" | "config" | "default";
 };
 
 export function resolveFastModeParam(
@@ -42,20 +41,11 @@ export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
-  agentId?: string;
   sessionEntry?: Pick<SessionEntry, "fastMode"> | undefined;
 }): FastModeState {
   const sessionOverride = normalizeFastMode(params.sessionEntry?.fastMode);
   if (sessionOverride !== undefined) {
     return { enabled: sessionOverride, source: "session" };
-  }
-
-  const agentDefault =
-    params.agentId && params.cfg
-      ? resolveAgentConfig(params.cfg, params.agentId)?.fastModeDefault
-      : undefined;
-  if (typeof agentDefault === "boolean") {
-    return { enabled: agentDefault, source: "agent" };
   }
 
   const configuredRaw = resolveConfiguredFastModeRaw(params);

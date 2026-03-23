@@ -39,7 +39,7 @@ export function registerBrowserInspectCommands(
           { timeoutMs: 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
@@ -106,13 +106,19 @@ export function registerBrowserInspectCommands(
             await fs.writeFile(opts.out, payload, "utf8");
           }
           if (parent?.json) {
-            defaultRuntime.writeJson({
-              ok: true,
-              out: opts.out,
-              ...(result.format === "ai" && result.imagePath
-                ? { imagePath: result.imagePath }
-                : {}),
-            });
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  out: opts.out,
+                  ...(result.format === "ai" && result.imagePath
+                    ? { imagePath: result.imagePath }
+                    : {}),
+                },
+                null,
+                2,
+              ),
+            );
           } else {
             defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
@@ -123,7 +129,7 @@ export function registerBrowserInspectCommands(
         }
 
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
 

@@ -159,10 +159,10 @@ export type ExtraBootstrapLoadDiagnostic = {
   detail: string;
 };
 
-type WorkspaceSetupState = {
+type WorkspaceOnboardingState = {
   version: typeof WORKSPACE_STATE_VERSION;
   bootstrapSeededAt?: string;
-  setupCompletedAt?: string;
+  onboardingCompletedAt?: string;
 };
 
 /** Set of recognized bootstrap filenames for runtime validation */
@@ -207,43 +207,35 @@ function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
-function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
+function parseWorkspaceOnboardingState(raw: string): WorkspaceOnboardingState | null {
   try {
     const parsed = JSON.parse(raw) as {
       bootstrapSeededAt?: unknown;
-      setupCompletedAt?: unknown;
       onboardingCompletedAt?: unknown;
     };
     if (!parsed || typeof parsed !== "object") {
       return null;
     }
-    const legacyCompletedAt =
-      typeof parsed.onboardingCompletedAt === "string" ? parsed.onboardingCompletedAt : undefined;
     return {
       version: WORKSPACE_STATE_VERSION,
       bootstrapSeededAt:
         typeof parsed.bootstrapSeededAt === "string" ? parsed.bootstrapSeededAt : undefined,
-      setupCompletedAt:
-        typeof parsed.setupCompletedAt === "string" ? parsed.setupCompletedAt : legacyCompletedAt,
+      onboardingCompletedAt:
+        typeof parsed.onboardingCompletedAt === "string" ? parsed.onboardingCompletedAt : undefined,
     };
   } catch {
     return null;
   }
 }
 
-async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
+async function readWorkspaceOnboardingState(statePath: string): Promise<WorkspaceOnboardingState> {
   try {
     const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = parseWorkspaceSetupState(raw);
-    if (
-      parsed &&
-      raw.includes('"onboardingCompletedAt"') &&
-      !raw.includes('"setupCompletedAt"') &&
-      parsed.setupCompletedAt
-    ) {
-      await writeWorkspaceSetupState(statePath, parsed);
-    }
-    return parsed ?? { version: WORKSPACE_STATE_VERSION };
+    return (
+      parseWorkspaceOnboardingState(raw) ?? {
+        version: WORKSPACE_STATE_VERSION,
+      }
+    );
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "ENOENT") {
@@ -255,19 +247,21 @@ async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetu
   }
 }
 
-async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
+async function readWorkspaceOnboardingStateForDir(dir: string): Promise<WorkspaceOnboardingState> {
   const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceSetupState(statePath);
+  return await readWorkspaceOnboardingState(statePath);
 }
 
-export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
-  const state = await readWorkspaceSetupStateForDir(dir);
-  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
+  const state = await readWorkspaceOnboardingStateForDir(dir);
+  return (
+    typeof state.onboardingCompletedAt === "string" && state.onboardingCompletedAt.trim().length > 0
+  );
 }
 
-async function writeWorkspaceSetupState(
+async function writeWorkspaceOnboardingState(
   statePath: string,
-  state: WorkspaceSetupState,
+  state: WorkspaceOnboardingState,
 ): Promise<void> {
   await fs.mkdir(path.dirname(statePath), { recursive: true });
   const payload = `${JSON.stringify(state, null, 2)}\n`;
@@ -388,9 +382,9 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
-  let state = await readWorkspaceSetupState(statePath);
+  let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
-  const markState = (next: Partial<WorkspaceSetupState>) => {
+  const markState = (next: Partial<WorkspaceOnboardingState>) => {
     state = { ...state, ...next };
     stateDirty = true;
   };
@@ -401,14 +395,14 @@ export async function ensureAgentWorkspace(params?: {
     markState({ bootstrapSeededAt: nowIso() });
   }
 
-  if (!state.setupCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {
-    markState({ setupCompletedAt: nowIso() });
+  if (!state.onboardingCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {
+    markState({ onboardingCompletedAt: nowIso() });
   }
 
-  if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
+  if (!state.bootstrapSeededAt && !state.onboardingCompletedAt && !bootstrapExists) {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
-    // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
-    // already-configured workspaces.
+    // indicators exist, treat onboarding as complete and avoid recreating BOOTSTRAP for
+    // already-onboarded workspaces.
     const [identityContent, userContent] = await Promise.all([
       fs.readFile(identityPath, "utf-8"),
       fs.readFile(userPath, "utf-8"),
@@ -429,10 +423,10 @@ export async function ensureAgentWorkspace(params?: {
       }
       return false;
     })();
-    const legacySetupCompleted =
+    const legacyOnboardingCompleted =
       identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
-    if (legacySetupCompleted) {
-      markState({ setupCompletedAt: nowIso() });
+    if (legacyOnboardingCompleted) {
+      markState({ onboardingCompletedAt: nowIso() });
     } else {
       const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
@@ -448,7 +442,7 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    await writeWorkspaceSetupState(statePath, state);
+    await writeWorkspaceOnboardingState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 

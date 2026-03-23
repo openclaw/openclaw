@@ -1,5 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockSpawnSync = vi.hoisted(() => vi.fn());
+
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
@@ -32,9 +35,7 @@ const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
-const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
-const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
-const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
+const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const probeGateway = vi.fn<
   (opts: {
     url: string;
@@ -48,18 +49,24 @@ const probeGateway = vi.fn<
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
 
+vi.mock("node:fs", () => ({
+  default: {
+    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  },
+}));
+
+vi.mock("node:child_process", () => ({
+  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+}));
+
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort,
 }));
 
-vi.mock("../../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
-    findVerifiedGatewayListenerPidsOnPortSync(port),
-  signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
-    signalVerifiedGatewayPidSync(pid, signal),
-  formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+vi.mock("../../infra/restart.js", () => ({
+  findGatewayPidsOnPortSync: (port: number) => findGatewayPidsOnPortSync(port),
 }));
 
 vi.mock("../../gateway/probe.js", () => ({
@@ -99,29 +106,6 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
 
-  function mockUnmanagedRestart({
-    runPostRestartCheck = false,
-  }: {
-    runPostRestartCheck?: boolean;
-  } = {}) {
-    runServiceRestart.mockImplementation(
-      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
-        if (runPostRestartCheck) {
-          await params.postRestartCheck?.({
-            json: Boolean(params.opts?.json),
-            stdout: process.stdout,
-            warnings: [],
-            fail: (message: string) => {
-              throw new Error(message);
-            },
-          });
-        }
-        return true;
-      },
-    );
-  }
-
   beforeAll(async () => {
     ({ runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
   });
@@ -137,12 +121,12 @@ describe("runDaemonRestart health checks", () => {
     renderGatewayPortHealthDiagnostics.mockReset();
     renderRestartDiagnostics.mockReset();
     resolveGatewayPort.mockReset();
-    findVerifiedGatewayListenerPidsOnPortSync.mockReset();
-    signalVerifiedGatewayPidSync.mockReset();
-    formatGatewayPidList.mockReset();
+    findGatewayPidsOnPortSync.mockReset();
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    mockReadFileSync.mockReset();
+    mockSpawnSync.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -174,8 +158,23 @@ describe("runDaemonRestart health checks", () => {
       configSnapshot: { commands: { restart: true } },
     });
     isRestartEnabled.mockReturnValue(true);
-    signalVerifiedGatewayPidSync.mockImplementation(() => {});
-    formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
+    mockReadFileSync.mockImplementation((path: string) => {
+      const match = path.match(/\/proc\/(\d+)\/cmdline$/);
+      if (!match) {
+        throw new Error(`unexpected path ${path}`);
+      }
+      const pid = Number.parseInt(match[1] ?? "", 10);
+      if ([4200, 4300].includes(pid)) {
+        return ["openclaw", "gateway", "--port", "18789", ""].join("\0");
+      }
+      throw new Error(`unknown pid ${pid}`);
+    });
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout: "openclaw gateway --port 18789",
+      stderr: "",
+    });
   });
 
   afterEach(() => {
@@ -243,26 +242,57 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    findGatewayPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
     runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
       await params.onNotLoaded?.();
     });
 
     await runDaemonStop({ json: true });
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+    expect(findGatewayPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(killSpy).toHaveBeenCalledWith(4200, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(4300, "SIGTERM");
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    mockUnmanagedRestart({ runPostRestartCheck: true });
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
 
     await runDaemonRestart({ json: true });
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(findGatewayPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(killSpy).toHaveBeenCalledWith(4200, "SIGUSR1");
     expect(probeGateway).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
@@ -271,8 +301,21 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
-    mockUnmanagedRestart();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    findGatewayPidsOnPortSync.mockReturnValue([4200, 4300]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        return true;
+      },
+    );
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
@@ -280,13 +323,18 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when the running gateway has commands.restart disabled", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
     probeGateway.mockResolvedValue({
       ok: true,
       configSnapshot: { commands: { restart: false } },
     });
     isRestartEnabled.mockReturnValue(false);
-    mockUnmanagedRestart();
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        return true;
+      },
+    );
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "Gateway restart is disabled in the running gateway config",
@@ -294,13 +342,21 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    mockReadFileSync.mockReturnValue(["python", "-m", "http.server", ""].join("\0"));
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout: "python -m http.server",
+      stderr: "",
+    });
     runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
       await params.onNotLoaded?.();
     });
 
     await runDaemonStop({ json: true });
 
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
   });
 });

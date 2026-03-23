@@ -4,7 +4,7 @@ import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-s
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -217,7 +217,7 @@ export async function modelsScanCommand(
       );
       printScanTable(sortScanResults(results), runtime);
     } else {
-      writeRuntimeJson(runtime, results);
+      runtime.log(JSON.stringify(results, null, 2));
     }
     return;
   }
@@ -328,14 +328,20 @@ export async function modelsScanCommand(
   });
 
   if (opts.json) {
-    writeRuntimeJson(runtime, {
-      selected,
-      selectedImages,
-      setDefault: Boolean(opts.setDefault),
-      setImage: Boolean(opts.setImage),
-      results,
-      warnings: [],
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          selected,
+          selectedImages,
+          setDefault: Boolean(opts.setDefault),
+          setImage: Boolean(opts.setImage),
+          results,
+          warnings: [],
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 

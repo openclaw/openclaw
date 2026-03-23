@@ -325,16 +325,9 @@ describe("web_search provider proxy dispatch", () => {
 
 describe("web_search perplexity Search API", () => {
   const priorFetch = global.fetch;
-  const savedEnv = { ...process.env };
-
-  beforeEach(() => {
-    delete process.env.PERPLEXITY_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
-  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    process.env = { ...savedEnv };
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
   });
@@ -469,16 +462,9 @@ describe("web_search perplexity Search API", () => {
 
 describe("web_search perplexity OpenRouter compatibility", () => {
   const priorFetch = global.fetch;
-  const savedEnv = { ...process.env };
-
-  beforeEach(() => {
-    delete process.env.PERPLEXITY_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
-  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    process.env = { ...savedEnv };
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
   });
@@ -571,9 +557,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     });
 
     expect(mockFetch).not.toHaveBeenCalled();
-    expect((result?.details as { error?: string } | undefined)?.error).toMatch(
-      /^unsupported_(domain_filter|structured_filter)$/,
-    );
+    expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
   });
 
   it("keeps Search API schema params visible before runtime auth routing", () => {

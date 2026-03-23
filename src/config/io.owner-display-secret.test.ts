@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
 
@@ -15,16 +14,12 @@ async function waitForPersistedSecret(configPath: string, expectedSecret: string
     if (parsed.commands?.ownerDisplaySecret === expectedSecret) {
       return;
     }
-    await sleep(5);
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("timed out waiting for ownerDisplaySecret persistence");
 }
 
 describe("config io owner display secret autofill", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
   it("auto-generates and persists commands.ownerDisplaySecret in hash mode", async () => {
     await withTempHome("openclaw-owner-display-secret-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

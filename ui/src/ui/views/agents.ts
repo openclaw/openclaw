@@ -113,10 +113,6 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
-  const selectedSkillCount =
-    selectedId && props.agentSkills.agentId === selectedId
-      ? (props.agentSkills.report?.skills?.length ?? null)
-      : null;
 
   const channelEntryCount = props.channels.snapshot
     ? Object.keys(props.channels.snapshot.channelAccounts ?? {}).length
@@ -126,7 +122,7 @@ export function renderAgents(props: AgentsProps) {
     : null;
   const tabCounts: Record<string, number | null> = {
     files: props.agentFiles.list?.files?.length ?? null,
-    skills: selectedSkillCount,
+    skills: props.agentSkills.report?.skills?.length ?? null,
     channels: channelEntryCount,
     cron: cronJobCount || null,
   };

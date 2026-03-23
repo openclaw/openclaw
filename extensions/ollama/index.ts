@@ -1,24 +1,25 @@
 import {
-  definePluginEntry,
+  buildOllamaProvider,
+  emptyPluginConfigSchema,
+  ensureOllamaModelPulled,
+  OLLAMA_DEFAULT_BASE_URL,
+  promptAndConfigureOllama,
+  configureOllamaNonInteractive,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { OLLAMA_DEFAULT_BASE_URL, resolveOllamaApiBase } from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/core";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
 
-async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/ollama-setup");
-}
-
-export default definePluginEntry({
+const ollamaPlugin = {
   id: "ollama",
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
+  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -32,8 +33,7 @@ export default definePluginEntry({
           hint: "Cloud and local open models",
           kind: "custom",
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const providerSetup = await loadProviderSetup();
-            const result = await providerSetup.promptAndConfigureOllama({
+            const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               prompter: ctx.prompter,
             });
@@ -49,16 +49,15 @@ export default definePluginEntry({
                 },
               ],
               configPatch: result.config,
+              defaultModel: `ollama/${result.defaultModelId}`,
             };
           },
-          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
-            const providerSetup = await loadProviderSetup();
-            return await providerSetup.configureOllamaNonInteractive({
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
+            configureOllamaNonInteractive({
               nextConfig: ctx.config,
               opts: ctx.opts,
               runtime: ctx.runtime,
-            });
-          },
+            }),
         },
       ],
       discovery: {
@@ -73,7 +72,7 @@ export default definePluginEntry({
                 ...explicit,
                 baseUrl:
                   typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-                    ? resolveOllamaApiBase(explicit.baseUrl)
+                    ? explicit.baseUrl.trim().replace(/\/+$/, "")
                     : OLLAMA_DEFAULT_BASE_URL,
                 api: explicit.api ?? "ollama",
                 apiKey: ollamaKey ?? explicit.apiKey ?? DEFAULT_API_KEY,
@@ -81,8 +80,7 @@ export default definePluginEntry({
             };
           }
 
-          const providerSetup = await loadProviderSetup();
-          const provider = await providerSetup.buildOllamaProvider(explicit?.baseUrl, {
+          const provider = await buildOllamaProvider(explicit?.baseUrl, {
             quiet: !ollamaKey && !explicit,
           });
           if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
@@ -97,7 +95,7 @@ export default definePluginEntry({
         },
       },
       wizard: {
-        setup: {
+        onboarding: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
           choiceHint: "Cloud and local open models",
@@ -116,9 +114,10 @@ export default definePluginEntry({
         if (!model.startsWith("ollama/")) {
           return;
         }
-        const providerSetup = await loadProviderSetup();
-        await providerSetup.ensureOllamaModelPulled({ config, model, prompter });
+        await ensureOllamaModelPulled({ config, prompter });
       },
     });
   },
-});
+};
+
+export default ollamaPlugin;

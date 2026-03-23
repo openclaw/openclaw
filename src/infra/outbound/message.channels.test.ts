@@ -1,9 +1,10 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { sendMessage, sendPoll } from "./message.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
   setActivePluginRegistry(registry);
@@ -15,13 +16,6 @@ vi.mock("../../gateway/call.js", () => ({
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
   randomIdempotencyKey: () => "idem-1",
 }));
-
-let sendMessage: typeof import("./message.js").sendMessage;
-let sendPoll: typeof import("./message.js").sendPoll;
-
-beforeAll(async () => {
-  ({ sendMessage, sendPoll } = await import("./message.js"));
-});
 
 beforeEach(() => {
   callGatewayMock.mockClear();
@@ -103,10 +97,13 @@ describe("sendMessage channel normalization", () => {
     expect(seen.to).toBe("+15551234567");
   });
 
-  it.each([
-    {
-      name: "normalizes Teams aliases",
-      registry: createTestRegistry([
+  it("normalizes Teams alias", async () => {
+    const sendMSTeams = vi.fn(async () => ({
+      messageId: "m1",
+      conversationId: "c1",
+    }));
+    setRegistry(
+      createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -116,57 +113,40 @@ describe("sendMessage channel normalization", () => {
           }),
         },
       ]),
-      params: {
-        to: "conversation:19:abc@thread.tacv2",
-        channel: "teams",
-        deps: {
-          sendMSTeams: vi.fn(async () => ({
-            messageId: "m1",
-            conversationId: "c1",
-          })),
-        },
-      },
-      assertDeps: (deps: { sendMSTeams?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
-      },
-      expectedChannel: "msteams",
-    },
-    {
-      name: "normalizes iMessage aliases",
-      registry: createTestRegistry([
+    );
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:19:abc@thread.tacv2",
+      content: "hi",
+      channel: "teams",
+      deps: { sendMSTeams },
+    });
+
+    expect(sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
+    expect(result.channel).toBe("msteams");
+  });
+
+  it("normalizes iMessage alias", async () => {
+    const sendIMessage = vi.fn(async () => ({ messageId: "i1" }));
+    setRegistry(
+      createTestRegistry([
         {
           pluginId: "imessage",
           source: "test",
           plugin: createIMessageTestPlugin(),
         },
       ]),
-      params: {
-        to: "someone@example.com",
-        channel: "imsg",
-        deps: {
-          sendIMessage: vi.fn(async () => ({ messageId: "i1" })),
-        },
-      },
-      assertDeps: (deps: { sendIMessage?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.sendIMessage).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
-      },
-      expectedChannel: "imessage",
-    },
-  ])("$name", async ({ registry, params, assertDeps, expectedChannel }) => {
-    setRegistry(registry);
-
+    );
     const result = await sendMessage({
       cfg: {},
+      to: "someone@example.com",
       content: "hi",
-      ...params,
+      channel: "imsg",
+      deps: { sendIMessage },
     });
 
-    assertDeps(params.deps);
-    expect(result.channel).toBe(expectedChannel);
+    expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
+    expect(result.channel).toBe("imessage");
   });
 });
 
@@ -182,31 +162,34 @@ describe("sendMessage replyToId threading", () => {
     return capturedCtx;
   };
 
-  it.each([
-    {
-      name: "passes replyToId through to the outbound adapter",
-      params: { content: "thread reply", replyToId: "post123" },
-      field: "replyToId",
-      expected: "post123",
-    },
-    {
-      name: "passes threadId through to the outbound adapter",
-      params: { content: "topic reply", threadId: "topic456" },
-      field: "threadId",
-      expected: "topic456",
-    },
-  ])("$name", async ({ params, field, expected }) => {
+  it("passes replyToId through to the outbound adapter", async () => {
     const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
       to: "channel:town-square",
+      content: "thread reply",
       channel: "mattermost",
-      ...params,
+      replyToId: "post123",
     });
 
     expect(capturedCtx).toHaveLength(1);
-    expect(capturedCtx[0]?.[field]).toBe(expected);
+    expect(capturedCtx[0]?.replyToId).toBe("post123");
+  });
+
+  it("passes threadId through to the outbound adapter", async () => {
+    const capturedCtx = setupMattermostCapture();
+
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "topic reply",
+      channel: "mattermost",
+      threadId: "topic456",
+    });
+
+    expect(capturedCtx).toHaveLength(1);
+    expect(capturedCtx[0]?.threadId).toBe("topic456");
   });
 });
 
@@ -310,9 +293,7 @@ const emptyRegistry = createTestRegistry([]);
 const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    const send = deps?.sendMSTeams as
-      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
-      | undefined;
+    const send = deps?.sendMSTeams;
     if (!send) {
       throw new Error("sendMSTeams missing");
     }
@@ -320,9 +301,7 @@ const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboun
     return { channel: "msteams", ...result };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.sendMSTeams as
-      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
-      | undefined;
+    const send = deps?.sendMSTeams;
     if (!send) {
       throw new Error("sendMSTeams missing");
     }

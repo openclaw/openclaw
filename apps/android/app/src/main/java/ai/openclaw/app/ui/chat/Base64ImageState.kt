@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,7 +28,8 @@ internal fun rememberBase64ImageState(base64: String): Base64ImageState {
     image =
       withContext(Dispatchers.Default) {
         try {
-          val bitmap = decodeBase64Bitmap(base64) ?: return@withContext null
+          val bytes = Base64.decode(base64, Base64.DEFAULT)
+          val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
           bitmap.asImageBitmap()
         } catch (_: Throwable) {
           null

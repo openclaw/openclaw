@@ -1,53 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDirectoryTestRuntime,
-  expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.js";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
+import { describe, expect, it } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
-function requireDirectorySelf(
-  directory: typeof msteamsPlugin.directory | null | undefined,
-): NonNullable<NonNullable<typeof msteamsPlugin.directory>["self"]> {
-  if (!directory?.self) {
-    throw new Error("expected msteams directory.self");
-  }
-  return directory.self;
-}
-
 describe("msteams directory", () => {
-  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
-  const directorySelf = requireDirectorySelf(msteamsPlugin.directory);
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  describe("self()", () => {
-    it("returns bot identity when credentials are configured", async () => {
-      const cfg = {
-        channels: {
-          msteams: {
-            appId: "test-app-id-1234",
-            appPassword: "secret",
-            tenantId: "tenant-id-5678",
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const result = await directorySelf({ cfg, runtime: runtimeEnv });
-      expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
-    });
-
-    it("returns null when credentials are not configured", async () => {
-      vi.stubEnv("MSTEAMS_APP_ID", "");
-      vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
-      vi.stubEnv("MSTEAMS_TENANT_ID", "");
-      const cfg = { channels: {} } as unknown as OpenClawConfig;
-      const result = await directorySelf({ cfg, runtime: runtimeEnv });
-      expect(result).toBeNull();
-    });
-  });
+  const runtimeEnv: RuntimeEnv = {
+    log: () => {},
+    error: () => {},
+    exit: (code: number): never => {
+      throw new Error(`exit ${code}`);
+    },
+  };
 
   it("lists peers and groups from config", async () => {
     const cfg = {
@@ -67,10 +29,12 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const directory = expectDirectorySurface(msteamsPlugin.directory);
+    expect(msteamsPlugin.directory).toBeTruthy();
+    expect(msteamsPlugin.directory?.listPeers).toBeTruthy();
+    expect(msteamsPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      directory.listPeers({
+      msteamsPlugin.directory!.listPeers!({
         cfg,
         query: undefined,
         limit: undefined,
@@ -86,7 +50,7 @@ describe("msteams directory", () => {
     );
 
     await expect(
-      directory.listGroups({
+      msteamsPlugin.directory!.listGroups!({
         cfg,
         query: undefined,
         limit: undefined,
@@ -96,35 +60,6 @@ describe("msteams directory", () => {
       expect.arrayContaining([
         { kind: "group", id: "conversation:chan1" },
         { kind: "group", id: "conversation:chan2" },
-      ]),
-    );
-  });
-
-  it("normalizes spaced allowlist and dm entries", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          allowFrom: ["  user:Bob  ", "  Alice  "],
-          dms: { "  Carol  ": {}, "user:Dave": {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const directory = expectDirectorySurface(msteamsPlugin.directory);
-
-    await expect(
-      directory.listPeers({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "user:Bob" },
-        { kind: "user", id: "user:Alice" },
-        { kind: "user", id: "user:Carol" },
-        { kind: "user", id: "user:Dave" },
       ]),
     );
   });

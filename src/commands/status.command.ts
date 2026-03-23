@@ -5,6 +5,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { formatGitInstallLabel } from "../infra/update-check.js";
 import {
@@ -13,11 +14,8 @@ import {
   resolveMemoryVectorState,
   type Tone,
 } from "../memory/status-format.js";
-import {
-  formatPluginCompatibilityNotice,
-  summarizePluginCompatibility,
-} from "../plugins/status.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { runSecurityAudit } from "../security/audit.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
@@ -38,19 +36,6 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "./status.update.js";
-
-let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
-let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
-
-function loadProviderUsage() {
-  providerUsagePromise ??= import("../infra/provider-usage.js");
-  return providerUsagePromise;
-}
-
-function loadSecurityAuditModule() {
-  securityAuditModulePromise ??= import("../security/audit.runtime.js");
-  return securityAuditModulePromise;
-}
 
 function resolvePairingRecoveryContext(params: {
   error?: string | null;
@@ -99,25 +84,28 @@ export async function statusCommand(
     { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
     runtime,
   );
-  const runSecurityAudit = async () =>
-    await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
-      runSecurityAudit({
+  const securityAudit = opts.json
+    ? await runSecurityAudit({
         config: scan.cfg,
         sourceConfig: scan.sourceConfig,
         deep: false,
         includeFilesystem: true,
         includeChannelSecurity: true,
-      }),
-    );
-  const securityAudit = opts.json
-    ? await runSecurityAudit()
+      })
     : await withProgress(
         {
           label: "Running security audit…",
           indeterminate: true,
           enabled: true,
         },
-        async () => await runSecurityAudit(),
+        async () =>
+          await runSecurityAudit({
+            config: scan.cfg,
+            sourceConfig: scan.sourceConfig,
+            deep: false,
+            includeFilesystem: true,
+            includeChannelSecurity: true,
+          }),
       );
   const {
     cfg,
@@ -141,7 +129,6 @@ export async function statusCommand(
     secretDiagnostics,
     memory,
     memoryPlugin,
-    pluginCompatibility,
   } = scan;
 
   const usage = opts.usage
@@ -151,10 +138,7 @@ export async function statusCommand(
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => {
-          const { loadProviderUsageSummary } = await loadProviderUsage();
-          return await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs });
-        },
+        async () => await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
   const health: HealthSummary | undefined = opts.deep
@@ -196,36 +180,38 @@ export async function statusCommand(
       getDaemonStatusSummary(),
       getNodeDaemonStatusSummary(),
     ]);
-    writeRuntimeJson(runtime, {
-      ...summary,
-      os: osSummary,
-      update,
-      updateChannel: channelInfo.channel,
-      updateChannelSource: channelInfo.source,
-      memory,
-      memoryPlugin,
-      gateway: {
-        mode: gatewayMode,
-        url: gatewayConnection.url,
-        urlSource: gatewayConnection.urlSource,
-        misconfigured: remoteUrlMissing,
-        reachable: gatewayReachable,
-        connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
-        self: gatewaySelf,
-        error: gatewayProbe?.error ?? null,
-        authWarning: gatewayProbeAuthWarning ?? null,
-      },
-      gatewayService: daemon,
-      nodeService: nodeDaemon,
-      agents: agentStatus,
-      securityAudit,
-      secretDiagnostics,
-      pluginCompatibility: {
-        count: pluginCompatibility.length,
-        warnings: pluginCompatibility,
-      },
-      ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          ...summary,
+          os: osSummary,
+          update,
+          updateChannel: channelInfo.channel,
+          updateChannelSource: channelInfo.source,
+          memory,
+          memoryPlugin,
+          gateway: {
+            mode: gatewayMode,
+            url: gatewayConnection.url,
+            urlSource: gatewayConnection.urlSource,
+            misconfigured: remoteUrlMissing,
+            reachable: gatewayReachable,
+            connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
+            self: gatewaySelf,
+            error: gatewayProbe?.error ?? null,
+            authWarning: gatewayProbeAuthWarning ?? null,
+          },
+          gatewayService: daemon,
+          nodeService: nodeDaemon,
+          agents: agentStatus,
+          securityAudit,
+          secretDiagnostics,
+          ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -419,13 +405,6 @@ export async function statusCommand(
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
-  const pluginCompatibilitySummary = summarizePluginCompatibility(pluginCompatibility);
-  const pluginCompatibilityValue =
-    pluginCompatibilitySummary.noticeCount === 0
-      ? ok("none")
-      : warn(
-          `${pluginCompatibilitySummary.noticeCount} notice${pluginCompatibilitySummary.noticeCount === 1 ? "" : "s"} · ${pluginCompatibilitySummary.pluginCount} plugin${pluginCompatibilitySummary.pluginCount === 1 ? "" : "s"}`,
-        );
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
@@ -453,7 +432,6 @@ export async function statusCommand(
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
-    { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
@@ -477,18 +455,6 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
-
-  if (pluginCompatibility.length > 0) {
-    runtime.log("");
-    runtime.log(theme.heading("Plugin compatibility"));
-    for (const notice of pluginCompatibility.slice(0, 8)) {
-      const label = notice.severity === "warn" ? theme.warn("WARN") : theme.muted("INFO");
-      runtime.log(`  ${label} ${formatPluginCompatibilityNotice(notice)}`);
-    }
-    if (pluginCompatibility.length > 8) {
-      runtime.log(theme.muted(`  … +${pluginCompatibility.length - 8} more`));
-    }
-  }
 
   if (pairingRecovery) {
     runtime.log("");
@@ -692,7 +658,6 @@ export async function statusCommand(
   }
 
   if (usage) {
-    const { formatUsageReportLines } = await loadProviderUsage();
     runtime.log("");
     runtime.log(theme.heading("Usage"));
     for (const line of formatUsageReportLines(usage)) {

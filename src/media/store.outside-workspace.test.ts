@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,21 +15,12 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 
-type StoreModule = typeof import("./store.js");
-type FsSafeModule = typeof import("../infra/fs-safe.js");
-
-let saveMediaSource: StoreModule["saveMediaSource"];
-let SafeOpenError: FsSafeModule["SafeOpenError"];
+const { saveMediaSource } = await import("./store.js");
+const { SafeOpenError } = await import("../infra/fs-safe.js");
 
 describe("media store outside-workspace mapping", () => {
   let tempHome: TempHomeEnv;
   let home = "";
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ saveMediaSource } = await import("./store.js"));
-    ({ SafeOpenError } = await import("../infra/fs-safe.js"));
-  });
 
   beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-media-store-test-home-");

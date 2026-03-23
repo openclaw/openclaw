@@ -175,12 +175,6 @@ describe("exec approvals safe bins", () => {
       expected: true,
     },
     {
-      name: "blocks jq env builtin even when jq is explicitly opted in",
-      argv: ["jq", "env"],
-      resolvedPath: "/usr/bin/jq",
-      expected: false,
-    },
-    {
       name: "blocks safe bins with file args",
       argv: ["jq", ".foo", "secret.json"],
       resolvedPath: "/usr/bin/jq",
@@ -334,7 +328,7 @@ describe("exec approvals safe bins", () => {
 
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
-    expect(defaults.has("jq")).toBe(false);
+    expect(defaults.has("jq")).toBe(true);
     expect(defaults.has("sort")).toBe(false);
     expect(defaults.has("grep")).toBe(false);
   });

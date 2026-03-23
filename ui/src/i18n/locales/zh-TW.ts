@@ -4,7 +4,6 @@ export const zh_TW: TranslationMap = {
   common: {
     health: "健康狀況",
     ok: "正常",
-    online: "在線",
     offline: "離線",
     connect: "連接",
     refresh: "刷新",

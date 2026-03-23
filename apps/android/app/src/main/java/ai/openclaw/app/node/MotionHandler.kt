@@ -10,7 +10,6 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import java.time.Instant
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -19,6 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -142,18 +142,19 @@ private object SystemMotionDataSource : MotionDataSource {
     val averageDelta: Double,
   )
 
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readStepCounter(sensorManager: SensorManager, sensor: Sensor): Int? {
     val sample =
       withTimeoutOrNull(1200L) {
         suspendCancellableCoroutine<Float?> { cont ->
+          var resumed = false
           val listener =
             object : SensorEventListener {
               override fun onSensorChanged(event: SensorEvent?) {
+                if (resumed) return
                 val value = event?.values?.firstOrNull()
-                val token = cont.tryResume(value) ?: return
-                cont.completeResume(token)
+                resumed = true
                 sensorManager.unregisterListener(this)
+                cont.resume(value)
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -161,7 +162,8 @@ private object SystemMotionDataSource : MotionDataSource {
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
             sensorManager.unregisterListener(listener)
-            cont.resume(null) { _, _, _ -> }
+            resumed = true
+            cont.resume(null)
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
@@ -170,7 +172,6 @@ private object SystemMotionDataSource : MotionDataSource {
     return sample?.toInt()?.takeIf { it >= 0 }
   }
 
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readAccelerometerSample(
     sensorManager: SensorManager,
     sensor: Sensor,
@@ -180,6 +181,7 @@ private object SystemMotionDataSource : MotionDataSource {
         suspendCancellableCoroutine<AccelerometerSample?> { cont ->
           var count = 0
           var sumDelta = 0.0
+          var resumed = false
           val listener =
             object : SensorEventListener {
               override fun onSensorChanged(event: SensorEvent?) {
@@ -193,14 +195,15 @@ private object SystemMotionDataSource : MotionDataSource {
                   ).toDouble()
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
-                if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                  val result = AccelerometerSample(
-                    samples = count,
-                    averageDelta = sumDelta / count,
-                  )
-                  val token = cont.tryResume(result) ?: return
-                  cont.completeResume(token)
+                if (count >= ACCELEROMETER_SAMPLE_TARGET && !resumed) {
+                  resumed = true
                   sensorManager.unregisterListener(this)
+                  cont.resume(
+                    AccelerometerSample(
+                      samples = count,
+                      averageDelta = if (count == 0) 0.0 else sumDelta / count,
+                    ),
+                  )
                 }
               }
 
@@ -208,7 +211,8 @@ private object SystemMotionDataSource : MotionDataSource {
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
-            cont.resume(null) { _, _, _ -> }
+            resumed = true
+            cont.resume(null)
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }

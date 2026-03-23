@@ -138,7 +138,7 @@ type PrintResultOptions = UpdateCommandOptions & {
 
 export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
   if (opts.json) {
-    defaultRuntime.writeJson(result);
+    defaultRuntime.log(JSON.stringify(result, null, 2));
     return;
   }
 

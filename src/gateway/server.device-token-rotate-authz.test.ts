@@ -87,13 +87,11 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
     role: "operator",
     scopes: ["operator.pairing"],
   });
-  expect(rotated.ok).toBe(true);
-  const pairingToken = rotated.ok ? rotated.entry.token : "";
-  expect(pairingToken).toBeTruthy();
+  expect(rotated?.token).toBeTruthy();
   return {
     deviceId: paired.identity.deviceId,
     identityPath: paired.identityPath,
-    pairingToken,
+    pairingToken: String(rotated?.token ?? ""),
   };
 }
 
@@ -223,7 +221,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
         scopes: ["operator.admin"],
       });
       expect(rotate.ok).toBe(false);
-      expect(rotate.error?.message).toBe("device token rotation denied");
+      expect(rotate.error?.message).toBe("missing scope: operator.admin");
 
       const paired = await getPairedDevice(attacker.deviceId);
       expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
@@ -268,7 +266,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
       });
 
       expect(rotate.ok).toBe(false);
-      expect(rotate.error?.message).toBe("device token rotation denied");
+      expect(rotate.error?.message).toBe("missing scope: operator.admin");
       await waitForMacrotasks();
       expect(sawInvoke).toBe(false);
 
@@ -278,41 +276,6 @@ describe("gateway device.token.rotate caller scope guard", () => {
     } finally {
       pairingWs?.close();
       nodeClient?.stop();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
-
-  test("returns the same public deny for unknown devices and caller scope failures", async () => {
-    const started = await startServerWithClient("secret");
-    const attacker = await issuePairingScopedTokenForAdminApprovedDevice("rotate-deny-shape");
-
-    let pairingWs: WebSocket | undefined;
-    try {
-      pairingWs = await connectPairingScopedOperator({
-        port: started.port,
-        identityPath: attacker.identityPath,
-        deviceToken: attacker.pairingToken,
-      });
-
-      const missingScope = await rpcReq(pairingWs, "device.token.rotate", {
-        deviceId: attacker.deviceId,
-        role: "operator",
-        scopes: ["operator.admin"],
-      });
-      const unknownDevice = await rpcReq(pairingWs, "device.token.rotate", {
-        deviceId: "missing-device",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      });
-
-      expect(missingScope.ok).toBe(false);
-      expect(unknownDevice.ok).toBe(false);
-      expect(missingScope.error?.message).toBe("device token rotation denied");
-      expect(unknownDevice.error?.message).toBe("device token rotation denied");
-    } finally {
-      pairingWs?.close();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();

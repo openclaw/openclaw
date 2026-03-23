@@ -1,23 +1,13 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
-  formatBtwTextForExternalDelivery,
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import {
-  hasInteractiveReplyBlocks,
-  hasReplyChannelData,
-  hasReplyPayloadContent,
-  type InteractiveReply,
-} from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
-  audioAsVoice?: boolean;
-  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -25,8 +15,6 @@ export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
-  audioAsVoice?: boolean;
-  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -71,11 +59,7 @@ export function normalizeReplyPayloadsForDelivery(
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
     const next: ReplyPayload = {
       ...payload,
-      text:
-        formatBtwTextForExternalDelivery({
-          ...payload,
-          text: parsed.text ?? "",
-        }) ?? "",
+      text: parsed.text ?? "",
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
@@ -99,22 +83,16 @@ export function normalizeOutboundPayloads(
 ): NormalizedOutboundPayload[] {
   const normalizedPayloads: NormalizedOutboundPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    const parts = resolveSendableOutboundReplyParts(payload);
-    const interactive = payload.interactive;
+    const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const channelData = payload.channelData;
-    const hasChannelData = hasReplyChannelData(channelData);
-    const hasInteractive = hasInteractiveReplyBlocks(interactive);
-    const text = parts.text;
-    if (
-      !hasReplyPayloadContent({ ...payload, text, mediaUrls: parts.mediaUrls }, { hasChannelData })
-    ) {
+    const hasChannelData = Boolean(channelData && Object.keys(channelData).length > 0);
+    const text = payload.text ?? "";
+    if (!text && mediaUrls.length === 0 && !hasChannelData) {
       continue;
     }
     normalizedPayloads.push({
       text,
-      mediaUrls: parts.mediaUrls,
-      audioAsVoice: payload.audioAsVoice === true ? true : undefined,
-      ...(hasInteractive ? { interactive } : {}),
+      mediaUrls,
       ...(hasChannelData ? { channelData } : {}),
     });
   }
@@ -126,13 +104,10 @@ export function normalizeOutboundPayloadsForJson(
 ): OutboundPayloadJson[] {
   const normalized: OutboundPayloadJson[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    const parts = resolveSendableOutboundReplyParts(payload);
     normalized.push({
-      text: parts.text,
+      text: payload.text ?? "",
       mediaUrl: payload.mediaUrl ?? null,
-      mediaUrls: parts.mediaUrls.length ? parts.mediaUrls : undefined,
-      audioAsVoice: payload.audioAsVoice === true ? true : undefined,
-      interactive: payload.interactive,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
       channelData: payload.channelData,
     });
   }

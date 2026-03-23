@@ -4,7 +4,6 @@ import type {
   GroupPolicy,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHealthMonitorConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretRef } from "./types.secrets.js";
 
@@ -75,8 +74,6 @@ export type GoogleChatAccountConfig = {
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */
   audience?: string;
-  /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
-  appPrincipal?: string;
   /** Google Chat webhook path (default: /googlechat). */
   webhookPath?: string;
   /** Google Chat webhook URL (used to derive the path). */
@@ -102,8 +99,6 @@ export type GoogleChatAccountConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: GoogleChatActionConfig;
   dm?: GoogleChatDmConfig;
-  /** Channel health monitor overrides for this channel/account. */
-  healthMonitor?: ChannelHealthMonitorConfig;
   /**
    * Typing indicator mode (default: "message").
    * - "none": No indicator

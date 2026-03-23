@@ -145,16 +145,13 @@ describe("doctor state integrity oauth dir checks", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
-      params.message.includes("This only renames them to *.deleted.<timestamp>."),
+      params.message.includes("orphan transcript file"),
     );
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-    expect(stateIntegrityText()).toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
-    );
-    expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
+    expect(stateIntegrityText()).toContain("orphan transcript file");
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
+        message: expect.stringContaining("orphan transcript file"),
       }),
     );
     const files = fs.readdirSync(sessionsDir);

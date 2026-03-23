@@ -1,5 +1,5 @@
-// Private ACPX runtime backend helpers for bundled extensions.
-// Keep this surface narrow and limited to the ACP runtime/backend contract.
+// Narrow plugin-sdk surface for the bundled acpx plugin.
+// Keep this list additive and scoped to symbols used under extensions/acpx.
 
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export { AcpRuntimeError } from "../acp/runtime/errors.js";

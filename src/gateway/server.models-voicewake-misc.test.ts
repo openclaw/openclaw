@@ -51,21 +51,18 @@ beforeAll(async () => {
 const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    if (!deps?.["whatsapp"]) {
+    if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return {
-      channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false })),
-    };
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    if (!deps?.["whatsapp"]) {
+    if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
     return {
       channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false, mediaUrl })),
+      ...(await deps.sendWhatsApp(to, text, { verbose: false, mediaUrl })),
     };
   },
 };

@@ -149,10 +149,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   val smsPermissionAvailable =
     remember {
-      BuildConfig.OPENCLAW_ENABLE_SMS &&
-        context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
+      context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
-  val callLogPermissionAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES
@@ -220,18 +218,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       calendarPermissionGranted = readOk && writeOk
     }
 
-  var callLogPermissionGranted by
-    remember {
-      mutableStateOf(
-        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
-          PackageManager.PERMISSION_GRANTED,
-      )
-    }
-  val callLogPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      callLogPermissionGranted = granted
-    }
-
   var motionPermissionGranted by
     remember {
       mutableStateOf(
@@ -249,16 +235,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-          PackageManager.PERMISSION_GRANTED &&
-          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
           PackageManager.PERMISSION_GRANTED,
       )
     }
   val smsPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-      val sendOk = perms[Manifest.permission.SEND_SMS] == true
-      val readOk = perms[Manifest.permission.READ_SMS] == true
-      smsPermissionGranted = sendOk && readOk
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      smsPermissionGranted = granted
       viewModel.refreshGatewayConnection()
     }
 
@@ -284,17 +266,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED &&
               ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
               PackageManager.PERMISSION_GRANTED
-          callLogPermissionGranted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
-              PackageManager.PERMISSION_GRANTED
           motionPermissionGranted =
             !motionPermissionRequired ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
               PackageManager.PERMISSION_GRANTED
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-              PackageManager.PERMISSION_GRANTED &&
-              ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
               PackageManager.PERMISSION_GRANTED
         }
       }
@@ -515,7 +492,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               colors = listItemColors,
               headlineContent = { Text("SMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send and search SMS from this device.", style = mobileCallout)
+                Text("Send SMS from this device.", style = mobileCallout)
               },
               trailingContent = {
                 Button(
@@ -523,7 +500,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                     if (smsPermissionGranted) {
                       openAppSettings(context)
                     } else {
-                      smsPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS))
+                      smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
                     }
                   },
                   colors = settingsPrimaryButtonColors(),
@@ -624,33 +601,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
               }
             },
           )
-          if (callLogPermissionAvailable) {
-            HorizontalDivider(color = mobileBorder)
-            ListItem(
-              modifier = Modifier.fillMaxWidth(),
-              colors = listItemColors,
-              headlineContent = { Text("Call Log", style = mobileHeadline) },
-              supportingContent = { Text("Search recent call history.", style = mobileCallout) },
-              trailingContent = {
-                Button(
-                  onClick = {
-                    if (callLogPermissionGranted) {
-                      openAppSettings(context)
-                    } else {
-                      callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
-                    }
-                  },
-                  colors = settingsPrimaryButtonColors(),
-                  shape = RoundedCornerShape(14.dp),
-                ) {
-                  Text(
-                    if (callLogPermissionGranted) "Manage" else "Grant",
-                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-                  )
-                }
-              },
-            )
-          }
           if (motionAvailable) {
             HorizontalDivider(color = mobileBorder)
             ListItem(
@@ -786,12 +736,11 @@ private fun settingsTextFieldColors() =
     cursorColor = mobileAccent,
   )
 
-@Composable
 private fun Modifier.settingsRowModifier() =
   this
     .fillMaxWidth()
     .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
-    .background(mobileCardSurface, RoundedCornerShape(14.dp))
+    .background(Color.White, RoundedCornerShape(14.dp))
 
 @Composable
 private fun settingsPrimaryButtonColors() =
@@ -832,7 +781,7 @@ private fun openNotificationListenerSettings(context: Context) {
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-          PackageManager.PERMISSION_GRANTED
+    PackageManager.PERMISSION_GRANTED
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
@@ -842,5 +791,5 @@ private fun isNotificationListenerEnabled(context: Context): Boolean {
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
-          sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }

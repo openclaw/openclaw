@@ -46,13 +46,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
@@ -112,7 +110,7 @@ fun ChatComposer(
         Surface(
           onClick = { showThinkingMenu = true },
           shape = RoundedCornerShape(14.dp),
-          color = mobileCardSurface,
+          color = Color.White,
           border = BorderStroke(1.dp, mobileBorderStrong),
         ) {
           Row(
@@ -128,15 +126,7 @@ fun ChatComposer(
           }
         }
 
-        DropdownMenu(
-          expanded = showThinkingMenu,
-          onDismissRequest = { showThinkingMenu = false },
-          shape = RoundedCornerShape(16.dp),
-          containerColor = mobileCardSurface,
-          tonalElevation = 0.dp,
-          shadowElevation = 8.dp,
-          border = BorderStroke(1.dp, mobileBorder),
-        ) {
+        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
           ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
@@ -187,7 +177,7 @@ fun ChatComposer(
             disabledContainerColor = mobileBorderStrong,
             disabledContentColor = mobileTextTertiary,
           ),
-        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
+        border = BorderStroke(1.dp, if (canSend) Color(0xFF154CAD) else mobileBorderStrong),
       ) {
         if (sendBusy) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
@@ -221,9 +211,9 @@ private fun SecondaryActionButton(
     shape = RoundedCornerShape(14.dp),
     colors =
       ButtonDefaults.buttonColors(
-        containerColor = mobileCardSurface,
+        containerColor = Color.White,
         contentColor = mobileTextSecondary,
-        disabledContainerColor = mobileCardSurface,
+        disabledContainerColor = Color.White,
         disabledContentColor = mobileTextTertiary,
       ),
     border = BorderStroke(1.dp, mobileBorderStrong),
@@ -313,7 +303,7 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
       Surface(
         onClick = onRemove,
         shape = RoundedCornerShape(999.dp),
-        color = mobileCardSurface,
+        color = Color.White,
         border = BorderStroke(1.dp, mobileBorderStrong),
       ) {
         Text(

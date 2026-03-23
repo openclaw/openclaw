@@ -1,5 +1,8 @@
 package ai.openclaw.app.ui.chat
 
+import android.content.ContentResolver
+import android.net.Uri
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -33,17 +36,15 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCaption2
 import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileDangerSoft
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,6 +64,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
   LaunchedEffect(mainSessionKey) {
     viewModel.loadChat(mainSessionKey)
+    viewModel.refreshChatSessions(limit = 200)
   }
 
   val context = LocalContext.current
@@ -78,7 +80,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         val next =
           uris.take(8).mapNotNull { uri ->
             try {
-              loadSizedImageAttachment(resolver, uri)
+              loadImageAttachment(resolver, uri)
             } catch (_: Throwable) {
               null
             }
@@ -155,10 +157,7 @@ private fun ChatThreadSelector(
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
 ) {
-  val sessionOptions =
-    remember(sessionKey, sessions, mainSessionKey) {
-      resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
-    }
+  val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -169,8 +168,8 @@ private fun ChatThreadSelector(
       Surface(
         onClick = { onSelectSession(entry.key) },
         shape = RoundedCornerShape(14.dp),
-        color = if (active) mobileAccent else mobileCardSurface,
-        border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
+        color = if (active) mobileAccent else Color.White,
+        border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
       ) {
@@ -191,7 +190,7 @@ private fun ChatThreadSelector(
 private fun ChatErrorRail(errorText: String) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    color = mobileDangerSoft,
+    color = androidx.compose.ui.graphics.Color.White,
     shape = RoundedCornerShape(12.dp),
     border = androidx.compose.foundation.BorderStroke(1.dp, mobileDanger),
   ) {
@@ -212,3 +211,24 @@ data class PendingImageAttachment(
   val mimeType: String,
   val base64: String,
 )
+
+private suspend fun loadImageAttachment(resolver: ContentResolver, uri: Uri): PendingImageAttachment {
+  val mimeType = resolver.getType(uri) ?: "image/*"
+  val fileName = (uri.lastPathSegment ?: "image").substringAfterLast('/')
+  val bytes =
+    withContext(Dispatchers.IO) {
+      resolver.openInputStream(uri)?.use { input ->
+        val out = ByteArrayOutputStream()
+        input.copyTo(out)
+        out.toByteArray()
+      } ?: ByteArray(0)
+    }
+  if (bytes.isEmpty()) throw IllegalStateException("empty attachment")
+  val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+  return PendingImageAttachment(
+    id = uri.toString() + "#" + System.currentTimeMillis().toString(),
+    fileName = fileName,
+    mimeType = mimeType,
+    base64 = base64,
+  )
+}

@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -12,9 +12,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-type ExecModule = typeof import("./exec.js");
-
-let runCommandWithTimeout: ExecModule["runCommandWithTimeout"];
+import { runCommandWithTimeout } from "./exec.js";
 
 function createFakeSpawnedChild() {
   const child = new EventEmitter() as EventEmitter & ChildProcess;
@@ -41,11 +39,6 @@ function createFakeSpawnedChild() {
 }
 
 describe("runCommandWithTimeout no-output timer", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runCommandWithTimeout } = await import("./exec.js"));
-  });
-
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

@@ -28,19 +28,19 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
   };
 }
 
-export async function runNonInteractiveSetup(
+export async function runNonInteractiveOnboarding(
   options: Record<string, unknown>,
   runtime: NonInteractiveRuntime,
 ): Promise<void> {
-  const { runNonInteractiveSetup: run } = await import("./onboard-non-interactive.js");
+  const { runNonInteractiveOnboarding: run } = await import("./onboard-non-interactive.js");
   await run(options, runtime);
 }
 
-export async function runNonInteractiveSetupWithDefaults(
+export async function runNonInteractiveOnboardingWithDefaults(
   runtime: NonInteractiveRuntime,
   options: Record<string, unknown>,
 ): Promise<void> {
-  await runNonInteractiveSetup(
+  await runNonInteractiveOnboarding(
     {
       ...NON_INTERACTIVE_DEFAULT_OPTIONS,
       ...options,

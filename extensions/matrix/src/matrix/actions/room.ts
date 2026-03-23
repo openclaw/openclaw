@@ -1,15 +1,18 @@
 import { resolveMatrixRoomId } from "../send.js";
-import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
+import { resolveActionClient } from "./client.js";
 import { EventType, type MatrixActionClientOpts } from "./types.js";
 
 export async function getMatrixMemberInfo(
   userId: string,
   opts: MatrixActionClientOpts & { roomId?: string } = {},
 ) {
-  return await withResolvedActionClient(opts, async (client) => {
+  const { client, stopOnDone } = await resolveActionClient(opts);
+  try {
     const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
+    // @vector-im/matrix-bot-sdk uses getUserProfile
     const profile = await client.getUserProfile(userId);
-    // Membership and power levels are not included in profile calls; fetch state separately if needed.
+    // Note: @vector-im/matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
+    // We'd need to fetch room state separately if needed
     return {
       userId,
       profile: {
@@ -21,11 +24,18 @@ export async function getMatrixMemberInfo(
       displayName: profile?.displayname ?? null,
       roomId: roomId ?? null,
     };
-  });
+  } finally {
+    if (stopOnDone) {
+      client.stop();
+    }
+  }
 }
 
 export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClientOpts = {}) {
-  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+  const { client, stopOnDone } = await resolveActionClient(opts);
+  try {
+    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+    // @vector-im/matrix-bot-sdk uses getRoomState for state events
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;
@@ -33,21 +43,21 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
 
     try {
       const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
-      name = typeof nameState?.name === "string" ? nameState.name : null;
+      name = nameState?.name ?? null;
     } catch {
       // ignore
     }
 
     try {
       const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
-      topic = typeof topicState?.topic === "string" ? topicState.topic : null;
+      topic = topicState?.topic ?? null;
     } catch {
       // ignore
     }
 
     try {
       const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
-      canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
+      canonicalAlias = aliasState?.alias ?? null;
     } catch {
       // ignore
     }
@@ -67,5 +77,9 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       altAliases: [], // Would need separate query
       memberCount,
     };
-  });
+  } finally {
+    if (stopOnDone) {
+      client.stop();
+    }
+  }
 }

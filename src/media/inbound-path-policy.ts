@@ -1,7 +1,5 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 
 const WILDCARD_SEGMENT = "*";
 const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:\//;
@@ -118,11 +116,11 @@ export function isInboundPathAllowed(params: {
 }
 
 function resolveIMessageAccountConfig(params: { cfg: OpenClawConfig; accountId?: string | null }) {
-  const accountId = normalizeAccountId(params.accountId);
-  if (!params.accountId?.trim()) {
+  const accountId = params.accountId?.trim();
+  if (!accountId) {
     return undefined;
   }
-  return resolveAccountEntry(params.cfg.channels?.imessage?.accounts, accountId);
+  return params.cfg.channels?.imessage?.accounts?.[accountId];
 }
 
 export function resolveIMessageAttachmentRoots(params: {

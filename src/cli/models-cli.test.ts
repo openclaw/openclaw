@@ -2,17 +2,18 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 
+const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
 const noopAsync = vi.fn(async () => undefined);
-const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/models.js", () => ({
+  githubCopilotLoginCommand,
   modelsStatusCommand,
   modelsAliasesAddCommand: noopAsync,
   modelsAliasesListCommand: noopAsync,
   modelsAliasesRemoveCommand: noopAsync,
   modelsAuthAddCommand: noopAsync,
-  modelsAuthLoginCommand,
+  modelsAuthLoginCommand: noopAsync,
   modelsAuthOrderClearCommand: noopAsync,
   modelsAuthOrderGetCommand: noopAsync,
   modelsAuthOrderSetCommand: noopAsync,
@@ -41,7 +42,7 @@ describe("models cli", () => {
   });
 
   beforeEach(() => {
-    modelsAuthLoginCommand.mockClear();
+    githubCopilotLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
 
@@ -73,13 +74,9 @@ describe("models cli", () => {
       from: "user",
     });
 
-    expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
-    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        method: "device",
-        yes: true,
-      }),
+    expect(githubCopilotLoginCommand).toHaveBeenCalledTimes(1);
+    expect(githubCopilotLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ yes: true }),
       expect.any(Object),
     );
   });

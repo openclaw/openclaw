@@ -1,22 +1,22 @@
 ---
-summary: "Windows support: native and WSL2 install paths, daemon, and current caveats"
+summary: "Windows (WSL2) support + companion app status"
 read_when:
   - Installing OpenClaw on Windows
-  - Choosing between native Windows and WSL2
   - Looking for Windows companion app status
-title: "Windows"
+title: "Windows (WSL2)"
 ---
 
-# Windows
+# Windows (WSL2)
 
-OpenClaw supports both **native Windows** and **WSL2**. WSL2 is the more
-stable path and recommended for the full experience — the CLI, Gateway, and
-tooling run inside Linux with full compatibility. Native Windows works for
-core CLI and Gateway use, with some caveats noted below.
+OpenClaw on Windows is recommended **via WSL2** (Ubuntu recommended). The
+CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native
+Windows might be trickier. WSL2 gives you the full Linux experience — one command
+to install: `wsl --install`.
 
 Native Windows companion apps are planned.
 
-## WSL2 (recommended)
+## Install (WSL2)
 
 - [Getting Started](/start/getting-started) (use inside WSL)
 - [Install & updates](/install/updating)

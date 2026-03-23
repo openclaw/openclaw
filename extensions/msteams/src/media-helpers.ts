@@ -8,7 +8,7 @@ import {
   extensionForMime,
   extractOriginalFilename,
   getFileExtension,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/msteams";
 
 /**
  * Detect MIME type from URL extension or data URL.

@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
@@ -84,6 +85,13 @@ export async function loadInternalHooks(
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 
     for (const entry of eligible) {
+      const hookConfig = resolveHookConfig(cfg, entry.hook.name);
+
+      // Skip if explicitly disabled in config
+      if (hookConfig?.enabled === false) {
+        continue;
+      }
+
       try {
         const hookBaseDir = resolveExistingRealpath(entry.hook.baseDir);
         if (!hookBaseDir) {

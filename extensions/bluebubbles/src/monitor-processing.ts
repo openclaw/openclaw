@@ -1,8 +1,22 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
-  resolveOutboundMediaUrls,
-  resolveTextChunksWithFallback,
-  sendMediaWithLeadingCaption,
-} from "openclaw/plugin-sdk/reply-payload";
+  DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
+  createReplyPrefixOptions,
+  evictOldHistoryKeys,
+  issuePairingChallenge,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/bluebubbles";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -35,24 +49,6 @@ import type {
 } from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
-import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  evictOldHistoryKeys,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
@@ -451,7 +447,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const pairing = createChannelPairingController({
+  const pairing = createScopedPairingAccess({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
@@ -653,10 +649,12 @@ export async function processMessage(
     }
 
     if (accessDecision.decision === "pairing") {
-      await pairing.issueChallenge({
+      await issuePairingChallenge({
+        channel: "bluebubbles",
         senderId: message.senderId,
         senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
+        upsertPairingRequest: pairing.upsertPairingRequest,
         onCreated: () => {
           runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
           logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
@@ -1225,47 +1223,17 @@ export async function processMessage(
     }, typingRestartDelayMs);
   };
   try {
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
       cfg: config,
       agentId: route.agentId,
       channel: "bluebubbles",
       accountId: account.accountId,
-      typingCallbacks: {
-        onReplyStart: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          streamingActive = true;
-          clearTypingRestartTimer();
-          try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
-          }
-        },
-        onIdle: () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          // Intentionally no-op for block streaming. We stop typing in finally
-          // after the run completes to avoid flicker between paragraph blocks.
-        },
-      },
     });
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: config,
       dispatcherOptions: {
-        ...replyPipeline,
+        ...prefixOptions,
         deliver: async (payload, info) => {
           const rawReplyToId =
             privateApiEnabled && typeof payload.replyToId === "string"
@@ -1275,7 +1243,11 @@ export async function processMessage(
           const replyToMessageGuid = rawReplyToId
             ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";
-          const mediaList = resolveOutboundMediaUrls(payload);
+          const mediaList = payload.mediaUrls?.length
+            ? payload.mediaUrls
+            : payload.mediaUrl
+              ? [payload.mediaUrl]
+              : [];
           if (mediaList.length > 0) {
             const tableMode = core.channel.text.resolveMarkdownTableMode({
               cfg: config,
@@ -1285,44 +1257,43 @@ export async function processMessage(
             const text = sanitizeReplyDirectiveText(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
-            await sendMediaWithLeadingCaption({
-              mediaUrls: mediaList,
-              caption: text,
-              send: async ({ mediaUrl, caption }) => {
-                const cachedBody = (caption ?? "").trim() || "<media:attachment>";
-                const pendingId = rememberPendingOutboundMessageId({
+            let first = true;
+            for (const mediaUrl of mediaList) {
+              const caption = first ? text : undefined;
+              first = false;
+              const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+              const pendingId = rememberPendingOutboundMessageId({
+                accountId: account.accountId,
+                sessionKey: route.sessionKey,
+                outboundTarget,
+                chatGuid: chatGuidForActions ?? chatGuid,
+                chatIdentifier,
+                chatId,
+                snippet: cachedBody,
+              });
+              let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+              try {
+                result = await sendBlueBubblesMedia({
+                  cfg: config,
+                  to: outboundTarget,
+                  mediaUrl,
+                  caption: caption ?? undefined,
+                  replyToId: replyToMessageGuid || null,
                   accountId: account.accountId,
-                  sessionKey: route.sessionKey,
-                  outboundTarget,
-                  chatGuid: chatGuidForActions ?? chatGuid,
-                  chatIdentifier,
-                  chatId,
-                  snippet: cachedBody,
                 });
-                let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
-                try {
-                  result = await sendBlueBubblesMedia({
-                    cfg: config,
-                    to: outboundTarget,
-                    mediaUrl,
-                    caption: caption ?? undefined,
-                    replyToId: replyToMessageGuid || null,
-                    accountId: account.accountId,
-                  });
-                } catch (err) {
-                  forgetPendingOutboundMessageId(pendingId);
-                  throw err;
-                }
-                if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
-                  forgetPendingOutboundMessageId(pendingId);
-                }
-                sentMessage = true;
-                statusSink?.({ lastOutboundAt: Date.now() });
-                if (info.kind === "block") {
-                  restartTypingSoon();
-                }
-              },
-            });
+              } catch (err) {
+                forgetPendingOutboundMessageId(pendingId);
+                throw err;
+              }
+              if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                forgetPendingOutboundMessageId(pendingId);
+              }
+              sentMessage = true;
+              statusSink?.({ lastOutboundAt: Date.now() });
+              if (info.kind === "block") {
+                restartTypingSoon();
+              }
+            }
             return;
           }
 
@@ -1341,14 +1312,11 @@ export async function processMessage(
           );
           const chunks =
             chunkMode === "newline"
-              ? resolveTextChunksWithFallback(
-                  text,
-                  core.channel.text.chunkTextWithMode(text, textLimit, chunkMode),
-                )
-              : resolveTextChunksWithFallback(
-                  text,
-                  core.channel.text.chunkMarkdownText(text, textLimit),
-                );
+              ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)
+              : core.channel.text.chunkMarkdownText(text, textLimit);
+          if (!chunks.length && text) {
+            chunks.push(text);
+          }
           if (!chunks.length) {
             return;
           }
@@ -1383,8 +1351,34 @@ export async function processMessage(
             }
           }
         },
-        onReplyStart: typingCallbacks?.onReplyStart,
-        onIdle: typingCallbacks?.onIdle,
+        onReplyStart: async () => {
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
+          streamingActive = true;
+          clearTypingRestartTimer();
+          try {
+            await sendBlueBubblesTyping(chatGuidForActions, true, {
+              cfg: config,
+              accountId: account.accountId,
+            });
+          } catch (err) {
+            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
+          }
+        },
+        onIdle: async () => {
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
+          // Intentionally no-op for block streaming. We stop typing in finally
+          // after the run completes to avoid flicker between paragraph blocks.
+        },
         onError: (err, info) => {
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
@@ -1448,7 +1442,7 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
-  const pairing = createChannelPairingController({
+  const pairing = createScopedPairingAccess({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,

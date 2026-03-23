@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
+import { describe, expect, it } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 
@@ -9,7 +9,6 @@ function createRequest(params: {
   method?: string;
   body?: string;
   contentType?: string;
-  autoEnd?: boolean;
 }): IncomingMessage {
   const req = new PassThrough();
   const incoming = req as unknown as IncomingMessage;
@@ -21,9 +20,7 @@ function createRequest(params: {
     if (params.body) {
       req.write(params.body);
     }
-    if (params.autoEnd !== false) {
-      req.end();
-    }
+    req.end();
   });
   return incoming;
 }
@@ -61,23 +58,6 @@ const accountFixture: ResolvedMattermostAccount = {
   config: {},
 };
 
-async function runSlashRequest(params: {
-  commandTokens: Set<string>;
-  body: string;
-  method?: string;
-}) {
-  const handler = createSlashCommandHttpHandler({
-    account: accountFixture,
-    cfg: {} as OpenClawConfig,
-    runtime: {} as RuntimeEnv,
-    commandTokens: params.commandTokens,
-  });
-  const req = createRequest({ method: params.method, body: params.body });
-  const response = createResponse();
-  await handler(req, response.res);
-  return response;
-}
-
 describe("slash-http", () => {
   it("rejects non-POST methods", async () => {
     const handler = createSlashCommandHttpHandler({
@@ -113,45 +93,38 @@ describe("slash-http", () => {
   });
 
   it("fails closed when no command tokens are registered", async () => {
-    const response = await runSlashRequest({
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
       commandTokens: new Set<string>(),
+    });
+    const req = createRequest({
       body: "token=tok1&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
     });
+    const response = createResponse();
+
+    await handler(req, response.res);
 
     expect(response.res.statusCode).toBe(401);
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
   });
 
   it("rejects unknown command tokens", async () => {
-    const response = await runSlashRequest({
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
       commandTokens: new Set(["known-token"]),
+    });
+    const req = createRequest({
       body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
     });
+    const response = createResponse();
+
+    await handler(req, response.res);
 
     expect(response.res.statusCode).toBe(401);
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
-  });
-
-  it("returns 408 when the request body stalls", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createSlashCommandHttpHandler({
-        account: accountFixture,
-        cfg: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-        commandTokens: new Set(["valid-token"]),
-      });
-      const req = createRequest({ autoEnd: false });
-      const response = createResponse();
-      const pending = handler(req, response.res);
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      await pending;
-
-      expect(response.res.statusCode).toBe(408);
-      expect(response.getBody()).toBe("Request body timeout");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

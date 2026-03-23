@@ -254,7 +254,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   };
 
   if (opts.json) {
-    defaultRuntime.writeJson(summary);
+    defaultRuntime.log(JSON.stringify(summary, null, 2));
     return;
   }
 

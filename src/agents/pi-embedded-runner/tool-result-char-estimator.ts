@@ -46,20 +46,6 @@ function getToolResultContent(msg: AgentMessage): unknown[] {
   return Array.isArray(content) ? content : [];
 }
 
-function estimateContentBlockChars(content: unknown[]): number {
-  let chars = 0;
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chars += block.text.length;
-    } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE;
-    } else {
-      chars += estimateUnknownChars(block);
-    }
-  }
-  return chars;
-}
-
 export function getToolResultText(msg: AgentMessage): string {
   const content = getToolResultContent(msg);
   const chunks: string[] = [];
@@ -81,10 +67,19 @@ function estimateMessageChars(msg: AgentMessage): number {
     if (typeof content === "string") {
       return content.length;
     }
+    let chars = 0;
     if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
+      for (const block of content) {
+        if (isTextBlock(block)) {
+          chars += block.text.length;
+        } else if (isImageBlock(block)) {
+          chars += IMAGE_CHAR_ESTIMATE;
+        } else {
+          chars += estimateUnknownChars(block);
+        }
+      }
     }
-    return 0;
+    return chars;
   }
 
   if (msg.role === "assistant") {
@@ -120,8 +115,17 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (isToolResultMessage(msg)) {
+    let chars = 0;
     const content = getToolResultContent(msg);
-    let chars = estimateContentBlockChars(content);
+    for (const block of content) {
+      if (isTextBlock(block)) {
+        chars += block.text.length;
+      } else if (isImageBlock(block)) {
+        chars += IMAGE_CHAR_ESTIMATE;
+      } else {
+        chars += estimateUnknownChars(block);
+      }
+    }
     const details = (msg as { details?: unknown }).details;
     chars += estimateUnknownChars(details);
     const weightedChars = Math.ceil(

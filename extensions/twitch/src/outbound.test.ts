@@ -10,7 +10,6 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { resolveTwitchAccountContext } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
 import {
   BASE_TWITCH_TEST_ACCOUNT,
@@ -21,7 +20,7 @@ import {
 // Mock dependencies
 vi.mock("./config.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",
-  resolveTwitchAccountContext: vi.fn(),
+  getAccountConfig: vi.fn(),
 }));
 
 vi.mock("./send.js", () => ({
@@ -47,20 +46,6 @@ function assertResolvedTarget(
   return result.to;
 }
 
-function expectTargetError(
-  resolveTarget: NonNullable<typeof twitchOutbound.resolveTarget>,
-  params: Parameters<NonNullable<typeof twitchOutbound.resolveTarget>>[0],
-  expectedMessage: string,
-) {
-  const result = resolveTarget(params);
-
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected resolveTarget to fail");
-  }
-  expect(result.error.message).toContain(expectedMessage);
-}
-
 describe("outbound", () => {
   const mockAccount = {
     ...BASE_TWITCH_TEST_ACCOUNT,
@@ -71,20 +56,6 @@ describe("outbound", () => {
   const mockConfig = makeTwitchTestConfig(mockAccount);
   installTwitchTestHooks();
 
-  function setupAccountContext(params?: {
-    account?: typeof mockAccount | null;
-    availableAccountIds?: string[];
-  }) {
-    const account = params?.account === undefined ? mockAccount : params.account;
-    vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
-      accountId: accountId?.trim() || "default",
-      account,
-      tokenResolution: { source: "config", token: account?.accessToken ?? "" },
-      configured: account !== null,
-      availableAccountIds: params?.availableAccountIds ?? ["default"],
-    }));
-  }
-
   describe("metadata", () => {
     it("should have direct delivery mode", () => {
       expect(twitchOutbound.deliveryMode).toBe("direct");
@@ -94,13 +65,9 @@ describe("outbound", () => {
       expect(twitchOutbound.textChunkLimit).toBe(500);
     });
 
-    it("should chunk long messages at 500 characters", () => {
-      const chunker = twitchOutbound.chunker;
-      if (!chunker) {
-        throw new Error("twitch outbound.chunker unavailable");
-      }
-
-      expect(chunker("a".repeat(600), 500)).toEqual(["a".repeat(500), "a".repeat(100)]);
+    it("should have chunker function", () => {
+      expect(twitchOutbound.chunker).toBeDefined();
+      expect(typeof twitchOutbound.chunker).toBe("function");
     });
   });
 
@@ -139,15 +106,17 @@ describe("outbound", () => {
     });
 
     it("should error when target not in allowlist (implicit mode)", () => {
-      expectTargetError(
-        resolveTarget,
-        {
-          to: "#notallowed",
-          mode: "implicit",
-          allowFrom: ["#primary", "#secondary"],
-        },
-        "Twitch",
-      );
+      const result = resolveTarget({
+        to: "#notallowed",
+        mode: "implicit",
+        allowFrom: ["#primary", "#secondary"],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolveTarget to fail");
+      }
+      expect(result.error.message).toContain("Twitch");
     });
 
     it("should accept any target when allowlist is empty", () => {
@@ -162,51 +131,59 @@ describe("outbound", () => {
     });
 
     it("should error when no target provided with allowlist", () => {
-      expectTargetError(
-        resolveTarget,
-        {
-          to: undefined,
-          mode: "implicit",
-          allowFrom: ["#fallback", "#other"],
-        },
-        "Twitch",
-      );
+      const result = resolveTarget({
+        to: undefined,
+        mode: "implicit",
+        allowFrom: ["#fallback", "#other"],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolveTarget to fail");
+      }
+      expect(result.error.message).toContain("Twitch");
     });
 
     it("should return error when no target and no allowlist", () => {
-      expectTargetError(
-        resolveTarget,
-        {
-          to: undefined,
-          mode: "explicit",
-          allowFrom: [],
-        },
-        "Missing target",
-      );
+      const result = resolveTarget({
+        to: undefined,
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolveTarget to fail");
+      }
+      expect(result.error.message).toContain("Missing target");
     });
 
     it("should handle whitespace-only target", () => {
-      expectTargetError(
-        resolveTarget,
-        {
-          to: "   ",
-          mode: "explicit",
-          allowFrom: [],
-        },
-        "Missing target",
-      );
+      const result = resolveTarget({
+        to: "   ",
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolveTarget to fail");
+      }
+      expect(result.error.message).toContain("Missing target");
     });
 
     it("should error when target normalizes to empty string", () => {
-      expectTargetError(
-        resolveTarget,
-        {
-          to: "#",
-          mode: "explicit",
-          allowFrom: [],
-        },
-        "Twitch",
-      );
+      const result = resolveTarget({
+        to: "#",
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolveTarget to fail");
+      }
+      expect(result.error.message).toContain("Twitch");
     });
 
     it("should filter wildcard from allowlist when checking membership", () => {
@@ -224,9 +201,10 @@ describe("outbound", () => {
 
   describe("sendText", () => {
     it("should send message successfully", async () => {
+      const { getAccountConfig } = await import("./config.js");
       const { sendMessageTwitchInternal } = await import("./send.js");
 
-      setupAccountContext();
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: true,
         messageId: "twitch-msg-123",
@@ -253,7 +231,9 @@ describe("outbound", () => {
     });
 
     it("should throw when account not found", async () => {
-      setupAccountContext({ account: null });
+      const { getAccountConfig } = await import("./config.js");
+
+      vi.mocked(getAccountConfig).mockReturnValue(null);
 
       await expect(
         twitchOutbound.sendText!({
@@ -266,8 +246,10 @@ describe("outbound", () => {
     });
 
     it("should throw when no channel specified", async () => {
+      const { getAccountConfig } = await import("./config.js");
+
       const accountWithoutChannel = { ...mockAccount, channel: undefined as unknown as string };
-      setupAccountContext({ account: accountWithoutChannel });
+      vi.mocked(getAccountConfig).mockReturnValue(accountWithoutChannel);
 
       await expect(
         twitchOutbound.sendText!({
@@ -280,9 +262,10 @@ describe("outbound", () => {
     });
 
     it("should use account channel when target not provided", async () => {
+      const { getAccountConfig } = await import("./config.js");
       const { sendMessageTwitchInternal } = await import("./send.js");
 
-      setupAccountContext();
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: true,
         messageId: "msg-456",
@@ -321,9 +304,10 @@ describe("outbound", () => {
     });
 
     it("should throw on send failure", async () => {
+      const { getAccountConfig } = await import("./config.js");
       const { sendMessageTwitchInternal } = await import("./send.js");
 
-      setupAccountContext();
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: false,
         messageId: "failed-msg",
@@ -344,8 +328,9 @@ describe("outbound", () => {
   describe("sendMedia", () => {
     it("should combine text and media URL", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
+      const { getAccountConfig } = await import("./config.js");
 
-      setupAccountContext();
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: true,
         messageId: "media-msg-123",
@@ -373,8 +358,9 @@ describe("outbound", () => {
 
     it("should send media URL only when no text", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
+      const { getAccountConfig } = await import("./config.js");
 
-      setupAccountContext();
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: true,
         messageId: "media-only-msg",

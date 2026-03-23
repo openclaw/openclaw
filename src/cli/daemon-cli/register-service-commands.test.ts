@@ -67,17 +67,6 @@ describe("addGatewayServiceCommands", () => {
         );
       },
     },
-    {
-      name: "forwards require-rpc for status",
-      argv: ["status", "--require-rpc"],
-      assert: () => {
-        expect(runDaemonStatus).toHaveBeenCalledWith(
-          expect.objectContaining({
-            requireRpc: true,
-          }),
-        );
-      },
-    },
   ])("$name", async ({ argv, assert }) => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });

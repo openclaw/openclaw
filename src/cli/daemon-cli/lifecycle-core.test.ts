@@ -1,12 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  defaultRuntime,
-  resetLifecycleRuntimeLogs,
-  resetLifecycleServiceMocks,
-  runtimeLogs,
-  service,
-  stubEmptyGatewayEnv,
-} from "./test-helpers/lifecycle-core-harness.js";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
@@ -15,6 +7,28 @@ const loadConfig = vi.fn(() => ({
     },
   },
 }));
+
+const runtimeLogs: string[] = [];
+const defaultRuntime = {
+  log: (message: string) => runtimeLogs.push(message),
+  error: vi.fn(),
+  exit: (code: number) => {
+    throw new Error(`__exit__:${code}`);
+  },
+};
+
+const service = {
+  label: "TestService",
+  loadedText: "loaded",
+  notLoadedText: "not loaded",
+  install: vi.fn(),
+  uninstall: vi.fn(),
+  stop: vi.fn(),
+  isLoaded: vi.fn(),
+  readCommand: vi.fn(),
+  readRuntime: vi.fn(),
+  restart: vi.fn(),
+};
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -29,28 +43,13 @@ let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
-function readJsonLog<T extends object>() {
-  const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-  return JSON.parse(jsonLine ?? "{}") as T;
-}
-
-function createServiceRunArgs(checkTokenDrift?: boolean) {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: () => [],
-    opts: { json: true as const },
-    ...(checkTokenDrift ? { checkTokenDrift } : {}),
-  };
-}
-
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
     ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
-    resetLifecycleRuntimeLogs();
+    runtimeLogs.length = 0;
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
       gateway: {
@@ -59,19 +58,33 @@ describe("runServiceRestart token drift", () => {
         },
       },
     });
-    resetLifecycleServiceMocks();
+    service.isLoaded.mockClear();
+    service.readCommand.mockClear();
+    service.restart.mockClear();
+    service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
-      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
-    stubEmptyGatewayEnv();
+    service.restart.mockResolvedValue({ outcome: "completed" });
+    vi.unstubAllEnvs();
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_URL", "");
   });
 
   it("emits drift warning when enabled", async () => {
-    await runServiceRestart(createServiceRunArgs(true));
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
 
     expect(loadConfig).toHaveBeenCalledTimes(1);
-    const payload = readJsonLog<{ warnings?: string[] }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("gateway install --force")]),
     );
@@ -86,14 +99,20 @@ describe("runServiceRestart token drift", () => {
       },
     });
     service.readCommand.mockResolvedValue({
-      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
     });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
 
-    await runServiceRestart(createServiceRunArgs(true));
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
 
-    const payload = readJsonLog<{ warnings?: string[] }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("gateway install --force")]),
     );
@@ -109,7 +128,8 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
-    const payload = readJsonLog<{ warnings?: string[] }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
   });
 
@@ -126,7 +146,8 @@ describe("runServiceRestart token drift", () => {
       }),
     });
 
-    const payload = readJsonLog<{ result?: string; message?: string }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("stopped");
     expect(payload.message).toContain("unmanaged process");
     expect(service.stop).not.toHaveBeenCalled();
@@ -151,7 +172,8 @@ describe("runServiceRestart token drift", () => {
     expect(postRestartCheck).toHaveBeenCalledTimes(1);
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
-    const payload = readJsonLog<{ result?: string; message?: string }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
   });
@@ -170,7 +192,8 @@ describe("runServiceRestart token drift", () => {
 
     expect(result).toBe(true);
     expect(postRestartCheck).not.toHaveBeenCalled();
-    const payload = readJsonLog<{ result?: string; message?: string }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
@@ -186,7 +209,8 @@ describe("runServiceRestart token drift", () => {
     });
 
     expect(service.isLoaded).toHaveBeenCalledTimes(1);
-    const payload = readJsonLog<{ result?: string; message?: string }>();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });

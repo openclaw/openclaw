@@ -23,22 +23,12 @@ vi.mock("./program/routes.js", () => ({
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    error: vi.fn(),
-    log: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  },
+  defaultRuntime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() },
 }));
 
 describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
-  // After vi.resetModules(), reimported modules get fresh loggingState.
-  // Capture the same reference that route.js uses.
-  let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
-  let originalForceStderr: boolean;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -46,19 +36,13 @@ describe("tryRouteCli", () => {
     delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     vi.resetModules();
     ({ tryRouteCli } = await import("./route.js"));
-    ({ loggingState } = await import("../logging/state.js"));
-    originalForceStderr = loggingState.forceConsoleToStderr;
-    loggingState.forceConsoleToStderr = false;
     findRoutedCommandMock.mockReturnValue({
-      loadPlugins: (argv: string[]) => !argv.includes("--json"),
+      loadPlugins: false,
       run: runRouteMock,
     });
   });
 
   afterEach(() => {
-    if (loggingState) {
-      loggingState.forceConsoleToStderr = originalForceStderr;
-    }
     if (originalDisableRouteFirst === undefined) {
       delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     } else {
@@ -75,7 +59,6 @@ describe("tryRouteCli", () => {
         suppressDoctorStdout: true,
       }),
     );
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
@@ -85,45 +68,6 @@ describe("tryRouteCli", () => {
       runtime: expect.any(Object),
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
-  });
-
-  it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
-    findRoutedCommandMock.mockReturnValue({
-      loadPlugins: true,
-      run: runRouteMock,
-    });
-
-    // Capture the value inside the mock callback using the same loggingState
-    // reference that route.js sees (both imported after vi.resetModules()).
-    const captured: boolean[] = [];
-    ensurePluginRegistryLoadedMock.mockImplementation(() => {
-      captured.push(loggingState.forceConsoleToStderr);
-    });
-
-    await tryRouteCli(["node", "openclaw", "agents", "--json"]);
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
-    expect(captured[0]).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
-
-  it("does not route logs to stderr during plugin loading without --json", async () => {
-    findRoutedCommandMock.mockReturnValue({
-      loadPlugins: true,
-      run: runRouteMock,
-    });
-
-    const captured: boolean[] = [];
-    ensurePluginRegistryLoadedMock.mockImplementation(() => {
-      captured.push(loggingState.forceConsoleToStderr);
-    });
-
-    await tryRouteCli(["node", "openclaw", "agents"]);
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
-    expect(captured[0]).toBe(false);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   it("routes status when root options precede the command", async () => {
@@ -136,6 +80,5 @@ describe("tryRouteCli", () => {
       runtime: expect.any(Object),
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
   });
 });

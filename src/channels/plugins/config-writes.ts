@@ -1,17 +1,18 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ChannelId } from "./types.js";
 
-type AccountConfigWithWrites = {
-  configWrites?: boolean;
-};
-
 type ChannelConfigWithAccounts = {
   configWrites?: boolean;
-  accounts?: Record<string, AccountConfigWithWrites>;
+  accounts?: Record<string, { configWrites?: boolean }>;
 };
+
+function resolveAccountConfig(accounts: ChannelConfigWithAccounts["accounts"], accountId: string) {
+  return resolveAccountEntry(accounts, accountId);
+}
 
 export type ConfigWriteScope = {
   channelId?: ChannelId | null;
@@ -37,11 +38,16 @@ export function resolveChannelConfigWrites(params: {
   channelId?: ChannelId | null;
   accountId?: string | null;
 }): boolean {
-  const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
+  if (!params.channelId) {
+    return true;
+  }
+  const channels = params.cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined;
+  const channelConfig = channels?.[params.channelId];
   if (!channelConfig) {
     return true;
   }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
+  const accountId = normalizeAccountId(params.accountId);
+  const accountConfig = resolveAccountConfig(channelConfig.accounts, accountId);
   const value = accountConfig?.configWrites ?? channelConfig.configWrites;
   return value !== false;
 }
@@ -174,21 +180,4 @@ function listConfigWriteTargetScopes(target?: ConfigWriteTarget): ConfigWriteSco
     return target.scopes;
   }
   return [target.scope];
-}
-
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId?: ChannelId | null,
-): ChannelConfigWithAccounts | undefined {
-  if (!channelId) {
-    return undefined;
-  }
-  return (cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined)?.[channelId];
-}
-
-function resolveChannelAccountConfig(
-  channelConfig: ChannelConfigWithAccounts,
-  accountId?: string | null,
-): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
 }

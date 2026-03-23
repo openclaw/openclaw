@@ -77,7 +77,6 @@ struct ExecHostRequestEvaluatorTests {
             env: [:],
             resolution: nil,
             allowlistResolutions: [],
-            allowAlwaysPatterns: [],
             allowlistMatches: [],
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,

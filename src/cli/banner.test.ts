@@ -1,9 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const readCliBannerTaglineModeMock = vi.fn();
+const loadConfigMock = vi.fn();
 
-vi.mock("./banner-config-lite.js", () => ({
-  readCliBannerTaglineMode: readCliBannerTaglineModeMock,
+vi.mock("../config/config.js", () => ({
+  loadConfig: loadConfigMock,
 }));
 
 let formatCliBannerLine: typeof import("./banner.js").formatCliBannerLine;
@@ -13,13 +13,15 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  readCliBannerTaglineModeMock.mockReset();
-  readCliBannerTaglineModeMock.mockReturnValue(undefined);
+  loadConfigMock.mockReset();
+  loadConfigMock.mockReturnValue({});
 });
 
 describe("formatCliBannerLine", () => {
   it("hides tagline text when cli.banner.taglineMode is off", () => {
-    readCliBannerTaglineModeMock.mockReturnValue("off");
+    loadConfigMock.mockReturnValue({
+      cli: { banner: { taglineMode: "off" } },
+    });
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
@@ -30,7 +32,9 @@ describe("formatCliBannerLine", () => {
   });
 
   it("uses default tagline when cli.banner.taglineMode is default", () => {
-    readCliBannerTaglineModeMock.mockReturnValue("default");
+    loadConfigMock.mockReturnValue({
+      cli: { banner: { taglineMode: "default" } },
+    });
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
@@ -41,7 +45,9 @@ describe("formatCliBannerLine", () => {
   });
 
   it("prefers explicit tagline mode over config", () => {
-    readCliBannerTaglineModeMock.mockReturnValue("off");
+    loadConfigMock.mockReturnValue({
+      cli: { banner: { taglineMode: "off" } },
+    });
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",

@@ -6,7 +6,7 @@ import {
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../shared/config-eval.js";
-import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
+import { resolveHookKey } from "./frontmatter.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
@@ -21,7 +21,20 @@ export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: 
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
-export { resolveHookConfig };
+export function resolveHookConfig(
+  config: OpenClawConfig | undefined,
+  hookKey: string,
+): HookConfig | undefined {
+  const hooks = config?.hooks?.internal?.entries;
+  if (!hooks || typeof hooks !== "object") {
+    return undefined;
+  }
+  const entry = (hooks as Record<string, HookConfig | undefined>)[hookKey];
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  return entry;
+}
 
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
@@ -53,11 +66,12 @@ export function shouldIncludeHook(params: {
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
-  const hookConfig = resolveHookConfig(
-    config,
-    params.entry.metadata?.hookKey ?? params.entry.hook.name,
-  );
-  if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
+  const hookKey = resolveHookKey(entry.hook.name, entry);
+  const hookConfig = resolveHookConfig(config, hookKey);
+  const pluginManaged = entry.hook.source === "openclaw-plugin";
+
+  // Check if explicitly disabled
+  if (!pluginManaged && hookConfig?.enabled === false) {
     return false;
   }
 

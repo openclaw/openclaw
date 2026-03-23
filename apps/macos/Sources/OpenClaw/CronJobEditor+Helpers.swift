@@ -16,14 +16,7 @@ extension CronJobEditor {
         self.agentId = job.agentId ?? ""
         self.enabled = job.enabled
         self.deleteAfterRun = job.deleteAfterRun ?? false
-        switch job.parsedSessionTarget {
-        case let .predefined(target):
-            self.sessionTarget = target
-            self.preservedSessionTargetRaw = nil
-        case let .session(id):
-            self.sessionTarget = .isolated
-            self.preservedSessionTargetRaw = "session:\(id)"
-        }
+        self.sessionTarget = job.sessionTarget
         self.wakeMode = job.wakeMode
 
         switch job.schedule {
@@ -58,7 +51,7 @@ extension CronJobEditor {
             self.channel = trimmed.isEmpty ? "last" : trimmed
             self.to = delivery.to ?? ""
             self.bestEffortDeliver = delivery.bestEffort ?? false
-        } else if self.isIsolatedLikeSessionTarget {
+        } else if self.sessionTarget == .isolated {
             self.deliveryMode = .announce
         }
     }
@@ -87,7 +80,7 @@ extension CronJobEditor {
             "name": name,
             "enabled": self.enabled,
             "schedule": schedule,
-            "sessionTarget": self.effectiveSessionTargetRaw,
+            "sessionTarget": self.sessionTarget.rawValue,
             "wakeMode": self.wakeMode.rawValue,
             "payload": payload,
         ]
@@ -99,7 +92,7 @@ extension CronJobEditor {
             root["agentId"] = NSNull()
         }
 
-        if self.isIsolatedLikeSessionTarget {
+        if self.sessionTarget == .isolated {
             root["delivery"] = self.buildDelivery()
         }
 
@@ -167,7 +160,7 @@ extension CronJobEditor {
     }
 
     func buildSelectedPayload() throws -> [String: Any] {
-        if self.isIsolatedLikeSessionTarget { return self.buildAgentTurnPayload() }
+        if self.sessionTarget == .isolated { return self.buildAgentTurnPayload() }
         switch self.payloadKind {
         case .systemEvent:
             let text = self.trimmed(self.systemEventText)
@@ -178,7 +171,7 @@ extension CronJobEditor {
     }
 
     func validateSessionTarget(_ payload: [String: Any]) throws {
-        if self.effectiveSessionTargetRaw == "main", payload["kind"] as? String == "agentTurn" {
+        if self.sessionTarget == .main, payload["kind"] as? String == "agentTurn" {
             throw NSError(
                 domain: "Cron",
                 code: 0,
@@ -188,7 +181,7 @@ extension CronJobEditor {
                 ])
         }
 
-        if self.effectiveSessionTargetRaw != "main", payload["kind"] as? String == "systemEvent" {
+        if self.sessionTarget == .isolated, payload["kind"] as? String == "systemEvent" {
             throw NSError(
                 domain: "Cron",
                 code: 0,
@@ -262,20 +255,6 @@ extension CronJobEditor {
         default: 86_400_000
         }
         return Int(floor(n * factor))
-    }
-
-    var effectiveSessionTargetRaw: String {
-        if self.sessionTarget == .isolated,
-           let preserved = self.preservedSessionTargetRaw?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !preserved.isEmpty
-        {
-            return preserved
-        }
-        return self.sessionTarget.rawValue
-    }
-
-    var isIsolatedLikeSessionTarget: Bool {
-        self.effectiveSessionTargetRaw != "main"
     }
 
     func formatDuration(ms: Int) -> String {

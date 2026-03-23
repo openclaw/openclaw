@@ -1,7 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import type { EnvelopeFormatOptions } from "../envelope.js";
-import { formatEnvelopeTimestamp } from "../envelope.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -12,14 +11,24 @@ function safeTrim(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function formatConversationTimestamp(
-  value: unknown,
-  envelope?: EnvelopeFormatOptions,
-): string | undefined {
+function formatConversationTimestamp(value: unknown): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  return formatEnvelopeTimestamp(value, envelope);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const formatted = formatZonedTimestamp(date);
+  if (!formatted) {
+    return undefined;
+  }
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    return weekday ? `${weekday} ${formatted}` : formatted;
+  } catch {
+    return formatted;
+  }
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
@@ -72,10 +81,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(
-  ctx: TemplateContext,
-  envelope?: EnvelopeFormatOptions,
-): string {
+export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -88,7 +94,7 @@ export function buildInboundUserContextPrefix(
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
-  const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
+  const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,

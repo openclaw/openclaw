@@ -184,18 +184,7 @@ describe("sessions_send label lookup", () => {
         timeoutMs: 5000,
       });
 
-      const tool = createOpenClawTools({
-        config: {
-          tools: {
-            sessions: {
-              visibility: "all",
-            },
-          },
-        },
-      }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
-        throw new Error("missing sessions_send tool");
-      }
+      const tool = getSessionsSendTool();
 
       // Send using label instead of sessionKey
       const result = await tool.execute("call-by-label", {

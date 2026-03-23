@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
@@ -57,7 +56,7 @@ describe("diffs tool", () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -136,9 +135,9 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expectArtifactOnlyFileResult(screenshotter, result);
-    expect((result?.details as Record<string, unknown>).artifactId).toEqual(expect.any(String));
-    expect((result?.details as Record<string, unknown>).expiresAt).toEqual(expect.any(String));
+    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+    expect((result?.details as Record<string, unknown>).mode).toBe("file");
+    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -228,7 +227,9 @@ describe("diffs tool", () => {
       after: "two\n",
     });
 
-    expectArtifactOnlyFileResult(screenshotter, result);
+    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+    expect((result?.details as Record<string, unknown>).mode).toBe("file");
+    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -318,12 +319,6 @@ describe("diffs tool", () => {
         fontFamily: "JetBrains Mono",
         fontSize: 17,
       },
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
     });
 
     const result = await tool.execute?.("tool-5", {
@@ -334,25 +329,19 @@ describe("diffs tool", () => {
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
     expect((result?.details as Record<string, unknown>).mode).toBe("view");
-    expect((result?.details as Record<string, unknown>).context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
 
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
-    expect(html).toContain("JetBrains Mono");
+    expect(html).toContain('--diffs-font-family: "JetBrains Mono"');
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -395,33 +384,10 @@ describe("diffs tool", () => {
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
   });
-
-  it("routes tool context into artifact details for file mode", async () => {
-    const screenshotter = createPngScreenshotter();
-    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
-      agentId: "reviewer",
-      sessionId: "session-456",
-      messageChannel: "telegram",
-      agentAccountId: "work",
-    });
-
-    const result = await tool.execute?.("tool-context-file", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-    });
-
-    expect((result?.details as Record<string, unknown>).context).toEqual({
-      agentId: "reviewer",
-      sessionId: "session-456",
-      messageChannel: "telegram",
-      agentAccountId: "work",
-    });
-  });
 });
 
 function createApi(): OpenClawPluginApi {
-  return createTestPluginApi({
+  return {
     id: "diffs",
     name: "Diffs",
     description: "Diffs",
@@ -433,36 +399,39 @@ function createApi(): OpenClawPluginApi {
       },
     },
     runtime: {} as OpenClawPluginApi["runtime"],
-  }) as OpenClawPluginApi;
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+    },
+    registerTool() {},
+    registerHook() {},
+    registerHttpRoute() {},
+    registerChannel() {},
+    registerGatewayMethod() {},
+    registerCli() {},
+    registerService() {},
+    registerProvider() {},
+    registerCommand() {},
+    registerContextEngine() {},
+    resolvePath(input: string) {
+      return input;
+    },
+    on() {},
+  };
 }
 
 function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
   defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
-  context: OpenClawPluginToolContext | undefined = {
-    agentId: "main",
-    sessionId: "session-123",
-    messageChannel: "discord",
-    agentAccountId: "default",
-  },
 ) {
   return createDiffsTool({
     api: createApi(),
     store,
     defaults,
     screenshotter,
-    context,
   });
-}
-
-function expectArtifactOnlyFileResult(
-  screenshotter: DiffScreenshotter,
-  result: { details?: unknown } | null | undefined,
-) {
-  expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-  expect((result?.details as Record<string, unknown>).mode).toBe("file");
-  expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(

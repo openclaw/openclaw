@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import { Static, Type } from "@sinclair/typebox";
-import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type { DiffArtifactContext, DiffRenderOptions, DiffToolDefaults } from "./types.js";
+import type { DiffRenderOptions, DiffToolDefaults } from "./types.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
@@ -64,10 +64,7 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     mode: Type.Optional(
-      stringEnum(
-        DIFF_MODES,
-        "Output mode: view, file, image (deprecated alias for file), or both. Default: both.",
-      ),
+      stringEnum(DIFF_MODES, "Output mode: view, file, image, or both. Default: both."),
     ),
     theme: Type.Optional(stringEnum(DIFF_THEMES, "Viewer theme. Default: dark.")),
     layout: Type.Optional(stringEnum(DIFF_LAYOUTS, "Diff layout. Default: unified.")),
@@ -138,7 +135,6 @@ export function createDiffsTool(params: {
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
   screenshotter?: DiffScreenshotter;
-  context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
   return {
     name: "diffs",
@@ -148,7 +144,6 @@ export function createDiffsTool(params: {
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
       const toolParams = rawParams as DiffsToolRawParams;
-      const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
@@ -186,7 +181,6 @@ export function createDiffsTool(params: {
           theme,
           image,
           ttlMs,
-          context: artifactContext,
         });
 
         return {
@@ -201,13 +195,10 @@ export function createDiffsTool(params: {
           ],
           details: buildArtifactDetails({
             baseDetails: {
-              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
-              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
               title: rendered.title,
               inputKind: rendered.inputKind,
               fileCount: rendered.fileCount,
               mode,
-              ...(artifactContext ? { context: artifactContext } : {}),
             },
             artifactFile,
             image,
@@ -221,7 +212,6 @@ export function createDiffsTool(params: {
         inputKind: rendered.inputKind,
         fileCount: rendered.fileCount,
         ttlMs,
-        context: artifactContext,
       });
 
       const viewerUrl = buildViewerUrl({
@@ -239,7 +229,6 @@ export function createDiffsTool(params: {
         inputKind: artifact.inputKind,
         fileCount: artifact.fileCount,
         mode,
-        ...(artifactContext ? { context: artifactContext } : {}),
       };
 
       if (mode === "view") {
@@ -362,18 +351,15 @@ async function renderDiffArtifactFile(params: {
   theme: DiffTheme;
   image: DiffRenderOptions["image"];
   ttlMs?: number;
-  context?: DiffArtifactContext;
-}): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
-  const standaloneArtifact = params.artifactId
-    ? undefined
-    : await params.store.createStandaloneFileArtifact({
-        format: params.image.format,
-        ttlMs: params.ttlMs,
-        context: params.context,
-      });
+}): Promise<{ path: string; bytes: number }> {
   const outputPath = params.artifactId
     ? params.store.allocateFilePath(params.artifactId, params.image.format)
-    : standaloneArtifact!.filePath;
+    : (
+        await params.store.createStandaloneFileArtifact({
+          format: params.image.format,
+          ttlMs: params.ttlMs,
+        })
+      ).filePath;
 
   await params.screenshotter.screenshotHtml({
     html: params.html,
@@ -386,33 +372,7 @@ async function renderDiffArtifactFile(params: {
   return {
     path: outputPath,
     bytes: stats.size,
-    ...(standaloneArtifact?.id ? { artifactId: standaloneArtifact.id } : {}),
-    ...(standaloneArtifact?.expiresAt ? { expiresAt: standaloneArtifact.expiresAt } : {}),
   };
-}
-
-function buildArtifactContext(
-  context: OpenClawPluginToolContext | undefined,
-): DiffArtifactContext | undefined {
-  if (!context) {
-    return undefined;
-  }
-
-  const artifactContext = {
-    agentId: normalizeContextString(context.agentId),
-    sessionId: normalizeContextString(context.sessionId),
-    messageChannel: normalizeContextString(context.messageChannel),
-    agentAccountId: normalizeContextString(context.agentAccountId),
-  };
-
-  return Object.values(artifactContext).some((value) => value !== undefined)
-    ? artifactContext
-    : undefined;
-}
-
-function normalizeContextString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {

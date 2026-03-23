@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DedupeEntry } from "../server-shared.js";
 import {
   __testing,
   readTerminalSnapshotFromGatewayDedupe,
@@ -8,25 +7,6 @@ import {
 } from "./agent-wait-dedupe.js";
 
 describe("agent wait dedupe helper", () => {
-  function setRunEntry(params: {
-    dedupe: Map<string, DedupeEntry>;
-    kind: "agent" | "chat";
-    runId: string;
-    ts?: number;
-    ok?: boolean;
-    payload: Record<string, unknown>;
-  }) {
-    setGatewayDedupeEntry({
-      dedupe: params.dedupe,
-      key: `${params.kind}:${params.runId}`,
-      entry: {
-        ts: params.ts ?? Date.now(),
-        ok: params.ok ?? true,
-        payload: params.payload,
-      },
-    });
-  }
-
   beforeEach(() => {
     __testing.resetWaiters();
     vi.useFakeTimers();
@@ -49,15 +29,18 @@ describe("agent wait dedupe helper", () => {
     await Promise.resolve();
     expect(__testing.getWaiterCount(runId)).toBe(1);
 
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      payload: {
-        runId,
-        status: "ok",
-        startedAt: 100,
-        endedAt: 200,
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+        },
       },
     });
 
@@ -73,22 +56,28 @@ describe("agent wait dedupe helper", () => {
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
     const dedupe = new Map();
     const runId = "run-stale-chat";
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      payload: {
-        runId,
-        status: "ok",
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+        },
       },
     });
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "agent",
-      runId,
-      payload: {
-        runId,
-        status: "accepted",
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "accepted",
+        },
       },
     });
 
@@ -111,26 +100,30 @@ describe("agent wait dedupe helper", () => {
   it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
     const dedupe = new Map();
     const runId = "run-nonterminal-agent-with-newer-chat";
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "agent",
-      runId,
-      ts: 100,
-      payload: {
-        runId,
-        status: "accepted",
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: {
+          runId,
+          status: "accepted",
+        },
       },
     });
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      ts: 200,
-      payload: {
-        runId,
-        status: "ok",
-        startedAt: 1,
-        endedAt: 2,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 1,
+          endedAt: 2,
+        },
       },
     });
 
@@ -150,13 +143,16 @@ describe("agent wait dedupe helper", () => {
   it("ignores stale agent snapshots when waiting for an active chat run", async () => {
     const dedupe = new Map();
     const runId = "run-chat-active-ignore-agent";
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "agent",
-      runId,
-      payload: {
-        runId,
-        status: "ok",
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+        },
       },
     });
 
@@ -177,15 +173,18 @@ describe("agent wait dedupe helper", () => {
     await Promise.resolve();
     expect(__testing.getWaiterCount(runId)).toBe(1);
 
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      payload: {
-        runId,
-        status: "ok",
-        startedAt: 123,
-        endedAt: 456,
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 123,
+          endedAt: 456,
+        },
       },
     });
 
@@ -201,20 +200,23 @@ describe("agent wait dedupe helper", () => {
     const runId = "run-collision";
     const dedupe = new Map();
 
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "agent",
-      runId,
-      ts: 100,
-      payload: { runId, status: "ok", startedAt: 10, endedAt: 20 },
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: { runId, status: "ok", startedAt: 10, endedAt: 20 },
+      },
     });
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      ts: 200,
-      ok: false,
-      payload: { runId, status: "error", startedAt: 30, endedAt: 40, error: "chat failed" },
+      key: `chat:${runId}`,
+      entry: {
+        ts: 200,
+        ok: false,
+        payload: { runId, status: "error", startedAt: 30, endedAt: 40, error: "chat failed" },
+      },
     });
 
     expect(
@@ -230,19 +232,23 @@ describe("agent wait dedupe helper", () => {
     });
 
     const dedupeReverse = new Map();
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe: dedupeReverse,
-      kind: "chat",
-      runId,
-      ts: 100,
-      payload: { runId, status: "ok", startedAt: 1, endedAt: 2 },
+      key: `chat:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: { runId, status: "ok", startedAt: 1, endedAt: 2 },
+      },
     });
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe: dedupeReverse,
-      kind: "agent",
-      runId,
-      ts: 200,
-      payload: { runId, status: "timeout", startedAt: 3, endedAt: 4, error: "still running" },
+      key: `agent:${runId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: { runId, status: "timeout", startedAt: 3, endedAt: 4, error: "still running" },
+      },
     });
 
     expect(
@@ -275,11 +281,14 @@ describe("agent wait dedupe helper", () => {
     await Promise.resolve();
     expect(__testing.getWaiterCount(runId)).toBe(2);
 
-    setRunEntry({
+    setGatewayDedupeEntry({
       dedupe,
-      kind: "chat",
-      runId,
-      payload: { runId, status: "ok" },
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok" },
+      },
     });
 
     await expect(first).resolves.toEqual(

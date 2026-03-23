@@ -8,10 +8,3 @@ export const ChannelHeartbeatVisibilitySchema = z
   })
   .strict()
   .optional();
-
-export const ChannelHealthMonitorSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-  })
-  .strict()
-  .optional();

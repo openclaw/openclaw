@@ -50,11 +50,7 @@ export function createGatewayReloadHandlers(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
-  createHealthMonitor: (opts: {
-    checkIntervalMs: number;
-    staleEventThresholdMs?: number;
-    maxRestartsPerHour?: number;
-  }) => ChannelHealthMonitor;
+  createHealthMonitor: (checkIntervalMs: number) => ChannelHealthMonitor;
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
@@ -105,17 +101,8 @@ export function createGatewayReloadHandlers(params: {
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
       const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
-      const staleMinutes = nextConfig.gateway?.channelStaleEventThresholdMinutes;
       nextState.channelHealthMonitor =
-        minutes === 0
-          ? null
-          : params.createHealthMonitor({
-              checkIntervalMs: (minutes ?? 5) * 60_000,
-              ...(staleMinutes != null && { staleEventThresholdMs: staleMinutes * 60_000 }),
-              ...(nextConfig.gateway?.channelMaxRestartsPerHour != null && {
-                maxRestartsPerHour: nextConfig.gateway.channelMaxRestartsPerHour,
-              }),
-            });
+        minutes === 0 ? null : params.createHealthMonitor((minutes ?? 5) * 60_000);
     }
 
     if (plan.restartGmailWatcher) {
@@ -219,7 +206,6 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
         hooks: {
           onReady: () => {
             restartPending = false;

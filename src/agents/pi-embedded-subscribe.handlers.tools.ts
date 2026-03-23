@@ -13,9 +13,9 @@ import type {
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
-  extractToolResultMediaArtifact,
   extractMessagingToolSend,
   extractToolErrorMessage,
+  extractToolResultMediaPaths,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -143,23 +143,6 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function queuePendingToolMedia(
-  ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean },
-) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls);
-  for (const mediaUrl of mediaReply.mediaUrls) {
-    if (seen.has(mediaUrl)) {
-      continue;
-    }
-    seen.add(mediaUrl);
-    ctx.state.pendingToolMediaUrls.push(mediaUrl);
-  }
-  if (mediaReply.audioAsVoice) {
-    ctx.state.pendingToolAudioAsVoice = true;
-  }
-}
-
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -243,20 +226,12 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
-  const hasStructuredMedia =
-    result &&
-    typeof result === "object" &&
-    (result as { details?: unknown }).details &&
-    typeof (result as { details?: unknown }).details === "object" &&
-    !Array.isArray((result as { details?: unknown }).details) &&
-    typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
-      "object" &&
-    !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
+  if (!ctx.params.onToolResult) {
+    return;
+  }
+
   const approvalPending = readExecApprovalPendingDetails(result);
   if (!isToolError && approvalPending) {
-    if (!ctx.params.onToolResult) {
-      return;
-    }
     try {
       await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
@@ -279,9 +254,6 @@ async function emitToolResultOutput(params: {
 
   const approvalUnavailable = readExecApprovalUnavailableDetails(result);
   if (!isToolError && approvalUnavailable) {
-    if (!ctx.params.onToolResult) {
-      return;
-    }
     try {
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
@@ -301,29 +273,26 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText, result);
+      ctx.emitToolOutput(toolName, meta, outputText);
     }
-    if (!hasStructuredMedia) {
-      return;
-    }
+    return;
   }
 
   if (isToolError) {
     return;
   }
 
-  const mediaReply = extractToolResultMediaArtifact(result);
-  if (!mediaReply) {
+  // emitToolOutput() already handles MEDIA: directives when enabled; this path
+  // only sends raw media URLs for non-verbose delivery mode.
+  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  if (mediaPaths.length === 0) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
-  if (mediaUrls.length === 0) {
-    return;
+  try {
+    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+  } catch {
+    // ignore delivery failures
   }
-  queuePendingToolMedia(ctx, {
-    mediaUrls,
-    ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
-  });
 }
 
 export async function handleToolExecutionStart(

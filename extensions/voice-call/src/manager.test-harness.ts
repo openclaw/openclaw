@@ -20,7 +20,6 @@ import type {
 
 export class FakeProvider implements VoiceCallProvider {
   readonly name: "plivo" | "twilio";
-  twilioStreamConnectEnabled = true;
   readonly playTtsCalls: PlayTtsInput[] = [];
   readonly hangupCalls: HangupCallInput[] = [];
   readonly startListeningCalls: StartListeningInput[] = [];
@@ -61,10 +60,6 @@ export class FakeProvider implements VoiceCallProvider {
 
   async getCallStatus(_input: GetCallStatusInput): Promise<GetCallStatusResult> {
     return this.getCallStatusResult;
-  }
-
-  isConversationStreamConnectEnabled(): boolean {
-    return this.name === "twilio" && this.twilioStreamConnectEnabled;
   }
 }
 

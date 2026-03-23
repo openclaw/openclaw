@@ -9,18 +9,14 @@
 
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import {
-  formatBtwTextForExternalDelivery,
-  shouldSuppressReasoningPayload,
-} from "./reply-payloads.js";
+import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 
 let deliverRuntimePromise: Promise<
   typeof import("../../infra/outbound/deliver-runtime.js")
@@ -79,8 +75,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: true };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
-  const channelId = normalizeChannelId(channel) ?? null;
-  const plugin = channelId ? getChannelPlugin(channelId) : undefined;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -100,43 +94,21 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
-    enableSlackInteractiveReplies: plugin?.messaging?.enableInteractiveReplies?.({
-      cfg,
-      accountId,
-    }),
   });
   if (!normalized) {
     return { ok: true };
   }
-  const externalPayload: ReplyPayload = {
-    ...normalized,
-    text: formatBtwTextForExternalDelivery(normalized),
-  };
 
-  let text = externalPayload.text ?? "";
-  let mediaUrls = (externalPayload.mediaUrls?.filter(Boolean) ?? []).length
-    ? (externalPayload.mediaUrls?.filter(Boolean) as string[])
-    : externalPayload.mediaUrl
-      ? [externalPayload.mediaUrl]
+  let text = normalized.text ?? "";
+  let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
+    ? (normalized.mediaUrls?.filter(Boolean) as string[])
+    : normalized.mediaUrl
+      ? [normalized.mediaUrl]
       : [];
-  const replyToId = externalPayload.replyToId;
-  const hasChannelData = plugin?.messaging?.hasStructuredReplyPayload?.({
-    payload: externalPayload,
-  });
+  const replyToId = normalized.replyToId;
 
   // Skip empty replies.
-  if (
-    !hasReplyPayloadContent(
-      {
-        ...externalPayload,
-        text,
-        mediaUrls,
-      },
-      {
-        hasChannelData,
-      },
-    )
-  ) {
+  if (!text.trim() && mediaUrls.length === 0) {
     return { ok: true };
   }
 
@@ -147,6 +119,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     };
   }
 
+  const channelId = normalizeChannelId(channel) ?? null;
   if (!channelId) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
@@ -154,21 +127,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
-  const replyTransport =
-    plugin?.threading?.resolveReplyTransport?.({
-      cfg,
-      accountId,
-      threadId,
-      replyToId,
-    }) ?? null;
   const resolvedReplyToId =
-    replyTransport?.replyToId ??
     replyToId ??
-    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
-      ? String(threadId)
-      : undefined);
-  const resolvedThreadId =
-    replyTransport?.threadId ?? (channelId === "slack" ? null : (threadId ?? null));
+    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+  const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
@@ -184,7 +146,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
-      payloads: [externalPayload],
+      payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,

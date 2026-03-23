@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
-  parseReleaseTagVersion,
   parseReleaseVersion,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
@@ -38,22 +37,6 @@ describe("parseReleaseVersion", () => {
   });
 });
 
-describe("parseReleaseTagVersion", () => {
-  it("accepts fallback correction tags for stable releases", () => {
-    expect(parseReleaseTagVersion("2026.3.10-2")).toMatchObject({
-      version: "2026.3.10-2",
-      packageVersion: "2026.3.10",
-      channel: "stable",
-      correctionNumber: 2,
-    });
-  });
-
-  it("rejects beta correction tags and malformed correction tags", () => {
-    expect(parseReleaseTagVersion("2026.3.10-beta.1-1")).toBeNull();
-    expect(parseReleaseTagVersion("2026.3.10-0")).toBeNull();
-  });
-});
-
 describe("utcCalendarDayDistance", () => {
   it("compares UTC calendar days rather than wall-clock hours", () => {
     const left = new Date("2026-03-09T23:59:59Z");
@@ -83,24 +66,14 @@ describe("collectReleaseTagErrors", () => {
     ).toContainEqual(expect.stringContaining("must be within 2 days"));
   });
 
-  it("accepts fallback correction tags for stable package versions", () => {
+  it("rejects tags that do not match the current release format", () => {
     expect(
       collectReleaseTagErrors({
         packageVersion: "2026.3.10",
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
-  });
-
-  it("rejects beta package versions paired with fallback correction tags", () => {
-    expect(
-      collectReleaseTagErrors({
-        packageVersion: "2026.3.10-beta.1",
-        releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
-      }),
-    ).toContainEqual(expect.stringContaining("does not match package.json version"));
+    ).toContainEqual(expect.stringContaining("must match vYYYY.M.D or vYYYY.M.D-beta.N"));
   });
 });
 

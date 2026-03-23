@@ -4,60 +4,13 @@ import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
-  type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
-
-  function useFakeHeartbeatTime() {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(0));
-  }
-
-  function startDefaultRunner(runOnce: RunOnce) {
+  function startDefaultRunner(runOnce: Parameters<typeof startHeartbeatRunner>[0]["runOnce"]) {
     return startHeartbeatRunner({
-      cfg: heartbeatConfig(),
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
       runOnce,
     });
-  }
-
-  function heartbeatConfig(
-    list?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
-  ): OpenClawConfig {
-    return {
-      agents: {
-        defaults: { heartbeat: { every: "30m" } },
-        ...(list ? { list } : {}),
-      },
-    } as OpenClawConfig;
-  }
-
-  function createRequestsInFlightRunSpy(skipCount: number) {
-    let callCount = 0;
-    return vi.fn().mockImplementation(async () => {
-      callCount++;
-      if (callCount <= skipCount) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
-      }
-      return { status: "ran", durationMs: 1 } as const;
-    });
-  }
-
-  async function expectWakeDispatch(params: {
-    cfg: OpenClawConfig;
-    runSpy: RunOnce;
-    wake: { reason: string; agentId?: string; sessionKey?: string; coalesceMs: number };
-    expectedCall: Record<string, unknown>;
-  }) {
-    const runner = startHeartbeatRunner({
-      cfg: params.cfg,
-      runOnce: params.runSpy,
-    });
-
-    requestHeartbeatNow(params.wake);
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(params.runSpy).toHaveBeenCalledTimes(1);
-    expect(params.runSpy).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
-
-    return runner;
   }
 
   afterEach(() => {
@@ -67,7 +20,8 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("updates scheduling when config changes without restart", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
@@ -108,7 +62,8 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("continues scheduling after runOnce throws an unhandled error", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
     let callCount = 0;
     const runSpy = vi.fn().mockImplementation(async () => {
@@ -134,7 +89,8 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("cleanup is idempotent and does not clear a newer runner's handler", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
     const runSpy1 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runSpy2 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -164,7 +120,8 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("run() returns skipped when runner is stopped", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
@@ -178,12 +135,22 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
-    const runSpy = createRequestsInFlightRunSpy(1);
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
 
     const runner = startHeartbeatRunner({
-      cfg: heartbeatConfig(),
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
       runOnce: runSpy,
     });
 
@@ -200,14 +167,24 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
 
     // Simulate a long-running heartbeat: the first 5 calls return
     // requests-in-flight (retries from the wake layer), then the 6th succeeds.
-    const runSpy = createRequestsInFlightRunSpy(5);
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 5) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
 
     const runner = startHeartbeatRunner({
-      cfg: heartbeatConfig(),
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
       runOnce: runSpy,
     });
 
@@ -231,54 +208,76 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("routes targeted wake requests to the requested agent/session", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const runner = await expectWakeDispatch({
+    const runner = startHeartbeatRunner({
       cfg: {
-        ...heartbeatConfig([
-          { id: "main", heartbeat: { every: "30m" } },
-          { id: "ops", heartbeat: { every: "15m" } },
-        ]),
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "ops", heartbeat: { every: "15m" } },
+          ],
+        },
       } as OpenClawConfig,
-      runSpy,
-      wake: {
-        reason: "cron:job-123",
-        agentId: "ops",
-        sessionKey: "agent:ops:discord:channel:alerts",
-        coalesceMs: 0,
-      },
-      expectedCall: {
-        agentId: "ops",
-        reason: "cron:job-123",
-        sessionKey: "agent:ops:discord:channel:alerts",
-      },
+      runOnce: runSpy,
     });
+
+    requestHeartbeatNow({
+      reason: "cron:job-123",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+      }),
+    );
 
     runner.stop();
   });
 
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
-    useFakeHeartbeatTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const runner = await expectWakeDispatch({
+    const runner = startHeartbeatRunner({
       cfg: {
-        ...heartbeatConfig([
-          { id: "main", heartbeat: { every: "30m" } },
-          { id: "finance", heartbeat: { every: "30m" } },
-        ]),
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "finance", heartbeat: { every: "30m" } },
+          ],
+        },
       } as OpenClawConfig,
-      runSpy,
-      wake: {
-        reason: "exec-event",
-        sessionKey: "agent:main:main",
-        coalesceMs: 0,
-      },
-      expectedCall: {
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
         agentId: "main",
         reason: "exec-event",
         sessionKey: "agent:main:main",
-      },
-    });
+      }),
+    );
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
 
     runner.stop();

@@ -1,9 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createSendCfgThreadingRuntime,
-  expectProvidedCfgSkipsRuntimeLoad,
-  expectRuntimeCfgFallback,
-} from "../../../test/helpers/extensions/send-config.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -22,7 +17,20 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("./runtime.js", () => ({
-  getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
+  getNextcloudTalkRuntime: () => ({
+    config: {
+      loadConfig: hoisted.loadConfig,
+    },
+    channel: {
+      text: {
+        resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+        convertMarkdownTables: hoisted.convertMarkdownTables,
+      },
+      activity: {
+        record: hoisted.record,
+      },
+    },
+  }),
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -64,9 +72,8 @@ describe("nextcloud-talk send cfg threading", () => {
       accountId: "work",
     });
 
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
+    expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(hoisted.resolveNextcloudTalkAccount).toHaveBeenCalledWith({
       cfg,
       accountId: "work",
     });
@@ -88,9 +95,8 @@ describe("nextcloud-talk send cfg threading", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expectRuntimeCfgFallback({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
+    expect(hoisted.loadConfig).toHaveBeenCalledTimes(1);
+    expect(hoisted.resolveNextcloudTalkAccount).toHaveBeenCalledWith({
       cfg: runtimeCfg,
       accountId: "default",
     });

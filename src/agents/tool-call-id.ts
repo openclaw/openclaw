@@ -144,55 +144,9 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
-function createOccurrenceAwareResolver(mode: ToolCallIdMode): {
-  resolveAssistantId: (id: string) => string;
-  resolveToolResultId: (id: string) => string;
-} {
-  const used = new Set<string>();
-  const assistantOccurrences = new Map<string, number>();
-  const orphanToolResultOccurrences = new Map<string, number>();
-  const pendingByRawId = new Map<string, string[]>();
-
-  const allocate = (seed: string): string => {
-    const next = makeUniqueToolId({ id: seed, used, mode });
-    used.add(next);
-    return next;
-  };
-
-  const resolveAssistantId = (id: string): string => {
-    const occurrence = (assistantOccurrences.get(id) ?? 0) + 1;
-    assistantOccurrences.set(id, occurrence);
-    const next = allocate(occurrence === 1 ? id : `${id}:${occurrence}`);
-    const pending = pendingByRawId.get(id);
-    if (pending) {
-      pending.push(next);
-    } else {
-      pendingByRawId.set(id, [next]);
-    }
-    return next;
-  };
-
-  const resolveToolResultId = (id: string): string => {
-    const pending = pendingByRawId.get(id);
-    if (pending && pending.length > 0) {
-      const next = pending.shift()!;
-      if (pending.length === 0) {
-        pendingByRawId.delete(id);
-      }
-      return next;
-    }
-
-    const occurrence = (orphanToolResultOccurrences.get(id) ?? 0) + 1;
-    orphanToolResultOccurrences.set(id, occurrence);
-    return allocate(`${id}:tool_result:${occurrence}`);
-  };
-
-  return { resolveAssistantId, resolveToolResultId };
-}
-
 function rewriteAssistantToolCallIds(params: {
   message: Extract<AgentMessage, { role: "assistant" }>;
-  resolveId: (id: string) => string;
+  resolve: (id: string) => string;
 }): Extract<AgentMessage, { role: "assistant" }> {
   const content = params.message.content;
   if (!Array.isArray(content)) {
@@ -214,7 +168,7 @@ function rewriteAssistantToolCallIds(params: {
     ) {
       return block;
     }
-    const nextId = params.resolveId(id);
+    const nextId = params.resolve(id);
     if (nextId === id) {
       return block;
     }
@@ -230,7 +184,7 @@ function rewriteAssistantToolCallIds(params: {
 
 function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
-  resolveId: (id: string) => string;
+  resolve: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
   const toolCallId =
     typeof params.message.toolCallId === "string" && params.message.toolCallId
@@ -238,14 +192,9 @@ function rewriteToolResultIds(params: {
       : undefined;
   const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
   const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
-  const sharedRawId =
-    toolCallId && toolUseIdStr && toolCallId === toolUseIdStr ? toolCallId : undefined;
 
-  const sharedResolvedId = sharedRawId ? params.resolveId(sharedRawId) : undefined;
-  const nextToolCallId =
-    sharedResolvedId ?? (toolCallId ? params.resolveId(toolCallId) : undefined);
-  const nextToolUseId =
-    sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
+  const nextToolCallId = toolCallId ? params.resolve(toolCallId) : undefined;
+  const nextToolUseId = toolUseIdStr ? params.resolve(toolUseIdStr) : undefined;
 
   if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
     return params.message;
@@ -270,11 +219,21 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 ): AgentMessage[] {
   // Strict mode: only [a-zA-Z0-9]
   // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
-  // Sanitization can introduce collisions, and some providers also reject raw
-  // duplicate tool-call IDs. Track assistant occurrences in-order so repeated
-  // raw IDs receive distinct rewritten IDs, while matching tool results consume
-  // the same rewritten IDs in encounter order.
-  const { resolveAssistantId, resolveToolResultId } = createOccurrenceAwareResolver(mode);
+  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
+  // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
+  const map = new Map<string, string>();
+  const used = new Set<string>();
+
+  const resolve = (id: string) => {
+    const existing = map.get(id);
+    if (existing) {
+      return existing;
+    }
+    const next = makeUniqueToolId({ id, used, mode });
+    map.set(id, next);
+    used.add(next);
+    return next;
+  };
 
   let changed = false;
   const out = messages.map((msg) => {
@@ -285,7 +244,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "assistant") {
       const next = rewriteAssistantToolCallIds({
         message: msg as Extract<AgentMessage, { role: "assistant" }>,
-        resolveId: resolveAssistantId,
+        resolve,
       });
       if (next !== msg) {
         changed = true;
@@ -295,7 +254,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "toolResult") {
       const next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
-        resolveId: resolveToolResultId,
+        resolve,
       });
       if (next !== msg) {
         changed = true;

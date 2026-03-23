@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,7 +11,6 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logDebugMock: vi.fn(),
   logInfoMock: vi.fn(),
 }));
-const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
@@ -40,7 +38,7 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
         child.emit("close", 0);
       });
     } else {
-      scheduleNativeTimeout(() => {
+      setTimeout(() => {
         child.emit("close", 0);
       }, delayMs);
     }
@@ -106,26 +104,16 @@ describe("QmdMemoryManager", () => {
   let stateDir: string;
   let cfg: OpenClawConfig;
   const agentId = "main";
-  const openManagers = new Set<QmdMemoryManager>();
-
-  function trackManager<T extends QmdMemoryManager | null>(manager: T): T {
-    if (manager) {
-      openManagers.add(manager);
-    }
-    return manager;
-  }
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
     const cfgToUse = params?.cfg ?? cfg;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
-    const manager = trackManager(
-      await QmdMemoryManager.create({
-        cfg: cfgToUse,
-        agentId,
-        resolved,
-        mode: params?.mode ?? "status",
-      }),
-    );
+    const manager = await QmdMemoryManager.create({
+      cfg: cfgToUse,
+      agentId,
+      resolved,
+      mode: params?.mode ?? "status",
+    });
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");
@@ -173,14 +161,7 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
   });
 
-  afterEach(async () => {
-    await Promise.all(
-      Array.from(openManagers, async (manager) => {
-        await manager.close();
-      }),
-    );
-    openManagers.clear();
-    await fs.rm(tmpRoot, { recursive: true, force: true });
+  afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     if (originalPath === undefined) {
@@ -198,7 +179,8 @@ describe("QmdMemoryManager", () => {
     } else {
       (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
     }
-    delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
+    delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
+    delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -383,14 +365,12 @@ describe("QmdMemoryManager", () => {
     });
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: devAgentId });
-    const manager = trackManager(
-      await QmdMemoryManager.create({
-        cfg,
-        agentId: devAgentId,
-        resolved,
-        mode: "full",
-      }),
-    );
+    const manager = await QmdMemoryManager.create({
+      cfg,
+      agentId: devAgentId,
+      resolved,
+      mode: "full",
+    });
     expect(manager).toBeTruthy();
     await manager?.close();
 
@@ -775,7 +755,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = trackManager(await createPromise);
+    const manager = await createPromise;
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");
@@ -2005,7 +1985,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = trackManager(await createPromise);
+    const manager = await createPromise;
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");

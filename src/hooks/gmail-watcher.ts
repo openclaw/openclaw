@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
@@ -20,6 +19,12 @@ import {
 } from "./gmail.js";
 
 const log = createSubsystemLogger("gmail-watcher");
+
+const ADDRESS_IN_USE_RE = /address already in use|EADDRINUSE/i;
+
+export function isAddressInUseError(line: string): boolean {
+  return ADDRESS_IN_USE_RE.test(line);
+}
 
 let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;

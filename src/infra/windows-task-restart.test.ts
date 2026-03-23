@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -14,9 +14,7 @@ vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => resolvePreferredOpenClawTmpDirMock(),
 }));
 
-type WindowsTaskRestartModule = typeof import("./windows-task-restart.js");
-
-let relaunchGatewayScheduledTask: WindowsTaskRestartModule["relaunchGatewayScheduledTask"];
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 const envSnapshot = captureFullEnv();
 const createdScriptPaths = new Set<string>();
@@ -53,11 +51,6 @@ afterEach(() => {
 });
 
 describe("relaunchGatewayScheduledTask", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ relaunchGatewayScheduledTask } = await import("./windows-task-restart.js"));
-  });
-
   it("writes a detached schtasks relaunch helper", () => {
     const unref = vi.fn();
     let seenCommandArg = "";

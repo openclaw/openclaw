@@ -14,7 +14,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -25,7 +25,6 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
-import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -45,13 +44,12 @@ export async function statusAllCommand(
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
     const loadedRaw = await readBestEffortConfig();
-    const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
-      await resolveCommandSecretRefsViaGateway({
-        config: loadedRaw,
-        commandName: "status --all",
-        targetIds: getStatusCommandSecretTargetIds(),
-        mode: "read_only_status",
-      });
+    const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+      config: loadedRaw,
+      commandName: "status --all",
+      targetIds: getStatusCommandSecretTargetIds(),
+      mode: "summary",
+    });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
     progress.tick();
@@ -124,11 +122,10 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const probeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg,
-      mode: isRemoteMode && !remoteUrlMissing ? "remote" : "local",
-      env: process.env,
-    });
+    const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
+    const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
+    const probeAuthResolution =
+      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
     const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
@@ -189,8 +186,8 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: probeAuthResolution.auth.token,
-          password: probeAuthResolution.auth.password,
+          token: localProbeAuthResolution.auth.token,
+          password: localProbeAuthResolution.auth.password,
         }
       : {};
 
@@ -240,7 +237,6 @@ export async function statusAllCommand(
             }
           })()
         : null;
-    const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
 
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     const dashboard = controlUiEnabled
@@ -332,13 +328,6 @@ export async function statusAllCommand(
         Item: "Agents",
         Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,
       },
-      {
-        Item: "Secrets",
-        Value:
-          secretDiagnostics.length > 0
-            ? `${secretDiagnostics.length} diagnostic${secretDiagnostics.length === 1 ? "" : "s"}`
-            : "none",
-      },
     ];
 
     const lines = await buildStatusAllReportLines({
@@ -354,7 +343,6 @@ export async function statusAllCommand(
       diagnosis: {
         snap,
         remoteUrlMissing,
-        secretDiagnostics,
         sentinel,
         lastErr,
         port,
@@ -363,7 +351,6 @@ export async function statusAllCommand(
         tailscale,
         tailscaleHttpsUrl,
         skillStatus,
-        pluginCompatibility,
         channelsStatus,
         channelIssues,
         gatewayReachable,

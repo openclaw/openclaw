@@ -1,18 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
-import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  ensureAuthProfileStore,
+  isProfileInCooldown,
+  resolveAuthProfileOrder,
+} from "../auth-profiles.js";
 import { normalizeProviderId } from "../model-selection.js";
-
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
-
-function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
 
 function isProfileForProvider(params: {
   provider: string;
@@ -39,9 +32,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionEntry.updatedAt = Date.now();
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    await (
-      await loadSessionStoreRuntime()
-    ).updateSessionStore(storePath, (store) => {
+    await updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
     });
   }
@@ -150,9 +141,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await (
-        await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (store) => {
+      await updateSessionStore(storePath, (store) => {
         store[sessionKey] = sessionEntry;
       });
     }

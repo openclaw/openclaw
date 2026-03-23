@@ -32,7 +32,7 @@ export function formatDurationPrecise(
     return "unknown";
   }
   if (ms < 1000) {
-    return `${Math.max(0, Math.round(ms))}ms`;
+    return `${ms}ms`;
   }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,

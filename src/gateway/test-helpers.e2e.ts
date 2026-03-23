@@ -2,8 +2,6 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
   type DeviceIdentity,
   loadOrCreateDeviceIdentity,
@@ -104,10 +102,6 @@ export async function connectGatewayClient(params: {
     timer.unref();
     client.start();
   });
-}
-
-export async function disconnectGatewayClient(client: GatewayClient): Promise<void> {
-  await client.stopAndWait();
 }
 
 export async function connectDeviceAuthReq(params: { url: string; token?: string }) {
@@ -235,9 +229,6 @@ export async function startGatewayWithClient(params: {
 }) {
   await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
 
   const port = await getFreeGatewayPort();
   const server = await startGatewayServer(port, {

@@ -105,18 +105,14 @@ const buildAccountDetails = (params: {
   return details;
 };
 
-async function inspectChannelAccount(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-  accountId: string,
-) {
+function inspectChannelAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
+    inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    }))
+    })
   );
 }
 
@@ -139,8 +135,8 @@ export async function buildChannelSummary(
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
-      const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
-      const resolvedInspectedAccount = await inspectChannelAccount(plugin, effective, accountId);
+      const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
+      const resolvedInspectedAccount = inspectChannelAccount(plugin, effective, accountId);
       const resolvedInspection = resolvedInspectedAccount as {
         enabled?: boolean;
         configured?: boolean;

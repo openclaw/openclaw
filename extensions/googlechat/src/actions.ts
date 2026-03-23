@@ -2,7 +2,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/googlechat";
 import {
   createActionGate,
   extractToolSend,
@@ -10,7 +10,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/googlechat";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,
@@ -51,10 +51,10 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 }
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
+  listActions: ({ cfg }) => {
     const accounts = listEnabledAccounts(cfg);
     if (accounts.length === 0) {
-      return null;
+      return [];
     }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
@@ -62,7 +62,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       actions.add("react");
       actions.add("reactions");
     }
-    return { actions: Array.from(actions) };
+    return Array.from(actions);
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");

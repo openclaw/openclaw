@@ -11,20 +11,16 @@ function createContext(
   lastAssistant: unknown,
   overrides?: { onAgentEvent?: (event: unknown) => void },
 ): EmbeddedPiSubscribeContext {
-  const onBlockReply = vi.fn();
   return {
     params: {
       runId: "run-1",
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
-      onBlockReply,
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
-      pendingToolMediaUrls: [],
-      pendingToolAudioAsVoice: false,
       blockState: {
         thinking: true,
         final: true,
@@ -36,7 +32,6 @@ function createContext(
       warn: vi.fn(),
     },
     flushBlockReplyBuffer: vi.fn(),
-    emitBlockReply: onBlockReply,
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
@@ -63,16 +58,14 @@ describe("handleAgentEnd", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
-      error: "LLM request failed: connection refused by the provider endpoint.",
+      error: "connection refused",
       rawErrorPreview: "connection refused",
-      consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
+        error: "connection refused",
       },
     });
   });
@@ -99,7 +92,7 @@ describe("handleAgentEnd", () => {
       failoverReason: "overloaded",
       providerErrorType: "overloaded_error",
       consoleMessage:
-        'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+        "embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment.",
     });
   });
 
@@ -119,7 +112,7 @@ describe("handleAgentEnd", () => {
     const meta = warn.mock.calls[0]?.[1];
     expect(meta).toMatchObject({
       consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=connection refused",
     });
     expect(meta?.consoleMessage).not.toContain("\n");
     expect(meta?.consoleMessage).not.toContain("\r");
@@ -163,20 +156,5 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
-  });
-
-  it("flushes orphaned tool media as a media-only block reply", () => {
-    const ctx = createContext(undefined);
-    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
-    ctx.state.pendingToolAudioAsVoice = true;
-
-    handleAgentEnd(ctx);
-
-    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 });

@@ -5,11 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   consumeRestartSentinel,
-  formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
   readRestartSentinel,
   resolveRestartSentinelPath,
-  summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
@@ -61,15 +59,6 @@ describe("restart sentinel", () => {
     await expect(fs.stat(filePath)).rejects.toThrow();
   });
 
-  it("drops structurally invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
-
-    await expect(readRestartSentinel()).resolves.toBeNull();
-    await expect(fs.stat(filePath)).rejects.toThrow();
-  });
-
   it("formatRestartSentinelMessage uses custom message when present", () => {
     const payload = {
       kind: "config-apply" as const,
@@ -104,26 +93,6 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
-  it("formats summary, distinct reason, and doctor hint together", () => {
-    const payload = {
-      kind: "config-patch" as const,
-      status: "error" as const,
-      ts: Date.now(),
-      message: "Patch failed",
-      doctorHint: "Run openclaw doctor",
-      stats: { mode: "patch", reason: "validation failed" },
-    };
-
-    expect(formatRestartSentinelMessage(payload)).toBe(
-      [
-        "Gateway restart config-patch error (patch)",
-        "Patch failed",
-        "Reason: validation failed",
-        "Run openclaw doctor",
-      ].join("\n"),
-    );
-  });
-
   it("trims log tails", () => {
     const text = "a".repeat(9000);
     const trimmed = trimLogTail(text, 8000);
@@ -145,18 +114,6 @@ describe("restart sentinel", () => {
     expect(textA).toBe(textB);
     expect(textA).toContain("Gateway restart restart ok");
     expect(textA).not.toContain('"ts"');
-  });
-
-  it("summarizes restart payloads and trims log tails without trailing whitespace", () => {
-    expect(
-      summarizeRestartSentinel({
-        kind: "update",
-        status: "skipped",
-        ts: 1,
-      }),
-    ).toBe("Gateway restart update skipped");
-    expect(trimLogTail("hello\n")).toBe("hello");
-    expect(trimLogTail(undefined)).toBeNull();
   });
 });
 
@@ -187,11 +144,5 @@ describe("restart sentinel message dedup", () => {
     const result = formatRestartSentinelMessage(payload);
     expect(result).toContain("Restart requested by /restart");
     expect(result).toContain("Reason: /restart");
-  });
-
-  it("formats the non-interactive doctor command", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
-    );
   });
 });

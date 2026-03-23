@@ -11,7 +11,7 @@ Describe the problem and fix in 2–5 bullets:
 
 - [ ] Bug fix
 - [ ] Feature
-- [ ] Refactor required for the fix
+- [ ] Refactor
 - [ ] Docs
 - [ ] Security hardening
 - [ ] Chore/infra

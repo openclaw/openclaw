@@ -4,7 +4,6 @@ import {
   collectKnownLongFlags,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
-import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -128,13 +127,10 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   if (positional.length < minPositional) {
     return false;
   }
-  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
-    return false;
-  }
-  return true;
+  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
 }
 
-function collectPositionalTokens(args: string[], profile: SafeBinProfile): string[] | null {
+export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
@@ -160,7 +156,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
           continue;
         }
         if (!consumePositionalToken(rest, positional)) {
-          return null;
+          return false;
         }
       }
       break;
@@ -168,7 +164,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
 
     if (token.kind === "positional") {
       if (!consumePositionalToken(token.raw, positional)) {
-        return null;
+        return false;
       }
       i += 1;
       continue;
@@ -186,7 +182,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
         longFlagPrefixMap,
       });
       if (nextIndex < 0) {
-        return null;
+        return false;
       }
       i = nextIndex;
       continue;
@@ -201,28 +197,10 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
       deniedFlags,
     });
     if (nextIndex < 0) {
-      return null;
+      return false;
     }
     i = nextIndex;
   }
 
-  return positional;
-}
-
-export function validateSafeBinArgv(
-  args: string[],
-  profile: SafeBinProfile,
-  options?: { binName?: string },
-): boolean {
-  const positional = collectPositionalTokens(args, profile);
-  if (!positional) {
-    return false;
-  }
-  if (!validatePositionalCount(positional, profile)) {
-    return false;
-  }
-  return validateSafeBinSemantics({
-    binName: options?.binName,
-    positional,
-  });
+  return validatePositionalCount(positional, profile);
 }

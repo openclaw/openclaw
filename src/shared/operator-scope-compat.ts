@@ -47,22 +47,3 @@ export function roleScopesAllow(params: {
   }
   return requested.every((scope) => operatorScopeSatisfied(scope, allowedSet));
 }
-
-export function resolveMissingRequestedScope(params: {
-  role: string;
-  requestedScopes: readonly string[];
-  allowedScopes: readonly string[];
-}): string | null {
-  for (const scope of params.requestedScopes) {
-    if (
-      !roleScopesAllow({
-        role: params.role,
-        requestedScopes: [scope],
-        allowedScopes: params.allowedScopes,
-      })
-    ) {
-      return scope;
-    }
-  }
-  return null;
-}

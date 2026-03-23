@@ -39,8 +39,6 @@ type PendingDevice = {
   deviceId: string;
   displayName?: string;
   role?: string;
-  roles?: string[];
-  scopes?: string[];
   remoteIp?: string;
   isRepair?: boolean;
   ts?: number;
@@ -199,30 +197,6 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
-function formatPendingRoles(request: PendingDevice): string {
-  const role = typeof request.role === "string" ? request.role.trim() : "";
-  if (role) {
-    return role;
-  }
-  const roles = Array.isArray(request.roles)
-    ? request.roles.map((item) => item.trim()).filter((item) => item.length > 0)
-    : [];
-  if (roles.length === 0) {
-    return "";
-  }
-  return roles.join(", ");
-}
-
-function formatPendingScopes(request: PendingDevice): string {
-  const scopes = Array.isArray(request.scopes)
-    ? request.scopes.map((item) => item.trim()).filter((item) => item.length > 0)
-    : [];
-  if (scopes.length === 0) {
-    return "";
-  }
-  return scopes.join(", ");
-}
-
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
@@ -246,7 +220,7 @@ export function registerDevicesCli(program: Command) {
       .action(async (opts: DevicesRpcOpts) => {
         const list = await listPairingWithFallback(opts);
         if (opts.json) {
-          defaultRuntime.writeJson(list);
+          defaultRuntime.log(JSON.stringify(list, null, 2));
           return;
         }
         if (list.pending?.length) {
@@ -261,7 +235,6 @@ export function registerDevicesCli(program: Command) {
                 { key: "Request", header: "Request", minWidth: 10 },
                 { key: "Device", header: "Device", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
-                { key: "Scopes", header: "Scopes", minWidth: 14, flex: true },
                 { key: "IP", header: "IP", minWidth: 12 },
                 { key: "Age", header: "Age", minWidth: 8 },
                 { key: "Flags", header: "Flags", minWidth: 8 },
@@ -269,8 +242,7 @@ export function registerDevicesCli(program: Command) {
               rows: list.pending.map((req) => ({
                 Request: req.requestId,
                 Device: req.displayName || req.deviceId,
-                Role: formatPendingRoles(req),
-                Scopes: formatPendingScopes(req),
+                Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
                 Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
                 Flags: req.isRepair ? "repair" : "",
@@ -323,7 +295,7 @@ export function registerDevicesCli(program: Command) {
         }
         const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
         if (opts.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
@@ -366,10 +338,16 @@ export function registerDevicesCli(program: Command) {
           }
         }
         if (opts.json) {
-          defaultRuntime.writeJson({
-            removedDevices: removedDeviceIds,
-            rejectedPending: rejectedRequestIds,
-          });
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                removedDevices: removedDeviceIds,
+                rejectedPending: rejectedRequestIds,
+              },
+              null,
+              2,
+            ),
+          );
           return;
         }
         defaultRuntime.log(
@@ -407,7 +385,7 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         if (opts.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
@@ -425,7 +403,7 @@ export function registerDevicesCli(program: Command) {
       .action(async (requestId: string, opts: DevicesRpcOpts) => {
         const result = await callGatewayCli("device.pair.reject", opts, { requestId });
         if (opts.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         const deviceId = (result as { deviceId?: string })?.deviceId;
@@ -450,7 +428,7 @@ export function registerDevicesCli(program: Command) {
           role: required.role,
           scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
         });
-        defaultRuntime.writeJson(result);
+        defaultRuntime.log(JSON.stringify(result, null, 2));
       }),
   );
 
@@ -469,7 +447,7 @@ export function registerDevicesCli(program: Command) {
           deviceId: required.deviceId,
           role: required.role,
         });
-        defaultRuntime.writeJson(result);
+        defaultRuntime.log(JSON.stringify(result, null, 2));
       }),
   );
 }

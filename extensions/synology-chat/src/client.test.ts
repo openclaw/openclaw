@@ -15,8 +15,7 @@ vi.mock("node:http", () => {
 });
 
 // Import after mocks are set up
-const { sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
-  await import("./client.js");
+const { sendMessage, sendFileUrl, fetchChatUsers, resolveChatUserId } = await import("./client.js");
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
 
@@ -52,7 +51,7 @@ function mockFailureResponse(statusCode = 500) {
   mockResponse(statusCode, "error");
 }
 
-function installFakeTimerHarness() {
+describe("sendMessage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -63,10 +62,6 @@ function installFakeTimerHarness() {
   afterEach(() => {
     vi.useRealTimers();
   });
-}
-
-describe("sendMessage", () => {
-  installFakeTimerHarness();
 
   it("returns true on successful send", async () => {
     mockSuccessResponse();
@@ -91,7 +86,16 @@ describe("sendMessage", () => {
 });
 
 describe("sendFileUrl", () => {
-  installFakeTimerHarness();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    fakeNowMs += 10_000;
+    vi.setSystemTime(fakeNowMs);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("returns true on success", async () => {
     mockSuccessResponse();
@@ -110,7 +114,7 @@ describe("sendFileUrl", () => {
   });
 });
 
-// Helper to mock the user_list API response for fetchChatUsers / resolveLegacyWebhookNameToChatUserId
+// Helper to mock the user_list API response for fetchChatUsers / resolveChatUserId
 function mockUserListResponse(
   users: Array<{ user_id: number; username: string; nickname: string }>,
 ) {
@@ -147,7 +151,7 @@ function mockUserListResponseImpl(
   httpsGet.mockImplementation(impl);
 }
 
-describe("resolveLegacyWebhookNameToChatUserId", () => {
+describe("resolveChatUserId", () => {
   const baseUrl =
     "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22";
   const baseUrl2 =
@@ -170,10 +174,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       { user_id: 4, username: "jmn67", nickname: "jmn" },
       { user_id: 7, username: "she67", nickname: "sarah" },
     ]);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
+    const result = await resolveChatUserId(baseUrl, "jmn");
     expect(result).toBe(4);
   });
 
@@ -185,10 +186,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     // Advance time to invalidate cache
     fakeNowMs += 10 * 60 * 1000;
     vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn67",
-    });
+    const result = await resolveChatUserId(baseUrl, "jmn67");
     expect(result).toBe(4);
   });
 
@@ -196,10 +194,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     mockUserListResponse([{ user_id: 4, username: "JMN67", nickname: "JMN" }]);
     fakeNowMs += 10 * 60 * 1000;
     vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
+    const result = await resolveChatUserId(baseUrl, "jmn");
     expect(result).toBe(4);
   });
 
@@ -207,10 +202,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
     fakeNowMs += 10 * 60 * 1000;
     vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "unknown_user",
-    });
+    const result = await resolveChatUserId(baseUrl, "unknown_user");
     expect(result).toBeUndefined();
   });
 
@@ -218,10 +210,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     mockUserListResponse([]);
     fakeNowMs += 10 * 60 * 1000;
     vi.setSystemTime(fakeNowMs);
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "anyone",
-    });
+    await resolveChatUserId(baseUrl, "anyone");
     const httpsGet = vi.mocked((https as any).get);
     expect(httpsGet).toHaveBeenCalledWith(
       expect.stringContaining("method=user_list"),
@@ -234,14 +223,8 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     mockUserListResponseOnce([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
     mockUserListResponseOnce([{ user_id: 9, username: "jmn67", nickname: "jmn" }]);
 
-    const result1 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    const result2 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl2,
-      mutableWebhookUsername: "jmn",
-    });
+    const result1 = await resolveChatUserId(baseUrl, "jmn");
+    const result2 = await resolveChatUserId(baseUrl2, "jmn");
 
     expect(result1).toBe(4);
     expect(result2).toBe(9);

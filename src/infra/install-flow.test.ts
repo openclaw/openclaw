@@ -6,19 +6,6 @@ import * as archive from "./archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 import * as installSource from "./install-source-utils.js";
 
-async function runExtractedArchiveFailureCase(configureArchive: () => void) {
-  vi.spyOn(installSource, "withTempDir").mockImplementation(
-    async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
-  );
-  configureArchive();
-  return await withExtractedArchiveRoot({
-    archivePath: "/tmp/plugin.tgz",
-    tempDirPrefix: "openclaw-plugin-",
-    timeoutMs: 1000,
-    onExtracted: async () => ({ ok: true as const }),
-  });
-}
-
 describe("resolveExistingInstallPath", () => {
   let fixtureRoot = "";
 
@@ -79,7 +66,6 @@ describe("withExtractedArchiveRoot", () => {
       archivePath,
       tempDirPrefix: "openclaw-plugin-",
       timeoutMs: 1000,
-      rootMarkers: ["package.json"],
       onExtracted,
     });
 
@@ -89,9 +75,7 @@ describe("withExtractedArchiveRoot", () => {
         archivePath,
       }),
     );
-    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
-      rootMarkers: ["package.json"],
-    });
+    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir);
     expect(onExtracted).toHaveBeenCalledWith(packageRoot);
     expect(result).toEqual({
       ok: true,
@@ -100,8 +84,16 @@ describe("withExtractedArchiveRoot", () => {
   });
 
   it("returns extract failure when extraction throws", async () => {
-    const result = await runExtractedArchiveFailureCase(() => {
-      vi.spyOn(archive, "extractArchive").mockRejectedValue(new Error("boom"));
+    vi.spyOn(installSource, "withTempDir").mockImplementation(
+      async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
+    );
+    vi.spyOn(archive, "extractArchive").mockRejectedValue(new Error("boom"));
+
+    const result = await withExtractedArchiveRoot({
+      archivePath: "/tmp/plugin.tgz",
+      tempDirPrefix: "openclaw-plugin-",
+      timeoutMs: 1000,
+      onExtracted: async () => ({ ok: true as const }),
     });
 
     expect(result).toEqual({
@@ -111,9 +103,17 @@ describe("withExtractedArchiveRoot", () => {
   });
 
   it("returns root-resolution failure when archive layout is invalid", async () => {
-    const result = await runExtractedArchiveFailureCase(() => {
-      vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-      vi.spyOn(archive, "resolvePackedRootDir").mockRejectedValue(new Error("invalid layout"));
+    vi.spyOn(installSource, "withTempDir").mockImplementation(
+      async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
+    );
+    vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
+    vi.spyOn(archive, "resolvePackedRootDir").mockRejectedValue(new Error("invalid layout"));
+
+    const result = await withExtractedArchiveRoot({
+      archivePath: "/tmp/plugin.tgz",
+      tempDirPrefix: "openclaw-plugin-",
+      timeoutMs: 1000,
+      onExtracted: async () => ({ ok: true as const }),
     });
 
     expect(result).toEqual({

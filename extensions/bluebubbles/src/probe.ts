@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "./runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/bluebubbles";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
@@ -73,7 +73,7 @@ export async function fetchBlueBubblesServerInfo(params: {
 }
 
 /**
- * Get cached server info synchronously (for use in describeMessageTool).
+ * Get cached server info synchronously (for use in listActions).
  * Returns null if not cached or expired.
  */
 export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {

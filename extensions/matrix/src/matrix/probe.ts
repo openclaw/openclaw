@@ -1,5 +1,4 @@
-import type { SsrFPolicy } from "../runtime-api.js";
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/matrix";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
 export type MatrixProbe = BaseProbeResult & {
@@ -13,9 +12,6 @@ export async function probeMatrix(params: {
   accessToken: string;
   userId?: string;
   timeoutMs: number;
-  accountId?: string | null;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -46,17 +42,13 @@ export async function probeMatrix(params: {
     };
   }
   try {
-    const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
-      userId: inputUserId,
+      userId: params.userId ?? "",
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
-      accountId: params.accountId,
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      ssrfPolicy: params.ssrfPolicy,
     });
-    // The client wrapper resolves user ID via whoami when needed.
+    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

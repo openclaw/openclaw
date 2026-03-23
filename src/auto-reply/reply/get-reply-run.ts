@@ -2,20 +2,25 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  isEmbeddedPiRunStreaming,
+  resolveEmbeddedSessionLane,
+} from "../../agents/pi-embedded.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
-import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
@@ -29,6 +34,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -36,10 +42,10 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { resolveQueueSettings } from "./queue/settings.js";
-import type { RouteReplyParams } from "./route-reply.js";
+import { resolveQueueSettings } from "./queue.js";
+import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -47,33 +53,6 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
-
-let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
-  null;
-let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js")> | null = null;
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runtime.js")> | null =
-  null;
-
-function loadPiEmbeddedRuntime() {
-  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
-  return piEmbeddedRuntimePromise;
-}
-
-function loadAgentRunnerRuntime() {
-  agentRunnerRuntimePromise ??= import("./agent-runner.runtime.js");
-  return agentRunnerRuntimePromise;
-}
-
-function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
-}
-
-function loadSessionUpdatesRuntime() {
-  sessionUpdatesRuntimePromise ??= import("./session-updates.runtime.js");
-  return sessionUpdatesRuntimePromise;
-}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -92,13 +71,13 @@ function resolveResetSessionNoticeRoute(params: {
   ctx: MsgContext;
   command: ReturnType<typeof buildCommandContext>;
 }): {
-  channel: RouteReplyParams["channel"];
+  channel: Parameters<typeof routeReply>[0]["channel"];
   to: string;
 } | null {
   const commandChannel = params.command.channel?.trim().toLowerCase();
   const fallbackChannel =
     commandChannel && commandChannel !== "webchat"
-      ? (commandChannel as RouteReplyParams["channel"])
+      ? (commandChannel as Parameters<typeof routeReply>[0]["channel"])
       : undefined;
   const channel = params.ctx.OriginatingChannel ?? fallbackChannel;
   const to = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
@@ -127,7 +106,6 @@ async function sendResetSessionNotice(params: {
   if (!route) {
     return;
   }
-  const { routeReply } = await loadRouteReplyRuntime();
   await routeReply({
     payload: {
       text: buildResetSessionNoticeText({
@@ -314,7 +292,6 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
@@ -324,7 +301,6 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
-    envelopeOptions,
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
@@ -389,7 +365,6 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -468,12 +443,6 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const {
-    abortEmbeddedPiRun,
-    isEmbeddedPiRunActive,
-    isEmbeddedPiRunStreaming,
-    resolveEmbeddedSessionLane,
-  } = await loadPiEmbeddedRuntime();
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
@@ -545,7 +514,6 @@ export async function runPreparedReply(
         cfg,
         provider,
         model,
-        agentId,
         sessionEntry,
       }).enabled,
       verboseLevel: resolvedVerboseLevel,
@@ -566,7 +534,6 @@ export async function runPreparedReply(
     },
   };
 
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,

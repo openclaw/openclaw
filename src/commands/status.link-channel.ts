@@ -16,10 +16,7 @@ export async function resolveLinkChannelContext(
 ): Promise<LinkChannelContext | null> {
   for (const plugin of listChannelPlugins()) {
     const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg, {
-        mode: "read_only",
-        commandName: "status",
-      });
+      await resolveDefaultChannelAccountContext(plugin, cfg);
     const snapshot = plugin.config.describeAccount
       ? plugin.config.describeAccount(account, cfg)
       : ({

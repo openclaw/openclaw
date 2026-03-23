@@ -1,16 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+
+function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
+  return {
+    get: (key) => map[key.toLowerCase()] ?? null,
+  };
+}
 
 function redirectResponse(location: string): Response {
   return {
     ok: false,
     status: 302,
-    headers: makeFetchHeaders({ location }),
+    headers: makeHeaders({ location }),
     body: { cancel: vi.fn() },
   } as unknown as Response;
 }
@@ -19,7 +24,7 @@ function textResponse(body: string): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeFetchHeaders({ "content-type": "text/plain" }),
+    headers: makeHeaders({ "content-type": "text/plain" }),
     text: async () => body,
   } as unknown as Response;
 }

@@ -6,7 +6,6 @@ export type OutboundIdentity = {
   name?: string;
   avatarUrl?: string;
   emoji?: string;
-  theme?: string;
 };
 
 export function normalizeOutboundIdentity(
@@ -18,11 +17,10 @@ export function normalizeOutboundIdentity(
   const name = identity.name?.trim() || undefined;
   const avatarUrl = identity.avatarUrl?.trim() || undefined;
   const emoji = identity.emoji?.trim() || undefined;
-  const theme = identity.theme?.trim() || undefined;
-  if (!name && !avatarUrl && !emoji && !theme) {
+  if (!name && !avatarUrl && !emoji) {
     return undefined;
   }
-  return { name, avatarUrl, emoji, theme };
+  return { name, avatarUrl, emoji };
 }
 
 export function resolveAgentOutboundIdentity(
@@ -35,6 +33,5 @@ export function resolveAgentOutboundIdentity(
     name: agentIdentity?.name,
     emoji: agentIdentity?.emoji,
     avatarUrl: avatar.kind === "remote" ? avatar.url : undefined,
-    theme: agentIdentity?.theme,
   });
 }

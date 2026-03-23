@@ -6,7 +6,7 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
-} from "../plugins/provider-model-kilocode.js";
+} from "../providers/kilocode-shared.js";
 
 const log = createSubsystemLogger("kilocode-models");
 

@@ -16,7 +16,7 @@ import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
@@ -301,7 +301,7 @@ export async function channelsStatusCommand(
         }),
     );
     if (opts.json) {
-      writeRuntimeJson(runtime, payload);
+      runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
@@ -315,7 +315,7 @@ export async function channelsStatusCommand(
       config: cfg,
       commandName: "channels status",
       targetIds: getChannelsCommandSecretTargetIds(),
-      mode: "read_only_status",
+      mode: "summary",
     });
     for (const entry of diagnostics) {
       runtime.log(`[secrets] ${entry}`);

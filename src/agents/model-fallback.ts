@@ -19,11 +19,6 @@ import {
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
-import {
-  shouldAllowCooldownProbeForReason,
-  shouldPreserveTransientCooldownProbeSlot,
-  shouldUseTransientCooldownProbeSlot,
-} from "./failover-policy.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -145,16 +140,10 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
-    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
-    // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
-      provider: params.provider,
-      model: params.model,
-    });
-    if (shouldRethrowAbort(err) && !normalizedFailover) {
+    if (shouldRethrowAbort(err)) {
       throw err;
     }
-    return { ok: false, error: normalizedFailover ?? err };
+    return { ok: false, error: err };
   }
 }
 
@@ -599,11 +588,19 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           markProbeAttempt(now, probeThrottleKey);
         }
-        if (shouldAllowCooldownProbeForReason(decision.reason)) {
+        if (
+          decision.reason === "rate_limit" ||
+          decision.reason === "overloaded" ||
+          decision.reason === "billing" ||
+          decision.reason === "unknown"
+        ) {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
-          const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
+          const isTransientCooldownReason =
+            decision.reason === "rate_limit" ||
+            decision.reason === "overloaded" ||
+            decision.reason === "unknown";
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({
@@ -690,7 +687,13 @@ export async function runWithModelFallback<T>(params: {
     {
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
-        if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
+        const shouldPreserveTransientProbeSlot =
+          probeFailureReason === "model_not_found" ||
+          probeFailureReason === "format" ||
+          probeFailureReason === "auth" ||
+          probeFailureReason === "auth_permanent" ||
+          probeFailureReason === "session_expired";
+        if (!shouldPreserveTransientProbeSlot) {
           cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
         }
       }

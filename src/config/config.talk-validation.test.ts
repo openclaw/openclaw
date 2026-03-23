@@ -8,42 +8,38 @@ describe("talk config validation fail-closed behavior", () => {
     vi.restoreAllMocks();
   });
 
-  async function expectInvalidTalkConfig(config: unknown, messagePattern: RegExp) {
-    await withTempHomeConfig(config, async () => {
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      let thrown: unknown;
-      try {
-        loadConfig();
-      } catch (error) {
-        thrown = error;
-      }
-
-      expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
-      expect((thrown as Error).message).toMatch(messagePattern);
-      expect(consoleSpy).toHaveBeenCalled();
-    });
-  }
-
   it.each([
     ["boolean", true],
     ["string", "1500"],
     ["float", 1500.5],
   ])("rejects %s talk.silenceTimeoutMs during config load", async (_label, value) => {
-    await expectInvalidTalkConfig(
+    await withTempHomeConfig(
       {
         agents: { list: [{ id: "main" }] },
         talk: {
           silenceTimeoutMs: value,
         },
       },
-      /silenceTimeoutMs|talk/i,
+      async () => {
+        const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect((thrown as Error).message).toMatch(/silenceTimeoutMs|talk/i);
+        expect(consoleSpy).toHaveBeenCalled();
+      },
     );
   });
 
   it("rejects talk.provider when it does not match talk.providers during config load", async () => {
-    await expectInvalidTalkConfig(
+    await withTempHomeConfig(
       {
         agents: { list: [{ id: "main" }] },
         talk: {
@@ -55,12 +51,26 @@ describe("talk config validation fail-closed behavior", () => {
           },
         },
       },
-      /talk\.provider|talk\.providers|acme/i,
+      async () => {
+        const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect((thrown as Error).message).toMatch(/talk\.provider|talk\.providers|acme/i);
+        expect(consoleSpy).toHaveBeenCalled();
+      },
     );
   });
 
   it("rejects multi-provider talk config without talk.provider during config load", async () => {
-    await expectInvalidTalkConfig(
+    await withTempHomeConfig(
       {
         agents: { list: [{ id: "main" }] },
         talk: {
@@ -74,7 +84,21 @@ describe("talk config validation fail-closed behavior", () => {
           },
         },
       },
-      /talk\.provider|required/i,
+      async () => {
+        const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect((thrown as Error).message).toMatch(/talk\.provider|required/i);
+        expect(consoleSpy).toHaveBeenCalled();
+      },
     );
   });
 });

@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -115,7 +114,6 @@ export function renderMessageGroup(
   opts: {
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
-    showToolCalls?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
     basePath?: string;
@@ -167,7 +165,6 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
-              showToolCalls: opts.showToolCalls ?? true,
             },
             opts.onOpenSidebar,
           ),
@@ -177,11 +174,7 @@ export function renderMessageGroup(
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
-          ${
-            opts.onDelete
-              ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
-              : nothing
-          }
+          ${opts.onDelete ? renderDeleteButton(opts.onDelete) : nothing}
         </div>
       </div>
     </div>
@@ -319,17 +312,15 @@ function extractGroupText(group: MessageGroup): string {
 
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
-type DeleteConfirmSide = "left" | "right";
-
 function shouldSkipDeleteConfirm(): boolean {
   try {
-    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
+    return localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
   } catch {
     return false;
   }
 }
 
-function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
+function renderDeleteButton(onDelete: () => void) {
   return html`
     <span class="chat-delete-wrap">
       <button
@@ -349,7 +340,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             return;
           }
           const popover = document.createElement("div");
-          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
+          popover.className = "chat-delete-confirm";
           popover.innerHTML = `
             <p class="chat-delete-confirm__text">Delete this message?</p>
             <label class="chat-delete-confirm__remember">
@@ -371,7 +362,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
-                getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
+                localStorage.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
             popover.remove();
@@ -620,23 +611,9 @@ function jsonSummaryLabel(parsed: unknown): string {
   return "JSON";
 }
 
-function renderExpandButton(markdown: string, onOpenSidebar: (content: string) => void) {
-  return html`
-    <button
-      class="chat-expand-btn"
-      type="button"
-      title="Open in canvas"
-      aria-label="Open in canvas"
-      @click=${() => onOpenSidebar(markdown)}
-    >
-      <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
-    </button>
-  `;
-}
-
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -649,7 +626,7 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
+  const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
@@ -661,7 +638,6 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -674,9 +650,7 @@ function renderGroupedMessage(
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages) {
+  if (!markdown && !hasToolCards && !hasImages) {
     return nothing;
   }
 
@@ -689,18 +663,9 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
 
-  const hasActions = canCopyMarkdown || canExpand;
-
   return html`
     <div class="${bubbleClasses}">
-      ${
-        hasActions
-          ? html`<div class="chat-bubble-actions">
-              ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
-              ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-            </div>`
-          : nothing
-      }
+      ${canCopyMarkdown ? html`<div class="chat-bubble-actions">${renderCopyAsMarkdownButton(markdown!)}</div>` : nothing}
       ${
         isToolMessage
           ? html`

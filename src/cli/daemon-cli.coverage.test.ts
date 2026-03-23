@@ -81,8 +81,7 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 

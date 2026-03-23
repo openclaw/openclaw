@@ -17,7 +17,6 @@ import {
   loadSessionCostSummary,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
-  resolveExistingUsageSessionFile,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -426,18 +425,13 @@ export const usageHandlers: GatewayRequestHandlers = {
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the session file path
-      let sessionFile: string | undefined;
+      let sessionFile: string;
       try {
         const pathOpts = resolveSessionFilePathOptions({
           storePath: storePath !== "(multiple)" ? storePath : undefined,
           agentId: agentIdFromKey,
         });
-        sessionFile = resolveExistingUsageSessionFile({
-          sessionId,
-          sessionEntry: storeEntry,
-          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
-          agentId: agentIdFromKey,
-        });
+        sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
       } catch {
         respond(
           false,
@@ -447,22 +441,20 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      if (sessionFile) {
-        try {
-          const stats = fs.statSync(sessionFile);
-          if (stats.isFile()) {
-            mergedEntries.push({
-              key: resolvedStoreKey,
-              sessionId,
-              sessionFile,
-              label: storeEntry?.label,
-              updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-              storeEntry,
-            });
-          }
-        } catch {
-          // File doesn't exist - no results for this key
+      try {
+        const stats = fs.statSync(sessionFile);
+        if (stats.isFile()) {
+          mergedEntries.push({
+            key: resolvedStoreKey,
+            sessionId,
+            sessionFile,
+            label: storeEntry?.label,
+            updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
+            storeEntry,
+          });
         }
+      } catch {
+        // File doesn't exist - no results for this key
       }
     } else {
       // Full discovery for list view
@@ -777,22 +769,22 @@ export const usageHandlers: GatewayRequestHandlers = {
           .toSorted((a, b) => b.count - a.count),
       },
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+        const costDiff = b.totals.totalCost - a.totals.totalCost;
         if (costDiff !== 0) {
           return costDiff;
         }
-        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+        return b.totals.totalTokens - a.totals.totalTokens;
       }),
       byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+        const costDiff = b.totals.totalCost - a.totals.totalCost;
         if (costDiff !== 0) {
           return costDiff;
         }
-        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+        return b.totals.totalTokens - a.totals.totalTokens;
       }),
       byAgent: Array.from(byAgentMap.entries())
         .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
+        .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
       ...tail,
     };
 

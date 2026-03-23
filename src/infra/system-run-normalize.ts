@@ -1,4 +1,4 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { mapAllowFromEntries } from "../plugin-sdk/channel-config-helpers.js";
 
 export function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {

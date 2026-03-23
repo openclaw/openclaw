@@ -6,11 +6,10 @@ import {
   validateProfile,
   sanitizeProfileForDisplay,
 } from "./nostr-profile.js";
-import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
-function createTestProfileEvent(profile: NostrProfile, lastPublishedAt?: number) {
-  return createProfileEvent(TEST_HEX_PRIVATE_KEY_BYTES, profile, lastPublishedAt);
-}
+// Test private key
+const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
 
 // ============================================================================
 // Unicode Attack Vectors
@@ -445,7 +444,7 @@ describe("event creation edge cases", () => {
       lud16: "e".repeat(200) + "@example.com",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     expect(event.kind).toBe(0);
 
     // Content should be parseable JSON
@@ -458,7 +457,7 @@ describe("event creation edge cases", () => {
     // Create events in quick succession
     let lastTimestamp = 0;
     for (let i = 0; i < 25; i++) {
-      const event = createTestProfileEvent(profile, lastTimestamp);
+      const event = createProfileEvent(TEST_SK, profile, lastTimestamp);
       expect(event.created_at).toBeGreaterThan(lastTimestamp);
       lastTimestamp = event.created_at;
     }
@@ -470,7 +469,7 @@ describe("event creation edge cases", () => {
       about: "line1\nline2\ttab\\backslash",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     const parsed = JSON.parse(event.content) as { name: string; about: string };
 
     expect(parsed.name).toBe('test"user');

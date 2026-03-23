@@ -40,17 +40,11 @@ pnpm gateway:watch
 This maps to:
 
 ```bash
-node scripts/watch-node.mjs gateway --force
+node --watch-path src --watch-path tsconfig.json --watch-path package.json --watch-preserve-output scripts/run-node.mjs gateway --force
 ```
 
-The watcher restarts on build-relevant files under `src/`, extension source files,
-extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
-`package.json`, and `tsdown.config.ts`. Extension metadata changes restart the
-gateway without forcing a `tsdown` rebuild; source and config changes still
-rebuild `dist` first.
-
-Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart.
+Add any gateway CLI flags after `gateway:watch` and they will be passed through
+on each restart.
 
 ## Dev profile + dev gateway (--dev)
 

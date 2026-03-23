@@ -1,32 +1,26 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { safePathSegmentHashed } from "../infra/install-safe-path.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import {
-  expectSingleNpmInstallIgnoreScriptsCall,
-  expectSingleNpmPackIgnoreScriptsCall,
-} from "../test-utils/exec-assertions.js";
+import * as skillScanner from "../security/skill-scanner.js";
+import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import * as installSecurityScan from "./install-security-scan.js";
-import {
-  installPluginFromArchive,
-  installPluginFromDir,
-  installPluginFromNpmSpec,
-  installPluginFromPath,
-  PLUGIN_INSTALL_ERROR_CODE,
-  resolvePluginInstallDir,
-} from "./install.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
+let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
+let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
+let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
+let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
+let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -68,9 +62,7 @@ function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
     return suiteTempRoot;
   }
-  const bundleTempRoot = path.join(process.cwd(), ".tmp");
-  fs.mkdirSync(bundleTempRoot, { recursive: true });
-  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-"));
+  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
   return suiteTempRoot;
 }
 
@@ -94,23 +86,20 @@ async function packToArchive({
   pkgDir,
   outDir,
   outName,
-  flatRoot,
 }: {
   pkgDir: string;
   outDir: string;
   outName: string;
-  flatRoot?: boolean;
 }) {
   const dest = path.join(outDir, outName);
   fs.rmSync(dest, { force: true });
-  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
   await tar.c(
     {
       gzip: true,
       file: dest,
-      cwd: flatRoot ? pkgDir : path.dirname(pkgDir),
+      cwd: path.dirname(pkgDir),
     },
-    entries,
+    [path.basename(pkgDir)],
   );
   return dest;
 }
@@ -168,9 +157,7 @@ async function setupVoiceCallArchiveInstall(params: { outName: string; version: 
 }
 
 function expectPluginFiles(result: { targetDir: string }, stateDir: string, pluginId: string) {
-  expect(result.targetDir).toBe(
-    resolvePluginInstallDir(pluginId, path.join(stateDir, "extensions")),
-  );
+  expect(result.targetDir).toBe(path.join(stateDir, "extensions", pluginId));
   expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
   expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
 }
@@ -244,107 +231,6 @@ function setupManifestInstallFixture(params: { manifestId: string }) {
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
-function setupBundleInstallFixture(params: {
-  bundleFormat: "codex" | "claude" | "cursor";
-  name: string;
-}) {
-  const caseDir = makeTempDir();
-  const stateDir = path.join(caseDir, "state");
-  const pluginDir = path.join(caseDir, "plugin-src");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
-  const manifestDir = path.join(
-    pluginDir,
-    params.bundleFormat === "codex"
-      ? ".codex-plugin"
-      : params.bundleFormat === "cursor"
-        ? ".cursor-plugin"
-        : ".claude-plugin",
-  );
-  fs.mkdirSync(manifestDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(manifestDir, "plugin.json"),
-    JSON.stringify({
-      name: params.name,
-      description: `${params.bundleFormat} bundle fixture`,
-      ...(params.bundleFormat === "codex" ? { skills: "skills" } : {}),
-    }),
-    "utf-8",
-  );
-  if (params.bundleFormat === "cursor") {
-    fs.mkdirSync(path.join(pluginDir, ".cursor", "commands"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, ".cursor", "commands", "review.md"),
-      "---\ndescription: fixture\n---\n",
-      "utf-8",
-    );
-  }
-  fs.writeFileSync(
-    path.join(pluginDir, "skills", "SKILL.md"),
-    "---\ndescription: fixture\n---\n",
-    "utf-8",
-  );
-  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
-}
-
-function setupManifestlessClaudeInstallFixture() {
-  const caseDir = makeTempDir();
-  const stateDir = path.join(caseDir, "state");
-  const pluginDir = path.join(caseDir, "claude-manifestless");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(path.join(pluginDir, "commands"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "commands", "review.md"),
-    "---\ndescription: fixture\n---\n",
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(pluginDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
-  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
-}
-
-function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude" }) {
-  const caseDir = makeTempDir();
-  const stateDir = path.join(caseDir, "state");
-  const pluginDir = path.join(caseDir, "plugin-src");
-  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-  fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
-  const manifestDir = path.join(
-    pluginDir,
-    params.bundleFormat === "codex" ? ".codex-plugin" : ".claude-plugin",
-  );
-  fs.mkdirSync(manifestDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/native-dual",
-      version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
-      dependencies: { "left-pad": "1.3.0" },
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "native-dual",
-      configSchema: { type: "object", properties: {} },
-      skills: ["skills"],
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
-  fs.writeFileSync(path.join(pluginDir, "skills", "SKILL.md"), "---\ndescription: fixture\n---\n");
-  fs.writeFileSync(
-    path.join(manifestDir, "plugin.json"),
-    JSON.stringify({
-      name: "Bundle Fallback",
-      ...(params.bundleFormat === "codex" ? { skills: "skills" } : {}),
-    }),
-    "utf-8",
-  );
-  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
-}
-
 async function expectArchiveInstallReservedSegmentRejection(params: {
   packageName: string;
   outName: string;
@@ -370,14 +256,12 @@ async function installArchivePackageAndReturnResult(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex?: boolean;
-  flatRoot?: boolean;
 }) {
   const stateDir = makeTempDir();
   const archivePath = await ensureDynamicArchiveTemplate({
     outName: params.outName,
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
-    flatRoot: params.flatRoot === true,
   });
 
   const extensionsDir = path.join(stateDir, "extensions");
@@ -391,12 +275,10 @@ async function installArchivePackageAndReturnResult(params: {
 function buildDynamicArchiveTemplateKey(params: {
   packageJson: Record<string, unknown>;
   withDistIndex: boolean;
-  flatRoot: boolean;
 }): string {
   return JSON.stringify({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
-    flatRoot: params.flatRoot,
   });
 }
 
@@ -404,19 +286,17 @@ async function ensureDynamicArchiveTemplate(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex: boolean;
-  flatRoot?: boolean;
 }): Promise<string> {
   const templateKey = buildDynamicArchiveTemplateKey({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
-    flatRoot: params.flatRoot === true,
   });
   const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
   if (cachedPath) {
     return cachedPath;
   }
   const templateDir = makeTempDir();
-  const pkgDir = params.flatRoot ? templateDir : path.join(templateDir, "package");
+  const pkgDir = path.join(templateDir, "package");
   fs.mkdirSync(pkgDir, { recursive: true });
   if (params.withDistIndex) {
     fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
@@ -427,7 +307,6 @@ async function ensureDynamicArchiveTemplate(params: {
     pkgDir,
     outDir: ensureSuiteFixtureRoot(),
     outName: params.outName,
-    flatRoot: params.flatRoot,
   });
   dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
   return archivePath;
@@ -446,6 +325,15 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
+  ({
+    installPluginFromArchive,
+    installPluginFromDir,
+    installPluginFromNpmSpec,
+    installPluginFromPath,
+    PLUGIN_INSTALL_ERROR_CODE,
+  } = await import("./install.js"));
+  ({ runCommandWithTimeout } = await import("../process/exec.js"));
+
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
@@ -497,18 +385,68 @@ beforeAll(async () => {
       packageJson: preset.packageJson,
       outName: preset.outName,
       withDistIndex: preset.withDistIndex,
-      flatRoot: false,
     });
   }
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.unstubAllEnvs();
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
+  it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
+    const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
+      outName: "plugin.tgz",
+      version: "0.0.1",
+    });
+
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "voice-call" });
+  });
+
+  it("rejects installing when plugin already exists", async () => {
+    const { archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
+      outName: "plugin.tgz",
+      version: "0.0.1",
+    });
+
+    const first = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+    const second = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    if (second.ok) {
+      return;
+    }
+    expect(second.error).toContain("already exists");
+  });
+
+  it("installs from a zip archive", async () => {
+    const stateDir = makeTempDir();
+    const archivePath = getArchiveFixturePath({
+      cacheKey: "zipper:0.0.1",
+      outName: "zipper-0.0.1.zip",
+      buffer: ZIPPER_ARCHIVE_BUFFER,
+    });
+
+    const extensionsDir = path.join(stateDir, "extensions");
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "zipper" });
+  });
+
+  it("allows updates when mode is update", async () => {
     const stateDir = makeTempDir();
     const archiveV1 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.1",
@@ -526,75 +464,35 @@ describe("installPluginFromArchive", () => {
       archivePath: archiveV1,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
-
-    const duplicate = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
-    expect(duplicate.ok).toBe(false);
-    if (!duplicate.ok) {
-      expect(duplicate.error).toContain("already exists");
-    }
-
-    const updated = await installPluginFromArchive({
+    const second = await installPluginFromArchive({
       archivePath: archiveV2,
       extensionsDir,
       mode: "update",
     });
-    expect(updated.ok).toBe(true);
-    if (!updated.ok) {
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
       return;
     }
     const manifest = JSON.parse(
-      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
+      fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
     expect(manifest.version).toBe("0.0.2");
   });
 
-  it("installs from a zip archive", async () => {
-    const stateDir = makeTempDir();
-    const archivePath = getArchiveFixturePath({
-      cacheKey: "zipper:0.0.1",
-      outName: "zipper-0.0.1.zip",
-      buffer: ZIPPER_ARCHIVE_BUFFER,
+  it("rejects traversal-like plugin names", async () => {
+    await expectArchiveInstallReservedSegmentRejection({
+      packageName: "@evil/..",
+      outName: "traversal.tgz",
     });
-
-    const extensionsDir = path.join(stateDir, "extensions");
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
-  it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
-    const result = await installArchivePackageAndReturnResult({
-      packageJson: {
-        name: "@openclaw/rootless",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-      },
-      outName: "rootless-plugin.tgz",
-      withDistIndex: true,
-      flatRoot: true,
+  it("rejects reserved plugin ids", async () => {
+    await expectArchiveInstallReservedSegmentRejection({
+      packageName: "@evil/.",
+      outName: "reserved.tgz",
     });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
-    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
-  });
-
-  it("rejects reserved archive package ids", async () => {
-    for (const params of [
-      { packageName: "@evil/..", outName: "traversal.tgz" },
-      { packageName: "@evil/.", outName: "reserved.tgz" },
-    ]) {
-      await expectArchiveInstallReservedSegmentRejection(params);
-    }
   });
 
   it("rejects packages without openclaw.extensions", async () => {
@@ -693,7 +591,7 @@ describe("installPluginFromArchive", () => {
 
   it("continues install when scanner throws", async () => {
     const scanSpy = vi
-      .spyOn(installSecurityScan, "scanPackageInstallSource")
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
       .mockRejectedValueOnce(new Error("scanner exploded"));
 
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
@@ -717,17 +615,16 @@ describe("installPluginFromArchive", () => {
 });
 
 describe("installPluginFromDir", () => {
-  function expectInstalledWithPluginId(
+  function expectInstalledAsMemoryCognee(
     result: Awaited<ReturnType<typeof installPluginFromDir>>,
     extensionsDir: string,
-    pluginId: string,
   ) {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.pluginId).toBe(pluginId);
-    expect(result.targetDir).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
+    expect(result.pluginId).toBe("memory-cognee");
+    expect(result.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
   }
 
   it("uses --ignore-scripts for dependency install", async () => {
@@ -780,95 +677,6 @@ describe("installPluginFromDir", () => {
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
   });
 
-  it("rejects plugins whose minHostVersion is newer than the current host", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.21");
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
-    };
-    manifest.openclaw = {
-      ...manifest.openclaw,
-      install: {
-        ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.22",
-      },
-    };
-    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
-
-    const result = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION);
-    expect(result.error).toContain("requires OpenClaw >=2026.3.22, but this host is 2026.3.21");
-    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
-  });
-
-  it("rejects plugins with invalid minHostVersion metadata", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
-    };
-    manifest.openclaw = {
-      ...manifest.openclaw,
-      install: {
-        ...manifest.openclaw?.install,
-        minHostVersion: "2026.3.22",
-      },
-    };
-    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
-
-    const result = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION);
-    expect(result.error).toContain("invalid package.json openclaw.install.minHostVersion");
-    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
-  });
-
-  it("reports unknown host versions distinctly for minHostVersion-gated plugins", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "unknown");
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
-    };
-    manifest.openclaw = {
-      ...manifest.openclaw,
-      install: {
-        ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.22",
-      },
-    };
-    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
-
-    const result = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION);
-    expect(result.error).toContain("host version could not be determined");
-    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
-  });
-
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({
       manifestId: "memory-cognee",
@@ -881,160 +689,29 @@ describe("installPluginFromDir", () => {
       logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
     });
 
-    expectInstalledWithPluginId(res, extensionsDir, "memory-cognee");
+    expectInstalledAsMemoryCognee(res, extensionsDir);
     expect(
       infoMessages.some((msg) =>
         msg.includes(
-          'Plugin manifest id "memory-cognee" differs from npm package name "@openclaw/cognee-openclaw"',
+          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
         ),
       ),
     ).toBe(true);
   });
 
-  it("keeps scoped install ids aligned across manifest and package-name cases", async () => {
-    const scenarios = [
-      {
-        setup: () => setupManifestInstallFixture({ manifestId: "@team/memory-cognee" }),
-        expectedPluginId: "@team/memory-cognee",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-            expectedPluginId: "@team/memory-cognee",
-            logger: { info: () => {}, warn: () => {} },
-          }),
-      },
-      {
-        setup: () => setupInstallPluginFromDirFixture(),
-        expectedPluginId: "@openclaw/test-plugin",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-          }),
-      },
-      {
-        setup: () => setupInstallPluginFromDirFixture(),
-        expectedPluginId: "@openclaw/test-plugin",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-            expectedPluginId: "test-plugin",
-          }),
-      },
-    ] as const;
-
-    for (const scenario of scenarios) {
-      const { pluginDir, extensionsDir } = scenario.setup();
-      const res = await scenario.install(pluginDir, extensionsDir);
-      expectInstalledWithPluginId(res, extensionsDir, scenario.expectedPluginId);
-    }
-  });
-
-  it("keeps scoped install-dir validation aligned", () => {
-    for (const invalidId of ["@", "@/name", "team/name"]) {
-      expect(() => resolvePluginInstallDir(invalidId)).toThrow(
-        "invalid plugin name: scoped ids must use @scope/name format",
-      );
-    }
-
-    const extensionsDir = path.join(makeTempDir(), "extensions");
-    const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
-    const hashedFlatId = safePathSegmentHashed("@scope/name");
-    const flatTarget = resolvePluginInstallDir(hashedFlatId, extensionsDir);
-
-    expect(path.basename(scopedTarget)).toBe(`@${hashedFlatId}`);
-    expect(scopedTarget).not.toBe(flatTarget);
-  });
-
-  it("installs Codex bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "codex",
-      name: "Sample Bundle",
+  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "@team/memory-cognee",
     });
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir,
+      expectedPluginId: "memory-cognee",
+      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("sample-bundle");
-    expect(fs.existsSync(path.join(res.targetDir, ".codex-plugin", "plugin.json"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, "skills", "SKILL.md"))).toBe(true);
-  });
-
-  it("prefers native package installs over bundle installs for dual-format directories", async () => {
-    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
-      bundleFormat: "codex",
-    });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("native-dual");
-    expect(res.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: res.targetDir,
-    });
-  });
-
-  it("installs manifestless Claude bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupManifestlessClaudeInstallFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("claude-manifestless");
-    expect(fs.existsSync(path.join(res.targetDir, "commands", "review.md"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, "settings.json"))).toBe(true);
-  });
-
-  it("installs Cursor bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "cursor",
-      name: "Cursor Sample",
-    });
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("cursor-sample");
-    expect(fs.existsSync(path.join(res.targetDir, ".cursor-plugin", "plugin.json"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, ".cursor", "commands", "review.md"))).toBe(true);
+    expectInstalledAsMemoryCognee(res, extensionsDir);
   });
 });
 
@@ -1066,69 +743,6 @@ describe("installPluginFromPath", () => {
     }
     expect(result.error.toLowerCase()).toMatch(/hardlink|path alias escape/);
     expect(fs.readFileSync(victimPath, "utf-8")).toBe("ORIGINAL");
-  });
-
-  it("installs Claude bundles from an archive path", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "claude",
-      name: "Claude Sample",
-    });
-    const archivePath = path.join(makeTempDir(), "claude-bundle.tgz");
-
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
-
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("claude-sample");
-    expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
-  });
-
-  it("prefers native package installs over bundle installs for dual-format archives", async () => {
-    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
-      bundleFormat: "claude",
-    });
-    const archivePath = path.join(makeTempDir(), "dual-format.tgz");
-
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("native-dual");
-    expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: result.targetDir,
-    });
   });
 });
 
@@ -1245,74 +859,77 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("handles prerelease npm specs correctly", async () => {
-    const prereleaseMetadata = {
+  it("rejects bare npm specs that resolve to prerelease versions", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    mockNpmPackMetadataResult(run, {
       id: "@openclaw/voice-call@0.0.2-beta.1",
       name: "@openclaw/voice-call",
       version: "0.0.2-beta.1",
       filename: "voice-call-0.0.2-beta.1.tgz",
       integrity: "sha512-beta",
       shasum: "betashasum",
-    };
+    });
 
-    {
-      const run = vi.mocked(runCommandWithTimeout);
-      mockNpmPackMetadataResult(run, prereleaseMetadata);
-
-      const result = await installPluginFromNpmSpec({
-        spec: "@openclaw/voice-call",
-        logger: { info: () => {}, warn: () => {} },
-      });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("prerelease version 0.0.2-beta.1");
-        expect(result.error).toContain('"@openclaw/voice-call@beta"');
-      }
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call",
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("prerelease version 0.0.2-beta.1");
+      expect(result.error).toContain('"@openclaw/voice-call@beta"');
     }
+  });
 
-    vi.clearAllMocks();
-
-    {
-      const run = vi.mocked(runCommandWithTimeout);
-      let packTmpDir = "";
-      const packedName = "voice-call-0.0.2-beta.1.tgz";
-      const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
-      run.mockImplementation(async (argv, opts) => {
-        if (argv[0] === "npm" && argv[1] === "pack") {
-          packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
-          fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
-          return {
-            code: 0,
-            stdout: JSON.stringify([prereleaseMetadata]),
-            stderr: "",
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }
-        throw new Error(`unexpected command: ${argv.join(" ")}`);
-      });
-
-      const { extensionsDir } = await setupVoiceCallArchiveInstall({
-        outName: "voice-call-0.0.2-beta.1.tgz",
-        version: "0.0.1",
-      });
-      const result = await installPluginFromNpmSpec({
-        spec: "@openclaw/voice-call@beta",
-        extensionsDir,
-        logger: { info: () => {}, warn: () => {} },
-      });
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
+  it("allows explicit prerelease npm tags", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    let packTmpDir = "";
+    const packedName = "voice-call-0.0.2-beta.1.tgz";
+    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
+    run.mockImplementation(async (argv, opts) => {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
+        fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/voice-call@0.0.2-beta.1",
+              name: "@openclaw/voice-call",
+              version: "0.0.2-beta.1",
+              filename: packedName,
+              integrity: "sha512-beta",
+              shasum: "betashasum",
+            },
+          ]),
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
-      expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
-      expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
-      expectSingleNpmPackIgnoreScriptsCall({
-        calls: run.mock.calls,
-        expectedSpec: "@openclaw/voice-call@beta",
-      });
-      expect(packTmpDir).not.toBe("");
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    });
+
+    const { extensionsDir } = await setupVoiceCallArchiveInstall({
+      outName: "voice-call-0.0.2-beta.1.tgz",
+      version: "0.0.1",
+    });
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@beta",
+      extensionsDir,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
     }
+    expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
+    expectSingleNpmPackIgnoreScriptsCall({
+      calls: run.mock.calls,
+      expectedSpec: "@openclaw/voice-call@beta",
+    });
+    expect(packTmpDir).not.toBe("");
   });
 });

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { listAgentsForGateway } from "../gateway/session-utils.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -34,9 +34,9 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 export async function getAgentLocalStatuses(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfig = loadConfig(),
 ): Promise<AgentLocalStatusesResult> {
-  const agentList = listGatewayAgentsBasic(cfg);
+  const agentList = listAgentsForGateway(cfg);
   const now = Date.now();
 
   const statuses: AgentLocalStatus[] = [];
@@ -54,7 +54,13 @@ export async function getAgentLocalStatuses(
     const bootstrapPending = bootstrapPath != null ? await fileExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = readSessionStoreReadOnly(sessionsPath);
+    const store = (() => {
+      try {
+        return loadSessionStore(sessionsPath);
+      } catch {
+        return {};
+      }
+    })();
     const sessions = Object.entries(store)
       .filter(([key]) => key !== "global" && key !== "unknown")
       .map(([, entry]) => entry);

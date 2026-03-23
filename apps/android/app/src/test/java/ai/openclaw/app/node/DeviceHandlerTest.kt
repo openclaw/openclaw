@@ -93,7 +93,6 @@ class DeviceHandlerTest {
         "photos",
         "contacts",
         "calendar",
-        "callLog",
         "motion",
       )
     for (key in expected) {

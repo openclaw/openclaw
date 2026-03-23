@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -33,7 +33,6 @@ const SessionsListToolSchema = Type.Object({
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
-  config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -42,7 +41,7 @@ export function createSessionsListTool(opts?: {
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = loadConfig();
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
@@ -204,23 +203,6 @@ export function createSessionsListTool(opts?: {
           model: typeof entry.model === "string" ? entry.model : undefined,
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
-          estimatedCostUsd:
-            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
-          status: typeof entry.status === "string" ? entry.status : undefined,
-          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
-          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
-          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
-          childSessions: Array.isArray(entry.childSessions)
-            ? entry.childSessions
-                .filter((value): value is string => typeof value === "string")
-                .map((value) =>
-                  resolveDisplaySessionKey({
-                    key: value,
-                    alias,
-                    mainKey,
-                  }),
-                )
-            : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
@@ -234,7 +216,7 @@ export function createSessionsListTool(opts?: {
         };
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
-            key,
+            key: displayKey,
             alias,
             mainKey,
           });

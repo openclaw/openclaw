@@ -1,11 +1,15 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diagnostics-otel";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/diagnostics-otel";
 import { createDiagnosticsOtelService } from "./src/service.js";
 
-export default definePluginEntry({
+const plugin = {
   id: "diagnostics-otel",
   name: "Diagnostics OpenTelemetry",
   description: "Export diagnostics events to OpenTelemetry",
-  register(api) {
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
     api.registerService(createDiagnosticsOtelService());
   },
-});
+};
+
+export default plugin;

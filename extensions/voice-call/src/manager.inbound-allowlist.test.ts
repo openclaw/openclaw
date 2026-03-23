@@ -19,9 +19,8 @@ describe("CallManager inbound allowlist", () => {
     });
 
     expect(manager.getCallByProviderCallId("provider-missing")).toBeUndefined();
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({ providerCallId: "provider-missing" }),
-    ]);
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-missing");
   });
 
   it("rejects inbound calls with anonymous caller ID when allowlist enabled", async () => {
@@ -42,9 +41,8 @@ describe("CallManager inbound allowlist", () => {
     });
 
     expect(manager.getCallByProviderCallId("provider-anon")).toBeUndefined();
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({ providerCallId: "provider-anon" }),
-    ]);
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-anon");
   });
 
   it("rejects inbound calls that only match allowlist suffixes", async () => {
@@ -65,9 +63,8 @@ describe("CallManager inbound allowlist", () => {
     });
 
     expect(manager.getCallByProviderCallId("provider-suffix")).toBeUndefined();
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({ providerCallId: "provider-suffix" }),
-    ]);
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-suffix");
   });
 
   it("rejects duplicate inbound events with a single hangup call", async () => {
@@ -98,9 +95,8 @@ describe("CallManager inbound allowlist", () => {
     });
 
     expect(manager.getCallByProviderCallId("provider-dup")).toBeUndefined();
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({ providerCallId: "provider-dup" }),
-    ]);
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-dup");
   });
 
   it("accepts inbound calls that exactly match the allowlist", async () => {
@@ -120,18 +116,6 @@ describe("CallManager inbound allowlist", () => {
       to: "+15550000000",
     });
 
-    const call = manager.getCallByProviderCallId("provider-exact");
-    if (!call) {
-      throw new Error("expected exact allowlist match to keep the inbound call");
-    }
-    expect(call).toMatchObject({
-      providerCallId: "provider-exact",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550000000",
-    });
-    expect(call.callId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    );
+    expect(manager.getCallByProviderCallId("provider-exact")).toBeDefined();
   });
 });

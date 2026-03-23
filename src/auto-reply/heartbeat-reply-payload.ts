@@ -1,4 +1,3 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "./types.js";
 
 export function resolveHeartbeatReplyPayload(
@@ -15,7 +14,7 @@ export function resolveHeartbeatReplyPayload(
     if (!payload) {
       continue;
     }
-    if (hasOutboundReplyContent(payload)) {
+    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
   }

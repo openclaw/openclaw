@@ -86,8 +86,6 @@ export async function applyInlineDirectivesFastLane(
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
   });
 
   if (sessionEntry?.providerOverride) {

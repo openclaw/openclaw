@@ -1,7 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import type { BaseTokenResolution } from "./runtime-api.js";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/zalo";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
@@ -21,10 +20,20 @@ export function resolveZaloToken(
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
   const baseConfig = config;
-  const accountConfig = resolveAccountEntry(
-    baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
-    normalizeAccountId(resolvedAccountId),
-  );
+  const resolveAccountConfig = (id: string): ZaloConfig | undefined => {
+    const accounts = baseConfig?.accounts;
+    if (!accounts || typeof accounts !== "object") {
+      return undefined;
+    }
+    const direct = accounts[id] as ZaloConfig | undefined;
+    if (direct) {
+      return direct;
+    }
+    const normalized = normalizeAccountId(id);
+    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
+    return matchKey ? ((accounts as Record<string, ZaloConfig>)[matchKey] ?? undefined) : undefined;
+  };
+  const accountConfig = resolveAccountConfig(resolvedAccountId);
   const accountHasBotToken = Boolean(
     accountConfig && Object.prototype.hasOwnProperty.call(accountConfig, "botToken"),
   );

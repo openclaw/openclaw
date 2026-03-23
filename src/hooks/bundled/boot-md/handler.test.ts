@@ -10,21 +10,16 @@ const logDebug = vi.fn();
 const MAIN_WORKSPACE_DIR = path.join(path.sep, "ws", "main");
 const OPS_WORKSPACE_DIR = path.join(path.sep, "ws", "ops");
 
-function createMockLogger() {
-  return {
-    warn: logWarn,
-    debug: logDebug,
-    child: vi.fn(() => createMockLogger()),
-  };
-}
-
 vi.mock("../../../gateway/boot.js", () => ({ runBootOnce }));
 vi.mock("../../../agents/agent-scope.js", () => ({
   listAgentIds,
   resolveAgentWorkspaceDir,
 }));
 vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => createMockLogger(),
+  createSubsystemLogger: () => ({
+    warn: logWarn,
+    debug: logDebug,
+  }),
 }));
 
 const { default: runBootChecklist } = await import("./handler.js");

@@ -1,16 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderBinaryThinking: vi.fn(),
-  resolveProviderDefaultThinkingLevel: vi.fn(),
-  resolveProviderXHighThinking: vi.fn(),
-}));
-
-vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-}));
+import { describe, expect, it } from "vitest";
 import {
   listThinkingLevelLabels,
   listThinkingLevels,
@@ -18,15 +6,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "./thinking.js";
-
-beforeEach(() => {
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
-});
 
 describe("normalizeThinkLevel", () => {
   it("accepts mid as medium", () => {
@@ -64,31 +43,23 @@ describe("normalizeThinkLevel", () => {
 });
 
 describe("listThinkingLevels", () => {
-  it("uses provider runtime hooks for xhigh support", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
-
-    expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
+  it("includes xhigh for codex models", () => {
+    expect(listThinkingLevels(undefined, "gpt-5.2-codex")).toContain("xhigh");
+    expect(listThinkingLevels(undefined, "gpt-5.3-codex")).toContain("xhigh");
+    expect(listThinkingLevels(undefined, "gpt-5.3-codex-spark")).toContain("xhigh");
   });
 
-  it("includes xhigh for provider-advertised models", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
-      (provider === "openai-codex" &&
-        ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
-          context.modelId,
-        )) ||
-      (provider === "github-copilot" && ["gpt-5.2", "gpt-5.2-codex"].includes(context.modelId))
-        ? true
-        : undefined,
-    );
-
-    expect(listThinkingLevels("openai-codex", "gpt-5.2-codex")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
+  it("includes xhigh for openai gpt-5.2 and gpt-5.4 variants", () => {
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
+  });
+
+  it("includes xhigh for openai-codex gpt-5.4", () => {
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
+  });
+
+  it("includes xhigh for github-copilot gpt-5.2 refs", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });
@@ -104,21 +75,7 @@ describe("listThinkingLevels", () => {
 });
 
 describe("listThinkingLevelLabels", () => {
-  it("uses provider runtime hooks for binary thinking providers", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
-
-    expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
-  });
-
-  it("returns on/off for provider-advertised binary thinking", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(({ provider }) =>
-      provider === "zai" ? true : undefined,
-    );
-
-    expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
-  });
-
-  it("keeps built-in binary thinking fallback without provider runtime", () => {
+  it("returns on/off for ZAI", () => {
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
@@ -129,42 +86,13 @@ describe("listThinkingLevelLabels", () => {
 });
 
 describe("resolveThinkingDefaultForModel", () => {
-  it("uses provider runtime hooks for default thinking levels", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue("adaptive");
-
-    expect(resolveThinkingDefaultForModel({ provider: "demo", model: "demo-model" })).toBe(
-      "adaptive",
-    );
-  });
-
-  it("uses provider-advertised adaptive defaults", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
-      ({ provider, context }) =>
-        provider === "anthropic" && context.modelId === "claude-opus-4-6" ? "adaptive" : undefined,
-    );
-
+  it("defaults Claude 4.6 models to adaptive", () => {
     expect(
       resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
     ).toBe("adaptive");
   });
 
-  it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
-      ({ provider, context }) =>
-        provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
-          ? "adaptive"
-          : undefined,
-    );
-
-    expect(
-      resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
-    ).toBe("adaptive");
-  });
-
-  it("keeps built-in adaptive defaults without provider runtime", () => {
-    expect(
-      resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
-    ).toBe("adaptive");
+  it("treats Bedrock Anthropic aliases as adaptive", () => {
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
     ).toBe("adaptive");

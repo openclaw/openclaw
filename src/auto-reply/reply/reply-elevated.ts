@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getChannelDock } from "../../channels/dock.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { MsgContext } from "../templating.js";
@@ -33,9 +34,8 @@ function resolveAllowFromFormatter(params: {
   accountId?: string;
 }): AllowFromFormatter {
   const normalizedProvider = normalizeChannelId(params.provider);
-  const formatAllowFrom = normalizedProvider
-    ? getChannelPlugin(normalizedProvider)?.config?.formatAllowFrom
-    : undefined;
+  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
+  const formatAllowFrom = dock?.config?.formatAllowFrom;
   if (!formatAllowFrom) {
     return (values) => normalizeStringEntries(values);
   }
@@ -192,12 +192,11 @@ export function resolveElevatedPermissions(params: {
   }
 
   const normalizedProvider = normalizeChannelId(params.provider);
-  const fallbackAllowFrom = normalizedProvider
-    ? getChannelPlugin(normalizedProvider)?.elevated?.allowFromFallback?.({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-      })
-    : undefined;
+  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
+  const fallbackAllowFrom = dock?.elevated?.allowFromFallback?.({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+  });
   const formatAllowFrom = resolveAllowFromFormatter({
     cfg: params.cfg,
     provider: params.provider,

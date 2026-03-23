@@ -71,22 +71,17 @@ private object SystemPhotosDataSource : PhotosDataSource {
     for (row in rows) {
       if (remainingBudget <= 0) break
       val bitmap = decodeScaledBitmap(resolver, row.uri, request.maxWidth) ?: continue
-      try {
-        val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS)
-        if (encoded == null) continue
-        if (encoded.base64.length > remainingBudget) break
-        remainingBudget -= encoded.base64.length
-        out +=
-          EncodedPhotoPayload(
-            format = "jpeg",
-            base64 = encoded.base64,
-            width = encoded.width,
-            height = encoded.height,
-            createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
-          )
-      } finally {
-        bitmap.recycle()
-      }
+      val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS) ?: continue
+      if (encoded.base64.length > remainingBudget) break
+      remainingBudget -= encoded.base64.length
+      out +=
+        EncodedPhotoPayload(
+          format = "jpeg",
+          base64 = encoded.base64,
+          width = encoded.width,
+          height = encoded.height,
+          createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
+        )
     }
     return out
   }
@@ -164,11 +159,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
 
     if (decoded.width <= maxWidth) return decoded
     val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
-    return try {
-      decoded.scale(maxWidth, targetHeight, true)
-    } finally {
-      decoded.recycle()
-    }
+    return decoded.scale(maxWidth, targetHeight, true)
   }
 
   private fun computeInSampleSize(width: Int, maxWidth: Int): Int {
@@ -187,36 +178,30 @@ private object SystemPhotosDataSource : PhotosDataSource {
     maxBase64Chars: Int,
   ): EncodedJpeg? {
     var working = bitmap
-    try {
-      var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
-      repeat(10) {
-        val out = ByteArrayOutputStream()
-        val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
-        if (!ok) return null
-        val bytes = out.toByteArray()
-        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-        if (base64.length <= maxBase64Chars) {
-          return EncodedJpeg(
-            base64 = base64,
-            width = working.width,
-            height = working.height,
-          )
-        }
-        if (jpegQuality > 35) {
-          jpegQuality = max(25, jpegQuality - 15)
-          return@repeat
-        }
-        val nextWidth = max(240, (working.width * 0.75f).roundToInt())
-        if (nextWidth >= working.width) return null
-        val nextHeight = max(1, ((working.height.toDouble() * nextWidth) / working.width).roundToInt())
-        val previous = working
-        working = working.scale(nextWidth, nextHeight, true)
-        if (previous !== bitmap) previous.recycle()
+    var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
+    repeat(10) {
+      val out = ByteArrayOutputStream()
+      val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
+      if (!ok) return null
+      val bytes = out.toByteArray()
+      val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+      if (base64.length <= maxBase64Chars) {
+        return EncodedJpeg(
+          base64 = base64,
+          width = working.width,
+          height = working.height,
+        )
       }
-      return null
-    } finally {
-      if (working !== bitmap) working.recycle()
+      if (jpegQuality > 35) {
+        jpegQuality = max(25, jpegQuality - 15)
+        return@repeat
+      }
+      val nextWidth = max(240, (working.width * 0.75f).roundToInt())
+      if (nextWidth >= working.width) return null
+      val nextHeight = max(1, ((working.height.toDouble() * nextWidth) / working.width).roundToInt())
+      working = working.scale(nextWidth, nextHeight, true)
     }
+    return null
   }
 }
 

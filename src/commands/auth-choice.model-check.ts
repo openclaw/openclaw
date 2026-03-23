@@ -4,7 +4,7 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
@@ -37,14 +37,17 @@ export async function warnIfModelConfigLooksOff(
   const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
   if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
-        {
-          provider: ref.provider,
-          config,
-          includeEnvVar: true,
-        },
-      )}`,
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
     );
+  }
+
+  if (ref.provider === "openai") {
+    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
+    if (hasCodex) {
+      warnings.push(
+        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+      );
+    }
   }
 
   if (warnings.length > 0) {

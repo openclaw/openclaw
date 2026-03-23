@@ -7,7 +7,7 @@ import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { requireValidConfig } from "./agents.command-shared.js";
@@ -198,12 +198,18 @@ export async function agentsSetIdentityCommand(
   await writeConfigFile(nextConfig);
 
   if (opts.json) {
-    writeRuntimeJson(runtime, {
-      agentId,
-      identity: nextIdentity,
-      workspace: workspaceDir ?? null,
-      identityFile: identityFilePath ?? null,
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          agentId,
+          identity: nextIdentity,
+          workspace: workspaceDir ?? null,
+          identityFile: identityFilePath ?? null,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 

@@ -1,5 +1,4 @@
 import chalk from "chalk";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
@@ -205,11 +204,9 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     if (text?.trim()) {
       extra.text = compactPreview(text);
     }
-    const mediaCount = resolveSendableOutboundReplyParts({
-      mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
-    }).mediaCount;
-    if (mediaCount > 0) {
-      extra.media = mediaCount;
+    const mediaUrls = Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined;
+    if (mediaUrls && mediaUrls.length > 0) {
+      extra.media = mediaUrls.length;
     }
     return extra;
   }

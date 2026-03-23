@@ -320,17 +320,11 @@ export async function runCommandWithTimeout(
           : signal != null
             ? "signal"
             : "exit";
-      const normalizedCode =
-        termination === "timeout" || termination === "no-output-timeout"
-          ? code === 0
-            ? 124
-            : code
-          : code;
       resolve({
         pid: child.pid ?? undefined,
         stdout,
         stderr,
-        code: normalizedCode,
+        code,
         signal,
         killed: child.killed,
         termination,

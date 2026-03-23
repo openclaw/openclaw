@@ -102,7 +102,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-export function formatEnvelopeTimestamp(
+function formatTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -179,7 +179,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (params.ip?.trim()) {
     parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
-  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }

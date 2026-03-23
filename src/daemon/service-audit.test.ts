@@ -6,53 +6,6 @@ import {
 } from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
 
-function hasIssue(
-  audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
-  code: (typeof SERVICE_AUDIT_CODES)[keyof typeof SERVICE_AUDIT_CODES],
-) {
-  return audit.issues.some((issue) => issue.code === code);
-}
-
-function createGatewayAudit({
-  expectedGatewayToken,
-  path = "/usr/local/bin:/usr/bin:/bin",
-  serviceToken,
-  environmentValueSources,
-}: {
-  expectedGatewayToken?: string;
-  path?: string;
-  serviceToken?: string;
-  environmentValueSources?: Record<string, "file" | "inline">;
-} = {}) {
-  return auditGatewayServiceConfig({
-    env: { HOME: "/tmp" },
-    platform: "linux",
-    expectedGatewayToken,
-    command: {
-      programArguments: ["/usr/bin/node", "gateway"],
-      environment: {
-        PATH: path,
-        ...(serviceToken ? { OPENCLAW_GATEWAY_TOKEN: serviceToken } : {}),
-      },
-      ...(environmentValueSources ? { environmentValueSources } : {}),
-    },
-  });
-}
-
-function expectTokenAudit(
-  audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
-  {
-    embedded,
-    mismatch,
-  }: {
-    embedded: boolean;
-    mismatch: boolean;
-  },
-) {
-  expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayTokenEmbedded)).toBe(embedded);
-  expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayTokenMismatch)).toBe(mismatch);
-}
-
 describe("auditGatewayServiceConfig", () => {
   it("flags bun runtime", async () => {
     const audit = await auditGatewayServiceConfig({
@@ -113,37 +66,89 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("flags gateway token mismatch when service token is stale", async () => {
-    const audit = await createGatewayAudit({
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
       expectedGatewayToken: "new-token",
-      serviceToken: "old-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+        },
+      },
     });
-    expectTokenAudit(audit, { embedded: true, mismatch: true });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(true);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(true);
   });
 
   it("flags embedded service token even when it matches config token", async () => {
-    const audit = await createGatewayAudit({
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
       expectedGatewayToken: "new-token",
-      serviceToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: "new-token",
+        },
+      },
     });
-    expectTokenAudit(audit, { embedded: true, mismatch: false });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(true);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
   });
 
   it("does not flag token issues when service token is not embedded", async () => {
-    const audit = await createGatewayAudit({
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
       expectedGatewayToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+        },
+      },
     });
-    expectTokenAudit(audit, { embedded: false, mismatch: false });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
   });
 
   it("does not treat EnvironmentFile-backed tokens as embedded", async () => {
-    const audit = await createGatewayAudit({
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
       expectedGatewayToken: "new-token",
-      serviceToken: "old-token",
-      environmentValueSources: {
-        OPENCLAW_GATEWAY_TOKEN: "file",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+        },
+        environmentValueSources: {
+          OPENCLAW_GATEWAY_TOKEN: "file",
+        },
       },
     });
-    expectTokenAudit(audit, { embedded: false, mismatch: false });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
   });
 });
 

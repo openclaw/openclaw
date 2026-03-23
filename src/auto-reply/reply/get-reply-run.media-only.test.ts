@@ -5,23 +5,17 @@ vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../agents/pi-embedded.runtime.js", () => ({
+vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
 }));
 
-vi.mock("../../config/sessions/group.js", () => ({
+vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
-}));
-
-vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
-}));
-
-vi.mock("../../config/sessions/store.js", () => ({
   updateSessionStore: vi.fn(),
 }));
 
@@ -36,7 +30,6 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../routing/session-key.js", () => ({
   normalizeMainKey: vi.fn().mockReturnValue("main"),
-  normalizeAgentId: vi.fn((id?: string) => id ?? "default"),
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
@@ -47,7 +40,7 @@ vi.mock("../command-detection.js", () => ({
   hasControlCommand: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("./agent-runner.runtime.js", () => ({
+vi.mock("./agent-runner.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
 }));
 
@@ -65,23 +58,20 @@ vi.mock("./inbound-meta.js", () => ({
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
 }));
 
-vi.mock("./queue/settings.js", () => ({
+vi.mock("./queue.js", () => ({
   resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", () => ({
   routeReply: vi.fn(),
 }));
 
-vi.mock("./session-updates.runtime.js", () => ({
+vi.mock("./session-updates.js", () => ({
   ensureSkillSnapshot: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
     sessionEntry,
     systemSent,
     skillsSnapshot: undefined,
   })),
-}));
-
-vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -89,9 +79,9 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
-import { runReplyAgent } from "./agent-runner.runtime.js";
-import { routeReply } from "./route-reply.runtime.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { runReplyAgent } from "./agent-runner.js";
+import { routeReply } from "./route-reply.js";
+import { drainFormattedSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 function baseParams(

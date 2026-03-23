@@ -1,15 +1,17 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { googlechatPlugin } from "./src/channel.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/googlechat";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/googlechat";
+import { googlechatDock, googlechatPlugin } from "./src/channel.js";
 import { setGoogleChatRuntime } from "./src/runtime.js";
 
-export { googlechatPlugin } from "./src/channel.js";
-export { setGoogleChatRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+const plugin = {
   id: "googlechat",
   name: "Google Chat",
   description: "OpenClaw Google Chat channel plugin",
-  plugin: googlechatPlugin as ChannelPlugin,
-  setRuntime: setGoogleChatRuntime,
-});
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
+    setGoogleChatRuntime(api.runtime);
+    api.registerChannel({ plugin: googlechatPlugin, dock: googlechatDock });
+  },
+};
+
+export default plugin;

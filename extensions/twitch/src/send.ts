@@ -5,11 +5,12 @@
  * They support dependency injection via the `deps` parameter for testability.
  */
 
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { resolveTwitchToken } from "./token.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
-import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
+import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
  * Result from sending a message to Twitch.
@@ -55,16 +56,18 @@ export async function sendMessageTwitchInternal(
   stripMarkdown: boolean = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
-  const { account, configured, availableAccountIds } = resolveTwitchAccountContext(cfg, accountId);
+  const account = getAccountConfig(cfg, accountId);
   if (!account) {
+    const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
+      error: `Account not found: ${accountId}. Available accounts: ${availableIds.join(", ") || "none"}`,
     };
   }
 
-  if (!configured) {
+  const tokenResolution = resolveTwitchToken(cfg, { accountId });
+  if (!isAccountConfigured(account, tokenResolution.token)) {
     return {
       ok: false,
       messageId: generateMessageId(),

@@ -1,4 +1,4 @@
-import { parseFiniteNumber } from "./runtime-api.js";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/bluebubbles";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
@@ -582,29 +582,6 @@ export function parseTapbackText(params: {
     return null;
   }
 
-  const parseLeadingReactionAction = (
-    prefix: "reacted" | "removed",
-    defaultAction: "added" | "removed",
-  ) => {
-    if (!lower.startsWith(prefix)) {
-      return null;
-    }
-    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) {
-      return null;
-    }
-    const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) {
-      return null;
-    }
-    const fallback = trimmed.slice(prefix.length).trim();
-    return {
-      emoji,
-      action: params.actionHint ?? defaultAction,
-      quotedText: quotedText ?? fallback,
-    };
-  };
-
   for (const [pattern, { emoji, action }] of TAPBACK_TEXT_MAP) {
     if (lower.startsWith(pattern)) {
       // Extract quoted text if present (e.g., 'Loved "hello"' -> "hello")
@@ -622,14 +599,30 @@ export function parseTapbackText(params: {
     }
   }
 
-  const reacted = parseLeadingReactionAction("reacted", "added");
-  if (reacted) {
-    return reacted;
+  if (lower.startsWith("reacted")) {
+    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
+    if (!emoji) {
+      return null;
+    }
+    const quotedText = extractQuotedTapbackText(trimmed);
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
+    const fallback = trimmed.slice("reacted".length).trim();
+    return { emoji, action: params.actionHint ?? "added", quotedText: quotedText ?? fallback };
   }
 
-  const removed = parseLeadingReactionAction("removed", "removed");
-  if (removed) {
-    return removed;
+  if (lower.startsWith("removed")) {
+    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
+    if (!emoji) {
+      return null;
+    }
+    const quotedText = extractQuotedTapbackText(trimmed);
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
+    const fallback = trimmed.slice("removed".length).trim();
+    return { emoji, action: params.actionHint ?? "removed", quotedText: quotedText ?? fallback };
   }
   return null;
 }

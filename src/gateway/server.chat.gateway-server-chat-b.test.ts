@@ -8,7 +8,6 @@ import {
   connectOk,
   getReplyFromConfig,
   installGatewayTestHooks,
-  mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
   startServerWithClient,
@@ -84,29 +83,15 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
-async function prepareMainHistoryHarness(params: {
-  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
-  createSessionDir: () => Promise<string>;
-  historyMaxBytes?: number;
-}) {
-  if (params.historyMaxBytes !== undefined) {
-    __setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
-  }
-  await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir();
-  await writeMainSessionStore();
-  return sessionDir;
-}
-
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const bigText = "x".repeat(2_000);
       const historyLines: string[] = [];
@@ -167,8 +152,9 @@ describe("gateway server chat", () => {
       await writeMainSessionStore();
       testState.agentConfig = { blockStreamingDefault: "on" };
       try {
+        spy.mockClear();
         let capturedOpts: GetReplyOptions | undefined;
-        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
           capturedOpts = opts;
           return undefined;
         });
@@ -194,11 +180,11 @@ describe("gateway server chat", () => {
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
@@ -233,11 +219,11 @@ describe("gateway server chat", () => {
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const baseText = "s".repeat(1_200);
       const lines: string[] = [];
@@ -386,7 +372,8 @@ describe("gateway server chat", () => {
       await createSessionDir();
       await writeMainSessionStore();
 
-      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+      spy.mockClear();
+      spy.mockImplementationOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
         const signal = opts?.abortSignal;
         await new Promise<void>((resolve) => {

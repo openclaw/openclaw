@@ -1,20 +1,10 @@
-import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { toBrowserErrorResponse } from "../errors.js";
-import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
-
-function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
-  const mapped = toBrowserErrorResponse(err);
-  if (mapped) {
-    return jsonError(res, mapped.status, mapped.message);
-  }
-  jsonError(res, 500, String(err));
-}
 
 async function withBasicProfileRoute(params: {
   req: BrowserRequest;
@@ -29,21 +19,11 @@ async function withBasicProfileRoute(params: {
   try {
     await params.run(profileCtx);
   } catch (err) {
-    return handleBrowserRouteError(params.res, err);
-  }
-}
-
-async function withProfilesServiceMutation(params: {
-  res: BrowserResponse;
-  ctx: BrowserRouteContext;
-  run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
-}) {
-  try {
-    const service = createBrowserProfilesService(params.ctx);
-    const result = await params.run(service);
-    params.res.json(result);
-  } catch (err) {
-    return handleBrowserRouteError(params.res, err);
+    const mapped = toBrowserErrorResponse(err);
+    if (mapped) {
+      return jsonError(params.res, mapped.status, mapped.message);
+    }
+    jsonError(params.res, 500, String(err));
   }
 }
 
@@ -73,59 +53,46 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       return jsonError(res, profileCtx.status, profileCtx.error);
     }
 
+    const [cdpHttp, cdpReady] = await Promise.all([
+      profileCtx.isHttpReachable(300),
+      profileCtx.isReachable(600),
+    ]);
+
+    const profileState = current.profiles.get(profileCtx.profile.name);
+    let detectedBrowser: string | null = null;
+    let detectedExecutablePath: string | null = null;
+    let detectError: string | null = null;
+
     try {
-      const [cdpHttp, cdpReady] = await Promise.all([
-        profileCtx.isHttpReachable(300),
-        profileCtx.isReachable(600),
-      ]);
-
-      const profileState = current.profiles.get(profileCtx.profile.name);
-      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-      let detectedBrowser: string | null = null;
-      let detectedExecutablePath: string | null = null;
-      let detectError: string | null = null;
-
-      try {
-        const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
-        if (detected) {
-          detectedBrowser = detected.kind;
-          detectedExecutablePath = detected.path;
-        }
-      } catch (err) {
-        detectError = String(err);
+      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      if (detected) {
+        detectedBrowser = detected.kind;
+        detectedExecutablePath = detected.path;
       }
-
-      res.json({
-        enabled: current.resolved.enabled,
-        profile: profileCtx.profile.name,
-        driver: profileCtx.profile.driver,
-        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
-        running: cdpReady,
-        cdpReady,
-        cdpHttp,
-        pid: capabilities.usesChromeMcp
-          ? getChromeMcpPid(profileCtx.profile.name)
-          : (profileState?.running?.pid ?? null),
-        cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
-        chosenBrowser: profileState?.running?.exe.kind ?? null,
-        detectedBrowser,
-        detectedExecutablePath,
-        detectError,
-        userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
-        color: profileCtx.profile.color,
-        headless: current.resolved.headless,
-        noSandbox: current.resolved.noSandbox,
-        executablePath: current.resolved.executablePath ?? null,
-        attachOnly: profileCtx.profile.attachOnly,
-      });
     } catch (err) {
-      const mapped = toBrowserErrorResponse(err);
-      if (mapped) {
-        return jsonError(res, mapped.status, mapped.message);
-      }
-      jsonError(res, 500, String(err));
+      detectError = String(err);
     }
+
+    res.json({
+      enabled: current.resolved.enabled,
+      profile: profileCtx.profile.name,
+      running: cdpReady,
+      cdpReady,
+      cdpHttp,
+      pid: profileState?.running?.pid ?? null,
+      cdpPort: profileCtx.profile.cdpPort,
+      cdpUrl: profileCtx.profile.cdpUrl,
+      chosenBrowser: profileState?.running?.exe.kind ?? null,
+      detectedBrowser,
+      detectedExecutablePath,
+      detectError,
+      userDataDir: profileState?.running?.userDataDir ?? null,
+      color: profileCtx.profile.color,
+      headless: current.resolved.headless,
+      noSandbox: current.resolved.noSandbox,
+      executablePath: current.resolved.executablePath ?? null,
+      attachOnly: profileCtx.profile.attachOnly,
+    });
   });
 
   // Start browser (profile-aware)
@@ -176,37 +143,31 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
     const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-    const userDataDir = toStringOrEmpty((req.body as { userDataDir?: unknown })?.userDataDir);
-    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
+    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
+      | "openclaw"
+      | "extension"
+      | "";
 
     if (!name) {
       return jsonError(res, 400, "name is required");
     }
-    if (driver && driver !== "openclaw" && driver !== "clawd" && driver !== "existing-session") {
-      return jsonError(
-        res,
-        400,
-        `unsupported profile driver "${driver}"; use "openclaw", "clawd", or "existing-session"`,
-      );
-    }
 
-    await withProfilesServiceMutation({
-      res,
-      ctx,
-      run: async (service) =>
-        await service.createProfile({
-          name,
-          color: color || undefined,
-          cdpUrl: cdpUrl || undefined,
-          userDataDir: userDataDir || undefined,
-          driver:
-            driver === "existing-session"
-              ? "existing-session"
-              : driver === "openclaw" || driver === "clawd"
-                ? "openclaw"
-                : undefined,
-        }),
-    });
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.createProfile({
+        name,
+        color: color || undefined,
+        cdpUrl: cdpUrl || undefined,
+        driver: driver === "extension" ? "extension" : undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      const mapped = toBrowserErrorResponse(err);
+      if (mapped) {
+        return jsonError(res, mapped.status, mapped.message);
+      }
+      jsonError(res, 500, String(err));
+    }
   });
 
   // Delete a profile
@@ -216,10 +177,16 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       return jsonError(res, 400, "profile name is required");
     }
 
-    await withProfilesServiceMutation({
-      res,
-      ctx,
-      run: async (service) => await service.deleteProfile(name),
-    });
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.deleteProfile(name);
+      res.json(result);
+    } catch (err) {
+      const mapped = toBrowserErrorResponse(err);
+      if (mapped) {
+        return jsonError(res, mapped.status, mapped.message);
+      }
+      jsonError(res, 500, String(err));
+    }
   });
 }

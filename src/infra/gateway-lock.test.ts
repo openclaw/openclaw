@@ -5,24 +5,19 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
 
 let fixtureRoot = "";
 let fixtureCount = 0;
-const realNow = Date.now.bind(Date);
-
-function resolveTestLockDir() {
-  return path.join(fixtureRoot, "__locks");
-}
 
 async function makeEnv() {
   const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
   const configPath = path.join(dir, "openclaw.json");
   await fs.writeFile(configPath, "{}", "utf8");
+  await fs.mkdir(resolveGatewayLockDir(), { recursive: true });
   return {
     ...process.env,
     OPENCLAW_STATE_DIR: dir,
@@ -39,11 +34,6 @@ async function acquireForTest(
     allowInTests: true,
     timeoutMs: 30,
     pollIntervalMs: 2,
-    now: realNow,
-    sleep: async (ms) => {
-      await nativeSleep(ms);
-    },
-    lockDir: resolveTestLockDir(),
     ...opts,
   });
 }
@@ -52,7 +42,7 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const lockDir = resolveTestLockDir();
+  const lockDir = resolveGatewayLockDir();
   return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
 }
 
@@ -155,7 +145,6 @@ describe("gateway lock", () => {
   beforeEach(() => {
     // Other suites occasionally leave global spies behind (Date.now, setTimeout, etc.).
     // This test relies on fake timers advancing Date.now and setTimeout deterministically.
-    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -166,7 +155,6 @@ describe("gateway lock", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("blocks concurrent acquisition until release", async () => {
@@ -186,6 +174,8 @@ describe("gateway lock", () => {
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
     const env = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = createLockPayload({ configPath, startTime: 111 });
@@ -284,7 +274,6 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
       env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
-      lockDir: resolveTestLockDir(),
     });
     expect(lock).toBeNull();
   });
@@ -293,7 +282,6 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
       env: { ...env, VITEST: "1" },
-      lockDir: resolveTestLockDir(),
     });
     expect(lock).toBeNull();
   });

@@ -1,7 +1,22 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
-import { matchBrowserUrlPattern } from "./url-pattern.js";
+
+function matchUrlPattern(pattern: string, url: string): boolean {
+  const p = pattern.trim();
+  if (!p) {
+    return false;
+  }
+  if (p === url) {
+    return true;
+  }
+  if (p.includes("*")) {
+    const escaped = p.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    const regex = new RegExp(`^${escaped.replace(/\*\*/g, ".*").replace(/\*/g, ".*")}$`);
+    return regex.test(url);
+  }
+  return url.includes(p);
+}
 
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
@@ -50,7 +65,7 @@ export async function responseBodyViaPlaywright(opts: {
       }
       const r = resp as { url?: () => string };
       const u = r.url?.() || "";
-      if (!matchBrowserUrlPattern(pattern, u)) {
+      if (!matchUrlPattern(pattern, u)) {
         return;
       }
       done = true;

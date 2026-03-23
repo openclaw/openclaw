@@ -389,7 +389,6 @@ describe("argv helpers", () => {
       ["node", "openclaw", "models", "list"],
       ["node", "openclaw", "models", "status"],
       ["node", "openclaw", "memory", "status"],
-      ["node", "openclaw", "update", "status", "--json"],
       ["node", "openclaw", "agent", "--message", "hi"],
     ] as const;
     const mutatingArgv = [
@@ -407,7 +406,6 @@ describe("argv helpers", () => {
 
   it.each([
     { path: ["status"], expected: false },
-    { path: ["update", "status"], expected: false },
     { path: ["config", "get"], expected: false },
     { path: ["models", "status"], expected: false },
     { path: ["agents", "list"], expected: true },

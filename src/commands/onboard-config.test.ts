@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  applyLocalSetupWorkspaceConfig,
+  applyOnboardingLocalWorkspaceConfig,
   ONBOARDING_DEFAULT_DM_SCOPE,
   ONBOARDING_DEFAULT_TOOLS_PROFILE,
 } from "./onboard-config.js";
 
-describe("applyLocalSetupWorkspaceConfig", () => {
-  it("defaults local setup tool profile to coding", () => {
+describe("applyOnboardingLocalWorkspaceConfig", () => {
+  it("defaults local onboarding tool profile to coding", () => {
     expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
   });
 
   it("sets secure dmScope default when unset", () => {
     const baseConfig: OpenClawConfig = {};
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
     expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
     expect(result.gateway?.mode).toBe("local");
@@ -27,7 +27,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
         dmScope: "main",
       },
     };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
     expect(result.session?.dmScope).toBe("main");
   });
@@ -38,7 +38,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
         dmScope: "per-account-channel-peer",
       },
     };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
     expect(result.session?.dmScope).toBe("per-account-channel-peer");
   });
@@ -49,7 +49,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
         profile: "full",
       },
     };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
     expect(result.tools?.profile).toBe("full");
   });

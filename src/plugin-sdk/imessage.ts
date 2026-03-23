@@ -1,26 +1,10 @@
-export type { IMessageAccountConfig } from "../config/types.js";
-export type { OpenClawConfig } from "../config/config.js";
-export type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-  OpenClawPluginApi,
-  PluginRuntime,
-} from "./channel-plugin-common.js";
+export type { ResolvedIMessageAccount } from "../imessage/accounts.js";
+export * from "./channel-plugin-common.js";
 export {
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  applyAccountNameToChannelSection,
-  buildChannelConfigSchema,
-  deleteAccountFromConfigSection,
-  emptyPluginConfigSchema,
-  formatPairingApproveHint,
-  getChatChannelMeta,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  setAccountEnabledInConfigSection,
-} from "./channel-plugin-common.js";
-export { detectBinary } from "../plugins/setup-binary.js";
-export { formatDocsLink } from "../terminal/links.js";
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+} from "../imessage/accounts.js";
 export {
   formatTrimmedAllowFromEntries,
   resolveIMessageConfigAllowFrom,
@@ -38,16 +22,9 @@ export {
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
-} from "../../extensions/imessage/api.js";
+} from "../channels/plugins/group-mentions.js";
+export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
-export {
-  buildComputedAccountStatusSnapshot,
-  collectStatusIssuesFromLastError,
-} from "./status-helpers.js";
-export {
-  monitorIMessageProvider,
-  probeIMessage,
-  sendMessageIMessage,
-} from "../../extensions/imessage/runtime-api.js";
+export { collectStatusIssuesFromLastError } from "./status-helpers.js";

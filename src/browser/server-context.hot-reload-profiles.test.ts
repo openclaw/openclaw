@@ -30,7 +30,6 @@ vi.mock("../config/config.js", () => ({
       return buildConfig();
     },
   }),
-  getRuntimeConfigSnapshot: () => null,
   loadConfig: () => {
     // simulate stale loadConfig that doesn't see updates unless cache cleared
     if (!cachedConfig) {

@@ -2,44 +2,42 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   buildTelegramTopicConversationId,
-  normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
-import {
-  evaluateSessionFreshness,
-  resolveChannelResetConfig,
-  resolveSessionResetPolicy,
-  resolveSessionResetType,
-  resolveThreadFlag,
-} from "../../config/sessions/reset.js";
-import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
-import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  deriveSessionMetaPatch,
+  evaluateSessionFreshness,
   type GroupKeyResolution,
+  loadSessionStore,
+  resolveAndPersistSessionFile,
+  resolveChannelResetConfig,
+  resolveThreadFlag,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveGroupSessionKey,
+  resolveSessionKey,
+  resolveSessionTranscriptPath,
+  resolveStorePath,
   type SessionEntry,
   type SessionScope,
-} from "../../config/sessions/types.js";
+  updateSessionStore,
+} from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { archiveSessionTranscripts } from "../../gateway/session-archive.fs.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
-import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -71,21 +69,44 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
+function normalizeSessionText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    return `${value}`.trim();
+  }
+  return "";
+}
+
+function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
+  const sessionKey = normalizeSessionText(raw);
+  if (!sessionKey) {
+    return undefined;
+  }
+  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.toLowerCase();
+  const match = scoped.match(/(?:^|:)channel:([^:]+)$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return match[1];
+}
+
 function resolveAcpResetBindingContext(ctx: MsgContext): {
   channel: string;
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channelRaw = normalizeConversationText(
+  const channelRaw = normalizeSessionText(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   ).toLowerCase();
   if (!channelRaw) {
     return null;
   }
-  const accountId = normalizeConversationText(ctx.AccountId) || "default";
+  const accountId = normalizeSessionText(ctx.AccountId) || "default";
   const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
+    ctx.MessageThreadId != null ? normalizeSessionText(String(ctx.MessageThreadId)) : "";
 
   if (channelRaw === "telegram") {
     const parentConversationId =
@@ -122,7 +143,7 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   }
   let parentConversationId: string | undefined;
   if (channelRaw === "discord" && normalizedThreadId) {
-    const fromContext = normalizeConversationText(ctx.ThreadParentId);
+    const fromContext = normalizeSessionText(ctx.ThreadParentId);
     if (fromContext && fromContext !== conversationId) {
       parentConversationId = fromContext;
     } else {
@@ -151,7 +172,7 @@ function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): string | undefined {
-  const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
+  const activeSessionKey = normalizeSessionText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
@@ -193,22 +214,14 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
-  const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
     skipCache: true,
   });
-  if (ingressTimingEnabled) {
-    log.info(
-      `session-init store-load agent=${agentId} session=${sessionCtxForState.SessionKey ?? "(no-session)"} ` +
-        `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
-    );
-  }
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -225,9 +238,6 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
-  let persistedAuthProfileOverride: string | undefined;
-  let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
-  let persistedAuthProfileOverrideCompactionCount: number | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -364,9 +374,6 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
-    persistedAuthProfileOverride = entry.authProfileOverride;
-    persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-    persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -383,9 +390,6 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
-      persistedAuthProfileOverride = entry.authProfileOverride;
-      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       persistedLabel = entry.label;
     }
   }
@@ -437,11 +441,6 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
-    authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
-    authProfileOverrideSource:
-      persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount:
-      persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
@@ -501,7 +500,7 @@ export async function initSessionState(params: {
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
           `parentTokens=${parentTokens}`,
       );
-      const forked = await forkSessionFromParent({
+      const forked = forkSessionFromParent({
         parentEntry: sessionStore[parentSessionKey],
         agentId,
         sessionsDir: path.dirname(storePath),
@@ -534,15 +533,11 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
-    // Clear stale context hash so the first flush in the new session is not
-    // incorrectly skipped due to a hash match with the old transcript (#30115).
-    sessionEntry.memoryFlushContextHash = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
-    sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.

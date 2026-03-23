@@ -1,13 +1,11 @@
 export type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaLocalRoots?: readonly string[];
-  optimizeImages?: boolean;
 };
 
 export type OutboundMediaLoadOptions = {
   maxBytes?: number;
   localRoots?: readonly string[];
-  optimizeImages?: boolean;
 };
 
 export function resolveOutboundMediaLocalRoots(
@@ -23,6 +21,5 @@ export function buildOutboundMediaLoadOptions(
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),
-    ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
   };
 }

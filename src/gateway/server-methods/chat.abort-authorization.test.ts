@@ -1,55 +1,74 @@
-import { describe, expect, it } from "vitest";
-import {
-  createActiveRun,
-  createChatAbortContext,
-  invokeChatAbortHandler,
-} from "./chat.abort.test-helpers.js";
+import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 
-async function invokeSingleRunAbort({
-  context,
-  runId = "run-1",
-  connId,
-  deviceId,
-  scopes,
-}: {
-  context: ReturnType<typeof createChatAbortContext>;
-  runId?: string;
-  connId: string;
-  deviceId: string;
-  scopes: string[];
-}) {
-  return await invokeChatAbortHandler({
-    handler: chatHandlers["chat.abort"],
-    context,
-    request: { sessionKey: "main", runId },
-    client: {
-      connId,
-      connect: { device: { id: deviceId }, scopes },
-    },
-  });
+function createActiveRun(sessionKey: string, owner?: { connId?: string; deviceId?: string }) {
+  const now = Date.now();
+  return {
+    controller: new AbortController(),
+    sessionId: `${sessionKey}-session`,
+    sessionKey,
+    startedAtMs: now,
+    expiresAtMs: now + 30_000,
+    ownerConnId: owner?.connId,
+    ownerDeviceId: owner?.deviceId,
+  };
 }
 
-function createSingleAbortContext() {
-  return createChatAbortContext({
-    chatAbortControllers: new Map([
-      [
-        "run-1",
-        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-      ],
-    ]),
+function createContext(overrides: Record<string, unknown> = {}) {
+  return {
+    chatAbortControllers: new Map(),
+    chatRunBuffers: new Map(),
+    chatDeltaSentAt: new Map(),
+    chatAbortedRuns: new Map<string, number>(),
+    removeChatRun: vi
+      .fn()
+      .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
+    agentRunSeq: new Map<string, number>(),
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
+    logGateway: { warn: vi.fn() },
+    ...overrides,
+  };
+}
+
+async function invokeChatAbort(params: {
+  context: ReturnType<typeof createContext>;
+  request: { sessionKey: string; runId?: string };
+  client?: {
+    connId?: string;
+    connect?: {
+      device?: { id?: string };
+      scopes?: string[];
+    };
+  } | null;
+}) {
+  const respond = vi.fn();
+  await chatHandlers["chat.abort"]({
+    params: params.request,
+    respond: respond as never,
+    context: params.context as never,
+    req: {} as never,
+    client: (params.client ?? null) as never,
+    isWebchatConnect: () => false,
   });
+  return respond;
 }
 
 describe("chat.abort authorization", () => {
   it("rejects explicit run aborts from other clients", async () => {
-    const context = createSingleAbortContext();
+    const context = createContext({
+      chatAbortControllers: new Map([
+        ["run-1", createActiveRun("main", { connId: "conn-owner", deviceId: "dev-owner" })],
+      ]),
+    });
 
-    const respond = await invokeSingleRunAbort({
+    const respond = await invokeChatAbort({
       context,
-      connId: "conn-other",
-      deviceId: "dev-other",
-      scopes: ["operator.write"],
+      request: { sessionKey: "main", runId: "run-1" },
+      client: {
+        connId: "conn-other",
+        connect: { device: { id: "dev-other" }, scopes: ["operator.write"] },
+      },
     });
 
     const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
@@ -60,14 +79,13 @@ describe("chat.abort authorization", () => {
   });
 
   it("allows the same paired device to abort after reconnecting", async () => {
-    const context = createChatAbortContext({
+    const context = createContext({
       chatAbortControllers: new Map([
-        ["run-1", createActiveRun("main", { owner: { connId: "conn-old", deviceId: "dev-1" } })],
+        ["run-1", createActiveRun("main", { connId: "conn-old", deviceId: "dev-1" })],
       ]),
     });
 
-    const respond = await invokeChatAbortHandler({
-      handler: chatHandlers["chat.abort"],
+    const respond = await invokeChatAbort({
       context,
       request: { sessionKey: "main", runId: "run-1" },
       client: {
@@ -83,15 +101,14 @@ describe("chat.abort authorization", () => {
   });
 
   it("only aborts session-scoped runs owned by the requester", async () => {
-    const context = createChatAbortContext({
+    const context = createContext({
       chatAbortControllers: new Map([
-        ["run-mine", createActiveRun("main", { owner: { deviceId: "dev-1" } })],
-        ["run-other", createActiveRun("main", { owner: { deviceId: "dev-2" } })],
+        ["run-mine", createActiveRun("main", { deviceId: "dev-1" })],
+        ["run-other", createActiveRun("main", { deviceId: "dev-2" })],
       ]),
     });
 
-    const respond = await invokeChatAbortHandler({
-      handler: chatHandlers["chat.abort"],
+    const respond = await invokeChatAbort({
       context,
       request: { sessionKey: "main" },
       client: {
@@ -108,13 +125,19 @@ describe("chat.abort authorization", () => {
   });
 
   it("allows operator.admin clients to bypass owner checks", async () => {
-    const context = createSingleAbortContext();
+    const context = createContext({
+      chatAbortControllers: new Map([
+        ["run-1", createActiveRun("main", { connId: "conn-owner", deviceId: "dev-owner" })],
+      ]),
+    });
 
-    const respond = await invokeSingleRunAbort({
+    const respond = await invokeChatAbort({
       context,
-      connId: "conn-admin",
-      deviceId: "dev-admin",
-      scopes: ["operator.admin"],
+      request: { sessionKey: "main", runId: "run-1" },
+      client: {
+        connId: "conn-admin",
+        connect: { device: { id: "dev-admin" }, scopes: ["operator.admin"] },
+      },
     });
 
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];

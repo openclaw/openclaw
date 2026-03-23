@@ -30,15 +30,12 @@ export function displayContainers(containers: SandboxContainerInfo[], runtime: R
   displayItems(
     containers,
     {
-      emptyMessage: "No sandbox runtimes found.",
-      title: "📦 Sandbox Runtimes:",
+      emptyMessage: "No sandbox containers found.",
+      title: "📦 Sandbox Containers:",
       renderItem: (container, rt) => {
-        rt.log(`  ${container.runtimeLabel ?? container.containerName}`);
+        rt.log(`  ${container.containerName}`);
         rt.log(`    Status:  ${formatStatus(container.running)}`);
-        rt.log(
-          `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${formatImageMatch(container.imageMatch)}`,
-        );
-        rt.log(`    Backend: ${container.backendId ?? "docker"}`);
+        rt.log(`    Image:   ${container.image} ${formatImageMatch(container.imageMatch)}`);
         rt.log(
           `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
         );
@@ -95,9 +92,9 @@ export function displaySummary(
   runtime.log(`Total: ${totalCount} (${runningCount} running)`);
 
   if (mismatchCount > 0) {
-    runtime.log(`\n⚠️  ${mismatchCount} runtime(s) with config mismatch detected.`);
+    runtime.log(`\n⚠️  ${mismatchCount} container(s) with image mismatch detected.`);
     runtime.log(
-      `   Run '${formatCliCommand("openclaw sandbox recreate --all")}' to update all runtimes.`,
+      `   Run '${formatCliCommand("openclaw sandbox recreate --all")}' to update all containers.`,
     );
   }
 }
@@ -107,14 +104,12 @@ export function displayRecreatePreview(
   browsers: SandboxBrowserInfo[],
   runtime: RuntimeEnv,
 ): void {
-  runtime.log("\nSandbox runtimes to be recreated:\n");
+  runtime.log("\nContainers to be recreated:\n");
 
   if (containers.length > 0) {
-    runtime.log("📦 Sandbox Runtimes:");
+    runtime.log("📦 Sandbox Containers:");
     for (const container of containers) {
-      runtime.log(
-        `  - ${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}] (${formatSimpleStatus(container.running)})`,
-      );
+      runtime.log(`  - ${container.containerName} (${formatSimpleStatus(container.running)})`);
     }
   }
 
@@ -126,7 +121,7 @@ export function displayRecreatePreview(
   }
 
   const total = containers.length + browsers.length;
-  runtime.log(`\nTotal: ${total} runtime(s)`);
+  runtime.log(`\nTotal: ${total} container(s)`);
 }
 
 export function displayRecreateResult(
@@ -136,6 +131,6 @@ export function displayRecreateResult(
   runtime.log(`\nDone: ${result.successCount} removed, ${result.failCount} failed`);
 
   if (result.successCount > 0) {
-    runtime.log("\nRuntimes will be automatically recreated when the agent is next used.");
+    runtime.log("\nContainers will be automatically recreated when the agent is next used.");
   }
 }

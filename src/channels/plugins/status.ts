@@ -41,19 +41,6 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
   };
 }
 
-async function inspectChannelAccount<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): Promise<ResolvedAccount | null> {
-  return (params.plugin.config.inspectAccount?.(params.cfg, params.accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: params.plugin.id,
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }))) as ResolvedAccount | null;
-}
-
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
@@ -62,7 +49,13 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot | null> {
-  const inspectedAccount = await inspectChannelAccount(params);
+  const inspectedAccount =
+    params.plugin.config.inspectAccount?.(params.cfg, params.accountId) ??
+    inspectReadOnlyChannelAccount({
+      channelId: params.plugin.id,
+      cfg: params.cfg,
+      accountId: params.accountId,
+    });
   if (!inspectedAccount) {
     return null;
   }
@@ -80,9 +73,15 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const inspectedAccount = await inspectChannelAccount(params);
-  const account =
-    inspectedAccount ?? params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  const inspectedAccount =
+    params.plugin.config.inspectAccount?.(params.cfg, params.accountId) ??
+    inspectReadOnlyChannelAccount({
+      channelId: params.plugin.id,
+      cfg: params.cfg,
+      accountId: params.accountId,
+    });
+  const account = (inspectedAccount ??
+    params.plugin.config.resolveAccount(params.cfg, params.accountId)) as ResolvedAccount;
   return await buildSnapshotFromAccount({
     ...params,
     account,

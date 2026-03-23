@@ -27,65 +27,68 @@ function buildContext(overrides?: Partial<MsgContext>): MsgContext {
   } as MsgContext;
 }
 
-function expectAllowFromDecision(params: {
-  allowFrom: string[];
-  ctx?: Partial<MsgContext>;
-  allowed: boolean;
-}) {
-  const result = resolveElevatedPermissions({
-    cfg: buildConfig(params.allowFrom),
-    agentId: "main",
-    provider: "whatsapp",
-    ctx: buildContext(params.ctx),
-  });
-
-  expect(result.enabled).toBe(true);
-  expect(result.allowed).toBe(params.allowed);
-  if (params.allowed) {
-    expect(result.failures).toHaveLength(0);
-    return;
-  }
-
-  expect(result.failures).toContainEqual({
-    gate: "allowFrom",
-    key: "tools.elevated.allowFrom.whatsapp",
-  });
-}
-
 describe("resolveElevatedPermissions", () => {
   it("authorizes when sender matches allowFrom", () => {
-    expectAllowFromDecision({
-      allowFrom: ["+15550001111"],
-      allowed: true,
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["+15550001111"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
     });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.failures).toHaveLength(0);
   });
 
   it("does not authorize when only recipient matches allowFrom", () => {
-    expectAllowFromDecision({
-      allowFrom: ["+15559990000"],
-      allowed: false,
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["+15559990000"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.failures).toContainEqual({
+      gate: "allowFrom",
+      key: "tools.elevated.allowFrom.whatsapp",
     });
   });
 
   it("does not authorize untyped mutable sender fields", () => {
-    expectAllowFromDecision({
-      allowFrom: ["owner-display-name"],
-      allowed: false,
-      ctx: {
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["owner-display-name"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext({
         SenderName: "owner-display-name",
         SenderUsername: "owner-display-name",
         SenderTag: "owner-display-name",
-      },
+      }),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.failures).toContainEqual({
+      gate: "allowFrom",
+      key: "tools.elevated.allowFrom.whatsapp",
     });
   });
 
   it("authorizes mutable sender fields only with explicit prefix", () => {
-    expectAllowFromDecision({
-      allowFrom: ["username:owner_username"],
-      allowed: true,
-      ctx: {
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["username:owner_username"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext({
         SenderUsername: "owner_username",
-      },
+      }),
     });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.failures).toHaveLength(0);
   });
 });

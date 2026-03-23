@@ -99,13 +99,6 @@ export type RenderedDiffDocument = {
   inputKind: DiffInput["kind"];
 };
 
-export type DiffArtifactContext = {
-  agentId?: string;
-  sessionId?: string;
-  messageChannel?: string;
-  agentAccountId?: string;
-};
-
 export type DiffArtifactMeta = {
   id: string;
   token: string;
@@ -116,7 +109,6 @@ export type DiffArtifactMeta = {
   fileCount: number;
   viewerPath: string;
   htmlPath: string;
-  context?: DiffArtifactContext;
   filePath?: string;
   imagePath?: string;
 };

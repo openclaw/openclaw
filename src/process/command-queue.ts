@@ -59,14 +59,6 @@ const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
   nextTaskId: 1,
 }));
 
-function normalizeLane(lane: string): string {
-  return lane.trim() || CommandLane.Main;
-}
-
-function getLaneDepth(state: LaneState): number {
-  return state.queue.length + state.activeTaskIds.size;
-}
-
 function getLaneState(lane: string): LaneState {
   const existing = queueState.lanes.get(lane);
   if (existing) {
@@ -167,7 +159,7 @@ export function markGatewayDraining(): void {
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
-  const cleaned = normalizeLane(lane);
+  const cleaned = lane.trim() || CommandLane.Main;
   const state = getLaneState(cleaned);
   state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
   drainLane(cleaned);
@@ -184,7 +176,7 @@ export function enqueueCommandInLane<T>(
   if (queueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
-  const cleaned = normalizeLane(lane);
+  const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
@@ -196,7 +188,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, getLaneDepth(state));
+    logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);
   });
 }
@@ -212,24 +204,24 @@ export function enqueueCommand<T>(
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {
-  const resolved = normalizeLane(lane);
+  const resolved = lane.trim() || CommandLane.Main;
   const state = queueState.lanes.get(resolved);
   if (!state) {
     return 0;
   }
-  return getLaneDepth(state);
+  return state.queue.length + state.activeTaskIds.size;
 }
 
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of queueState.lanes.values()) {
-    total += getLaneDepth(s);
+    total += s.queue.length + s.activeTaskIds.size;
   }
   return total;
 }
 
 export function clearCommandLane(lane: string = CommandLane.Main) {
-  const cleaned = normalizeLane(lane);
+  const cleaned = lane.trim() || CommandLane.Main;
   const state = queueState.lanes.get(cleaned);
   if (!state) {
     return 0;

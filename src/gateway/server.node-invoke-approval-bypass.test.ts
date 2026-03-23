@@ -83,7 +83,7 @@ async function requestAllowOnceApproval(
     systemRunPlan: {
       argv: commandArgv,
       cwd: null,
-      commandText: command,
+      rawCommand: command,
       agentId: null,
       sessionKey: null,
     },

@@ -1,10 +1,5 @@
-import {
-  type GatewayBonjourBeacon,
-  pickResolvedGatewayHost,
-  pickResolvedGatewayPort,
-} from "../../infra/bonjour-discovery.js";
+import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
@@ -12,19 +7,39 @@ export type GatewayDiscoverOpts = {
 };
 
 export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
+  if (raw === undefined || raw === null) {
+    return fallbackMs;
+  }
+  const value =
+    typeof raw === "string"
+      ? raw.trim()
+      : typeof raw === "number" || typeof raw === "bigint"
+        ? String(raw)
+        : null;
+  if (value === null) {
+    throw new Error("invalid --timeout");
+  }
+  if (!value) {
+    return fallbackMs;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid --timeout: ${value}`);
+  }
+  return parsed;
 }
 
 export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
   // Security: TXT records are unauthenticated. Prefer the resolved service endpoint (SRV/A/AAAA)
-  // and fail closed when discovery did not resolve a routable host.
-  return pickResolvedGatewayHost(beacon);
+  // over TXT-provided routing hints.
+  const host = beacon.host || beacon.tailnetDns || beacon.lanHost;
+  return host?.trim() ? host.trim() : null;
 }
 
-export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
+export function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
   // Security: TXT records are unauthenticated. Prefer the resolved service port over TXT gatewayPort.
-  // Fail closed when discovery did not resolve a routable port.
-  return pickResolvedGatewayPort(beacon);
+  const port = beacon.port ?? beacon.gatewayPort ?? 18789;
+  return port > 0 ? port : 18789;
 }
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
@@ -59,7 +74,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   const host = pickBeaconHost(beacon);
   const gatewayPort = pickGatewayPort(beacon);
   const scheme = beacon.gatewayTls ? "wss" : "ws";
-  const wsUrl = host && gatewayPort ? `${scheme}://${host}:${gatewayPort}` : null;
+  const wsUrl = host ? `${scheme}://${host}:${gatewayPort}` : null;
 
   const lines = [`- ${title} ${domain}`];
 

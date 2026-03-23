@@ -1,11 +1,11 @@
 import {
-  createAgendaCard,
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
   createMediaPlayerCard,
   createEventCard,
-} from "../../plugin-sdk/line.js";
-import type { LineChannelData } from "../../plugin-sdk/line.js";
+  createAgendaCard,
+  createDeviceControlCard,
+  createAppleTvRemoteCard,
+} from "../../line/flex-templates.js";
+import type { LineChannelData } from "../../line/types.js";
 import type { ReplyPayload } from "../types.js";
 
 /**

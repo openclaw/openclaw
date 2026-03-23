@@ -19,17 +19,6 @@ function createRemoteGatewayTokenRefConfig(tokenId: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-async function expectNoGatewayCredentials(
-  config: OpenClawConfig,
-  env: Record<string, string | undefined>,
-) {
-  await withEnvAsync(env, async () => {
-    const credentials = await resolveNodeHostGatewayCredentials({ config });
-    expect(credentials.token).toBeUndefined();
-    expect(credentials.password).toBeUndefined();
-  });
-}
-
 describe("resolveNodeHostGatewayCredentials", () => {
   it("does not inherit gateway.remote token in local mode", async () => {
     const config = {
@@ -39,10 +28,17 @@ describe("resolveNodeHostGatewayCredentials", () => {
       },
     } as OpenClawConfig;
 
-    await expectNoGatewayCredentials(config, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    });
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+      },
+      async () => {
+        const credentials = await resolveNodeHostGatewayCredentials({ config });
+        expect(credentials.token).toBeUndefined();
+        expect(credentials.password).toBeUndefined();
+      },
+    );
   });
 
   it("ignores unresolved gateway.remote token refs in local mode", async () => {
@@ -60,11 +56,18 @@ describe("resolveNodeHostGatewayCredentials", () => {
       },
     } as OpenClawConfig;
 
-    await expectNoGatewayCredentials(config, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      MISSING_REMOTE_GATEWAY_TOKEN: undefined,
-    });
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        MISSING_REMOTE_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        const credentials = await resolveNodeHostGatewayCredentials({ config });
+        expect(credentials.token).toBeUndefined();
+        expect(credentials.password).toBeUndefined();
+      },
+    );
   });
 
   it("resolves remote token SecretRef values", async () => {

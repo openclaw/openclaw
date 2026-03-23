@@ -339,22 +339,6 @@ export async function runServiceRestart(params: {
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
-  const emitScheduledRestart = (
-    restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
-    serviceLoaded: boolean,
-  ) => {
-    emit({
-      ok: true,
-      result: restartStatus.daemonActionResult,
-      message: restartStatus.message,
-      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
-      warnings: warnings.length ? warnings : undefined,
-    });
-    if (!json) {
-      defaultRuntime.log(restartStatus.message);
-    }
-    return true;
-  };
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -439,14 +423,34 @@ export async function runServiceRestart(params: {
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
-      return emitScheduledRestart(restartStatus, loaded);
+      emit({
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, loaded),
+        warnings: warnings.length ? warnings : undefined,
+      });
+      if (!json) {
+        defaultRuntime.log(restartStatus.message);
+      }
+      return true;
     }
     if (params.postRestartCheck) {
       const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {
-          return emitScheduledRestart(restartStatus, loaded);
+          emit({
+            ok: true,
+            result: restartStatus.daemonActionResult,
+            message: restartStatus.message,
+            service: buildDaemonServiceSnapshot(params.service, loaded),
+            warnings: warnings.length ? warnings : undefined,
+          });
+          if (!json) {
+            defaultRuntime.log(restartStatus.message);
+          }
+          return true;
         }
       }
     }

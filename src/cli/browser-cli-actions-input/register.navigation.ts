@@ -31,7 +31,7 @@ export function registerBrowserNavigationCommands(
           { timeoutMs: 20000 },
         );
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`navigated to ${result.url ?? url}`);

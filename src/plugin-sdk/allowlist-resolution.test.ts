@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapAllowlistResolutionInputs } from "./allow-from.js";
+import { mapAllowlistResolutionInputs } from "./allowlist-resolution.js";
 
 describe("mapAllowlistResolutionInputs", () => {
   it("maps inputs sequentially and preserves order", async () => {

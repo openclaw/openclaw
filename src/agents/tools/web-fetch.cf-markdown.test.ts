@@ -4,7 +4,6 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
   createBaseWebFetchToolConfig,
   installWebFetchSsrfHarness,
-  makeFetchHeaders,
 } from "./web-fetch.test-harness.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-tools.js";
@@ -12,14 +11,17 @@ import { createWebFetchTool } from "./web-tools.js";
 const baseToolConfig = createBaseWebFetchToolConfig();
 installWebFetchSsrfHarness();
 
+function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
+  return {
+    get: (key) => map[key.toLowerCase()] ?? null,
+  };
+}
+
 function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeFetchHeaders({
-      "content-type": "text/markdown; charset=utf-8",
-      ...extraHeaders,
-    }),
+    headers: makeHeaders({ "content-type": "text/markdown; charset=utf-8", ...extraHeaders }),
     text: async () => body,
   } as Response;
 }
@@ -28,7 +30,7 @@ function htmlResponse(body: string): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
+    headers: makeHeaders({ "content-type": "text/html; charset=utf-8" }),
     text: async () => body,
   } as Response;
 }

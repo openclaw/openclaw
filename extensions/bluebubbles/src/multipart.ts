@@ -30,11 +30,3 @@ export async function postMultipartFormData(params: {
     params.timeoutMs,
   );
 }
-
-export async function assertMultipartActionOk(response: Response, action: string): Promise<void> {
-  if (response.ok) {
-    return;
-  }
-  const errorText = await response.text().catch(() => "");
-  throw new Error(`BlueBubbles ${action} failed (${response.status}): ${errorText || "unknown"}`);
-}

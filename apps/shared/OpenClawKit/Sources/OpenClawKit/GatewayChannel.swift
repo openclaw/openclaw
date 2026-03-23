@@ -513,11 +513,8 @@ public actor GatewayChannelActor {
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
         let authToken =
             explicitToken ??
-                // A freshly scanned setup code should force the bootstrap pairing path instead of
-                // silently reusing an older stored device token.
-                (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
-                    ? storedToken
-                    : nil)
+                (includeDeviceIdentity && explicitPassword == nil &&
+                    (explicitBootstrapToken == nil || storedToken != nil) ? storedToken : nil)
         let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource

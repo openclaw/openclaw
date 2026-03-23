@@ -7,7 +7,6 @@ export type AgentMediaPayload = {
   MediaTypes?: string[];
 };
 
-/** Convert outbound media descriptors into the legacy agent payload field layout. */
 export function buildAgentMediaPayload(
   mediaList: Array<{ path: string; contentType?: string | null }>,
 ): AgentMediaPayload {

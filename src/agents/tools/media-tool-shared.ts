@@ -1,8 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
+import { getDefaultLocalRoots } from "../../web/media.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
-import type { ToolModelConfig } from "./model-config.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
@@ -22,21 +21,6 @@ export function applyImageModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageModelConfig: ImageModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
-}
-
-export function applyImageGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
-}
-
-function applyAgentDefaultModelConfig(
-  cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel",
-  modelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
   if (!cfg) {
     return undefined;
   }
@@ -46,7 +30,7 @@ function applyAgentDefaultModelConfig(
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        [key]: modelConfig,
+        imageModel: imageModelConfig,
       },
     },
   };

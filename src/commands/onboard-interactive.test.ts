@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
+import { runInteractiveOnboarding } from "./onboard-interactive.js";
 
 const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(() => ({ id: "prompter" })),
-  runSetupWizard: vi.fn(async () => {}),
+  runOnboardingWizard: vi.fn(async () => {}),
   restoreTerminalState: vi.fn(),
 }));
 
@@ -13,8 +13,8 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
 
-vi.mock("../wizard/setup.js", () => ({
-  runSetupWizard: mocks.runSetupWizard,
+vi.mock("../wizard/onboarding.js", () => ({
+  runOnboardingWizard: mocks.runOnboardingWizard,
 }));
 
 vi.mock("../terminal/restore.js", () => ({
@@ -29,7 +29,7 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
-describe("runInteractiveSetup", () => {
+describe("runInteractiveOnboarding", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -37,10 +37,10 @@ describe("runInteractiveSetup", () => {
   it("restores terminal state without resuming stdin on success", async () => {
     const runtime = makeRuntime();
 
-    await runInteractiveSetup({} as never, runtime);
+    await runInteractiveOnboarding({} as never, runtime);
 
-    expect(mocks.runSetupWizard).toHaveBeenCalledOnce();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+    expect(mocks.runOnboardingWizard).toHaveBeenCalledOnce();
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
       resumeStdinIfPaused: false,
     });
   });
@@ -54,12 +54,12 @@ describe("runInteractiveSetup", () => {
         throw exitError;
       }) as unknown as RuntimeEnv["exit"],
     };
-    mocks.runSetupWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
+    mocks.runOnboardingWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
 
-    await expect(runInteractiveSetup({} as never, runtime)).rejects.toBe(exitError);
+    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toBe(exitError);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
       resumeStdinIfPaused: false,
     });
     const restoreOrder =
@@ -73,12 +73,12 @@ describe("runInteractiveSetup", () => {
   it("rethrows non-cancel errors after restoring terminal state", async () => {
     const runtime = makeRuntime();
     const err = new Error("boom");
-    mocks.runSetupWizard.mockRejectedValueOnce(err);
+    mocks.runOnboardingWizard.mockRejectedValueOnce(err);
 
-    await expect(runInteractiveSetup({} as never, runtime)).rejects.toThrow("boom");
+    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toThrow("boom");
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
       resumeStdinIfPaused: false,
     });
   });

@@ -1,9 +1,18 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
 import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
+
+async function withTempRoot<T>(prefix: string, run: (root: string) => Promise<T>): Promise<T> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await run(root);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -19,7 +28,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempRoot("openclaw-boundary-path-", async (base) => {
       const root = path.join(base, "workspace");
       const targetDir = path.join(root, "target-dir");
       const linkPath = path.join(root, "alias");
@@ -46,7 +55,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempRoot("openclaw-boundary-path-", async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const linkPath = path.join(root, "alias-out");
@@ -77,7 +86,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempRoot("openclaw-boundary-path-", async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const outsideFile = path.join(outside, "target.txt");
@@ -113,7 +122,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempRoot("openclaw-boundary-path-", async (base) => {
       const root = path.join(base, "workspace");
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
@@ -144,7 +153,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
+    await withTempRoot("openclaw-boundary-path-fuzz-", async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");

@@ -1,4 +1,9 @@
-import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveConfigWriteTargetFromPath,
+} from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -26,7 +31,6 @@ import {
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
-import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -80,19 +84,20 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     }
     parsedWritePath = parsedPath.path;
     const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
-    const deniedText = resolveConfigWriteDeniedText({
+    const writeAuth = authorizeConfigWrite({
       cfg: params.cfg,
-      channel: params.command.channel,
-      channelId,
-      accountId: params.ctx.AccountId,
-      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      origin: { channelId, accountId: params.ctx.AccountId },
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
+      allowBypass: canBypassConfigWritePolicy({
+        channel: params.command.channel,
+        gatewayClientScopes: params.ctx.GatewayClientScopes,
+      }),
     });
-    if (deniedText) {
+    if (!writeAuth.allowed) {
       return {
         shouldContinue: false,
         reply: {
-          text: deniedText,
+          text: formatConfigWriteDeniedMessage({ result: writeAuth, fallbackChannelId: channelId }),
         },
       };
     }

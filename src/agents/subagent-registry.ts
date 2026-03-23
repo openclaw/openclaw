@@ -6,7 +6,6 @@ import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
@@ -16,7 +15,6 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -150,78 +148,6 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
     }
   }
   return undefined;
-}
-
-export function resolveSubagentSessionStatus(
-  entry: Pick<SubagentRunRecord, "endedAt" | "endedReason" | "outcome"> | null | undefined,
-): SessionEntry["status"] {
-  if (!entry) {
-    return undefined;
-  }
-  if (!entry.endedAt) {
-    return "running";
-  }
-  if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
-    return "killed";
-  }
-  const status = entry.outcome?.status;
-  if (status === "error") {
-    return "failed";
-  }
-  if (status === "timeout") {
-    return "timeout";
-  }
-  return "done";
-}
-
-async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
-  const childSessionKey = entry.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return;
-  }
-
-  const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const startedAt = getSubagentSessionStartedAt(entry);
-  const endedAt =
-    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
-  const runtimeMs =
-    endedAt !== undefined
-      ? getSubagentSessionRuntimeMs(entry, endedAt)
-      : getSubagentSessionRuntimeMs(entry);
-  const status = resolveSubagentSessionStatus(entry);
-
-  await updateSessionStore(storePath, (store) => {
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return;
-    }
-
-    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-      sessionEntry.startedAt = startedAt;
-    } else {
-      delete sessionEntry.startedAt;
-    }
-
-    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-      sessionEntry.endedAt = endedAt;
-    } else {
-      delete sessionEntry.endedAt;
-    }
-
-    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      sessionEntry.runtimeMs = runtimeMs;
-    } else {
-      delete sessionEntry.runtimeMs;
-    }
-
-    if (status) {
-      sessionEntry.status = status;
-    } else {
-      delete sessionEntry.status;
-    }
-  });
 }
 
 function resolveSubagentRunOrphanReason(params: {
@@ -396,7 +322,6 @@ async function notifyContextEngineSubagentEnded(params: {
     ensureRuntimePluginsLoaded({
       config: cfg,
       workspaceDir: params.workspaceDir,
-      allowGatewaySubagentBinding: true,
     });
     ensureContextEnginesInitialized();
     const engine = await resolveContextEngine(cfg);
@@ -574,33 +499,7 @@ async function completeSubagentRun(params: {
     persistSubagentRuns();
   }
 
-  try {
-    await persistSubagentSessionTiming(entry);
-  } catch (err) {
-    log.warn("failed to persist subagent session timing", {
-      err,
-      runId: entry.runId,
-      childSessionKey: entry.childSessionKey,
-    });
-  }
-
   const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
-  if (mutated && !suppressedForSteerRestart) {
-    // The gateway also emits sessions.changed directly from raw lifecycle
-    // events, but for subagent sessions the visible status comes from this
-    // registry. When a restarted follow-up run ends, the raw lifecycle `end`
-    // event can reach websocket subscribers before this registry records
-    // endedAt/outcome, leaving the dashboard stuck on the stale "running"
-    // snapshot. Emit a follow-up lifecycle change after persisting the
-    // registry update so subscribers receive the authoritative completed
-    // status.
-    emitSessionLifecycleEvent({
-      sessionKey: entry.childSessionKey,
-      reason: "subagent-status",
-      parentSessionKey: entry.requesterSessionKey,
-      label: entry.label,
-    });
-  }
   const shouldEmitEndedHook =
     !suppressedForSteerRestart &&
     shouldEmitEndedHookForRun({
@@ -785,19 +684,6 @@ function restoreSubagentRunsOnce() {
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
-
-    // Schedule orphan recovery for subagent sessions that were aborted
-    // by a SIGUSR1 reload. This runs after a short delay to let the
-    // gateway fully bootstrap first. Dynamic import to avoid increasing
-    // startup memory footprint. (#47711)
-    void import("./subagent-orphan-recovery.js").then(
-      ({ scheduleOrphanRecovery }) => {
-        scheduleOrphanRecovery({ getActiveRuns: () => subagentRuns });
-      },
-      () => {
-        // Ignore import failures — orphan recovery is best-effort.
-      },
-    );
   } catch {
     // ignore restore failures
   }
@@ -806,10 +692,7 @@ function restoreSubagentRunsOnce() {
 function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
   const config = cfg ?? loadConfig();
   const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
-  if (!Number.isFinite(minutes) || minutes < 0) {
-    return undefined;
-  }
-  if (minutes === 0) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
@@ -902,9 +785,6 @@ function ensureListener() {
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         if (startedAt) {
           entry.startedAt = startedAt;
-          if (typeof entry.sessionStartedAt !== "number") {
-            entry.sessionStartedAt = startedAt;
-          }
           persistSubagentRuns();
         }
         return;
@@ -1206,51 +1086,6 @@ export function clearSubagentRunSteerRestart(runId: string) {
   return true;
 }
 
-function resolveSubagentSessionStartedAt(
-  entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt">,
-): number | undefined {
-  if (typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)) {
-    return entry.sessionStartedAt;
-  }
-  if (typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)) {
-    return entry.startedAt;
-  }
-  return typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
-    ? entry.createdAt
-    : undefined;
-}
-
-export function getSubagentSessionStartedAt(
-  entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt"> | null | undefined,
-): number | undefined {
-  return entry ? resolveSubagentSessionStartedAt(entry) : undefined;
-}
-
-export function getSubagentSessionRuntimeMs(
-  entry:
-    | Pick<SubagentRunRecord, "startedAt" | "endedAt" | "accumulatedRuntimeMs">
-    | null
-    | undefined,
-  now = Date.now(),
-): number | undefined {
-  if (!entry) {
-    return undefined;
-  }
-
-  const accumulatedRuntimeMs =
-    typeof entry.accumulatedRuntimeMs === "number" && Number.isFinite(entry.accumulatedRuntimeMs)
-      ? Math.max(0, entry.accumulatedRuntimeMs)
-      : 0;
-
-  if (typeof entry.startedAt !== "number" || !Number.isFinite(entry.startedAt)) {
-    return entry.accumulatedRuntimeMs != null ? accumulatedRuntimeMs : undefined;
-  }
-
-  const currentRunEndedAt =
-    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : now;
-  return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - entry.startedAt));
-}
-
 export function replaceSubagentRunAfterSteer(params: {
   previousRunId: string;
   nextRunId: string;
@@ -1281,28 +1116,15 @@ export function replaceSubagentRunAfterSteer(params: {
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = source.spawnMode === "session" ? "session" : "run";
   const archiveAtMs =
-    spawnMode === "session" || source.cleanup === "keep"
-      ? undefined
-      : archiveAfterMs
-        ? now + archiveAfterMs
-        : undefined;
+    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
-  const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
-  const accumulatedRuntimeMs =
-    getSubagentSessionRuntimeMs(
-      source,
-      typeof source.endedAt === "number" ? source.endedAt : now,
-    ) ?? 0;
 
   const next: SubagentRunRecord = {
     ...source,
     runId: nextRunId,
-    createdAt: now,
     startedAt: now,
-    sessionStartedAt,
-    accumulatedRuntimeMs,
     endedAt: undefined,
     endedReason: undefined,
     endedHookEmittedAt: undefined,
@@ -1358,11 +1180,7 @@ export function registerSubagentRun(params: {
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = params.spawnMode === "session" ? "session" : "run";
   const archiveAtMs =
-    spawnMode === "session" || params.cleanup === "keep"
-      ? undefined
-      : archiveAfterMs
-        ? now + archiveAfterMs
-        : undefined;
+    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -1383,8 +1201,6 @@ export function registerSubagentRun(params: {
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,
-    sessionStartedAt: now,
-    accumulatedRuntimeMs: 0,
     archiveAtMs,
     cleanupHandled: false,
     wakeOnDescendantSettle: undefined,
@@ -1428,9 +1244,6 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     let mutated = false;
     if (typeof wait.startedAt === "number") {
       entry.startedAt = wait.startedAt;
-      if (typeof entry.sessionStartedAt !== "number") {
-        entry.sessionStartedAt = wait.startedAt;
-      }
       mutated = true;
     }
     if (typeof wait.endedAt === "number") {
@@ -1598,13 +1411,6 @@ export function markSubagentRunTerminated(params: {
   if (updated > 0) {
     persistSubagentRuns();
     for (const entry of entriesByChildSessionKey.values()) {
-      void persistSubagentSessionTiming(entry).catch((err) => {
-        log.warn("failed to persist killed subagent session timing", {
-          err,
-          runId: entry.runId,
-          childSessionKey: entry.childSessionKey,
-        });
-      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
@@ -1672,32 +1478,6 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
   );
-}
-
-export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
-  let latestActive: SubagentRunRecord | null = null;
-  let latestEnded: SubagentRunRecord | null = null;
-  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (typeof entry.endedAt !== "number") {
-      if (!latestActive || entry.createdAt > latestActive.createdAt) {
-        latestActive = entry;
-      }
-      continue;
-    }
-    if (!latestEnded || entry.createdAt > latestEnded.createdAt) {
-      latestEnded = entry;
-    }
-  }
-
-  return latestActive ?? latestEnded;
 }
 
 export function initSubagentRegistry() {

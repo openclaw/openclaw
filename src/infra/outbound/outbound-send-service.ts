@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
@@ -84,7 +84,6 @@ export async function executeSendAction(params: {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
-  forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
@@ -133,7 +132,6 @@ export async function executeSendAction(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
     dryRun: params.ctx.dryRun,
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,
@@ -152,16 +150,14 @@ export async function executeSendAction(params: {
 
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
-  resolveCorePoll: () => {
-    to: string;
-    question: string;
-    options: string[];
-    maxSelections: number;
-    durationSeconds?: number;
-    durationHours?: number;
-    threadId?: string;
-    isAnonymous?: boolean;
-  };
+  to: string;
+  question: string;
+  options: string[];
+  maxSelections: number;
+  durationSeconds?: number;
+  durationHours?: number;
+  threadId?: string;
+  isAnonymous?: boolean;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -176,20 +172,19 @@ export async function executePollAction(params: {
     return pluginHandled;
   }
 
-  const corePoll = params.resolveCorePoll();
   const result: MessagePollResult = await sendPoll({
     cfg: params.ctx.cfg,
-    to: corePoll.to,
-    question: corePoll.question,
-    options: corePoll.options,
-    maxSelections: corePoll.maxSelections,
-    durationSeconds: corePoll.durationSeconds ?? undefined,
-    durationHours: corePoll.durationHours ?? undefined,
+    to: params.to,
+    question: params.question,
+    options: params.options,
+    maxSelections: params.maxSelections,
+    durationSeconds: params.durationSeconds ?? undefined,
+    durationHours: params.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: corePoll.threadId ?? undefined,
+    threadId: params.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: corePoll.isAnonymous ?? undefined,
+    isAnonymous: params.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
   });

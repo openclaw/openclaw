@@ -1,5 +1,4 @@
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
 
 export type BindingTargetKind = "subagent" | "session";
 export type BindingStatus = "active" | "ending" | "ended";
@@ -146,69 +145,25 @@ function resolveAdapterCapabilities(
   };
 }
 
-const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBinding.adapters");
-
-type SessionBindingAdapterRegistration = {
-  adapter: SessionBindingAdapter;
-  normalizedAdapter: SessionBindingAdapter;
-};
-
-const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapterRegistration[]>(
-  SESSION_BINDING_ADAPTERS_KEY,
-);
-
-function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
-  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  return registrations?.[0]?.normalizedAdapter ?? null;
-}
+const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
-  const normalizedAdapter = {
+  const key = toAdapterKey({
+    channel: adapter.channel,
+    accountId: adapter.accountId,
+  });
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, {
     ...adapter,
     channel: adapter.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(adapter.accountId),
-  };
-  const key = toAdapterKey({
-    channel: normalizedAdapter.channel,
-    accountId: normalizedAdapter.accountId,
   });
-  const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  const registrations = existing ? [...existing] : [];
-  registrations.push({
-    adapter,
-    normalizedAdapter,
-  });
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
 export function unregisterSessionBindingAdapter(params: {
   channel: string;
   accountId: string;
-  adapter?: SessionBindingAdapter;
 }): void {
-  const key = toAdapterKey(params);
-  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  if (!registrations || registrations.length === 0) {
-    return;
-  }
-  const nextRegistrations = [...registrations];
-  if (params.adapter) {
-    // Remove the matching owner so a surviving duplicate graph can stay active.
-    const registrationIndex = nextRegistrations.findLastIndex(
-      (registration) => registration.adapter === params.adapter,
-    );
-    if (registrationIndex < 0) {
-      return;
-    }
-    nextRegistrations.splice(registrationIndex, 1);
-  } else {
-    nextRegistrations.pop();
-  }
-  if (nextRegistrations.length === 0) {
-    ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
-    return;
-  }
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
+  ADAPTERS_BY_CHANNEL_ACCOUNT.delete(toAdapterKey(params));
 }
 
 function resolveAdapterForConversation(ref: ConversationRef): SessionBindingAdapter | null {
@@ -226,13 +181,7 @@ function resolveAdapterForChannelAccount(params: {
     channel: params.channel,
     accountId: params.accountId,
   });
-  return getActiveAdapterForKey(key);
-}
-
-function getActiveRegisteredAdapters(): SessionBindingAdapter[] {
-  return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
-    .map((registrations) => registrations[0]?.normalizedAdapter ?? null)
-    .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
+  return ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? null;
 }
 
 function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[] {
@@ -316,7 +265,7 @@ function createDefaultSessionBindingService(): SessionBindingService {
         return [];
       }
       const results: SessionBindingRecord[] = [];
-      for (const adapter of getActiveRegisteredAdapters()) {
+      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
         const entries = adapter.listBySession(key);
         if (entries.length > 0) {
           results.push(...entries);
@@ -340,13 +289,13 @@ function createDefaultSessionBindingService(): SessionBindingService {
       if (!normalizedBindingId) {
         return;
       }
-      for (const adapter of getActiveRegisteredAdapters()) {
+      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
         adapter.touch?.(normalizedBindingId, at);
       }
     },
     unbind: async (input) => {
       const removed: SessionBindingRecord[] = [];
-      for (const adapter of getActiveRegisteredAdapters()) {
+      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
         if (!adapter.unbind) {
           continue;
         }

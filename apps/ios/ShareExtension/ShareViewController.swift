@@ -189,7 +189,6 @@ final class ShareViewController: UIViewController {
             try await gateway.connect(
                 url: url,
                 token: config.token,
-                bootstrapToken: nil,
                 password: config.password,
                 connectOptions: makeOptions("openclaw-ios"),
                 sessionBox: nil,
@@ -209,7 +208,6 @@ final class ShareViewController: UIViewController {
             try await gateway.connect(
                 url: url,
                 token: config.token,
-                bootstrapToken: nil,
                 password: config.password,
                 connectOptions: makeOptions("moltbot-ios"),
                 sessionBox: nil,

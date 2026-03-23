@@ -7,8 +7,8 @@ import {
 import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
@@ -30,16 +30,14 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const loadedCfg = await requireValidConfig(runtime);
-  if (!loadedCfg) {
+  const cfg = await requireValidConfig(runtime);
+  if (!cfg) {
     return;
   }
-  let cfg = loadedCfg;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  const rawChannel = opts.channel?.trim() ?? "";
-  let channel: ChatChannel | null = normalizeChannelId(rawChannel);
+  let channel: ChatChannel | null = normalizeChannelId(opts.channel);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
@@ -76,16 +74,15 @@ export async function channelsRemoveCommand(
       return;
     }
   } else {
-    if (!rawChannel) {
+    if (!channel) {
       runtime.error("Channel is required. Use --channel <name>.");
       runtime.exit(1);
       return;
     }
     if (!deleteConfig) {
       const confirm = createClackPrompter();
-      const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
       const ok = await confirm.confirm({
-        message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
+        message: `Disable ${channelLabel(channel)} account "${accountId}"? (keeps config)`,
         initialValue: true,
       });
       if (!ok) {
@@ -94,38 +91,18 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const resolvedPluginState =
-    !useWizard && rawChannel
-      ? await resolveInstallableChannelPlugin({
-          cfg,
-          runtime,
-          rawChannel,
-          allowInstall: true,
-        })
-      : null;
-  if (resolvedPluginState?.configChanged) {
-    cfg = resolvedPluginState.cfg;
-  }
-  const resolvedChannel = resolvedPluginState?.channelId ?? channel;
-  if (!resolvedChannel) {
-    runtime.error(`Unknown channel: ${rawChannel}`);
-    runtime.exit(1);
-    return;
-  }
-  channel = resolvedChannel;
-  const plugin = resolvedPluginState?.plugin ?? getChannelPlugin(resolvedChannel);
+  const plugin = getChannelPlugin(channel);
   if (!plugin) {
-    runtime.error(`Unknown channel: ${resolvedChannel}`);
+    runtime.error(`Unknown channel: ${channel}`);
     runtime.exit(1);
     return;
   }
-  const resolvedChannelId: ChatChannel = resolvedChannel;
+
   const resolvedAccountId =
     normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
 
   let next = { ...cfg };
-  const prevCfg = cfg;
   if (deleteConfig) {
     if (!plugin.config.deleteAccount) {
       runtime.error(`Channel ${channel} does not support delete.`);
@@ -136,11 +113,11 @@ export async function channelsRemoveCommand(
       cfg: next,
       accountId: resolvedAccountId,
     });
-    await plugin.lifecycle?.onAccountRemoved?.({
-      prevCfg,
-      accountId: resolvedAccountId,
-      runtime,
-    });
+
+    // Clean up Telegram polling offset to prevent stale offset on bot token change (#18233)
+    if (channel === "telegram") {
+      await deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
+    }
   } else {
     if (!plugin.config.setAccountEnabled) {
       runtime.error(`Channel ${channel} does not support disable.`);
@@ -152,26 +129,20 @@ export async function channelsRemoveCommand(
       accountId: resolvedAccountId,
       enabled: false,
     });
-    await plugin.lifecycle?.onAccountConfigChanged?.({
-      prevCfg,
-      nextCfg: next,
-      accountId: resolvedAccountId,
-      runtime,
-    });
   }
 
   await writeConfigFile(next);
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
     );
   }
 }

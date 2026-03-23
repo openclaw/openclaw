@@ -88,8 +88,7 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 

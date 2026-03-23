@@ -4,7 +4,7 @@ import {
   type CliOutboundSendSource,
 } from "./outbound-send-mapping.js";
 
-export type CliDeps = CliOutboundSendSource;
+export type CliDeps = Required<CliOutboundSendSource>;
 
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   return createOutboundSendDepsFromCliSource(deps);

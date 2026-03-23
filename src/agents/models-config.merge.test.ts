@@ -74,8 +74,8 @@ describe("models-config merge helpers", () => {
         headers: { "User-Agent": "claude-code/0.1.0" },
         models: [
           {
-            id: "kimi-code",
-            name: "Kimi Code",
+            id: "k2p5",
+            name: "Kimi for Coding",
             input: ["text", "image"],
             reasoning: true,
           },
@@ -87,8 +87,8 @@ describe("models-config merge helpers", () => {
         headers: { "X-Kimi-Tenant": "tenant-a" },
         models: [
           {
-            id: "kimi-code",
-            name: "Kimi Code",
+            id: "k2p5",
+            name: "Kimi for Coding",
             input: ["text", "image"],
             reasoning: true,
           },

@@ -60,24 +60,11 @@ export function resolveAllowlistCandidates<TSource extends string>(params: {
   return { allowed: false };
 }
 
-export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
-  compiledAllowlist: CompiledAllowlist;
-  candidates: Array<{ value?: string; source: TSource }>;
-}): AllowlistMatch<TSource> {
-  if (params.compiledAllowlist.set.size === 0) {
-    return { allowed: false };
-  }
-  if (params.compiledAllowlist.wildcard) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" as TSource };
-  }
-  return resolveAllowlistCandidates(params);
-}
-
 export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
   allowList: ReadonlyArray<string>;
   candidates: Array<{ value?: string; source: TSource }>;
 }): AllowlistMatch<TSource> {
-  return resolveCompiledAllowlistMatch({
+  return resolveAllowlistCandidates({
     compiledAllowlist: compileAllowlist(params.allowList),
     candidates: params.candidates,
   });

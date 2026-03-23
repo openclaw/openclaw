@@ -61,8 +61,6 @@ export function renderSkills(props: SkillsProps) {
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}
             placeholder="Search skills"
-            autocomplete="off"
-            name="skills-filter"
           />
         </label>
         <div class="muted">${filtered.length} shown</div>

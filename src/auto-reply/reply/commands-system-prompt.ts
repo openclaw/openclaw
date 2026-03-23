@@ -57,7 +57,6 @@ export async function resolveCommandsSystemPromptBundle(
         agentId: params.agentId,
         workspaceDir,
         sessionKey: params.sessionKey,
-        allowGatewaySubagentBinding: true,
         messageProvider: params.command.channel,
         groupId: params.sessionEntry?.groupId ?? undefined,
         groupChannel: params.sessionEntry?.groupChannel ?? undefined,

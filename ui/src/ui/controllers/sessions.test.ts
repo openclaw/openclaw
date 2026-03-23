@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
-
-if (!("window" in globalThis)) {
-  Object.assign(globalThis, {
-    window: {
-      confirm: () => false,
-    },
-  });
-}
 
 function createState(request: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
   return {
@@ -30,20 +22,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("subscribeSessions", () => {
-  it("registers for session change events", async () => {
-    const request = vi.fn(async () => ({ subscribed: true }));
-    const state = createState(request);
-
-    await subscribeSessions(state);
-
-    expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
-    expect(state.sessionsError).toBeNull();
-  });
-});
-
-describe("deleteSessionsAndRefresh", () => {
-  it("deletes multiple sessions and refreshes", async () => {
+describe("deleteSessionAndRefresh", () => {
+  it("refreshes sessions after a successful delete", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.delete") {
         return { ok: true };
@@ -56,44 +36,39 @@ describe("deleteSessionsAndRefresh", () => {
     const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b"]);
+    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
 
-    expect(deleted).toEqual(["key-a", "key-b"]);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(deleted).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.delete", {
-      key: "key-a",
+      key: "agent:main:test",
       deleteTranscript: true,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.delete", {
-      key: "key-b",
-      deleteTranscript: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
     });
+    expect(state.sessionsError).toBeNull();
     expect(state.sessionsLoading).toBe(false);
   });
 
-  it("returns empty array when user cancels", async () => {
+  it("does not refresh sessions when user cancels delete", async () => {
     const request = vi.fn(async () => undefined);
-    const state = createState(request);
+    const state = createState(request, { sessionsError: "existing error" });
     vi.spyOn(window, "confirm").mockReturnValue(false);
 
-    const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
+    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toBe(false);
     expect(request).not.toHaveBeenCalled();
+    expect(state.sessionsError).toBe("existing error");
+    expect(state.sessionsLoading).toBe(false);
   });
 
-  it("returns partial results when some deletes fail", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
+  it("does not refresh sessions when delete fails and preserves the delete error", async () => {
+    const request = vi.fn(async (method: string) => {
       if (method === "sessions.delete") {
-        const p = params as { key: string };
-        if (p.key === "key-b" || p.key === "key-c") {
-          throw new Error(`delete failed: ${p.key}`);
-        }
-        return { ok: true };
+        throw new Error("delete boom");
       }
       if (method === "sessions.list") {
         return undefined;
@@ -103,20 +78,27 @@ describe("deleteSessionsAndRefresh", () => {
     const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b", "key-c", "key-d"]);
+    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
 
-    expect(deleted).toEqual(["key-a", "key-d"]);
-    expect(state.sessionsError).toBe("Error: delete failed: key-b; Error: delete failed: key-c");
+    expect(deleted).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:main:test",
+      deleteTranscript: true,
+    });
+    expect(state.sessionsError).toContain("delete boom");
     expect(state.sessionsLoading).toBe(false);
   });
+});
 
-  it("returns empty array when already loading", async () => {
+describe("deleteSession", () => {
+  it("returns false when already loading", async () => {
     const request = vi.fn(async () => undefined);
     const state = createState(request, { sessionsLoading: true });
 
-    const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
+    const deleted = await deleteSession(state, "agent:main:test");
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 });

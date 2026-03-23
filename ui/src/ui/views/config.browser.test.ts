@@ -42,8 +42,6 @@ describe("config view", () => {
     themeMode: "system" as ThemeMode,
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
-    borderRadius: 50,
-    setBorderRadius: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });
@@ -209,15 +207,6 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
-  });
-
-  it("renders the top search icon inside the search input row", () => {
-    const container = document.createElement("div");
-    render(renderConfig(baseProps()), container);
-
-    const icon = container.querySelector<SVGElement>(".config-search__icon");
-    expect(icon).not.toBeNull();
-    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
   });
 
   it("renders top tabs for root and available sections", () => {

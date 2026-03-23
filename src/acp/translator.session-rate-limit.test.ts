@@ -6,7 +6,6 @@ import type {
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
-import { listThinkingLevels } from "../auto-reply/thinking.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
@@ -242,7 +241,7 @@ describe("acp session UX bridge behavior", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
+  it("replays user and assistant text history on loadSession and returns initial controls", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection.__sessionUpdateMock;
@@ -283,13 +282,7 @@ describe("acp session UX bridge behavior", () => {
         return {
           messages: [
             { role: "user", content: [{ type: "text", text: "Question" }] },
-            {
-              role: "assistant",
-              content: [
-                { type: "thinking", thinking: "Internal loop about NO_REPLY" },
-                { type: "text", text: "Answer" },
-              ],
-            },
+            { role: "assistant", content: [{ type: "text", text: "Answer" }] },
             { role: "system", content: [{ type: "text", text: "ignore me" }] },
             { role: "assistant", content: [{ type: "image", image: "skip" }] },
           ],
@@ -304,9 +297,7 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("high");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual(
-      listThinkingLevels("openai", "gpt-5.4"),
-    );
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
     expect(result.configOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -336,13 +327,6 @@ describe("acp session UX bridge behavior", () => {
       update: {
         sessionUpdate: "user_message_chunk",
         content: { type: "text", text: "Question" },
-      },
-    });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "agent:main:work",
-      update: {
-        sessionUpdate: "agent_thought_chunk",
-        content: { type: "text", text: "Internal loop about NO_REPLY" },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({

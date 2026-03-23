@@ -4,7 +4,7 @@ export type ParsedTelegramTopicConversation = {
   canonicalConversationId: string;
 };
 
-export function normalizeConversationText(value: unknown): string {
+function normalizeText(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
   }
@@ -15,7 +15,7 @@ export function normalizeConversationText(value: unknown): string {
 }
 
 export function parseTelegramChatIdFromTarget(raw: unknown): string | undefined {
-  const text = normalizeConversationText(raw);
+  const text = normalizeText(raw);
   if (!text) {
     return undefined;
   }

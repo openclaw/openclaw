@@ -1,9 +1,12 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
-import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-export type ImageModelConfig = ToolModelConfig;
+export type ImageModelConfig = { primary?: string; fallbacks?: string[] };
 
 export function decodeDataUrl(dataUrl: string): {
   buffer: Buffer;
@@ -52,7 +55,12 @@ export function coerceImageAssistantText(params: {
 }
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
-  return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
+  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
+  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.imageModel);
+  return {
+    ...(primary?.trim() ? { primary: primary.trim() } : {}),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
 }
 
 export function resolveProviderVisionModelFromConfig(params: {

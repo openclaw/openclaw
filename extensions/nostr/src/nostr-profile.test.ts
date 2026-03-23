@@ -9,13 +9,11 @@ import {
   sanitizeProfileForDisplay,
   type ProfileContent,
 } from "./nostr-profile.js";
-import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
-const TEST_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
-
-function createTestProfileEvent(profile: NostrProfile, lastPublishedAt?: number) {
-  return createProfileEvent(TEST_HEX_PRIVATE_KEY_BYTES, profile, lastPublishedAt);
-}
+// Test private key (DO NOT use in production - this is a known test key)
+const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
+const TEST_PUBKEY = getPublicKey(TEST_SK);
 
 // ============================================================================
 // Profile Content Conversion Tests
@@ -125,7 +123,7 @@ describe("createProfileEvent", () => {
       about: "A test bot",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
 
     expect(event.kind).toBe(0);
     expect(event.pubkey).toBe(TEST_PUBKEY);
@@ -141,7 +139,7 @@ describe("createProfileEvent", () => {
       about: "Testing JSON serialization",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     const parsedContent = JSON.parse(event.content) as ProfileContent;
 
     expect(parsedContent.name).toBe("jsontest");
@@ -151,14 +149,14 @@ describe("createProfileEvent", () => {
 
   it("produces a verifiable signature", () => {
     const profile: NostrProfile = { name: "signaturetest" };
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
 
     expect(verifyEvent(event)).toBe(true);
   });
 
   it("uses current timestamp when no lastPublishedAt provided", () => {
     const profile: NostrProfile = { name: "timestamptest" };
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
 
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
@@ -169,7 +167,7 @@ describe("createProfileEvent", () => {
     const futureTimestamp = 1705320000 + 3600; // 1 hour in the future
     const profile: NostrProfile = { name: "monotonictest" };
 
-    const event = createTestProfileEvent(profile, futureTimestamp);
+    const event = createProfileEvent(TEST_SK, profile, futureTimestamp);
 
     expect(event.created_at).toBe(futureTimestamp + 1);
   });
@@ -178,7 +176,7 @@ describe("createProfileEvent", () => {
     const pastTimestamp = 1705320000 - 3600; // 1 hour in the past
     const profile: NostrProfile = { name: "pasttest" };
 
-    const event = createTestProfileEvent(profile, pastTimestamp);
+    const event = createProfileEvent(TEST_SK, profile, pastTimestamp);
 
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
@@ -366,7 +364,7 @@ describe("edge cases", () => {
     expect(content.name).toBe("🤖 Bot");
     expect(content.about).toBe("I am a 🤖 robot! 🎉");
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     const parsed = JSON.parse(event.content) as ProfileContent;
     expect(parsed.name).toBe("🤖 Bot");
   });
@@ -380,7 +378,7 @@ describe("edge cases", () => {
     const content = profileToContent(profile);
     expect(content.name).toBe("日本語ユーザー");
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     expect(verifyEvent(event)).toBe(true);
   });
 
@@ -392,7 +390,7 @@ describe("edge cases", () => {
     const content = profileToContent(profile);
     expect(content.about).toBe("Line 1\nLine 2\nLine 3");
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     const parsed = JSON.parse(event.content) as ProfileContent;
     expect(parsed.about).toBe("Line 1\nLine 2\nLine 3");
   });
@@ -406,7 +404,7 @@ describe("edge cases", () => {
     const result = validateProfile(profile);
     expect(result.valid).toBe(true);
 
-    const event = createTestProfileEvent(profile);
+    const event = createProfileEvent(TEST_SK, profile);
     expect(verifyEvent(event)).toBe(true);
   });
 });

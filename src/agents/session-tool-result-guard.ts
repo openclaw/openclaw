@@ -16,11 +16,6 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
-const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
-
-type SessionManagerWithRawAppend = SessionManager & {
-  [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
-};
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -73,21 +68,9 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
-/**
- * Return the unguarded appendMessage implementation for a session manager.
- */
-export function getRawSessionAppendMessage(
-  sessionManager: SessionManager,
-): SessionManager["appendMessage"] {
-  const rawAppend = (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE];
-  return rawAppend ?? sessionManager.appendMessage.bind(sessionManager);
-}
-
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
-    /** Optional session key for transcript update broadcasts. */
-    sessionKey?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -124,8 +107,7 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   getPendingIds: () => string[];
 } {
-  const originalAppend = getRawSessionAppendMessage(sessionManager);
-  (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE] = originalAppend;
+  const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
@@ -263,12 +245,7 @@ export function installSessionToolResultGuard(
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
     if (sessionFile) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        message: finalMessage,
-        messageId: typeof result === "string" ? result : undefined,
-      });
+      emitSessionTranscriptUpdate(sessionFile);
     }
 
     if (toolCalls.length > 0) {

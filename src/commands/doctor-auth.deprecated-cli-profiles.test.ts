@@ -63,13 +63,6 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
               refresh: "token-r2",
               expires: Date.now() + 60_000,
             },
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "token-c",
-              refresh: "token-r3",
-              expires: Date.now() + 60_000,
-            },
           },
         },
         null,
@@ -83,11 +76,10 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
         profiles: {
           "anthropic:claude-cli": { provider: "anthropic", mode: "oauth" },
           "openai-codex:codex-cli": { provider: "openai-codex", mode: "oauth" },
-          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
         },
         order: {
           anthropic: ["anthropic:claude-cli"],
-          "openai-codex": ["openai-codex:codex-cli", "openai-codex:default"],
+          "openai-codex": ["openai-codex:codex-cli"],
         },
       },
     } as const;
@@ -102,12 +94,10 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     };
     expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(raw.profiles?.["openai-codex:default"]).toBeDefined();
 
     expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(next.auth?.profiles?.["openai-codex:default"]).toBeDefined();
     expect(next.auth?.order?.anthropic).toBeUndefined();
-    expect(next.auth?.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
+    expect(next.auth?.order?.["openai-codex"]).toBeUndefined();
   });
 });

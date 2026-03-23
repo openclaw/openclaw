@@ -1,43 +1,28 @@
-import { CHANNEL_IDS, CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import type { ChannelMeta } from "./plugins/types.js";
 import type { ChannelId } from "./plugins/types.js";
-export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
-export type { ChatChannelId } from "./ids.js";
+
+// Channel docking: add new core channels here (order + meta + aliases), then
+// register the plugin in its extension entrypoint and keep protocol IDs in sync.
+export const CHAT_CHANNEL_ORDER = [
+  "telegram",
+  "whatsapp",
+  "discord",
+  "irc",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "line",
+] as const;
+
+export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
+
+export const CHANNEL_IDS = [...CHAT_CHANNEL_ORDER] as const;
 
 export type ChatChannelMeta = ChannelMeta;
 
 const WEBSITE_URL = "https://openclaw.ai";
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
-
-type RegisteredChannelPluginEntry = {
-  plugin: {
-    id?: string | null;
-    meta?: { aliases?: string[] | null } | null;
-  };
-};
-
-function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: { registry?: { channels?: RegisteredChannelPluginEntry[] | null } | null };
-  };
-  return globalState[REGISTRY_STATE]?.registry?.channels ?? [];
-}
-
-function findRegisteredChannelPluginEntry(
-  normalizedKey: string,
-): RegisteredChannelPluginEntry | undefined {
-  return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = String(entry.plugin.id ?? "")
-      .trim()
-      .toLowerCase();
-    if (id && id === normalizedKey) {
-      return true;
-    }
-    return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalizedKey,
-    );
-  });
-}
 
 const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
   telegram: {
@@ -183,18 +168,18 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
   if (!key) {
     return null;
   }
-  return findRegisteredChannelPluginEntry(key)?.plugin.id ?? null;
-}
 
-export function listRegisteredChannelPluginIds(): ChannelId[] {
-  return listRegisteredChannelPluginEntries().flatMap((entry) => {
-    const id = entry.plugin.id?.trim();
-    return id ? [id as ChannelId] : [];
+  const registry = requireActivePluginRegistry();
+  const hit = registry.channels.find((entry) => {
+    const id = String(entry.plugin.id ?? "")
+      .trim()
+      .toLowerCase();
+    if (id && id === key) {
+      return true;
+    }
+    return (entry.plugin.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === key);
   });
-}
-
-export function listRegisteredChannelPluginAliases(): string[] {
-  return listRegisteredChannelPluginEntries().flatMap((entry) => entry.plugin.meta?.aliases ?? []);
+  return hit?.plugin.id ?? null;
 }
 
 export function formatChannelPrimerLine(meta: ChatChannelMeta): string {

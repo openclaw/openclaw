@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createConfigIO: vi.fn().mockReturnValue({
@@ -10,13 +10,7 @@ vi.mock("./io.js", () => ({
   createConfigIO: mocks.createConfigIO,
 }));
 
-let formatConfigPath: typeof import("./logging.js").formatConfigPath;
-let logConfigUpdated: typeof import("./logging.js").logConfigUpdated;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ formatConfigPath, logConfigUpdated } = await import("./logging.js"));
-});
+import { formatConfigPath, logConfigUpdated } from "./logging.js";
 
 describe("config logging", () => {
   it("formats the live config path when no explicit path is provided", () => {

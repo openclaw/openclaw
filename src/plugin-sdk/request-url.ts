@@ -1,4 +1,3 @@
-/** Extract a string URL from the common request-like inputs accepted by fetch helpers. */
 export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;

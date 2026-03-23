@@ -13,7 +13,6 @@ export type PluginCommandRunOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-/** Run a plugin-managed command with timeout handling and normalized stdout/stderr results. */
 export async function runPluginCommandWithTimeout(
   options: PluginCommandRunOptions,
 ): Promise<PluginCommandRunResult> {

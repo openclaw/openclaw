@@ -4,7 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 
 export type { DmPolicy, GroupPolicy };
 

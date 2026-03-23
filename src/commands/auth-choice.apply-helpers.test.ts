@@ -282,7 +282,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
         setCredential,
       }),
     ).rejects.toThrow(
-      'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive setup.',
+      'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive onboarding.',
     );
     expect(setCredential).not.toHaveBeenCalled();
   });

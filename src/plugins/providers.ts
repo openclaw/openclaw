@@ -1,113 +1,25 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { hasExplicitPluginConfig } from "./config-state.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import type { PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { createPluginLoaderLogger } from "./logger.js";
+import type { ProviderPlugin } from "./types.js";
 
-export function withBundledProviderVitestCompat(params: {
-  config: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
-  const env = params.env ?? process.env;
-  if (
-    !env.VITEST ||
-    hasExplicitPluginConfig(params.config?.plugins) ||
-    params.pluginIds.length === 0
-  ) {
-    return params.config;
-  }
+const log = createSubsystemLogger("plugins");
 
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      enabled: true,
-      allow: [...params.pluginIds],
-      slots: {
-        ...params.config?.plugins?.slots,
-        memory: "none",
-      },
-    },
-  };
-}
-
-export function resolveBundledProviderCompatPluginIds(params: {
+export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
+  /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
-}): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
-  const registry = loadPluginManifestRegistry({
+}): ProviderPlugin[] {
+  const registry = loadOpenClawPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    logger: createPluginLoaderLogger(log),
   });
-  return registry.plugins
-    .filter(
-      (plugin) =>
-        plugin.origin === "bundled" &&
-        plugin.providers.length > 0 &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
 
-export const __testing = {
-  resolveBundledProviderCompatPluginIds,
-  withBundledProviderVitestCompat,
-} as const;
-
-export function resolveOwningPluginIdsForProvider(params: {
-  provider: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const pluginIds = registry.plugins
-    .filter((plugin) =>
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
-    )
-    .map((plugin) => plugin.id);
-
-  return pluginIds.length > 0 ? pluginIds : undefined;
-}
-
-export function resolveNonBundledProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] {
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  return registry.plugins
-    .filter(
-      (plugin) =>
-        plugin.origin !== "bundled" &&
-        plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
-          id: plugin.id,
-          origin: plugin.origin,
-          config: normalizedConfig,
-          rootConfig: params.config,
-        }).enabled,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
+  return registry.providers.map((entry) => ({
+    ...entry.provider,
+    pluginId: entry.pluginId,
+  }));
 }

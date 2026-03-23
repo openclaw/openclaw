@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
+import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesChatOpts = {
@@ -55,7 +55,12 @@ async function sendBlueBubblesChatEndpointRequest(params: {
     { method: params.method },
     params.opts.timeoutMs,
   );
-  await assertMultipartActionOk(res, params.action);
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(
+      `BlueBubbles ${params.action} failed (${res.status}): ${errorText || "unknown"}`,
+    );
+  }
 }
 
 async function sendPrivateApiJsonRequest(params: {
@@ -81,7 +86,12 @@ async function sendPrivateApiJsonRequest(params: {
   }
 
   const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
-  await assertMultipartActionOk(res, params.action);
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(
+      `BlueBubbles ${params.action} failed (${res.status}): ${errorText || "unknown"}`,
+    );
+  }
 }
 
 export async function markBlueBubblesChatRead(
@@ -319,5 +329,8 @@ export async function setGroupIconBlueBubbles(
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
   });
 
-  await assertMultipartActionOk(res, "setGroupIcon");
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles setGroupIcon failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }

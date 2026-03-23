@@ -2,14 +2,14 @@ import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  createChannelPairingController,
   dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createScopedPairingAccess,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
-  resolveDualTextControlCommandGate,
+  resolveControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
@@ -19,7 +19,7 @@ import {
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -63,7 +63,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
-  const pairing = createChannelPairingController({
+  const pairing = createScopedPairingAccess({
     core,
     channel: "msteams",
     accountId: DEFAULT_ACCOUNT_ID,
@@ -177,17 +177,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    // When a route-level (team/channel) allowlist is configured but the sender allowlist is
-    // empty, resolveSenderScopedGroupPolicy would otherwise downgrade the policy to "open",
-    // allowing any sender. To close this bypass (GHSA-g7cr-9h7q-4qxq), treat an empty sender
-    // allowlist as deny-all whenever the route allowlist is active.
-    const senderGroupPolicy =
-      channelGate.allowlistConfigured && effectiveGroupAllowFrom.length === 0
-        ? groupPolicy
-        : resolveSenderScopedGroupPolicy({
-            groupPolicy,
-            groupAllowFrom: effectiveGroupAllowFrom,
-          });
+    const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+      groupPolicy,
+      groupAllowFrom: effectiveGroupAllowFrom,
+    });
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
@@ -304,15 +297,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
+    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
+    const commandGate = resolveControlCommandGate({
       useAccessGroups,
-      primaryConfigured: commandDmAllowFrom.length > 0,
-      primaryAllowed: ownerAllowedForCommands,
-      secondaryConfigured: effectiveGroupAllowFrom.length > 0,
-      secondaryAllowed: groupAllowedForCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
+      authorizers: [
+        { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      ],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
     });
-    if (shouldBlock) {
+    const commandAuthorized = commandGate.commandAuthorized;
+    if (commandGate.shouldBlock) {
       logInboundDrop({
         log: logVerboseMessage,
         channel: "msteams",
@@ -575,7 +571,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         cfg,
         ctxPayload,
         dispatcher,
-        onSettled: () => markDispatchIdle(),
+        onSettled: () => {
+          markDispatchIdle();
+        },
         replyOptions,
       });
 

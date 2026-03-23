@@ -337,6 +337,7 @@ extension OnboardingView {
         self.remoteProbePreflightMessage == nil && self.remoteProbeState != .checking
     }
 
+    @ViewBuilder
     private func remoteConnectionSection() -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
@@ -502,17 +503,17 @@ extension OnboardingView {
     {
         switch issue {
         case .tokenRequired:
-            ("key.fill", .orange)
+            return ("key.fill", .orange)
         case .tokenMismatch:
-            ("exclamationmark.triangle.fill", .orange)
+            return ("exclamationmark.triangle.fill", .orange)
         case .gatewayTokenNotConfigured:
-            ("wrench.and.screwdriver.fill", .orange)
+            return ("wrench.and.screwdriver.fill", .orange)
         case .setupCodeExpired:
-            ("qrcode.viewfinder", .orange)
+            return ("qrcode.viewfinder", .orange)
         case .passwordRequired:
-            ("lock.slash.fill", .orange)
+            return ("lock.slash.fill", .orange)
         case .pairingRequired:
-            ("link.badge.plus", .orange)
+            return ("link.badge.plus", .orange)
         }
     }
 

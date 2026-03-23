@@ -1,5 +1,4 @@
 import { resolveNextcloudTalkAccount } from "./accounts.js";
-import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
@@ -35,19 +34,33 @@ function resolveCredentials(
 }
 
 function normalizeRoomToken(to: string): string {
-  const normalized = stripNextcloudTalkTargetPrefix(to);
+  const trimmed = to.trim();
+  if (!trimmed) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
+
+  let normalized = trimmed;
+  if (normalized.startsWith("nextcloud-talk:")) {
+    normalized = normalized.slice("nextcloud-talk:".length).trim();
+  } else if (normalized.startsWith("nc:")) {
+    normalized = normalized.slice("nc:".length).trim();
+  }
+
+  if (normalized.startsWith("room:")) {
+    normalized = normalized.slice("room:".length).trim();
+  }
+
   if (!normalized) {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
   return normalized;
 }
 
-function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
-  cfg: CoreConfig;
-  account: ReturnType<typeof resolveNextcloudTalkAccount>;
-  baseUrl: string;
-  secret: string;
-} {
+export async function sendMessageNextcloudTalk(
+  to: string,
+  text: string,
+  opts: NextcloudTalkSendOpts = {},
+): Promise<NextcloudTalkSendResult> {
   const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
@@ -57,15 +70,6 @@ function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
     { baseUrl: opts.baseUrl, secret: opts.secret },
     account,
   );
-  return { cfg, account, baseUrl, secret };
-}
-
-export async function sendMessageNextcloudTalk(
-  to: string,
-  text: string,
-  opts: NextcloudTalkSendOpts = {},
-): Promise<NextcloudTalkSendResult> {
-  const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
 
   if (!text?.trim()) {
@@ -172,7 +176,15 @@ export async function sendReactionNextcloudTalk(
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
 ): Promise<{ ok: true }> {
-  const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
+  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
+  const account = resolveNextcloudTalkAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const { baseUrl, secret } = resolveCredentials(
+    { baseUrl: opts.baseUrl, secret: opts.secret },
+    account,
+  );
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });

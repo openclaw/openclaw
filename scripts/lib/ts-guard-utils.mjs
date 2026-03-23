@@ -1,15 +1,7 @@
 import { promises as fs } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const require = createRequire(import.meta.url);
-let tsCache;
-
-function getTypeScript() {
-  tsCache ??= require("typescript");
-  return tsCache;
-}
+import ts from "typescript";
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
@@ -121,7 +113,6 @@ export function toLine(sourceFile, node) {
 }
 
 export function getPropertyNameText(name) {
-  const ts = getTypeScript();
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text;
   }
@@ -129,7 +120,6 @@ export function getPropertyNameText(name) {
 }
 
 export function unwrapExpression(expression) {
-  const ts = getTypeScript();
   let current = expression;
   while (true) {
     if (ts.isParenthesizedExpression(current)) {

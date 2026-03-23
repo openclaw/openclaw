@@ -1,19 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } from "./models-config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks();
-
-afterEach(() => {
-  resetModelsJsonReadyCacheForTest();
-});
 
 describe("models-config file mode", () => {
   it("writes models.json with mode 0600", async () => {

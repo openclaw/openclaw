@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-  deliveryContextFromSession: vi.fn(() => ({
+  resolveSessionDeliveryTarget: vi.fn(() => ({
     channel: "whatsapp",
     to: "+15550001",
     accountId: "acct-1",
@@ -15,63 +14,44 @@ const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
-type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: mocks.resolveSessionAgentId,
+}));
 
-let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
+vi.mock("../utils/message-channel.js", () => ({
+  normalizeMessageChannel: mocks.normalizeMessageChannel,
+  isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
+}));
 
-function createParams(
-  overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
-): Parameters<typeof deliverSessionMaintenanceWarning>[0] {
-  const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
-  return {
-    cfg: {},
-    sessionKey,
-    entry: {} as never,
-    warning: {
-      activeSessionKey: sessionKey,
-      pruneAfterMs: 1_000,
-      maxEntries: 100,
-      wouldPrune: true,
-      wouldCap: false,
-      ...(overrides.warning as object),
-    } as never,
-    ...overrides,
-  };
-}
+vi.mock("./outbound/targets.js", () => ({
+  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+}));
+
+vi.mock("./outbound/deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("./system-events.js", () => ({
+  enqueueSystemEvent: mocks.enqueueSystemEvent,
+}));
+
+const { deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js");
 
 describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     prevVitest = process.env.VITEST;
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;
     process.env.NODE_ENV = "development";
-    vi.resetModules();
     mocks.resolveSessionAgentId.mockClear();
-    mocks.deliveryContextFromSession.mockClear();
+    mocks.resolveSessionDeliveryTarget.mockClear();
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.enqueueSystemEvent.mockClear();
-    vi.doMock("../agents/agent-scope.js", () => ({
-      resolveSessionAgentId: mocks.resolveSessionAgentId,
-    }));
-    vi.doMock("../utils/message-channel.js", () => ({
-      normalizeMessageChannel: mocks.normalizeMessageChannel,
-      isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
-    }));
-    vi.doMock("../utils/delivery-context.js", () => ({
-      deliveryContextFromSession: mocks.deliveryContextFromSession,
-    }));
-    vi.doMock("./outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-    }));
-    vi.doMock("./system-events.js", () => ({
-      enqueueSystemEvent: mocks.enqueueSystemEvent,
-    }));
-    ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
   });
 
   afterEach(() => {
@@ -88,9 +68,18 @@ describe("deliverSessionMaintenanceWarning", () => {
   });
 
   it("forwards session context to outbound delivery", async () => {
-    const params = createParams({ sessionKey: "agent:main:main" });
-
-    await deliverSessionMaintenanceWarning(params);
+    await deliverSessionMaintenanceWarning({
+      cfg: {},
+      sessionKey: "agent:main:main",
+      entry: {} as never,
+      warning: {
+        activeSessionKey: "agent:main:main",
+        pruneAfterMs: 1_000,
+        maxEntries: 100,
+        wouldPrune: true,
+        wouldCap: false,
+      } as never,
+    });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -100,62 +89,5 @@ describe("deliverSessionMaintenanceWarning", () => {
       }),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("suppresses duplicate warning contexts for the same session", async () => {
-    const params = createParams();
-
-    await deliverSessionMaintenanceWarning(params);
-    await deliverSessionMaintenanceWarning(params);
-
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to a system event when the last target is not deliverable", async () => {
-    mocks.deliveryContextFromSession.mockReturnValueOnce({
-      channel: "debug",
-      to: "+15550001",
-      accountId: "acct-1",
-      threadId: "thread-1",
-    });
-    mocks.isDeliverableMessageChannel.mockReturnValueOnce(false);
-
-    await deliverSessionMaintenanceWarning(
-      createParams({
-        warning: {
-          pruneAfterMs: 3_600_000,
-          maxEntries: 10,
-          wouldPrune: false,
-          wouldCap: true,
-        } as never,
-      }),
-    );
-
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("most recent 10 sessions"),
-      expect.objectContaining({ sessionKey: expect.stringContaining("agent:") }),
-    );
-  });
-
-  it("skips warning delivery in test mode", async () => {
-    process.env.NODE_ENV = "test";
-
-    await deliverSessionMaintenanceWarning(createParams());
-
-    expect(mocks.deliveryContextFromSession).not.toHaveBeenCalled();
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("enqueues a system event when outbound delivery fails", async () => {
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("boom"));
-
-    await deliverSessionMaintenanceWarning(createParams());
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("older than 1 second"),
-      expect.objectContaining({ sessionKey: expect.stringContaining("agent:") }),
-    );
   });
 });

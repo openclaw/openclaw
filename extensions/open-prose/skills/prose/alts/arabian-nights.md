@@ -78,17 +78,146 @@ An alternative register for OpenProse that draws from One Thousand and One Night
 | `prompt`   | `command` | What is commanded of the djinn |
 | `model`    | `spirit`  | Which spirit answers           |
 
-### Shared appendix
+### Unchanged
 
-Use [shared-appendix.md](./shared-appendix.md) for unchanged keywords and the common comparison pattern.
+These keywords already work or are too functional to replace sensibly:
 
-Recommended Arabian Nights rewrite targets:
+- `**...**` discretion markers — already work
+- `until`, `while` — already work
+- `map`, `filter`, `reduce`, `pmap` — pipeline operators
+- `max` — constraint modifier
+- `as` — aliasing
+- Model names: `sonnet`, `opus`, `haiku` — already poetic
 
-- `session` sample -> `tale`
-- `parallel` sample -> `bazaar`
-- `loop` sample -> `telling`
-- `try/catch/finally` sample -> `venture` / `should misfortune strike` / `and so it was`
-- `choice` sample -> `crossroads` / `path`
+---
+
+## Side-by-Side Comparison
+
+### Simple Program
+
+```prose
+# Functional
+use "@alice/research" as research
+input topic: "What to investigate"
+
+agent helper:
+  model: sonnet
+
+let findings = session: helper
+  prompt: "Research {topic}"
+
+output summary = session "Summarize"
+  context: findings
+```
+
+```prose
+# Nights
+conjure "@alice/research" as research
+wish topic: "What to investigate"
+
+djinn helper:
+  spirit: sonnet
+
+name findings = tale: helper
+  command: "Research {topic}"
+
+gift summary = tale "Summarize"
+  scroll: findings
+```
+
+### Parallel Execution
+
+```prose
+# Functional
+parallel:
+  security = session "Check security"
+  perf = session "Check performance"
+  style = session "Check style"
+
+session "Synthesize review"
+  context: { security, perf, style }
+```
+
+```prose
+# Nights
+bazaar:
+  security = tale "Check security"
+  perf = tale "Check performance"
+  style = tale "Check style"
+
+tale "Synthesize review"
+  scroll: { security, perf, style }
+```
+
+### Loop with Condition
+
+```prose
+# Functional
+loop until **the code is bug-free** (max: 5):
+  session "Find and fix bugs"
+```
+
+```prose
+# Nights
+telling until **the code is bug-free** (max: 5):
+  tale "Find and fix bugs"
+```
+
+### Error Handling
+
+```prose
+# Functional
+try:
+  session "Risky operation"
+catch as err:
+  session "Handle error"
+    context: err
+finally:
+  session "Cleanup"
+```
+
+```prose
+# Nights
+venture:
+  tale "Risky operation"
+should misfortune strike as err:
+  tale "Handle error"
+    scroll: err
+and so it was:
+  tale "Cleanup"
+```
+
+### Choice Block
+
+```prose
+# Functional
+choice **the severity level**:
+  option "Critical":
+    session "Escalate immediately"
+  option "Minor":
+    session "Log for later"
+```
+
+```prose
+# Nights
+crossroads **the severity level**:
+  path "Critical":
+    tale "Escalate immediately"
+  path "Minor":
+    tale "Log for later"
+```
+
+### Conditionals
+
+```prose
+# Functional
+if **has security issues**:
+  session "Fix security"
+elif **has performance issues**:
+  session "Optimize"
+else:
+  session "Approve"
+```
 
 ```prose
 # Nights

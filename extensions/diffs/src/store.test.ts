@@ -28,22 +28,10 @@ describe("DiffArtifactStore", () => {
       title: "Demo",
       inputKind: "before_after",
       fileCount: 1,
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
     });
 
     const loaded = await store.getArtifact(artifact.id, artifact.token);
     expect(loaded?.id).toBe(artifact.id);
-    expect(loaded?.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
   });
 
@@ -109,19 +97,10 @@ describe("DiffArtifactStore", () => {
   });
 
   it("creates standalone file artifacts with managed metadata", async () => {
-    const standalone = await store.createStandaloneFileArtifact({
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-      },
-    });
+    const standalone = await store.createStandaloneFileArtifact();
     expect(standalone.filePath).toMatch(/preview\.png$/);
     expect(standalone.filePath).toContain(rootDir);
     expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
-    expect(standalone.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-    });
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {

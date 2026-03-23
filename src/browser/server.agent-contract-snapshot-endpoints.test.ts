@@ -96,14 +96,10 @@ describe("browser control server", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "click", selector: "button.save" }),
     });
-    expect(clickSelector.status).toBe(200);
-    expect(((await clickSelector.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(2, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      selector: "button.save",
-      doubleClick: false,
-    });
+    expect(clickSelector.status).toBe(400);
+    expect(((await clickSelector.json()) as { error?: string }).error).toMatch(
+      /'selector' is not supported/i,
+    );
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",

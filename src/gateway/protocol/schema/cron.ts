@@ -21,12 +21,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   );
 }
 
-const CronSessionTargetSchema = Type.Union([
-  Type.Literal("main"),
-  Type.Literal("isolated"),
-  Type.Literal("current"),
-  Type.String({ pattern: "^session:.+" }),
-]);
+const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 const CronRunStatusSchema = Type.Union([
   Type.Literal("ok"),

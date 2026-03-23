@@ -79,7 +79,6 @@ describe("subagent-registry context-engine bootstrap", () => {
       expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/tmp/workspace",
-        allowGatewaySubagentBinding: true,
       });
     });
     expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);

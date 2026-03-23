@@ -1,11 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
   anthropicToolChoiceMode: "native" | "openai-string-modes";
-  openAiPayloadNormalizationMode: "default" | "moonshot-thinking";
   providerFamily: "default" | "openai" | "anthropic";
   preserveAnthropicThinkingSignatures: boolean;
   openAiCompatTurnValidation: boolean;
@@ -16,16 +13,9 @@ export type ProviderCapabilities = {
   dropThinkingBlockModelHints: string[];
 };
 
-export type ProviderCapabilityLookupOptions = {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-};
-
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   anthropicToolSchemaMode: "native",
   anthropicToolChoiceMode: "native",
-  openAiPayloadNormalizationMode: "default",
   providerFamily: "default",
   preserveAnthropicThinkingSignatures: true,
   openAiCompatTurnValidation: true,
@@ -36,8 +26,8 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  "anthropic-vertex": {
+const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  anthropic: {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
@@ -45,12 +35,10 @@ const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> 
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-};
-
-const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
-  anthropic: {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
+  // kimi-coding natively supports Anthropic tool framing (input_schema);
+  // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
+  "kimi-coding": {
+    preserveAnthropicThinkingSignatures: false,
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
@@ -64,8 +52,16 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "mistralai",
     ],
   },
-  moonshot: {
-    openAiPayloadNormalizationMode: "moonshot-thinking",
+  openai: {
+    providerFamily: "openai",
+  },
+  "openai-codex": {
+    providerFamily: "openai",
+  },
+  openrouter: {
+    openAiCompatTurnValidation: false,
+    geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
   },
   opencode: {
     openAiCompatTurnValidation: false,
@@ -77,89 +73,49 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
-  openai: {
-    providerFamily: "openai",
+  kilocode: {
+    geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
+  },
+  "github-copilot": {
+    dropThinkingBlockModelHints: ["claude"],
   },
 };
 
-export function resolveProviderCapabilities(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): ProviderCapabilities {
+export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
-  const pluginCapabilities = normalized
-    ? resolveProviderCapabilitiesWithPlugin({
-        provider: normalized,
-        config: options?.config,
-        workspaceDir: options?.workspaceDir,
-        env: options?.env,
-      })
-    : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...CORE_PROVIDER_CAPABILITIES[normalized],
-    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
+    ...PROVIDER_CAPABILITIES[normalized],
   };
 }
 
-export function preservesAnthropicThinkingSignatures(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return resolveProviderCapabilities(provider, options).preserveAnthropicThinkingSignatures;
+export function preservesAnthropicThinkingSignatures(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).preserveAnthropicThinkingSignatures;
 }
 
-export function requiresOpenAiCompatibleAnthropicToolPayload(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  const capabilities = resolveProviderCapabilities(provider, options);
+export function requiresOpenAiCompatibleAnthropicToolPayload(provider?: string | null): boolean {
+  const capabilities = resolveProviderCapabilities(provider);
   return (
     capabilities.anthropicToolSchemaMode !== "native" ||
     capabilities.anthropicToolChoiceMode !== "native"
   );
 }
 
-export function usesOpenAiFunctionAnthropicToolSchema(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return (
-    resolveProviderCapabilities(provider, options).anthropicToolSchemaMode === "openai-functions"
-  );
+export function usesOpenAiFunctionAnthropicToolSchema(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).anthropicToolSchemaMode === "openai-functions";
 }
 
-export function usesOpenAiStringModeAnthropicToolChoice(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return (
-    resolveProviderCapabilities(provider, options).anthropicToolChoiceMode === "openai-string-modes"
-  );
+export function usesOpenAiStringModeAnthropicToolChoice(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).anthropicToolChoiceMode === "openai-string-modes";
 }
 
-export function supportsOpenAiCompatTurnValidation(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return resolveProviderCapabilities(provider, options).openAiCompatTurnValidation;
+export function supportsOpenAiCompatTurnValidation(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).openAiCompatTurnValidation;
 }
 
-export function usesMoonshotThinkingPayloadCompat(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return (
-    resolveProviderCapabilities(provider, options).openAiPayloadNormalizationMode ===
-    "moonshot-thinking"
-  );
-}
-
-export function sanitizesGeminiThoughtSignatures(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return resolveProviderCapabilities(provider, options).geminiThoughtSignatureSanitization;
+export function sanitizesGeminiThoughtSignatures(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).geminiThoughtSignatureSanitization;
 }
 
 function modelIncludesAnyHint(modelId: string | null | undefined, hints: string[]): boolean {
@@ -167,41 +123,29 @@ function modelIncludesAnyHint(modelId: string | null | undefined, hints: string[
   return Boolean(normalized) && hints.some((hint) => normalized.includes(hint));
 }
 
-export function isOpenAiProviderFamily(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return resolveProviderCapabilities(provider, options).providerFamily === "openai";
+export function isOpenAiProviderFamily(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).providerFamily === "openai";
 }
 
-export function isAnthropicProviderFamily(
-  provider?: string | null,
-  options?: ProviderCapabilityLookupOptions,
-): boolean {
-  return resolveProviderCapabilities(provider, options).providerFamily === "anthropic";
+export function isAnthropicProviderFamily(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).providerFamily === "anthropic";
 }
 
 export function shouldDropThinkingBlocksForModel(params: {
   provider?: string | null;
   modelId?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
   return modelIncludesAnyHint(
     params.modelId,
-    resolveProviderCapabilities(params.provider, params).dropThinkingBlockModelHints,
+    resolveProviderCapabilities(params.provider).dropThinkingBlockModelHints,
   );
 }
 
 export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
   provider?: string | null;
   modelId?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
-  const capabilities = resolveProviderCapabilities(params.provider, params);
+  const capabilities = resolveProviderCapabilities(params.provider);
   return (
     capabilities.geminiThoughtSignatureSanitization &&
     modelIncludesAnyHint(params.modelId, capabilities.geminiThoughtSignatureModelHints)
@@ -211,9 +155,8 @@ export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
 export function resolveTranscriptToolCallIdMode(
   provider?: string | null,
   modelId?: string | null,
-  options?: ProviderCapabilityLookupOptions,
 ): "strict9" | undefined {
-  const capabilities = resolveProviderCapabilities(provider, options);
+  const capabilities = resolveProviderCapabilities(provider);
   const mode = capabilities.transcriptToolCallIdMode;
   if (mode === "strict9") {
     return mode;

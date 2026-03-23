@@ -1,27 +1,10 @@
-const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
-const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const KEY = "openclaw.control.settings.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
-const MAX_SCOPED_SESSION_ENTRIES = 10;
 
-function settingsKeyForGateway(gatewayUrl: string): string {
-  return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
-}
-
-type ScopedSessionSelection = {
-  sessionKey: string;
-  lastActiveSessionKey: string;
-};
-
-type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
-  token?: never;
-  sessionKey?: string;
-  lastActiveSessionKey?: string;
-  sessionsByGateway?: Record<string, ScopedSessionSelection>;
-};
+type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
 import { isSupportedLocale } from "../i18n/index.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -34,12 +17,10 @@ export type UiSettings = {
   themeMode: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
-  chatShowToolCalls: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
-  borderRadius: number; // Corner roundness (0–100, default 50)
   locale?: string;
 };
 
@@ -105,41 +86,6 @@ function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
 
-function resolveScopedSessionSelection(
-  gatewayUrl: string,
-  parsed: PersistedUiSettings,
-  defaults: UiSettings,
-): ScopedSessionSelection {
-  const scope = normalizeGatewayTokenScope(gatewayUrl);
-  const scoped = parsed.sessionsByGateway?.[scope];
-  if (
-    scoped &&
-    typeof scoped.sessionKey === "string" &&
-    scoped.sessionKey.trim() &&
-    typeof scoped.lastActiveSessionKey === "string" &&
-    scoped.lastActiveSessionKey.trim()
-  ) {
-    return {
-      sessionKey: scoped.sessionKey.trim(),
-      lastActiveSessionKey: scoped.lastActiveSessionKey.trim(),
-    };
-  }
-
-  const legacySessionKey =
-    typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
-      ? parsed.sessionKey.trim()
-      : defaults.sessionKey;
-  const legacyLastActiveSessionKey =
-    typeof parsed.lastActiveSessionKey === "string" && parsed.lastActiveSessionKey.trim()
-      ? parsed.lastActiveSessionKey.trim()
-      : legacySessionKey || defaults.lastActiveSessionKey;
-
-  return {
-    sessionKey: legacySessionKey,
-    lastActiveSessionKey: legacyLastActiveSessionKey,
-  };
-}
-
 function loadSessionToken(gatewayUrl: string): string {
   try {
     const storage = getSessionStorage();
@@ -175,7 +121,6 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 
 export function loadSettings(): UiSettings {
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
-  const storage = getSafeLocalStorage();
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -186,31 +131,23 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
-    chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
-    borderRadius: 50,
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
-    const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
+    const raw = localStorage.getItem(KEY);
     if (!raw) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as PersistedUiSettings;
+    const parsed = JSON.parse(raw) as Partial<UiSettings>;
     const parsedGatewayUrl =
       typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
         ? parsed.gatewayUrl.trim()
         : defaults.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
-    const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
@@ -219,8 +156,15 @@ export function loadSettings(): UiSettings {
       gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
       token: loadSessionToken(gatewayUrl),
-      sessionKey: scopedSessionSelection.sessionKey,
-      lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
+      sessionKey:
+        typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
+          ? parsed.sessionKey.trim()
+          : defaults.sessionKey,
+      lastActiveSessionKey:
+        typeof parsed.lastActiveSessionKey === "string" && parsed.lastActiveSessionKey.trim()
+          ? parsed.lastActiveSessionKey.trim()
+          : (typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()) ||
+            defaults.lastActiveSessionKey,
       theme,
       themeMode: mode,
       chatFocusMode:
@@ -229,10 +173,6 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
-      chatShowToolCalls:
-        typeof parsed.chatShowToolCalls === "boolean"
-          ? parsed.chatShowToolCalls
-          : defaults.chatShowToolCalls,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -249,12 +189,6 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
-      borderRadius:
-        typeof parsed.borderRadius === "number" &&
-        parsed.borderRadius >= 0 &&
-        parsed.borderRadius <= 100
-          ? parsed.borderRadius
-          : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
     if ("token" in parsed) {
@@ -272,58 +206,19 @@ export function saveSettings(next: UiSettings) {
 
 function persistSettings(next: UiSettings) {
   persistSessionToken(next.gatewayUrl, next.token);
-  const storage = getSafeLocalStorage();
-  const scope = normalizeGatewayTokenScope(next.gatewayUrl);
-  const scopedKey = settingsKeyForGateway(next.gatewayUrl);
-  let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
-  try {
-    // Try to migrate from legacy key or other scopes
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem("openclaw.control.settings.v1");
-    if (raw) {
-      const parsed = JSON.parse(raw) as PersistedUiSettings;
-      if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
-        existingSessionsByGateway = parsed.sessionsByGateway;
-      }
-    }
-  } catch {
-    // best-effort
-  }
-  const sessionsByGateway = Object.fromEntries(
-    [
-      ...Object.entries(existingSessionsByGateway).filter(([key]) => key !== scope),
-      [
-        scope,
-        {
-          sessionKey: next.sessionKey,
-          lastActiveSessionKey: next.lastActiveSessionKey,
-        },
-      ],
-    ].slice(-MAX_SCOPED_SESSION_ENTRIES),
-  );
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
+    sessionKey: next.sessionKey,
+    lastActiveSessionKey: next.lastActiveSessionKey,
     theme: next.theme,
     themeMode: next.themeMode,
     chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
-    chatShowToolCalls: next.chatShowToolCalls,
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
-    borderRadius: next.borderRadius,
-    sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  const serialized = JSON.stringify(persisted);
-  try {
-    storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory settings and visual updates from being applied
-  }
+  localStorage.setItem(KEY, JSON.stringify(persisted));
 }

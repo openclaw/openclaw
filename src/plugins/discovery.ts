@@ -1,50 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import {
-  BUNDLED_PLUGIN_METADATA,
-  resolveBundledPluginGeneratedPath,
-} from "./bundled-plugin-metadata.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
-  type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
-import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
+import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
-
-const CANONICAL_PACKAGE_ID_ALIASES: Record<string, string> = {
-  "elevenlabs-speech": "elevenlabs",
-  "microsoft-speech": "microsoft",
-  "ollama-provider": "ollama",
-  "sglang-provider": "sglang",
-  "vllm-provider": "vllm",
-};
 
 export type PluginCandidate = {
   idHint: string;
   source: string;
-  setupSource?: string;
   rootDir: string;
   origin: PluginOrigin;
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
   workspaceDir?: string;
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
-  bundledManifest?: PluginManifest;
-  bundledManifestPath?: string;
 };
 
 export type PluginDiscoveryResult = {
@@ -352,16 +333,17 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  const canonicalPackageId = CANONICAL_PACKAGE_ID_ALIASES[unscoped] ?? unscoped;
-  const normalizedPackageId =
-    canonicalPackageId.endsWith("-provider") && canonicalPackageId.length > "-provider".length
-      ? canonicalPackageId.slice(0, -"-provider".length)
-      : canonicalPackageId;
+  const canonicalPackageId =
+    {
+      "ollama-provider": "ollama",
+      "sglang-provider": "sglang",
+      "vllm-provider": "vllm",
+    }[unscoped] ?? unscoped;
 
   if (!params.hasMultipleExtensions) {
-    return normalizedPackageId;
+    return canonicalPackageId;
   }
-  return `${normalizedPackageId}/${base}`;
+  return `${canonicalPackageId}/${base}`;
 }
 
 function addCandidate(params: {
@@ -370,17 +352,12 @@ function addCandidate(params: {
   seen: Set<string>;
   idHint: string;
   source: string;
-  setupSource?: string;
   rootDir: string;
   origin: PluginOrigin;
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
   ownershipUid?: number | null;
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
-  bundledManifest?: PluginManifest;
-  bundledManifestPath?: string;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
@@ -403,62 +380,15 @@ function addCandidate(params: {
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
-    setupSource: params.setupSource,
     rootDir: resolvedRoot,
     origin: params.origin,
-    format: params.format ?? "openclaw",
-    bundleFormat: params.bundleFormat,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
     packageVersion: manifest?.version?.trim() || undefined,
     packageDescription: manifest?.description?.trim() || undefined,
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
-    bundledManifest: params.bundledManifest,
-    bundledManifestPath: params.bundledManifestPath,
   });
-}
-
-function discoverBundleInRoot(params: {
-  rootDir: string;
-  origin: PluginOrigin;
-  ownershipUid?: number | null;
-  workspaceDir?: string;
-  candidates: PluginCandidate[];
-  diagnostics: PluginDiagnostic[];
-  seen: Set<string>;
-}): "added" | "invalid" | "none" {
-  const bundleFormat = detectBundleManifestFormat(params.rootDir);
-  if (!bundleFormat) {
-    return "none";
-  }
-  const bundleManifest = loadBundleManifest({
-    rootDir: params.rootDir,
-    bundleFormat,
-    rejectHardlinks: params.origin !== "bundled",
-  });
-  if (!bundleManifest.ok) {
-    params.diagnostics.push({
-      level: "error",
-      message: bundleManifest.error,
-      source: bundleManifest.manifestPath,
-    });
-    return "invalid";
-  }
-  addCandidate({
-    candidates: params.candidates,
-    diagnostics: params.diagnostics,
-    seen: params.seen,
-    idHint: bundleManifest.manifest.id,
-    source: params.rootDir,
-    rootDir: params.rootDir,
-    origin: params.origin,
-    format: "bundle",
-    bundleFormat,
-    ownershipUid: params.ownershipUid,
-    workspaceDir: params.workspaceDir,
-  });
-  return "added";
 }
 
 function resolvePackageEntrySource(params: {
@@ -476,25 +406,12 @@ function resolvePackageEntrySource(params: {
     rejectHardlinks: params.rejectHardlinks ?? true,
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
-      path: () => null,
-      io: () => {
-        params.diagnostics.push({
-          level: "warn",
-          message: `extension entry unreadable (I/O error): ${params.entryPath}`,
-          source: params.sourceLabel,
-        });
-        return null;
-      },
-      fallback: () => {
-        params.diagnostics.push({
-          level: "error",
-          message: `extension entry escapes package directory: ${params.entryPath}`,
-          source: params.sourceLabel,
-        });
-        return null;
-      },
+    params.diagnostics.push({
+      level: "error",
+      message: `extension entry escapes package directory: ${params.entryPath}`,
+      source: params.sourceLabel,
     });
+    return null;
   }
   const safeSource = opened.path;
   fs.closeSync(opened.fd);
@@ -509,7 +426,6 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
-  skipDirectories?: Set<string>;
 }) {
   if (!fs.existsSync(params.dir)) {
     return;
@@ -547,9 +463,6 @@ function discoverInDirectory(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    if (params.skipDirectories?.has(entry.name)) {
-      continue;
-    }
     if (shouldIgnoreScannedDirectory(entry.name)) {
       continue;
     }
@@ -558,17 +471,6 @@ function discoverInDirectory(params: {
     const manifest = readPackageManifest(fullPath, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
-    const setupSource =
-      typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
-        ? resolvePackageEntrySource({
-            packageDir: fullPath,
-            entryPath: setupEntryPath,
-            sourceLabel: fullPath,
-            diagnostics: params.diagnostics,
-            rejectHardlinks,
-          })
-        : null;
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -592,7 +494,6 @@ function discoverInDirectory(params: {
             hasMultipleExtensions: extensions.length > 1,
           }),
           source: resolved,
-          ...(setupSource ? { setupSource } : {}),
           rootDir: fullPath,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
@@ -601,19 +502,6 @@ function discoverInDirectory(params: {
           packageDir: fullPath,
         });
       }
-      continue;
-    }
-
-    const bundleDiscovery = discoverBundleInRoot({
-      rootDir: fullPath,
-      origin: params.origin,
-      ownershipUid: params.ownershipUid,
-      workspaceDir: params.workspaceDir,
-      candidates: params.candidates,
-      diagnostics: params.diagnostics,
-      seen: params.seen,
-    });
-    if (bundleDiscovery === "added") {
       continue;
     }
 
@@ -627,7 +515,6 @@ function discoverInDirectory(params: {
         seen: params.seen,
         idHint: entry.name,
         source: indexFile,
-        ...(setupSource ? { setupSource } : {}),
         rootDir: fullPath,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
@@ -688,17 +575,6 @@ function discoverFromPath(params: {
     const manifest = readPackageManifest(resolved, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
-    const setupSource =
-      typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
-        ? resolvePackageEntrySource({
-            packageDir: resolved,
-            entryPath: setupEntryPath,
-            sourceLabel: resolved,
-            diagnostics: params.diagnostics,
-            rejectHardlinks,
-          })
-        : null;
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -722,7 +598,6 @@ function discoverFromPath(params: {
             hasMultipleExtensions: extensions.length > 1,
           }),
           source,
-          ...(setupSource ? { setupSource } : {}),
           rootDir: resolved,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
@@ -731,19 +606,6 @@ function discoverFromPath(params: {
           packageDir: resolved,
         });
       }
-      return;
-    }
-
-    const bundleDiscovery = discoverBundleInRoot({
-      rootDir: resolved,
-      origin: params.origin,
-      ownershipUid: params.ownershipUid,
-      workspaceDir: params.workspaceDir,
-      candidates: params.candidates,
-      diagnostics: params.diagnostics,
-      seen: params.seen,
-    });
-    if (bundleDiscovery === "added") {
       return;
     }
 
@@ -758,7 +620,6 @@ function discoverFromPath(params: {
         seen: params.seen,
         idHint: path.basename(resolved),
         source: indexFile,
-        ...(setupSource ? { setupSource } : {}),
         rootDir: resolved,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
@@ -780,62 +641,6 @@ function discoverFromPath(params: {
     });
     return;
   }
-}
-
-function discoverBundledMetadataInDirectory(params: {
-  dir: string;
-  ownershipUid?: number | null;
-  candidates: PluginCandidate[];
-  diagnostics: PluginDiagnostic[];
-  seen: Set<string>;
-}) {
-  if (!fs.existsSync(params.dir)) {
-    return null;
-  }
-
-  const coveredDirectories = new Set<string>();
-  for (const entry of BUNDLED_PLUGIN_METADATA) {
-    const rootDir = path.join(params.dir, entry.dirName);
-    if (!fs.existsSync(rootDir)) {
-      continue;
-    }
-    coveredDirectories.add(entry.dirName);
-    const source = resolveBundledPluginGeneratedPath(rootDir, entry.source);
-    if (!source) {
-      continue;
-    }
-    const setupSource = resolveBundledPluginGeneratedPath(rootDir, entry.setupSource);
-    const packageManifest = readPackageManifest(rootDir, false);
-    addCandidate({
-      candidates: params.candidates,
-      diagnostics: params.diagnostics,
-      seen: params.seen,
-      idHint: entry.idHint,
-      source,
-      ...(setupSource ? { setupSource } : {}),
-      rootDir,
-      origin: "bundled",
-      ownershipUid: params.ownershipUid,
-      manifest: {
-        ...packageManifest,
-        ...(!packageManifest?.name && entry.packageName ? { name: entry.packageName } : {}),
-        ...(!packageManifest?.version && entry.packageVersion
-          ? { version: entry.packageVersion }
-          : {}),
-        ...(!packageManifest?.description && entry.packageDescription
-          ? { description: entry.packageDescription }
-          : {}),
-        ...(!packageManifest?.openclaw && entry.packageManifest
-          ? { openclaw: entry.packageManifest }
-          : {}),
-      },
-      packageDir: rootDir,
-      bundledManifest: entry.manifest,
-      bundledManifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    });
-  }
-
-  return coveredDirectories;
 }
 
 export function discoverOpenClawPlugins(params: {
@@ -900,13 +705,6 @@ export function discoverOpenClawPlugins(params: {
   }
 
   if (roots.stock) {
-    const coveredBundledDirectories = discoverBundledMetadataInDirectory({
-      dir: roots.stock,
-      ownershipUid: params.ownershipUid,
-      candidates,
-      diagnostics,
-      seen,
-    });
     discoverInDirectory({
       dir: roots.stock,
       origin: "bundled",
@@ -914,7 +712,6 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
-      ...(coveredBundledDirectories ? { skipDirectories: coveredBundledDirectories } : {}),
     });
   }
 

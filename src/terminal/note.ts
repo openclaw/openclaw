@@ -54,21 +54,6 @@ function isCopySensitiveToken(word: string): boolean {
   return word.includes("_") && FILE_LIKE_RE.test(word);
 }
 
-function pushWrappedWordSegments(params: {
-  word: string;
-  available: number;
-  firstPrefix: string;
-  continuationPrefix: string;
-  lines: string[];
-}) {
-  const parts = splitLongWord(params.word, params.available);
-  const first = parts.shift() ?? "";
-  params.lines.push(params.firstPrefix + first);
-  for (const part of parts) {
-    params.lines.push(params.continuationPrefix + part);
-  }
-}
-
 function wrapLine(line: string, maxWidth: number): string[] {
   if (line.trim().length === 0) {
     return [line];
@@ -95,15 +80,14 @@ function wrapLine(line: string, maxWidth: number): string[] {
           current = word;
           continue;
         }
-        pushWrappedWordSegments({
-          word,
-          available,
-          firstPrefix: prefix,
-          continuationPrefix: nextPrefix,
-          lines,
-        });
+        const parts = splitLongWord(word, available);
+        const first = parts.shift() ?? "";
+        lines.push(prefix + first);
         prefix = nextPrefix;
         available = nextWidth;
+        for (const part of parts) {
+          lines.push(prefix + part);
+        }
         continue;
       }
       current = word;
@@ -125,13 +109,12 @@ function wrapLine(line: string, maxWidth: number): string[] {
         current = word;
         continue;
       }
-      pushWrappedWordSegments({
-        word,
-        available,
-        firstPrefix: prefix,
-        continuationPrefix: prefix,
-        lines,
-      });
+      const parts = splitLongWord(word, available);
+      const first = parts.shift() ?? "";
+      lines.push(prefix + first);
+      for (const part of parts) {
+        lines.push(prefix + part);
+      }
       current = "";
       continue;
     }

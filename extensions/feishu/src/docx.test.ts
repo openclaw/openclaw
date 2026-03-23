@@ -5,17 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
-const convertMock = vi.hoisted(() => vi.fn());
-const documentCreateMock = vi.hoisted(() => vi.fn());
-const blockListMock = vi.hoisted(() => vi.fn());
-const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
-const blockChildrenGetMock = vi.hoisted(() => vi.fn());
-const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
-const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
-const driveUploadAllMock = vi.hoisted(() => vi.fn());
-const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
-const blockPatchMock = vi.hoisted(() => vi.fn());
-const scopeListMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -34,6 +23,18 @@ vi.mock("./runtime.js", () => ({
 import { registerFeishuDocTools } from "./docx.js";
 
 describe("feishu_doc image fetch hardening", () => {
+  const convertMock = vi.hoisted(() => vi.fn());
+  const documentCreateMock = vi.hoisted(() => vi.fn());
+  const blockListMock = vi.hoisted(() => vi.fn());
+  const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
+  const blockChildrenGetMock = vi.hoisted(() => vi.fn());
+  const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
+  const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
+  const driveUploadAllMock = vi.hoisted(() => vi.fn());
+  const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
+  const blockPatchMock = vi.hoisted(() => vi.fn());
+  const scopeListMock = vi.hoisted(() => vi.fn());
+
   beforeEach(() => {
     vi.clearAllMocks();
 

@@ -5,7 +5,6 @@ export const es: TranslationMap = {
     version: "Versión",
     health: "Estado",
     ok: "Correcto",
-    online: "En línea",
     offline: "Desconectado",
     connect: "Conectar",
     refresh: "Actualizar",

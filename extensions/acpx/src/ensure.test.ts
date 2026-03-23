@@ -54,55 +54,6 @@ describe("acpx ensure", () => {
     }
   });
 
-  function mockEnsureInstallFlow() {
-    spawnAndCollectMock
-      .mockResolvedValueOnce({
-        stdout: "acpx 0.0.9\n",
-        stderr: "",
-        code: 0,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        stdout: "added 1 package\n",
-        stderr: "",
-        code: 0,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
-        stderr: "",
-        code: 0,
-        error: null,
-      });
-  }
-
-  function expectEnsureInstallCalls(stripProviderAuthEnvVars?: boolean) {
-    expect(spawnAndCollectMock.mock.calls[0]?.[0]).toMatchObject({
-      command: "/plugin/node_modules/.bin/acpx",
-      args: ["--version"],
-      cwd: "/plugin",
-      stripProviderAuthEnvVars,
-    });
-    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
-      command: "npm",
-      args: [
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        `acpx@${ACPX_PINNED_VERSION}`,
-      ],
-      cwd: "/plugin",
-      stripProviderAuthEnvVars,
-    });
-    expect(spawnAndCollectMock.mock.calls[2]?.[0]).toMatchObject({
-      command: "/plugin/node_modules/.bin/acpx",
-      args: ["--version"],
-      cwd: "/plugin",
-      stripProviderAuthEnvVars,
-    });
-  }
-
   it("accepts the pinned acpx version", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
       stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
@@ -226,7 +177,25 @@ describe("acpx ensure", () => {
   });
 
   it("installs and verifies pinned acpx when precheck fails", async () => {
-    mockEnsureInstallFlow();
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "added 1 package\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
+        stderr: "",
+        code: 0,
+        error: null,
+      });
 
     await ensureAcpx({
       command: "/plugin/node_modules/.bin/acpx",
@@ -235,11 +204,33 @@ describe("acpx ensure", () => {
     });
 
     expect(spawnAndCollectMock).toHaveBeenCalledTimes(3);
-    expectEnsureInstallCalls();
+    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
+      command: "npm",
+      args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
+      cwd: "/plugin",
+    });
   });
 
   it("threads stripProviderAuthEnvVars through version probes and install", async () => {
-    mockEnsureInstallFlow();
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "added 1 package\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
+        stderr: "",
+        code: 0,
+        error: null,
+      });
 
     await ensureAcpx({
       command: "/plugin/node_modules/.bin/acpx",
@@ -248,7 +239,24 @@ describe("acpx ensure", () => {
       stripProviderAuthEnvVars: true,
     });
 
-    expectEnsureInstallCalls(true);
+    expect(spawnAndCollectMock.mock.calls[0]?.[0]).toMatchObject({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--version"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
+    });
+    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
+      command: "npm",
+      args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
+    });
+    expect(spawnAndCollectMock.mock.calls[2]?.[0]).toMatchObject({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--version"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
+    });
   });
 
   it("fails with actionable error when npm install fails", async () => {

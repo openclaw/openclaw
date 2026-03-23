@@ -76,8 +76,8 @@ private object SystemContactsDataSource : ContactsDataSource {
       selection = null
       selectionArgs = null
     } else {
-      selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
-      selectionArgs = arrayOf("%${escapeLikePattern(request.query)}%")
+      selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ?"
+      selectionArgs = arrayOf("%${request.query}%")
     }
     val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT ${request.limit}"
     resolver.query(
@@ -246,9 +246,6 @@ private object SystemContactsDataSource : ContactsDataSource {
       return cursor.getString(0)?.trim()?.ifEmpty { null }
     }
   }
-
-  private fun escapeLikePattern(pattern: String): String =
-    pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
   private fun loadPhones(resolver: ContentResolver, contactId: Long): List<String> {
     return queryContactValues(

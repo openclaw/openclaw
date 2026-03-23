@@ -28,7 +28,6 @@ export type CallManagerTransientState = {
   activeTurnCalls: Set<CallId>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
-  initialMessageInFlight: Set<CallId>;
 };
 
 export type CallManagerHooks = {

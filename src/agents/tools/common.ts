@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -54,8 +53,22 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
 function readParamRaw(params: Record<string, unknown>, key: string): unknown {
-  return readSnakeCaseParamRaw(params, key);
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+    return params[snakeKey];
+  }
+  return undefined;
 }
 
 export function readStringParam(
@@ -214,46 +227,16 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function stringifyToolPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  try {
-    const encoded = JSON.stringify(payload, null, 2);
-    if (typeof encoded === "string") {
-      return encoded;
-    }
-  } catch {
-    // Fall through to String(payload) for non-serializable values.
-  }
-  return String(payload);
-}
-
-export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
+export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return {
     content: [
       {
         type: "text",
-        text,
+        text: JSON.stringify(payload, null, 2),
       },
     ],
-    details,
+    details: payload,
   };
-}
-
-export function failedTextResult<TDetails extends { status: "failed" }>(
-  text: string,
-  details: TDetails,
-): AgentToolResult<TDetails> {
-  return textResult(text, details);
-}
-
-export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
-  return textResult(stringifyToolPayload(payload), payload);
-}
-
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
-  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export function wrapOwnerOnlyToolExecution(
@@ -281,29 +264,19 @@ export async function imageResult(params: {
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
-    ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
+    {
+      type: "text",
+      text: params.extraText ?? `MEDIA:${params.path}`,
+    },
     {
       type: "image",
       data: params.base64,
       mimeType: params.mimeType,
     },
   ];
-  const detailsMedia =
-    params.details?.media &&
-    typeof params.details.media === "object" &&
-    !Array.isArray(params.details.media)
-      ? (params.details.media as Record<string, unknown>)
-      : undefined;
   const result: AgentToolResult<unknown> = {
     content,
-    details: {
-      path: params.path,
-      ...params.details,
-      media: {
-        ...detailsMedia,
-        mediaUrl: params.path,
-      },
-    },
+    details: { path: params.path, ...params.details },
   };
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }

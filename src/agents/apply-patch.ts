@@ -270,28 +270,8 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: async (filePath) => {
-      if (workspaceOnly) {
-        await assertSandboxPath({
-          filePath,
-          cwd: options.cwd,
-          root: options.cwd,
-          allowFinalSymlinkForUnlink: true,
-          allowFinalHardlinkForUnlink: true,
-        });
-      }
-      await fs.rm(filePath);
-    },
-    mkdirp: async (dir) => {
-      if (workspaceOnly) {
-        await assertSandboxPath({
-          filePath: dir,
-          cwd: options.cwd,
-          root: options.cwd,
-        });
-      }
-      await fs.mkdir(dir, { recursive: true });
-    },
+    remove: (filePath) => fs.rm(filePath),
+    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
   };
 }
 
@@ -313,7 +293,7 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false && resolved.hostPath) {
+    if (options.workspaceOnly !== false) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
@@ -323,8 +303,8 @@ async function resolvePatchPath(
       });
     }
     return {
-      resolved: resolved.hostPath ?? resolved.containerPath,
-      display: resolved.relativePath || resolved.containerPath,
+      resolved: resolved.hostPath,
+      display: resolved.relativePath || resolved.hostPath,
     };
   }
 

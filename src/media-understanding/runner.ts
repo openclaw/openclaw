@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -44,7 +44,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
-} from "./provider-registry.js";
+} from "./providers/index.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -75,9 +75,8 @@ export type RunCapabilityResult = {
 
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
-  cfg?: OpenClawConfig,
 ): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides, cfg);
+  return buildMediaUnderstandingRegistry(overrides);
 }
 
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
@@ -363,16 +362,12 @@ async function resolveKeyEntry(params: {
     if (capability === "video" && !provider.describeVideo) {
       return null;
     }
-    if (
-      !(await hasAvailableAuthForProvider({
-        provider: providerId,
-        cfg,
-        agentDir,
-      }))
-    ) {
+    try {
+      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
+      return { type: "provider" as const, provider: providerId, model };
+    } catch {
       return null;
     }
-    return { type: "provider" as const, provider: providerId, model };
   };
 
   if (capability === "image") {
@@ -558,12 +553,13 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  const hasAuth = await hasAvailableAuthForProvider({
-    provider: providerId,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
-  if (!hasAuth) {
+  try {
+    await resolveApiKeyForProvider({
+      provider: providerId,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+  } catch {
     return null;
   }
   return {

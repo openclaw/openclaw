@@ -4,8 +4,8 @@ import path from "node:path";
 import { resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
 import {
+  expandHomePrefix,
   resolveEffectiveHomeDir,
-  resolveHomeRelativePath,
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
@@ -279,14 +279,26 @@ export function resolveUserPath(
   if (!input) {
     return "";
   }
-  return resolveHomeRelativePath(input, { env, homedir });
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    const expanded = expandHomePrefix(trimmed, {
+      home: resolveRequiredHomeDir(env, homedir),
+      env,
+      homedir,
+    });
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
 }
 
 export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim();
+  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }

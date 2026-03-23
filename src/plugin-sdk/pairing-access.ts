@@ -8,7 +8,6 @@ type ScopedUpsertInput = Omit<
   "channel" | "accountId"
 >;
 
-/** Scope pairing store operations to one channel/account pair for plugin-facing helpers. */
 export function createScopedPairingAccess(params: {
   core: PluginRuntime;
   channel: ChannelId;

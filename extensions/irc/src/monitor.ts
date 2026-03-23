@@ -1,11 +1,10 @@
-import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/irc";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
 import { isChannelTarget } from "./normalize.js";
 import { makeIrcMessageId } from "./protocol.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
@@ -40,10 +39,12 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     accountId: opts.accountId,
   });
 
-  const runtime: RuntimeEnv = resolveLoggerBackedRuntime(
-    opts.runtime,
-    core.logging.getChildLogger(),
-  );
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger: core.logging.getChildLogger(),
+      exitError: () => new Error("Runtime exit not available"),
+    });
 
   if (!account.configured) {
     throw new Error(

@@ -11,19 +11,17 @@ export function formatRuntimeStatusWithDetails({
   state,
   details = [],
 }: RuntimeStatusFormatInput): string {
-  const runtimeStatus = status?.trim() || "unknown";
+  const runtimeStatus = status ?? "unknown";
   const fullDetails: string[] = [];
   if (pid) {
     fullDetails.push(`pid ${pid}`);
   }
-  const normalizedState = state?.trim();
-  if (normalizedState && normalizedState.toLowerCase() !== runtimeStatus.toLowerCase()) {
-    fullDetails.push(`state ${normalizedState}`);
+  if (state && state.toLowerCase() !== runtimeStatus) {
+    fullDetails.push(`state ${state}`);
   }
   for (const detail of details) {
-    const normalizedDetail = detail.trim();
-    if (normalizedDetail) {
-      fullDetails.push(normalizedDetail);
+    if (detail) {
+      fullDetails.push(detail);
     }
   }
   return fullDetails.length > 0 ? `${runtimeStatus} (${fullDetails.join(", ")})` : runtimeStatus;

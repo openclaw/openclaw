@@ -4,17 +4,13 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommand, removeCommandByName } from "./command-tree.js";
-import {
-  getSubCliCommandsWithSubcommands,
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
-type SubCliEntry = SubCliDescriptor & {
+type SubCliEntry = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
   register: SubCliRegistrar;
 };
 
@@ -313,8 +309,12 @@ const entries: SubCliEntry[] = [
   },
 ];
 
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
+export function getSubCliEntries(): SubCliEntry[] {
+  return entries;
+}
+
+export function getSubCliCommandsWithSubcommands(): string[] {
+  return entries.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
 }
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {

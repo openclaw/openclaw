@@ -1,7 +1,6 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -73,7 +72,6 @@ async function runTelegramAnnounceTurn(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
@@ -140,10 +138,11 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("delivers media payloads even when heartbeat text is suppressed", async () => {
+  it("handles media heartbeat delivery and last-target text delivery", async () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
+      // Media should still be delivered even if text is just HEARTBEAT_OK.
       mockEmbeddedAgentPayloads([
         { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
       ]);
@@ -157,15 +156,9 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(mediaRes.status).toBe("ok");
       expect(deps.sendMessageTelegram).toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps non-empty heartbeat text when last-target ack suppression is disabled", async () => {
-    await withTempHome(async (home) => {
-      const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
       vi.mocked(runSubagentAnnounceFlow).mockClear();
-      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
+      vi.mocked(deps.sendMessageTelegram).mockClear();
       mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
 
       const cfg = makeCfg(home, storePath);
@@ -201,25 +194,8 @@ describe("runCronIsolatedAgentTurn", () => {
         "HEARTBEAT_OK 🦞",
         expect.objectContaining({ accountId: undefined }),
       );
-    });
-  });
 
-  it("deletes the direct cron session after last-target text delivery", async () => {
-    await withTempHome(async (home) => {
-      const { storePath, deps } = await createTelegramDeliveryFixture(home);
-
-      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
-
-      const cfg = makeCfg(home, storePath);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          heartbeat: { ackMaxChars: 0 },
-        },
-      };
-
-      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
+      vi.mocked(deps.sendMessageTelegram).mockClear();
       vi.mocked(runSubagentAnnounceFlow).mockClear();
       vi.mocked(callGateway).mockClear();
 

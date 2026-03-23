@@ -28,7 +28,7 @@ async function runSystemGatewayCommand(
   try {
     const result = await action();
     if (opts.json || successText === undefined) {
-      defaultRuntime.writeJson(result);
+      defaultRuntime.log(JSON.stringify(result, null, 2));
     } else {
       defaultRuntime.log(successText);
     }

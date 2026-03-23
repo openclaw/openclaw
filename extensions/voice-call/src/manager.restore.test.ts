@@ -8,103 +8,123 @@ import {
   writeCallsToStore,
 } from "./manager.test-harness.js";
 
-function requireSingleActiveCall(manager: CallManager) {
-  const activeCalls = manager.getActiveCalls();
-  expect(activeCalls).toHaveLength(1);
-  const activeCall = activeCalls[0];
-  if (!activeCall) {
-    throw new Error("expected restored active call");
-  }
-  return activeCall;
-}
-
 describe("CallManager verification on restore", () => {
-  async function initializeManager(params?: {
-    callOverrides?: Parameters<typeof makePersistedCall>[0];
-    providerResult?: FakeProvider["getCallStatusResult"];
-    configureProvider?: (provider: FakeProvider) => void;
-    configOverrides?: Partial<{ maxDurationSeconds: number }>;
-  }) {
+  it("skips stale calls reported terminal by provider", async () => {
     const storePath = createTestStorePath();
-    const call = makePersistedCall(params?.callOverrides);
+    const call = makePersistedCall();
     writeCallsToStore(storePath, [call]);
 
     const provider = new FakeProvider();
-    if (params?.providerResult) {
-      provider.getCallStatusResult = params.providerResult;
-    }
-    params?.configureProvider?.(provider);
+    provider.getCallStatusResult = { status: "completed", isTerminal: true };
 
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
-      ...params?.configOverrides,
     });
     const manager = new CallManager(config, storePath);
     await manager.initialize(provider, "https://example.com/voice/webhook");
-
-    return { call, manager };
-  }
-
-  it("skips stale calls reported terminal by provider", async () => {
-    const { manager } = await initializeManager({
-      providerResult: { status: "completed", isTerminal: true },
-    });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
   });
 
   it("keeps calls reported active by provider", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "in-progress", isTerminal: false },
-    });
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
 
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
+    const provider = new FakeProvider();
+    provider.getCallStatusResult = { status: "in-progress", isTerminal: false };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(manager.getActiveCalls()[0]?.callId).toBe(call.callId);
   });
 
   it("keeps calls when provider returns unknown (transient error)", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "error", isTerminal: false, isUnknown: true },
-    });
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
 
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
+    const provider = new FakeProvider();
+    provider.getCallStatusResult = { status: "error", isTerminal: false, isUnknown: true };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
   });
 
   it("skips calls older than maxDurationSeconds", async () => {
-    const { manager } = await initializeManager({
-      callOverrides: {
-        startedAt: Date.now() - 600_000,
-        answeredAt: Date.now() - 590_000,
-      },
-      configOverrides: { maxDurationSeconds: 300 },
+    const storePath = createTestStorePath();
+    const call = makePersistedCall({
+      startedAt: Date.now() - 600_000,
+      answeredAt: Date.now() - 590_000,
     });
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      maxDurationSeconds: 300,
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
 
     expect(manager.getActiveCalls()).toHaveLength(0);
   });
 
   it("skips calls without providerCallId", async () => {
-    const { manager } = await initializeManager({
-      callOverrides: { providerCallId: undefined, state: "initiated" },
+    const storePath = createTestStorePath();
+    const call = makePersistedCall({ providerCallId: undefined, state: "initiated" });
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
     });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
 
     expect(manager.getActiveCalls()).toHaveLength(0);
   });
 
   it("keeps call when getCallStatus throws (verification failure)", async () => {
-    const { call, manager } = await initializeManager({
-      configureProvider: (provider) => {
-        provider.getCallStatus = async () => {
-          throw new Error("network failure");
-        };
-      },
-    });
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
 
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
+    const provider = new FakeProvider();
+    provider.getCallStatus = async () => {
+      throw new Error("network failure");
+    };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
   });
 });

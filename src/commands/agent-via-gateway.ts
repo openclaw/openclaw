@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -6,7 +5,7 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -70,16 +69,16 @@ function formatPayloadForLog(payload: {
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
-  const parts = resolveSendableOutboundReplyParts({
-    text: payload.text,
-    mediaUrls: payload.mediaUrls,
-    mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
-  });
   const lines: string[] = [];
-  if (parts.text) {
-    lines.push(parts.text.trimEnd());
+  if (payload.text) {
+    lines.push(payload.text.trimEnd());
   }
-  for (const url of parts.mediaUrls) {
+  const mediaUrl =
+    typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
+      ? payload.mediaUrl.trim()
+      : undefined;
+  const media = payload.mediaUrls ?? (mediaUrl ? [mediaUrl] : []);
+  for (const url of media) {
     lines.push(`MEDIA:${url}`);
   }
   return lines.join("\n").trimEnd();
@@ -156,7 +155,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, response);
+    runtime.log(JSON.stringify(response, null, 2));
     return response;
   }
 

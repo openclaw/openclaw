@@ -26,8 +26,6 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
 
-type AuthHintKind = "required" | "failed";
-
 /** Whether the overview should show device-pairing guidance for this error. */
 export function shouldShowPairingHint(
   connected: boolean,
@@ -43,34 +41,30 @@ export function shouldShowPairingHint(
   return lastError.toLowerCase().includes("pairing required");
 }
 
-/**
- * Return the overview auth hint to show, if any.
- *
- * Keep fallback string matching narrow so generic "connect failed" close reasons
- * do not get misclassified as token/password problems.
- */
-export function resolveAuthHintKind(params: {
-  connected: boolean;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-  hasToken: boolean;
-  hasPassword: boolean;
-}): AuthHintKind | null {
-  if (params.connected || !params.lastError) {
-    return null;
+export function shouldShowAuthHint(
+  connected: boolean,
+  lastError: string | null,
+  lastErrorCode?: string | null,
+): boolean {
+  if (connected || !lastError) {
+    return false;
   }
-  if (params.lastErrorCode) {
-    if (!AUTH_FAILURE_CODES.has(params.lastErrorCode)) {
-      return null;
-    }
-    return AUTH_REQUIRED_CODES.has(params.lastErrorCode) ? "required" : "failed";
+  if (lastErrorCode) {
+    return AUTH_FAILURE_CODES.has(lastErrorCode);
   }
+  const lower = lastError.toLowerCase();
+  return lower.includes("unauthorized") || lower.includes("connect failed");
+}
 
-  const lower = params.lastError.toLowerCase();
-  if (!lower.includes("unauthorized")) {
-    return null;
+export function shouldShowAuthRequiredHint(
+  hasToken: boolean,
+  hasPassword: boolean,
+  lastErrorCode?: string | null,
+): boolean {
+  if (lastErrorCode) {
+    return AUTH_REQUIRED_CODES.has(lastErrorCode);
   }
-  return !params.hasToken && !params.hasPassword ? "required" : "failed";
+  return !hasToken && !hasPassword;
 }
 
 export function shouldShowInsecureContextHint(

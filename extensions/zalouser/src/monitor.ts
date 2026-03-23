@@ -1,38 +1,36 @@
 import {
   DM_GROUP_ACCESS_REASON,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/channel-policy";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
+  KeyedAsyncQueue,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/compat";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   OutboundReplyPayload,
   RuntimeEnv,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/zalouser";
 import {
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  deliverTextOrMediaReply,
+  createTypingCallbacks,
+  createScopedPairingAccess,
+  createReplyPrefixOptions,
   evaluateGroupRouteAccessForPolicy,
   isDangerousNameMatchingEnabled,
+  issuePairingChallenge,
+  resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
   resolveOpenProviderRuntimeGroupPolicy,
-  resolveSendableOutboundReplyParts,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
-  resolveSenderScopedGroupPolicy,
+  sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -129,6 +127,16 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   }
   const senderId = message.senderId?.trim();
   return `direct:${senderId || threadId}`;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function resolveZalouserDmSessionScope(config: OpenClawConfig) {
@@ -250,7 +258,7 @@ async function processMessage(
   historyState: ZalouserGroupHistoryState,
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
 ): Promise<void> {
-  const pairing = createChannelPairingController({
+  const pairing = createScopedPairingAccess({
     core,
     channel: "zalouser",
     accountId: account.accountId,
@@ -350,10 +358,6 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
-  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-    groupPolicy,
-    groupAllowFrom: configGroupAllowFrom,
-  });
   const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
     commandBody,
     config,
@@ -365,11 +369,10 @@ async function processMessage(
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup,
     dmPolicy,
-    groupPolicy: senderGroupPolicy,
+    groupPolicy,
     allowFrom: configAllowFrom,
     groupAllowFrom: configGroupAllowFrom,
     storeAllowFrom,
-    groupAllowFromFallbackToAllowFrom: false,
     isSenderAllowed: (allowFrom) => isSenderAllowed(senderId, allowFrom),
   });
   if (isGroup && accessDecision.decision !== "allow") {
@@ -387,10 +390,12 @@ async function processMessage(
 
   if (!isGroup && accessDecision.decision !== "allow") {
     if (accessDecision.decision === "pairing") {
-      await pairing.issueChallenge({
+      await issuePairingChallenge({
+        channel: "zalouser",
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,
         meta: { name: senderName || undefined },
+        upsertPairingRequest: pairing.upsertPairingRequest,
         onCreated: () => {
           logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
         },
@@ -626,24 +631,24 @@ async function processMessage(
     },
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: config,
     agentId: route.agentId,
     channel: "zalouser",
     accountId: account.accountId,
-    typing: {
-      start: async () => {
-        await sendTypingZalouser(chatId, {
-          profile: account.profile,
-          isGroup,
-        });
-      },
-      onStartError: (err) => {
-        runtime.error?.(
-          `[${account.accountId}] zalouser typing start failed for ${chatId}: ${String(err)}`,
-        );
-        logVerbose(core, runtime, `zalouser typing failed for ${chatId}: ${String(err)}`);
-      },
+  });
+  const typingCallbacks = createTypingCallbacks({
+    start: async () => {
+      await sendTypingZalouser(chatId, {
+        profile: account.profile,
+        isGroup,
+      });
+    },
+    onStartError: (err) => {
+      runtime.error?.(
+        `[${account.accountId}] zalouser typing start failed for ${chatId}: ${String(err)}`,
+      );
+      logVerbose(core, runtime, `zalouser typing failed for ${chatId}: ${String(err)}`);
     },
   });
 
@@ -651,7 +656,8 @@ async function processMessage(
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
-      ...replyPipeline,
+      ...prefixOptions,
+      typingCallbacks,
       deliver: async (payload) => {
         await deliverZalouserReply({
           payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
@@ -702,31 +708,16 @@ async function deliverZalouserReply(params: {
   const { payload, profile, chatId, isGroup, runtime, core, config, accountId, statusSink } =
     params;
   const tableMode = params.tableMode ?? "code";
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
+  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
   });
-  await deliverTextOrMediaReply({
-    payload,
-    text: reply.text,
-    sendText: async (chunk) => {
-      try {
-        await sendMessageZalouser(chatId, chunk, {
-          profile,
-          isGroup,
-          textMode: "markdown",
-          textChunkMode: chunkMode,
-          textChunkLimit,
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error(`Zalouser message send failed: ${String(err)}`);
-      }
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
+
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls: resolveOutboundMediaUrls(payload),
+    caption: text,
+    send: async ({ mediaUrl, caption }) => {
       logVerbose(core, runtime, `Sending media to ${chatId}`);
       await sendMessageZalouser(chatId, caption ?? "", {
         profile,
@@ -738,10 +729,28 @@ async function deliverZalouserReply(params: {
       });
       statusSink?.({ lastOutboundAt: Date.now() });
     },
-    onMediaError: (error) => {
+    onError: (error) => {
       runtime.error(`Zalouser media send failed: ${String(error)}`);
     },
   });
+  if (sentMedia) {
+    return;
+  }
+
+  if (text) {
+    try {
+      await sendMessageZalouser(chatId, text, {
+        profile,
+        isGroup,
+        textMode: "markdown",
+        textChunkMode: chunkMode,
+        textChunkLimit,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    } catch (err) {
+      runtime.error(`Zalouser message send failed: ${String(err)}`);
+    }
+  }
 }
 
 export async function monitorZalouserProvider(

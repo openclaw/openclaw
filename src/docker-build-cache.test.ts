@@ -9,10 +9,6 @@ async function readRepoFile(path: string): Promise<string> {
   return readFile(resolve(repoRoot, path), "utf8");
 }
 
-function indexOfPattern(source: string, pattern: RegExp): number {
-  return source.search(pattern);
-}
-
 describe("docker build cache layout", () => {
   it("keeps the root dependency layer independent from scripts changes", async () => {
     const dockerfile = await readRepoFile("Dockerfile");
@@ -33,11 +29,8 @@ describe("docker build cache layout", () => {
       "scripts/docker/cleanup-smoke/Dockerfile",
     ]) {
       const dockerfile = await readRepoFile(path);
-      expect(
-        dockerfile,
-        `${path} should use a shared pnpm store cache under the active user's home`,
-      ).toMatch(
-        /--mount=type=cache,id=openclaw-pnpm-store,target=\/(?:root|home\/appuser)\/\.local\/share\/pnpm\/store,sharing=locked/,
+      expect(dockerfile, `${path} should use a shared pnpm store cache`).toContain(
+        "--mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked",
       );
     }
   });
@@ -94,41 +87,23 @@ describe("docker build cache layout", () => {
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
+      dockerfile.indexOf("COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./"),
+    ).toBeLessThan(installIndex);
+    expect(dockerfile.indexOf("COPY ui/package.json ./ui/package.json")).toBeLessThan(installIndex);
+    expect(
+      dockerfile.indexOf(
+        "COPY extensions/memory-core/package.json ./extensions/memory-core/package.json",
       ),
     ).toBeLessThan(installIndex);
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts openclaw\.mjs \.\/$/m,
+      dockerfile.indexOf(
+        "COPY tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts vitest.e2e.config.ts openclaw.mjs ./",
       ),
     ).toBeGreaterThan(installIndex);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m)).toBeGreaterThan(
-      installIndex,
-    );
-    expect(
-      indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+test \.\/test$/m),
-    ).toBeGreaterThan(installIndex);
-    expect(
-      indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+scripts \.\/scripts$/m),
-    ).toBeGreaterThan(installIndex);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+ui \.\/ui$/m)).toBeGreaterThan(
-      installIndex,
-    );
+    expect(dockerfile.indexOf("COPY src ./src")).toBeGreaterThan(installIndex);
+    expect(dockerfile.indexOf("COPY test ./test")).toBeGreaterThan(installIndex);
+    expect(dockerfile.indexOf("COPY scripts ./scripts")).toBeGreaterThan(installIndex);
+    expect(dockerfile.indexOf("COPY ui ./ui")).toBeGreaterThan(installIndex);
   });
 
   it("copies manifests before install in the qr-import image", async () => {
@@ -136,28 +111,17 @@ describe("docker build cache layout", () => {
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
-      ),
+      dockerfile.indexOf("COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./"),
     ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
+    expect(dockerfile.indexOf("COPY ui/package.json ./ui/package.json")).toBeLessThan(installIndex);
     expect(dockerfile).toContain(
       "This image only exercises the root qrcode-terminal dependency path.",
     );
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
+      dockerfile.indexOf(
+        "COPY extensions/memory-core/package.json ./extensions/memory-core/package.json",
       ),
     ).toBe(-1);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
-      installIndex,
-    );
+    expect(dockerfile.indexOf("COPY . .")).toBeGreaterThan(installIndex);
   });
 });

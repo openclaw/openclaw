@@ -1,5 +1,5 @@
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
-import { resolveControlCommandGate } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   authorizeMattermostCommandInvocation,
@@ -15,35 +15,6 @@ const accountFixture: ResolvedMattermostAccount = {
   baseUrlSource: "config",
   config: {},
 };
-
-function authorizeGroupCommand(senderId: string) {
-  return authorizeMattermostCommandInvocation({
-    account: {
-      ...accountFixture,
-      config: {
-        groupPolicy: "allowlist",
-        allowFrom: ["trusted-user"],
-      },
-    },
-    cfg: {
-      commands: {
-        useAccessGroups: true,
-      },
-    },
-    senderId,
-    senderName: senderId,
-    channelId: "chan-1",
-    channelInfo: {
-      id: "chan-1",
-      type: "O",
-      name: "general",
-      display_name: "General",
-    },
-    storeAllowFrom: [],
-    allowTextCommands: true,
-    hasControlCommand: true,
-  });
-}
 
 describe("mattermost monitor authz", () => {
   it("keeps DM allowlist merged with pairing-store entries", () => {
@@ -101,7 +72,32 @@ describe("mattermost monitor authz", () => {
   });
 
   it("denies group control commands when the sender is outside the allowlist", () => {
-    const decision = authorizeGroupCommand("attacker");
+    const decision = authorizeMattermostCommandInvocation({
+      account: {
+        ...accountFixture,
+        config: {
+          groupPolicy: "allowlist",
+          allowFrom: ["trusted-user"],
+        },
+      },
+      cfg: {
+        commands: {
+          useAccessGroups: true,
+        },
+      },
+      senderId: "attacker",
+      senderName: "attacker",
+      channelId: "chan-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "general",
+        display_name: "General",
+      },
+      storeAllowFrom: [],
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
 
     expect(decision).toMatchObject({
       ok: false,
@@ -111,7 +107,32 @@ describe("mattermost monitor authz", () => {
   });
 
   it("authorizes group control commands for allowlisted senders", () => {
-    const decision = authorizeGroupCommand("trusted-user");
+    const decision = authorizeMattermostCommandInvocation({
+      account: {
+        ...accountFixture,
+        config: {
+          groupPolicy: "allowlist",
+          allowFrom: ["trusted-user"],
+        },
+      },
+      cfg: {
+        commands: {
+          useAccessGroups: true,
+        },
+      },
+      senderId: "trusted-user",
+      senderName: "trusted-user",
+      channelId: "chan-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "general",
+        display_name: "General",
+      },
+      storeAllowFrom: [],
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
 
     expect(decision).toMatchObject({
       ok: true,

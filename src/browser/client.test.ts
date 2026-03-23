@@ -160,7 +160,6 @@ describe("browser client", () => {
               targetId: "t1",
               url: "https://x",
               result: 1,
-              results: [{ ok: true }],
             }),
           } as unknown as Response;
         }
@@ -259,7 +258,7 @@ describe("browser client", () => {
     ).resolves.toMatchObject({ ok: true, targetId: "t1" });
     await expect(
       browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
+    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
     await expect(
       browserArmFileChooser("http://127.0.0.1:18791", {
         paths: ["/tmp/a.txt"],

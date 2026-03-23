@@ -1,31 +1,10 @@
+import type { MSTeamsConfig } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it } from "vitest";
-import type { MSTeamsConfig } from "../runtime-api.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
-
-function resolveNamedTeamRouteConfig(allowNameMatching = false) {
-  const cfg: MSTeamsConfig = {
-    teams: {
-      "My Team": {
-        requireMention: true,
-        channels: {
-          "General Chat": { requireMention: false },
-        },
-      },
-    },
-  };
-
-  return resolveMSTeamsRouteConfig({
-    cfg,
-    teamName: "My Team",
-    channelName: "General Chat",
-    conversationId: "ignored",
-    allowNameMatching,
-  });
-}
 
 describe("msteams policy", () => {
   describe("resolveMSTeamsRouteConfig", () => {
@@ -47,11 +26,8 @@ describe("msteams policy", () => {
         conversationId: "chan456",
       });
 
-      if (!res.teamConfig || !res.channelConfig) {
-        throw new Error("expected matched team and channel config");
-      }
-      expect(res.teamConfig.requireMention).toBe(false);
-      expect(res.channelConfig.requireMention).toBe(true);
+      expect(res.teamConfig?.requireMention).toBe(false);
+      expect(res.channelConfig?.requireMention).toBe(true);
       expect(res.allowlistConfigured).toBe(true);
       expect(res.allowed).toBe(true);
       expect(res.channelMatchKey).toBe("chan456");
@@ -75,7 +51,23 @@ describe("msteams policy", () => {
     });
 
     it("blocks team and channel name matches by default", () => {
-      const res = resolveNamedTeamRouteConfig();
+      const cfg: MSTeamsConfig = {
+        teams: {
+          "My Team": {
+            requireMention: true,
+            channels: {
+              "General Chat": { requireMention: false },
+            },
+          },
+        },
+      };
+
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamName: "My Team",
+        channelName: "General Chat",
+        conversationId: "ignored",
+      });
 
       expect(res.teamConfig).toBeUndefined();
       expect(res.channelConfig).toBeUndefined();
@@ -83,13 +75,27 @@ describe("msteams policy", () => {
     });
 
     it("matches team and channel by name when dangerous name matching is enabled", () => {
-      const res = resolveNamedTeamRouteConfig(true);
+      const cfg: MSTeamsConfig = {
+        teams: {
+          "My Team": {
+            requireMention: true,
+            channels: {
+              "General Chat": { requireMention: false },
+            },
+          },
+        },
+      };
 
-      if (!res.teamConfig || !res.channelConfig) {
-        throw new Error("expected matched named team and channel config");
-      }
-      expect(res.teamConfig.requireMention).toBe(true);
-      expect(res.channelConfig.requireMention).toBe(false);
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamName: "My Team",
+        channelName: "General Chat",
+        conversationId: "ignored",
+        allowNameMatching: true,
+      });
+
+      expect(res.teamConfig?.requireMention).toBe(true);
+      expect(res.channelConfig?.requireMention).toBe(false);
       expect(res.allowed).toBe(true);
     });
   });

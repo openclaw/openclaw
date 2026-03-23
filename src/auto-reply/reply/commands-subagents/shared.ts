@@ -11,12 +11,12 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import { parseExplicitTargetForChannel } from "../../../channels/plugins/target-parsing.js";
 import type {
   SessionEntry,
   loadSessionStore as loadSessionStoreFn,
   resolveStorePath as resolveStorePathFn,
 } from "../../../config/sessions.js";
+import { parseDiscordTarget } from "../../../discord/targets.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -30,7 +30,6 @@ import {
 } from "../../../shared/subagents-format.js";
 import {
   isDiscordSurface,
-  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
@@ -48,7 +47,6 @@ import { resolveTelegramConversationId } from "../telegram-context.js";
 export { extractAssistantText, stripToolMessages };
 export {
   isDiscordSurface,
-  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
@@ -337,9 +335,13 @@ export function resolveDiscordChannelIdForFocus(
     typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
   ].filter(Boolean);
   for (const candidate of toCandidates) {
-    const target = parseExplicitTargetForChannel("discord", candidate);
-    if (target?.chatType === "channel" && target.to) {
-      return target.to;
+    try {
+      const target = parseDiscordTarget(candidate, { defaultKind: "channel" });
+      if (target?.kind === "channel" && target.id) {
+        return target.id;
+      }
+    } catch {
+      // Ignore parse failures and try the next candidate.
     }
   }
   return undefined;

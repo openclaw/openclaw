@@ -32,99 +32,144 @@ function makeMattermostPlugin(): ChannelPlugin {
       isEnabled: () => true,
     },
     actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
+      listActions: () => ["send"],
     },
   };
 }
 
-type TestTable = Awaited<ReturnType<typeof buildChannelsTable>>;
+function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: params?.botToken ?? "bot-token",
+        appToken: params?.appToken ?? "app-token",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: params?.botToken ?? "bot-token",
+        appToken: params?.appToken ?? "app-token",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
 
-function makeSlackDirectPlugin(config: ChannelPlugin["config"]): ChannelPlugin {
+function makeUnavailableSlackPlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        botToken: "",
+        appToken: "",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        botToken: "",
+        appToken: "",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
   return makeDirectPlugin({
     id: "slack",
     label: "Slack",
     docsPath: "/channels/slack",
-    config,
-  });
-}
-
-function createSlackTokenAccount(params?: { botToken?: string; appToken?: string }) {
-  return {
-    name: "Primary",
-    enabled: true,
-    botToken: params?.botToken ?? "bot-token",
-    appToken: params?.appToken ?? "app-token",
-  };
-}
-
-function createUnavailableSlackTokenAccount() {
-  return {
-    name: "Primary",
-    enabled: true,
-    configured: true,
-    botToken: "",
-    appToken: "",
-    botTokenSource: "config",
-    appTokenSource: "config",
-    botTokenStatus: "configured_unavailable",
-    appTokenStatus: "configured_unavailable",
-  };
-}
-
-function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): ChannelPlugin {
-  return makeSlackDirectPlugin({
-    listAccountIds: () => ["primary"],
-    defaultAccountId: () => "primary",
-    inspectAccount: () => createSlackTokenAccount(params),
-    resolveAccount: () => createSlackTokenAccount(params),
-    isConfigured: () => true,
-    isEnabled: () => true,
-  });
-}
-
-function makeUnavailableSlackPlugin(): ChannelPlugin {
-  return makeSlackDirectPlugin({
-    listAccountIds: () => ["primary"],
-    defaultAccountId: () => "primary",
-    inspectAccount: () => createUnavailableSlackTokenAccount(),
-    resolveAccount: () => createUnavailableSlackTokenAccount(),
-    isConfigured: () => true,
-    isEnabled: () => true,
-  });
-}
-
-function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
-  return makeSlackDirectPlugin({
-    listAccountIds: () => ["primary"],
-    defaultAccountId: () => "primary",
-    inspectAccount: (cfg) =>
-      (cfg as { marker?: string }).marker === "source"
-        ? createUnavailableSlackTokenAccount()
-        : {
-            name: "Primary",
-            enabled: true,
-            configured: false,
-            botToken: "",
-            appToken: "",
-            botTokenSource: "none",
-            appTokenSource: "none",
-          },
-    resolveAccount: () => ({
-      name: "Primary",
-      enabled: true,
-      botToken: "",
-      appToken: "",
-    }),
-    isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
-    isEnabled: () => true,
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: (cfg) =>
+        (cfg as { marker?: string }).marker === "source"
+          ? {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              botToken: "",
+              appToken: "",
+              botTokenSource: "config",
+              appTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              appTokenStatus: "configured_unavailable",
+            }
+          : {
+              name: "Primary",
+              enabled: true,
+              configured: false,
+              botToken: "",
+              appToken: "",
+              botTokenSource: "none",
+              appTokenSource: "none",
+            },
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: "",
+        appToken: "",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: () => true,
+    },
   });
 }
 
 function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
-  return makeDirectPlugin({
+  return {
     id: "discord",
-    label: "Discord",
-    docsPath: "/channels/discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -154,7 +199,10 @@ function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
       isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
       isEnabled: () => true,
     },
-  });
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
 }
 
 function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
@@ -215,76 +263,64 @@ function makeTokenPlugin(): ChannelPlugin {
   });
 }
 
-async function buildTestTable(
-  plugins: ChannelPlugin[],
-  params?: { cfg?: Record<string, unknown>; sourceConfig?: Record<string, unknown> },
-) {
-  vi.mocked(listChannelPlugins).mockReturnValue(plugins);
-  return await buildChannelsTable((params?.cfg ?? { channels: {} }) as never, {
-    showSecrets: false,
-    sourceConfig: params?.sourceConfig as never,
-  });
-}
-
-function expectTableRow(
-  table: TestTable,
-  params: { id: string; state: string; detailContains?: string; detailEquals?: string },
-) {
-  const row = table.rows.find((entry) => entry.id === params.id);
-  expect(row).toBeDefined();
-  expect(row?.state).toBe(params.state);
-  if (params.detailContains) {
-    expect(row?.detail).toContain(params.detailContains);
-  }
-  if (params.detailEquals) {
-    expect(row?.detail).toBe(params.detailEquals);
-  }
-  return row;
-}
-
-function expectTableDetailRows(
-  table: TestTable,
-  title: string,
-  rows: Array<Record<string, string>>,
-) {
-  const detail = table.details.find((entry) => entry.title === title);
-  expect(detail).toBeDefined();
-  expect(detail?.rows).toEqual(rows);
-}
-
 describe("buildChannelsTable - mattermost token summary", () => {
   it("does not require appToken for mattermost accounts", async () => {
-    const table = await buildTestTable([makeMattermostPlugin()]);
-    const mattermostRow = expectTableRow(table, { id: "mattermost", state: "ok" });
+    vi.mocked(listChannelPlugins).mockReturnValue([makeMattermostPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const mattermostRow = table.rows.find((row) => row.id === "mattermost");
+    expect(mattermostRow).toBeDefined();
+    expect(mattermostRow?.state).toBe("ok");
     expect(mattermostRow?.detail).not.toContain("need bot+app");
   });
 
   it("keeps bot+app requirement when both fields exist", async () => {
-    const table = await buildTestTable([makeSlackPlugin({ botToken: "bot-token", appToken: "" })]);
-    expectTableRow(table, { id: "slack", state: "warn", detailContains: "need bot+app" });
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeSlackPlugin({ botToken: "bot-token", appToken: "" }),
+    ]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("need bot+app");
   });
 
   it("reports configured-but-unavailable Slack credentials as warn", async () => {
-    const table = await buildTestTable([makeUnavailableSlackPlugin()]);
-    expectTableRow(table, {
-      id: "slack",
-      state: "warn",
-      detailContains: "unavailable in this command path",
+    vi.mocked(listChannelPlugins).mockReturnValue([makeUnavailableSlackPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
     });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("unavailable in this command path");
   });
 
   it("preserves unavailable credential state from the source config snapshot", async () => {
-    const table = await buildTestTable([makeSourceAwareUnavailablePlugin()], {
-      cfg: { marker: "resolved", channels: {} },
-      sourceConfig: { marker: "source", channels: {} },
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSourceAwareUnavailablePlugin()]);
+
+    const table = await buildChannelsTable({ marker: "resolved", channels: {} } as never, {
+      showSecrets: false,
+      sourceConfig: { marker: "source", channels: {} } as never,
     });
 
-    expectTableRow(table, {
-      id: "slack",
-      state: "warn",
-      detailContains: "unavailable in this command path",
-    });
-    expectTableDetailRows(table, "Slack accounts", [
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("unavailable in this command path");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
       {
         Account: "primary (Primary)",
         Notes: "bot:config · app:config · secret unavailable in this command path",
@@ -294,13 +330,21 @@ describe("buildChannelsTable - mattermost token summary", () => {
   });
 
   it("treats status-only available credentials as resolved", async () => {
-    const table = await buildTestTable([makeSourceUnavailableResolvedAvailablePlugin()], {
-      cfg: { marker: "resolved", channels: {} },
-      sourceConfig: { marker: "source", channels: {} },
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSourceUnavailableResolvedAvailablePlugin()]);
+
+    const table = await buildChannelsTable({ marker: "resolved", channels: {} } as never, {
+      showSecrets: false,
+      sourceConfig: { marker: "source", channels: {} } as never,
     });
 
-    expectTableRow(table, { id: "discord", state: "ok", detailEquals: "configured" });
-    expectTableDetailRows(table, "Discord accounts", [
+    const discordRow = table.rows.find((row) => row.id === "discord");
+    expect(discordRow).toBeDefined();
+    expect(discordRow?.state).toBe("ok");
+    expect(discordRow?.detail).toBe("configured");
+
+    const discordDetails = table.details.find((detail) => detail.title === "Discord accounts");
+    expect(discordDetails).toBeDefined();
+    expect(discordDetails?.rows).toEqual([
       {
         Account: "primary (Primary)",
         Notes: "token:config",
@@ -310,13 +354,20 @@ describe("buildChannelsTable - mattermost token summary", () => {
   });
 
   it("treats Slack HTTP signing-secret availability as required config", async () => {
-    const table = await buildTestTable([makeHttpSlackUnavailablePlugin()]);
-    expectTableRow(table, {
-      id: "slack",
-      state: "warn",
-      detailContains: "configured http credentials unavailable",
+    vi.mocked(listChannelPlugins).mockReturnValue([makeHttpSlackUnavailablePlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
     });
-    expectTableDetailRows(table, "Slack accounts", [
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("configured http credentials unavailable");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
       {
         Account: "primary (Primary)",
         Notes: "bot:config · signing:config · secret unavailable in this command path",
@@ -326,7 +377,15 @@ describe("buildChannelsTable - mattermost token summary", () => {
   });
 
   it("still reports single-token channels as ok", async () => {
-    const table = await buildTestTable([makeTokenPlugin()]);
-    expectTableRow(table, { id: "token-only", state: "ok", detailContains: "token" });
+    vi.mocked(listChannelPlugins).mockReturnValue([makeTokenPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const tokenRow = table.rows.find((row) => row.id === "token-only");
+    expect(tokenRow).toBeDefined();
+    expect(tokenRow?.state).toBe("ok");
+    expect(tokenRow?.detail).toContain("token");
   });
 });

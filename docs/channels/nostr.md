@@ -16,7 +16,7 @@ Nostr is a decentralized protocol for social networking. This channel enables Op
 
 ### Onboarding (recommended)
 
-- Onboarding (`openclaw onboard`) and `openclaw channels add` list optional channel plugins.
+- The onboarding wizard (`openclaw onboard`) and `openclaw channels add` list optional channel plugins.
 - Selecting Nostr prompts you to install the plugin on demand.
 
 Install defaults:
@@ -40,15 +40,6 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 
 Restart the Gateway after installing or enabling plugins.
 
-### Non-interactive setup
-
-```bash
-openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
-openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY" --relay-urls "wss://relay.damus.io,wss://relay.primal.net"
-```
-
-Use `--use-env` to keep `NOSTR_PRIVATE_KEY` in the environment instead of storing the key in config.
-
 ## Quick setup
 
 1. Generate a Nostr keypair (if needed):
@@ -60,13 +51,13 @@ nak key generate
 
 2. Add to config:
 
-```json5
+```json
 {
-  channels: {
-    nostr: {
-      privateKey: "${NOSTR_PRIVATE_KEY}",
-    },
-  },
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}"
+    }
+  }
 }
 ```
 
@@ -96,23 +87,23 @@ Profile data is published as a NIP-01 `kind:0` event. You can manage it from the
 
 Example:
 
-```json5
+```json
 {
-  channels: {
-    nostr: {
-      privateKey: "${NOSTR_PRIVATE_KEY}",
-      profile: {
-        name: "openclaw",
-        displayName: "OpenClaw",
-        about: "Personal assistant DM bot",
-        picture: "https://example.com/avatar.png",
-        banner: "https://example.com/banner.png",
-        website: "https://example.com",
-        nip05: "openclaw@example.com",
-        lud16: "openclaw@example.com",
-      },
-    },
-  },
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}",
+      "profile": {
+        "name": "openclaw",
+        "displayName": "OpenClaw",
+        "about": "Personal assistant DM bot",
+        "picture": "https://example.com/avatar.png",
+        "banner": "https://example.com/banner.png",
+        "website": "https://example.com",
+        "nip05": "openclaw@example.com",
+        "lud16": "openclaw@example.com"
+      }
+    }
+  }
 }
 ```
 
@@ -130,23 +121,17 @@ Notes:
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
 
-Enforcement notes:
-
-- Sender policy is checked before signature verification and NIP-04 decryption.
-- Pairing replies are sent without processing the original DM body.
-- Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
-
 ### Allowlist example
 
-```json5
+```json
 {
-  channels: {
-    nostr: {
-      privateKey: "${NOSTR_PRIVATE_KEY}",
-      dmPolicy: "allowlist",
-      allowFrom: ["npub1abc...", "npub1xyz..."],
-    },
-  },
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}",
+      "dmPolicy": "allowlist",
+      "allowFrom": ["npub1abc...", "npub1xyz..."]
+    }
+  }
 }
 ```
 
@@ -161,14 +146,14 @@ Accepted formats:
 
 Defaults: `relay.damus.io` and `nos.lol`.
 
-```json5
+```json
 {
-  channels: {
-    nostr: {
-      privateKey: "${NOSTR_PRIVATE_KEY}",
-      relays: ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nostr.wine"],
-    },
-  },
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}",
+      "relays": ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nostr.wine"]
+    }
+  }
 }
 ```
 
@@ -197,14 +182,14 @@ Tips:
 docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ```
 
-```json5
+```json
 {
-  channels: {
-    nostr: {
-      privateKey: "${NOSTR_PRIVATE_KEY}",
-      relays: ["ws://localhost:7777"],
-    },
-  },
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}",
+      "relays": ["ws://localhost:7777"]
+    }
+  }
 }
 ```
 
@@ -240,7 +225,6 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
-- Pairing and allowlist policy is enforced before decrypt, so unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 

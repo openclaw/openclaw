@@ -65,7 +65,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
           await writeBase64ToFile(filePath, payload.base64);
 
           if (opts.json) {
-            defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
+            defaultRuntime.log(
+              JSON.stringify({ file: { path: filePath, format: payload.format } }, null, 2),
+            );
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
@@ -167,7 +169,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
             javaScript: js,
           });
           if (opts.json) {
-            defaultRuntime.writeJson(raw);
+            defaultRuntime.log(JSON.stringify(raw, null, 2));
             return;
           }
           const payload =

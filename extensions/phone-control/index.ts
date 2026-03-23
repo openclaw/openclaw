@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-  type OpenClawPluginService,
-} from "./runtime-api.js";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/phone-control";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -287,154 +283,139 @@ function formatStatus(state: ArmStateFile | null): string {
   return `Phone control: armed (${until}).\nTemporarily allowed: ${cmdLabel}`;
 }
 
-export default definePluginEntry({
-  id: "phone-control",
-  name: "Phone Control",
-  description: "Temporary allowlist control for phone automation commands",
-  register(api: OpenClawPluginApi) {
-    let expiryInterval: ReturnType<typeof setInterval> | null = null;
+export default function register(api: OpenClawPluginApi) {
+  let expiryInterval: ReturnType<typeof setInterval> | null = null;
 
-    const timerService: OpenClawPluginService = {
-      id: "phone-control-expiry",
-      start: async (ctx) => {
-        const statePath = resolveStatePath(ctx.stateDir);
-        const tick = async () => {
-          const state = await readArmState(statePath);
-          if (!state || state.expiresAtMs == null) {
-            return;
-          }
-          if (Date.now() < state.expiresAtMs) {
-            return;
-          }
-          await disarmNow({
-            api,
-            stateDir: ctx.stateDir,
-            statePath,
-            reason: "expired",
-          });
+  const timerService: OpenClawPluginService = {
+    id: "phone-control-expiry",
+    start: async (ctx) => {
+      const statePath = resolveStatePath(ctx.stateDir);
+      const tick = async () => {
+        const state = await readArmState(statePath);
+        if (!state || state.expiresAtMs == null) {
+          return;
+        }
+        if (Date.now() < state.expiresAtMs) {
+          return;
+        }
+        await disarmNow({
+          api,
+          stateDir: ctx.stateDir,
+          statePath,
+          reason: "expired",
+        });
+      };
+
+      // Best effort; don't crash the gateway if state is corrupt.
+      await tick().catch(() => {});
+
+      expiryInterval = setInterval(() => {
+        tick().catch(() => {});
+      }, 15_000);
+      expiryInterval.unref?.();
+
+      return;
+    },
+    stop: async () => {
+      if (expiryInterval) {
+        clearInterval(expiryInterval);
+        expiryInterval = null;
+      }
+      return;
+    },
+  };
+
+  api.registerService(timerService);
+
+  api.registerCommand({
+    name: "phone",
+    description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const args = ctx.args?.trim() ?? "";
+      const tokens = args.split(/\s+/).filter(Boolean);
+      const action = tokens[0]?.toLowerCase() ?? "";
+
+      const stateDir = api.runtime.state.resolveStateDir();
+      const statePath = resolveStatePath(stateDir);
+
+      if (!action || action === "help") {
+        const state = await readArmState(statePath);
+        return { text: `${formatStatus(state)}\n\n${formatHelp()}` };
+      }
+
+      if (action === "status") {
+        const state = await readArmState(statePath);
+        return { text: formatStatus(state) };
+      }
+
+      if (action === "disarm") {
+        const res = await disarmNow({
+          api,
+          stateDir,
+          statePath,
+          reason: "manual",
+        });
+        if (!res.changed) {
+          return { text: "Phone control: disarmed." };
+        }
+        const restoredLabel = res.restored.length > 0 ? res.restored.join(", ") : "none";
+        const removedLabel = res.removed.length > 0 ? res.removed.join(", ") : "none";
+        return {
+          text: `Phone control: disarmed.\nRemoved allowlist: ${removedLabel}\nRestored denylist: ${restoredLabel}`,
         };
+      }
 
-        // Best effort; don't crash the gateway if state is corrupt.
-        await tick().catch(() => {});
-
-        expiryInterval = setInterval(() => {
-          tick().catch(() => {});
-        }, 15_000);
-        expiryInterval.unref?.();
-
-        return;
-      },
-      stop: async () => {
-        if (expiryInterval) {
-          clearInterval(expiryInterval);
-          expiryInterval = null;
+      if (action === "arm") {
+        const group = parseGroup(tokens[1]);
+        if (!group) {
+          return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
         }
-        return;
-      },
-    };
+        const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
+        const expiresAtMs = Date.now() + durationMs;
 
-    api.registerService(timerService);
+        const commands = resolveCommandsForGroup(group);
+        const cfg = api.runtime.config.loadConfig();
+        const allowSet = new Set(normalizeAllowList(cfg));
+        const denySet = new Set(normalizeDenyList(cfg));
 
-    api.registerCommand({
-      name: "phone",
-      description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
-      acceptsArgs: true,
-      handler: async (ctx) => {
-        const args = ctx.args?.trim() ?? "";
-        const tokens = args.split(/\s+/).filter(Boolean);
-        const action = tokens[0]?.toLowerCase() ?? "";
-
-        const stateDir = api.runtime.state.resolveStateDir();
-        const statePath = resolveStatePath(stateDir);
-
-        if (!action || action === "help") {
-          const state = await readArmState(statePath);
-          return { text: `${formatStatus(state)}\n\n${formatHelp()}` };
+        const addedToAllow: string[] = [];
+        const removedFromDeny: string[] = [];
+        for (const cmd of commands) {
+          if (!allowSet.has(cmd)) {
+            allowSet.add(cmd);
+            addedToAllow.push(cmd);
+          }
+          if (denySet.delete(cmd)) {
+            removedFromDeny.push(cmd);
+          }
         }
+        const next = patchConfigNodeLists(cfg, {
+          allowCommands: uniqSorted([...allowSet]),
+          denyCommands: uniqSorted([...denySet]),
+        });
+        await api.runtime.config.writeConfigFile(next);
 
-        if (action === "status") {
-          const state = await readArmState(statePath);
-          return { text: formatStatus(state) };
-        }
+        await writeArmState(statePath, {
+          version: STATE_VERSION,
+          armedAtMs: Date.now(),
+          expiresAtMs,
+          group,
+          armedCommands: uniqSorted(commands),
+          addedToAllow: uniqSorted(addedToAllow),
+          removedFromDeny: uniqSorted(removedFromDeny),
+        });
 
-        if (action === "disarm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
-            return {
-              text: "⚠️ /phone disarm requires operator.admin for internal gateway callers.",
-            };
-          }
-          const res = await disarmNow({
-            api,
-            stateDir,
-            statePath,
-            reason: "manual",
-          });
-          if (!res.changed) {
-            return { text: "Phone control: disarmed." };
-          }
-          const restoredLabel = res.restored.length > 0 ? res.restored.join(", ") : "none";
-          const removedLabel = res.removed.length > 0 ? res.removed.join(", ") : "none";
-          return {
-            text: `Phone control: disarmed.\nRemoved allowlist: ${removedLabel}\nRestored denylist: ${restoredLabel}`,
-          };
-        }
+        const allowedLabel = uniqSorted(commands).join(", ");
+        return {
+          text:
+            `Phone control: armed for ${formatDuration(durationMs)}.\n` +
+            `Temporarily allowed: ${allowedLabel}\n` +
+            `To disarm early: /phone disarm`,
+        };
+      }
 
-        if (action === "arm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
-            return {
-              text: "⚠️ /phone arm requires operator.admin for internal gateway callers.",
-            };
-          }
-          const group = parseGroup(tokens[1]);
-          if (!group) {
-            return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
-          }
-          const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
-          const expiresAtMs = Date.now() + durationMs;
-
-          const commands = resolveCommandsForGroup(group);
-          const cfg = api.runtime.config.loadConfig();
-          const allowSet = new Set(normalizeAllowList(cfg));
-          const denySet = new Set(normalizeDenyList(cfg));
-
-          const addedToAllow: string[] = [];
-          const removedFromDeny: string[] = [];
-          for (const cmd of commands) {
-            if (!allowSet.has(cmd)) {
-              allowSet.add(cmd);
-              addedToAllow.push(cmd);
-            }
-            if (denySet.delete(cmd)) {
-              removedFromDeny.push(cmd);
-            }
-          }
-          const next = patchConfigNodeLists(cfg, {
-            allowCommands: uniqSorted([...allowSet]),
-            denyCommands: uniqSorted([...denySet]),
-          });
-          await api.runtime.config.writeConfigFile(next);
-
-          await writeArmState(statePath, {
-            version: STATE_VERSION,
-            armedAtMs: Date.now(),
-            expiresAtMs,
-            group,
-            armedCommands: uniqSorted(commands),
-            addedToAllow: uniqSorted(addedToAllow),
-            removedFromDeny: uniqSorted(removedFromDeny),
-          });
-
-          const allowedLabel = uniqSorted(commands).join(", ");
-          return {
-            text:
-              `Phone control: armed for ${formatDuration(durationMs)}.\n` +
-              `Temporarily allowed: ${allowedLabel}\n` +
-              `To disarm early: /phone disarm`,
-          };
-        }
-
-        return { text: formatHelp() };
-      },
-    });
-  },
-});
+      return { text: formatHelp() };
+    },
+  });
+}

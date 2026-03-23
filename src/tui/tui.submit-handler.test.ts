@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
-import {
-  createSubmitBurstCoalescer,
-  shouldEnableWindowsGitBashPasteFallback,
-} from "./tui-submit.js";
+import { createSubmitBurstCoalescer, shouldEnableWindowsGitBashPasteFallback } from "./tui.js";
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {

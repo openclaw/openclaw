@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { createEditorSubmitHandler } from "./tui-submit.js";
+import { createEditorSubmitHandler } from "./tui.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 

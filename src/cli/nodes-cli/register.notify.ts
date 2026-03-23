@@ -46,7 +46,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
-            defaultRuntime.writeJson(result);
+            defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
           const { ok } = getNodesTheme();

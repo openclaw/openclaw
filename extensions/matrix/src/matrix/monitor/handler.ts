@@ -1,68 +1,58 @@
+import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
+  DEFAULT_ACCOUNT_ID,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
-  ensureConfiguredAcpBindingReady,
+  dispatchReplyFromConfigWithSettledDispatcher,
+  evaluateGroupRouteAccessForPolicy,
   formatAllowlistMatchMeta,
-  getAgentScopedMediaLocalRoots,
-  getSessionBindingService,
   logInboundDrop,
   logTypingFailure,
+  resolveInboundSessionEnvelopeContext,
   resolveControlCommandGate,
   type PluginRuntime,
-  type ReplyPayload,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/matrix";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
-import { formatMatrixMediaUnavailableText } from "../media-text.js";
-import { fetchMatrixPollSnapshot } from "../poll-summary.js";
+import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
-  isPollEventType,
   isPollStartType,
   parsePollStartContent,
+  type PollStartContent,
 } from "../poll-types.js";
-import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
+import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
-  reactMatrixMessage,
-  sendMessageMatrix,
-  sendReadReceiptMatrix,
-  sendTypingMatrix,
-} from "../send.js";
-import { resolveMatrixMonitorAccessState } from "./access-state.js";
-import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
+  normalizeMatrixAllowList,
+  resolveMatrixAllowListMatch,
+  resolveMatrixAllowListMatches,
+} from "./allowlist.js";
+import {
+  resolveMatrixBodyForAgent,
+  resolveMatrixInboundSenderLabel,
+  resolveMatrixSenderUsername,
+} from "./inbound-body.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
-import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
-import { resolveMatrixInboundRoute } from "./route.js";
-import { createMatrixThreadContextResolver } from "./thread-context.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
-import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
-
-const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
-const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
-const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
-type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
   core: PluginRuntime;
   cfg: CoreConfig;
-  accountId: string;
   runtime: RuntimeEnv;
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
-  groupAllowFrom?: string[];
-  roomsConfig?: Record<string, MatrixRoomConfig>;
-  accountAllowBots?: boolean | "mentions";
-  configuredBotUserIds?: ReadonlySet<string>;
+  roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
@@ -73,8 +63,6 @@ export type MatrixMonitorHandlerParams = {
   mediaMaxBytes: number;
   startupMs: number;
   startupGraceMs: number;
-  dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -84,61 +72,59 @@ export type MatrixMonitorHandlerParams = {
   };
   getRoomInfo: (
     roomId: string,
-    opts?: { includeAliases?: boolean },
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
-  needsRoomAliasesForConfig: boolean;
+  accountId?: string | null;
 };
 
-function resolveMatrixMentionPrecheckText(params: {
-  eventType: string;
-  content: RoomMessageEventContent;
-  locationText?: string | null;
-}): string {
-  if (params.locationText?.trim()) {
-    return params.locationText.trim();
-  }
-  if (typeof params.content.body === "string" && params.content.body.trim()) {
-    return params.content.body.trim();
-  }
-  if (isPollStartType(params.eventType)) {
-    const parsed = parsePollStartContent(params.content as never);
-    if (parsed) {
-      return formatPollAsText(parsed);
-    }
-  }
-  return "";
+export function resolveMatrixBaseRouteSession(params: {
+  buildAgentSessionKey: (params: {
+    agentId: string;
+    channel: string;
+    accountId?: string | null;
+    peer?: { kind: "direct" | "channel"; id: string } | null;
+  }) => string;
+  baseRoute: {
+    agentId: string;
+    sessionKey: string;
+    mainSessionKey: string;
+    matchedBy?: string;
+  };
+  isDirectMessage: boolean;
+  roomId: string;
+  accountId?: string | null;
+}): { sessionKey: string; lastRoutePolicy: "main" | "session" } {
+  const sessionKey =
+    params.isDirectMessage && params.baseRoute.matchedBy === "binding.peer.parent"
+      ? params.buildAgentSessionKey({
+          agentId: params.baseRoute.agentId,
+          channel: "matrix",
+          accountId: params.accountId,
+          peer: { kind: "channel", id: params.roomId },
+        })
+      : params.baseRoute.sessionKey;
+  return {
+    sessionKey,
+    lastRoutePolicy: sessionKey === params.baseRoute.mainSessionKey ? "main" : "session",
+  };
 }
 
-function resolveMatrixInboundBodyText(params: {
-  rawBody: string;
-  filename?: string;
-  mediaPlaceholder?: string;
-  msgtype?: string;
-  hadMediaUrl: boolean;
-  mediaDownloadFailed: boolean;
-}): string {
-  if (params.mediaPlaceholder) {
-    return params.rawBody || params.mediaPlaceholder;
-  }
-  if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
-    return params.rawBody;
-  }
-  return formatMatrixMediaUnavailableText({
-    body: params.rawBody,
-    filename: params.filename,
-    msgtype: params.msgtype,
-  });
-}
-
-function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBotsMode {
-  if (value === true) {
-    return "all";
-  }
-  if (value === "mentions") {
-    return "mentions";
-  }
-  return "off";
+export function shouldOverrideMatrixDmToGroup(params: {
+  isDirectMessage: boolean;
+  roomConfigInfo?:
+    | {
+        config?: MatrixRoomConfig;
+        allowed: boolean;
+        matchSource?: string;
+      }
+    | undefined;
+}): boolean {
+  return (
+    params.isDirectMessage === true &&
+    params.roomConfigInfo?.config !== undefined &&
+    params.roomConfigInfo.allowed === true &&
+    params.roomConfigInfo.matchSource === "direct"
+  );
 }
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -146,15 +132,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     client,
     core,
     cfg,
-    accountId,
     runtime,
     logger,
     logVerboseMessage,
     allowFrom,
-    groupAllowFrom = [],
     roomsConfig,
-    accountAllowBots,
-    configuredBotUserIds = new Set<string>(),
     mentionRegexes,
     groupPolicy,
     replyToMode,
@@ -165,89 +147,36 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     mediaMaxBytes,
     startupMs,
     startupGraceMs,
-    dropPreStartupMessages,
-    inboundDeduper,
     directTracker,
     getRoomInfo,
     getMemberDisplayName,
-    needsRoomAliasesForConfig,
+    accountId,
   } = params;
-  let cachedStoreAllowFrom: {
-    value: string[];
-    expiresAtMs: number;
-  } | null = null;
-  const pairingReplySentAtMsBySender = new Map<string, number>();
-  const resolveThreadContext = createMatrixThreadContextResolver({
-    client,
-    getMemberDisplayName,
-    logVerboseMessage,
+  const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "matrix",
+    accountId: resolvedAccountId,
   });
 
-  const readStoreAllowFrom = async (): Promise<string[]> => {
-    const now = Date.now();
-    if (cachedStoreAllowFrom && now < cachedStoreAllowFrom.expiresAtMs) {
-      return cachedStoreAllowFrom.value;
-    }
-    const value = await core.channel.pairing
-      .readAllowFromStore({
-        channel: "matrix",
-        env: process.env,
-        accountId,
-      })
-      .catch(() => []);
-    cachedStoreAllowFrom = {
-      value,
-      expiresAtMs: now + ALLOW_FROM_STORE_CACHE_TTL_MS,
-    };
-    return value;
-  };
-
-  const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {
-    const now = Date.now();
-    if (created) {
-      pairingReplySentAtMsBySender.set(senderId, now);
-      return true;
-    }
-    const lastSentAtMs = pairingReplySentAtMsBySender.get(senderId);
-    if (typeof lastSentAtMs === "number" && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
-      return false;
-    }
-    pairingReplySentAtMsBySender.set(senderId, now);
-    if (pairingReplySentAtMsBySender.size > MAX_TRACKED_PAIRING_REPLY_SENDERS) {
-      const oldestSender = pairingReplySentAtMsBySender.keys().next().value;
-      if (typeof oldestSender === "string") {
-        pairingReplySentAtMsBySender.delete(oldestSender);
-      }
-    }
-    return true;
-  };
-
   return async (roomId: string, event: MatrixRawEvent) => {
-    const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let claimedInboundEvent = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted payloads are emitted separately after decryption.
+        // Encrypted messages are decrypted automatically by @vector-im/matrix-bot-sdk with crypto enabled
         return;
       }
 
-      const isPollEvent = isPollEventType(eventType);
-      const isReactionEvent = eventType === EventType.Reaction;
-      const locationContent = event.content as LocationMessageEventContent;
+      const isPollEvent = isPollStartType(eventType);
+      const locationContent = event.content as unknown as LocationMessageEventContent;
       const isLocationEvent =
         eventType === EventType.Location ||
         (eventType === EventType.RoomMessage && locationContent.msgtype === EventType.Location);
-      if (
-        eventType !== EventType.RoomMessage &&
-        !isPollEvent &&
-        !isLocationEvent &&
-        !isReactionEvent
-      ) {
+      if (eventType !== EventType.RoomMessage && !isPollEvent && !isLocationEvent) {
         return;
       }
       logVerboseMessage(
-        `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
+        `matrix: room.message recv room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
       if (event.unsigned?.redacted_because) {
         return;
@@ -262,37 +191,39 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
-      const commitInboundEventIfClaimed = async () => {
-        if (!claimedInboundEvent || !inboundDeduper || !eventId) {
-          return;
-        }
-        await inboundDeduper.commitEvent({ roomId, eventId });
-        claimedInboundEvent = false;
-      };
-      if (dropPreStartupMessages) {
-        if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
-          return;
-        }
-        if (
-          typeof eventTs !== "number" &&
-          typeof eventAge === "number" &&
-          eventAge > startupGraceMs
-        ) {
-          return;
-        }
+      if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+        return;
+      }
+      if (
+        typeof eventTs !== "number" &&
+        typeof eventAge === "number" &&
+        eventAge > startupGraceMs
+      ) {
+        return;
       }
 
-      let content = event.content as RoomMessageEventContent;
+      const roomInfo = await getRoomInfo(roomId);
+      const roomName = roomInfo.name;
+      const roomAliases = [roomInfo.canonicalAlias ?? "", ...roomInfo.altAliases].filter(Boolean);
 
-      if (
-        eventType === EventType.RoomMessage &&
-        isMatrixVerificationRoomMessage({
-          msgtype: (content as { msgtype?: unknown }).msgtype,
-          body: content.body,
-        })
-      ) {
-        logVerboseMessage(`matrix: skip verification/system room message room=${roomId}`);
-        return;
+      let content = event.content as unknown as RoomMessageEventContent;
+      if (isPollEvent) {
+        const pollStartContent = event.content as unknown as PollStartContent;
+        const pollSummary = parsePollStartContent(pollStartContent);
+        if (pollSummary) {
+          pollSummary.eventId = event.event_id ?? "";
+          pollSummary.roomId = roomId;
+          pollSummary.sender = senderId;
+          const senderDisplayName = await getMemberDisplayName(roomId, senderId);
+          pollSummary.senderName = senderDisplayName;
+          const pollText = formatPollAsText(pollSummary);
+          content = {
+            msgtype: "m.text",
+            body: pollText,
+          } as unknown as RoomMessageEventContent;
+        } else {
+          return;
+        }
       }
 
       const locationPayload: MatrixLocationPayload | null = resolveMatrixLocation({
@@ -306,185 +237,128 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
       }
-      if (eventId && inboundDeduper) {
-        claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
-        if (!claimedInboundEvent) {
-          logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
-          return;
-        }
-      }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      let isDirectMessage = await directTracker.isDirectMessage({
         roomId,
         senderId,
         selfUserId,
       });
+
+      // Resolve room config early so explicitly configured rooms can override DM classification.
+      // This ensures rooms in the groups config are always treated as groups regardless of
+      // member count or protocol-level DM flags. Only explicit matches (not wildcards) trigger
+      // the override to avoid breaking DM routing when a wildcard entry exists. (See #9106)
+      const roomConfigInfo = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliases,
+        name: roomName,
+      });
+      if (shouldOverrideMatrixDmToGroup({ isDirectMessage, roomConfigInfo })) {
+        logVerboseMessage(
+          `matrix: overriding DM to group for configured room=${roomId} (${roomConfigInfo.matchKey})`,
+        );
+        isDirectMessage = false;
+      }
+
       const isRoom = !isDirectMessage;
 
       if (isRoom && groupPolicy === "disabled") {
-        await commitInboundEventIfClaimed();
         return;
       }
-
-      const roomInfoForConfig =
-        isRoom && needsRoomAliasesForConfig
-          ? await getRoomInfo(roomId, { includeAliases: true })
-          : undefined;
-      const roomAliasesForConfig = roomInfoForConfig
-        ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
-        : [];
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliasesForConfig,
-          })
-        : undefined;
-      const roomConfig = roomConfigInfo?.config;
-      const allowBotsMode = resolveMatrixAllowBotsMode(roomConfig?.allowBots ?? accountAllowBots);
-      const isConfiguredBotSender = configuredBotUserIds.has(senderId);
+      // Only expose room config for confirmed group rooms. DMs should never inherit
+      // group settings (skills, systemPrompt, autoReply) even when a wildcard entry exists.
+      const roomConfig = isRoom ? roomConfigInfo?.config : undefined;
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
             roomConfigInfo.matchSource ?? "none"
           }`
         : "matchKey=none matchSource=none";
 
-      if (isConfiguredBotSender && allowBotsMode === "off") {
-        logVerboseMessage(
-          `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
-        );
-        await commitInboundEventIfClaimed();
-        return;
-      }
-
-      if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
-        logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
-        await commitInboundEventIfClaimed();
-        return;
-      }
-      if (isRoom && groupPolicy === "allowlist") {
-        if (!roomConfigInfo?.allowlistConfigured) {
-          logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
-          await commitInboundEventIfClaimed();
-          return;
-        }
-        if (!roomConfig) {
-          logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
-          await commitInboundEventIfClaimed();
+      if (isRoom) {
+        const routeAccess = evaluateGroupRouteAccessForPolicy({
+          groupPolicy,
+          routeAllowlistConfigured: Boolean(roomConfigInfo?.allowlistConfigured),
+          routeMatched: Boolean(roomConfig),
+          routeEnabled: roomConfigInfo?.allowed ?? true,
+        });
+        if (!routeAccess.allowed) {
+          if (routeAccess.reason === "route_disabled") {
+            logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
+          } else if (routeAccess.reason === "empty_allowlist") {
+            logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
+          } else if (routeAccess.reason === "route_not_allowlisted") {
+            logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
+          }
           return;
         }
       }
 
-      let senderNamePromise: Promise<string> | null = null;
-      const getSenderName = async (): Promise<string> => {
-        senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
-        return await senderNamePromise;
-      };
-      const storeAllowFrom = await readStoreAllowFrom();
-      const roomUsers = roomConfig?.users ?? [];
-      const accessState = resolveMatrixMonitorAccessState({
-        allowFrom,
-        storeAllowFrom,
-        groupAllowFrom,
-        roomUsers,
+      const senderName = await getMemberDisplayName(roomId, senderId);
+      const senderUsername = resolveMatrixSenderUsername(senderId);
+      const senderLabel = resolveMatrixInboundSenderLabel({
+        senderName,
         senderId,
-        isRoom,
+        senderUsername,
       });
-      const {
-        effectiveAllowFrom,
-        effectiveGroupAllowFrom,
-        effectiveRoomUsers,
-        groupAllowConfigured,
-        directAllowMatch,
-        roomUserMatch,
-        groupAllowMatch,
-        commandAuthorizers,
-      } = accessState;
+      const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+      const { access, effectiveAllowFrom, effectiveGroupAllowFrom, groupAllowConfigured } =
+        await resolveMatrixAccessState({
+          isDirectMessage,
+          resolvedAccountId,
+          dmPolicy,
+          groupPolicy,
+          allowFrom,
+          groupAllowFrom,
+          senderId,
+          readStoreForDmPolicy: pairing.readStoreForDmPolicy,
+        });
 
       if (isDirectMessage) {
-        if (!dmEnabled || dmPolicy === "disabled") {
-          await commitInboundEventIfClaimed();
+        const allowedDirectMessage = await enforceMatrixDirectMessageAccess({
+          dmEnabled,
+          dmPolicy,
+          accessDecision: access.decision,
+          senderId,
+          senderName,
+          effectiveAllowFrom,
+          upsertPairingRequest: pairing.upsertPairingRequest,
+          sendPairingReply: async (text) => {
+            await sendMessageMatrix(`room:${roomId}`, text, { client });
+          },
+          logVerboseMessage,
+        });
+        if (!allowedDirectMessage) {
           return;
-        }
-        if (dmPolicy !== "open") {
-          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
-          if (!directAllowMatch.allowed) {
-            if (!isReactionEvent && dmPolicy === "pairing") {
-              const senderName = await getSenderName();
-              const { code, created } = await core.channel.pairing.upsertPairingRequest({
-                channel: "matrix",
-                id: senderId,
-                accountId,
-                meta: { name: senderName },
-              });
-              if (shouldSendPairingReply(senderId, created)) {
-                const pairingReply = core.channel.pairing.buildPairingReply({
-                  channel: "matrix",
-                  idLine: `Your Matrix user id: ${senderId}`,
-                  code,
-                });
-                logVerboseMessage(
-                  created
-                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
-                );
-                try {
-                  await sendMessageMatrix(
-                    `room:${roomId}`,
-                    created
-                      ? pairingReply
-                      : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
-                    {
-                      client,
-                      cfg,
-                      accountId,
-                    },
-                  );
-                  await commitInboundEventIfClaimed();
-                } catch (err) {
-                  logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
-                  return;
-                }
-              } else {
-                logVerboseMessage(
-                  `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
-                );
-                await commitInboundEventIfClaimed();
-              }
-            }
-            if (isReactionEvent || dmPolicy !== "pairing") {
-              logVerboseMessage(
-                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-              );
-              await commitInboundEventIfClaimed();
-            }
-            return;
-          }
         }
       }
 
-      if (isRoom && roomUserMatch && !roomUserMatch.allowed) {
-        logVerboseMessage(
-          `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
-            roomUserMatch,
-          )})`,
-        );
-        await commitInboundEventIfClaimed();
-        return;
+      const roomUsers = roomConfig?.users ?? [];
+      if (isRoom && roomUsers.length > 0) {
+        const userMatch = resolveMatrixAllowListMatch({
+          allowList: normalizeMatrixAllowList(roomUsers),
+          userId: senderId,
+        });
+        if (!userMatch.allowed) {
+          logVerboseMessage(
+            `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
+              userMatch,
+            )})`,
+          );
+          return;
+        }
       }
-      if (
-        isRoom &&
-        groupPolicy === "allowlist" &&
-        effectiveRoomUsers.length === 0 &&
-        groupAllowConfigured
-      ) {
-        if (groupAllowMatch && !groupAllowMatch.allowed) {
+      if (isRoom && roomUsers.length === 0 && groupAllowConfigured && access.decision !== "allow") {
+        const groupAllowMatch = resolveMatrixAllowListMatch({
+          allowList: effectiveGroupAllowFrom,
+          userId: senderId,
+        });
+        if (!groupAllowMatch.allowed) {
           logVerboseMessage(
             `matrix: blocked sender ${senderId} (groupAllowFrom, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
               groupAllowMatch,
             )})`,
           );
-          await commitInboundEventIfClaimed();
           return;
         }
       }
@@ -492,30 +366,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logVerboseMessage(`matrix: allow room ${roomId} (${roomMatchMeta})`);
       }
 
-      if (isReactionEvent) {
-        const senderName = await getSenderName();
-        await handleInboundMatrixReaction({
-          client,
-          core,
-          cfg,
-          accountId,
-          roomId,
-          event,
-          senderId,
-          senderLabel: senderName,
-          selfUserId,
-          isDirectMessage,
-          logVerboseMessage,
-        });
-        await commitInboundEventIfClaimed();
-        return;
-      }
-
-      const mentionPrecheckText = resolveMatrixMentionPrecheckText({
-        eventType,
-        content,
-        locationText: locationPayload?.text,
-      });
+      const rawBody =
+        locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+      let media: {
+        path: string;
+        contentType?: string;
+        placeholder: string;
+      } | null = null;
       const contentUrl =
         "url" in content && typeof content.url === "string" ? content.url : undefined;
       const contentFile =
@@ -523,59 +380,72 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ? content.file
           : undefined;
       const mediaUrl = contentUrl ?? contentFile?.url;
-      if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
-        await commitInboundEventIfClaimed();
+      if (!rawBody && !mediaUrl) {
         return;
       }
 
-      const _messageId = event.event_id ?? "";
-      const _threadRootId = resolveMatrixThreadRootId({ event, content });
-      const {
-        route: _route,
-        configuredBinding: _configuredBinding,
-        runtimeBindingId: _runtimeBindingId,
-      } = resolveMatrixInboundRoute({
-        cfg,
-        accountId,
-        roomId,
-        senderId,
-        isDirectMessage,
-        messageId: _messageId,
-        threadRootId: _threadRootId,
-        eventTs: eventTs ?? undefined,
-        resolveAgentRoute: core.channel.routing.resolveAgentRoute,
-      });
-      const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
+      const contentInfo =
+        "info" in content && content.info && typeof content.info === "object"
+          ? (content.info as { mimetype?: string; size?: number })
+          : undefined;
+      const contentType = contentInfo?.mimetype;
+      const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
+      if (mediaUrl?.startsWith("mxc://")) {
+        try {
+          media = await downloadMatrixMedia({
+            client,
+            mxcUrl: mediaUrl,
+            contentType,
+            sizeBytes: contentSize,
+            maxBytes: mediaMaxBytes,
+            file: contentFile,
+          });
+        } catch (err) {
+          logVerboseMessage(`matrix: media download failed: ${String(err)}`);
+        }
+      }
+
+      const bodyText = rawBody || media?.placeholder || "";
+      if (!bodyText) {
+        return;
+      }
+
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
-        text: mentionPrecheckText,
-        mentionRegexes: agentMentionRegexes,
+        text: bodyText,
+        mentionRegexes,
       });
-      if (
-        isConfiguredBotSender &&
-        allowBotsMode === "mentions" &&
-        !isDirectMessage &&
-        !wasMentioned
-      ) {
-        logVerboseMessage(
-          `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
-        );
-        await commitInboundEventIfClaimed();
-        return;
-      }
       const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
         cfg,
         surface: "matrix",
       });
       const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-      const hasControlCommandInMessage = core.channel.text.hasControlCommand(
-        mentionPrecheckText,
-        cfg,
-      );
+      const senderAllowedForCommands = resolveMatrixAllowListMatches({
+        allowList: effectiveAllowFrom,
+        userId: senderId,
+      });
+      const senderAllowedForGroup = groupAllowConfigured
+        ? resolveMatrixAllowListMatches({
+            allowList: effectiveGroupAllowFrom,
+            userId: senderId,
+          })
+        : false;
+      const senderAllowedForRoomUsers =
+        isRoom && roomUsers.length > 0
+          ? resolveMatrixAllowListMatches({
+              allowList: normalizeMatrixAllowList(roomUsers),
+              userId: senderId,
+            })
+          : false;
+      const hasControlCommandInMessage = core.channel.text.hasControlCommand(bodyText, cfg);
       const commandGate = resolveControlCommandGate({
         useAccessGroups,
-        authorizers: commandAuthorizers,
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+          { configured: roomUsers.length > 0, allowed: senderAllowedForRoomUsers },
+          { configured: groupAllowConfigured, allowed: senderAllowedForGroup },
+        ],
         allowTextCommands,
         hasControlCommand: hasControlCommandInMessage,
       });
@@ -587,7 +457,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           reason: "control command (unauthorized)",
           target: senderId,
         });
-        await commitInboundEventIfClaimed();
         return;
       }
       const shouldRequireMention = isRoom
@@ -607,164 +476,138 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !hasExplicitMention &&
         commandAuthorized &&
         hasControlCommandInMessage;
-      const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
+      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
-        await commitInboundEventIfClaimed();
         return;
       }
 
-      if (isPollEvent) {
-        const pollSnapshot = await fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
-          logVerboseMessage(
-            `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
-          );
-          return null;
-        });
-        if (!pollSnapshot) {
-          return;
-        }
-        content = {
-          msgtype: "m.text",
-          body: pollSnapshot.text,
-        } as unknown as RoomMessageEventContent;
-      }
-
-      let media: {
-        path: string;
-        contentType?: string;
-        placeholder: string;
-      } | null = null;
-      let mediaDownloadFailed = false;
-      const finalContentUrl =
-        "url" in content && typeof content.url === "string" ? content.url : undefined;
-      const finalContentFile =
-        "file" in content && content.file && typeof content.file === "object"
-          ? content.file
-          : undefined;
-      const finalMediaUrl = finalContentUrl ?? finalContentFile?.url;
-      const contentInfo =
-        "info" in content && content.info && typeof content.info === "object"
-          ? (content.info as { mimetype?: string; size?: number })
-          : undefined;
-      const contentType = contentInfo?.mimetype;
-      const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
-      if (finalMediaUrl?.startsWith("mxc://")) {
-        try {
-          media = await downloadMatrixMedia({
-            client,
-            mxcUrl: finalMediaUrl,
-            contentType,
-            sizeBytes: contentSize,
-            maxBytes: mediaMaxBytes,
-            file: finalContentFile,
-          });
-        } catch (err) {
-          mediaDownloadFailed = true;
-          const errorText = err instanceof Error ? err.message : String(err);
-          logVerboseMessage(
-            `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
-          );
-          logger.warn("matrix media download failed", {
-            roomId,
-            eventId: event.event_id,
-            msgtype: content.msgtype,
-            encrypted: Boolean(finalContentFile),
-            error: errorText,
-          });
-        }
-      }
-
-      const rawBody =
-        locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
-      const bodyText = resolveMatrixInboundBodyText({
-        rawBody,
-        filename: typeof content.filename === "string" ? content.filename : undefined,
-        mediaPlaceholder: media?.placeholder,
-        msgtype: content.msgtype,
-        hadMediaUrl: Boolean(finalMediaUrl),
-        mediaDownloadFailed,
-      });
-      if (!bodyText) {
-        await commitInboundEventIfClaimed();
-        return;
-      }
-      const senderName = await getSenderName();
-      const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
-      const roomName = roomInfo?.name;
-
+      const messageId = event.event_id ?? "";
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
-        messageId: _messageId,
-        threadRootId: _threadRootId,
-        isThreadRoot: false, // Raw event payload does not carry explicit thread-root metadata.
+        messageId,
+        threadRootId,
+        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
-      const threadContext = _threadRootId
-        ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
-        : undefined;
 
-      if (_configuredBinding) {
-        const ensured = await ensureConfiguredAcpBindingReady({
-          cfg,
-          configuredBinding: _configuredBinding,
+      const baseRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+        // For DMs, pass roomId as parentPeer so the conversation is bindable by room ID
+        // while preserving DM trust semantics (secure 1:1, no group restrictions).
+        parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
+      });
+      const baseRouteSession = resolveMatrixBaseRouteSession({
+        buildAgentSessionKey: core.channel.routing.buildAgentSessionKey,
+        baseRoute,
+        isDirectMessage,
+        roomId,
+        accountId,
+      });
+
+      const route = {
+        ...baseRoute,
+        lastRoutePolicy: baseRouteSession.lastRoutePolicy,
+        sessionKey: threadRootId
+          ? `${baseRouteSession.sessionKey}:thread:${threadRootId}`
+          : baseRouteSession.sessionKey,
+      };
+
+      let threadStarterBody: string | undefined;
+      let threadLabel: string | undefined;
+      let parentSessionKey: string | undefined;
+
+      if (threadRootId) {
+        const existingSession = core.channel.session.readSessionUpdatedAt({
+          storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: baseRoute.agentId,
+          }),
+          sessionKey: route.sessionKey,
         });
-        if (!ensured.ok) {
-          logInboundDrop({
-            log: logVerboseMessage,
-            channel: "matrix",
-            reason: "configured ACP binding unavailable",
-            target: _configuredBinding.spec.conversationId,
-          });
-          return;
+
+        if (existingSession === undefined) {
+          try {
+            const rootEvent = await fetchEventSummary(client, roomId, threadRootId);
+            if (rootEvent?.body) {
+              const rootSenderName = rootEvent.sender
+                ? await getMemberDisplayName(roomId, rootEvent.sender)
+                : undefined;
+
+              threadStarterBody = core.channel.reply.formatAgentEnvelope({
+                channel: "Matrix",
+                from: rootSenderName ?? rootEvent.sender ?? "Unknown",
+                timestamp: rootEvent.timestamp,
+                envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
+                body: rootEvent.body,
+              });
+
+              threadLabel = `Matrix thread in ${roomName ?? roomId}`;
+              parentSessionKey = baseRoute.sessionKey;
+            }
+          } catch (err) {
+            logVerboseMessage(
+              `matrix: failed to fetch thread root ${threadRootId}: ${String(err)}`,
+            );
+          }
         }
       }
-      if (_runtimeBindingId) {
-        getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
-      }
+
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
-      const textWithId = `${bodyText}\n[matrix event id: ${_messageId} room: ${roomId}]`;
-      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-        agentId: _route.agentId,
-      });
-      const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-      const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-        storePath,
-        sessionKey: _route.sessionKey,
-      });
-      const body = core.channel.reply.formatAgentEnvelope({
+      const textWithId = threadRootId
+        ? `${bodyText}\n[matrix event id: ${messageId} room: ${roomId} thread: ${threadRootId}]`
+        : `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
+      const { storePath, envelopeOptions, previousTimestamp } =
+        resolveInboundSessionEnvelopeContext({
+          cfg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+        });
+      const body = core.channel.reply.formatInboundEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
         timestamp: eventTs ?? undefined,
         previousTimestamp,
         envelope: envelopeOptions,
         body: textWithId,
+        chatType: isDirectMessage ? "direct" : "channel",
+        senderLabel,
       });
 
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
+        BodyForAgent: resolveMatrixBodyForAgent({
+          isDirectMessage,
+          bodyText,
+          senderLabel,
+        }),
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
-        SessionKey: _route.sessionKey,
-        AccountId: _route.accountId,
-        ChatType: isDirectMessage ? "direct" : "channel",
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
+        ChatType: threadRootId ? "thread" : isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
-        SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+        SenderUsername: senderUsername,
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
-        GroupId: isRoom ? roomId : undefined,
+        GroupChannel: isRoom ? (roomInfo.canonicalAlias ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         Provider: "matrix" as const,
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
-        MessageSid: _messageId,
+        MessageSid: messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
         MessageThreadId: threadTarget,
-        ThreadStarterBody: threadContext?.threadStarterBody,
         Timestamp: eventTs ?? undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
@@ -774,25 +617,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandSource: "text" as const,
         OriginatingChannel: "matrix" as const,
         OriginatingTo: `room:${roomId}`,
+        ThreadStarterBody: threadStarterBody,
+        ThreadLabel: threadLabel,
+        ParentSessionKey: parentSessionKey,
       });
 
       await core.channel.session.recordInboundSession({
         storePath,
-        sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         ctx: ctxPayload,
         updateLastRoute: isDirectMessage
           ? {
-              sessionKey: _route.mainSessionKey,
+              sessionKey: route.mainSessionKey,
               channel: "matrix",
               to: `room:${roomId}`,
-              accountId: _route.accountId,
+              accountId: route.accountId,
             }
           : undefined,
         onRecordError: (err) => {
           logger.warn("failed updating session meta", {
             error: String(err),
             storePath,
-            sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
           });
         },
       });
@@ -800,11 +646,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
-      const { ackReaction, ackReactionScope: ackScope } = resolveMatrixAckReactionConfig({
-        cfg,
-        agentId: _route.agentId,
-        accountId,
-      });
+      const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+      const ackScope = cfg.messages?.ackReactionScope ?? "group-mentions";
       const shouldAckReaction = () =>
         Boolean(
           ackReaction &&
@@ -819,8 +662,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             shouldBypassMention,
           }),
         );
-      if (shouldAckReaction() && _messageId) {
-        reactMatrixMessage(roomId, _messageId, ackReaction, client).catch((err) => {
+      if (shouldAckReaction() && messageId) {
+        reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
           logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
         });
       }
@@ -831,27 +674,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      if (_messageId) {
-        sendReadReceiptMatrix(roomId, _messageId, client).catch((err) => {
-          logVerboseMessage(
-            `matrix: read receipt failed room=${roomId} id=${_messageId}: ${String(err)}`,
-          );
-        });
-      }
-
+      let didSendReply = false;
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg,
         channel: "matrix",
-        accountId: _route.accountId,
+        accountId: route.accountId,
       });
-      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
-      let finalReplyDeliveryFailed = false;
-      let nonFinalReplyDeliveryFailed = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
-        agentId: _route.agentId,
+        agentId: route.agentId,
         channel: "matrix",
-        accountId: _route.accountId,
+        accountId: route.accountId,
       });
       const typingCallbacks = createTypingCallbacks({
         start: () => sendTypingMatrix(roomId, true, undefined, client),
@@ -875,13 +708,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
-      const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
+      const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
-          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
-          deliver: async (payload: ReplyPayload) => {
+          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+          typingCallbacks,
+          deliver: async (payload) => {
             await deliverMatrixReplies({
-              cfg,
               replies: [payload],
               roomId,
               client,
@@ -889,72 +722,46 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               textLimit,
               replyToMode,
               threadId: threadTarget,
-              accountId: _route.accountId,
-              mediaLocalRoots,
+              accountId: route.accountId,
               tableMode,
             });
+            didSendReply = true;
           },
-          onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
-            if (info.kind === "final") {
-              finalReplyDeliveryFailed = true;
-            } else {
-              nonFinalReplyDeliveryFailed = true;
-            }
+          onError: (err, info) => {
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
-          onReplyStart: typingCallbacks.onReplyStart,
-          onIdle: typingCallbacks.onIdle,
         });
 
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+      const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
+        cfg,
+        ctxPayload,
         dispatcher,
         onSettled: () => {
           markDispatchIdle();
         },
-        run: async () => {
-          try {
-            return await core.channel.reply.dispatchReplyFromConfig({
-              ctx: ctxPayload,
-              cfg,
-              dispatcher,
-              replyOptions: {
-                ...replyOptions,
-                skillFilter: roomConfig?.skills,
-                onModelSelected,
-              },
-            });
-          } finally {
-            markRunComplete();
-          }
+        replyOptions: {
+          ...replyOptions,
+          skillFilter: roomConfig?.skills,
+          onModelSelected,
         },
       });
-      if (finalReplyDeliveryFailed) {
-        logVerboseMessage(
-          `matrix: final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
-        );
-        return;
-      }
-      if (!queuedFinal && nonFinalReplyDeliveryFailed) {
-        logVerboseMessage(
-          `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
-        );
-        return;
-      }
       if (!queuedFinal) {
-        await commitInboundEventIfClaimed();
         return;
       }
+      didSendReply = true;
       const finalCount = counts.final;
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
-      await commitInboundEventIfClaimed();
+      if (didSendReply) {
+        const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
+        core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {
+          sessionKey: route.sessionKey,
+          contextKey: `matrix:message:${roomId}:${messageId || "unknown"}`,
+        });
+      }
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
-    } finally {
-      if (claimedInboundEvent && inboundDeduper && eventId) {
-        inboundDeduper.releaseEvent({ roomId, eventId });
-      }
     }
   };
 }

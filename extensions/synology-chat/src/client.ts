@@ -27,12 +27,6 @@ type ChatUserCacheEntry = {
   cachedAt: number;
 };
 
-type ChatWebhookPayload = {
-  text?: string;
-  file_url?: string;
-  user_ids?: number[];
-};
-
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -53,7 +47,16 @@ export async function sendMessage(
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
-  const body = buildWebhookBody({ text }, userId);
+  const payloadObj: Record<string, any> = { text };
+  if (userId) {
+    // userId can be numeric ID or username - if numeric, add to user_ids
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
 
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
@@ -92,7 +95,15 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = true,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
+  const payloadObj: Record<string, any> = { file_url: fileUrl };
+  if (userId) {
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
 
   try {
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -173,22 +184,25 @@ export async function fetchChatUsers(
 }
 
 /**
- * Resolve a mutable webhook username/nickname to the correct Chat API user_id.
+ * Resolve a webhook username to the correct Chat API user_id.
  *
  * Synology Chat outgoing webhooks send a user_id that may NOT match the
  * Chat-internal user_id needed by the chatbot API (method=chatbot).
  * The webhook's "username" field corresponds to the Chat user's "nickname".
  *
+ * @param incomingUrl - Bot incoming webhook URL (used to derive user_list URL)
+ * @param webhookUsername - The username from the outgoing webhook payload
+ * @param allowInsecureSsl - Skip TLS verification
  * @returns The correct Chat user_id, or undefined if not found
  */
-export async function resolveLegacyWebhookNameToChatUserId(params: {
-  incomingUrl: string;
-  mutableWebhookUsername: string;
-  allowInsecureSsl?: boolean;
-  log?: { warn: (...args: unknown[]) => void };
-}): Promise<number | undefined> {
-  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+export async function resolveChatUserId(
+  incomingUrl: string,
+  webhookUsername: string,
+  allowInsecureSsl = true,
+  log?: { warn: (...args: unknown[]) => void },
+): Promise<number | undefined> {
+  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
+  const lower = webhookUsername.toLowerCase();
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
   const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
@@ -199,22 +213,6 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   if (byUsername) return byUsername.user_id;
 
   return undefined;
-}
-
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
-  const numericId = parseNumericUserId(userId);
-  if (numericId !== undefined) {
-    payload.user_ids = [numericId];
-  }
-  return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-}
-
-function parseNumericUserId(userId?: string | number): number | undefined {
-  if (userId === undefined) {
-    return undefined;
-  }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-  return Number.isNaN(numericId) ? undefined : numericId;
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {

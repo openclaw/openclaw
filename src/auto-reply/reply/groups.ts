@@ -1,3 +1,4 @@
+import { getChannelDock } from "../../channels/dock.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizePluginChannelId,
@@ -38,7 +39,7 @@ function resolveDockChannelId(raw?: string | null): ChannelId | null {
     return null;
   }
   try {
-    if (getChannelPlugin(normalized as ChannelId)) {
+    if (getChannelDock(normalized as ChannelId)) {
       return normalized as ChannelId;
     }
   } catch {
@@ -67,7 +68,7 @@ export function resolveGroupRequireMention(params: {
   const groupSpace = ctx.GroupSpace?.trim();
   let requireMention: boolean | undefined;
   try {
-    requireMention = getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
+    requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
       cfg,
       groupId,
       groupChannel,
@@ -157,7 +158,7 @@ export function buildGroupIntro(params: {
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
-    ? getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
+    ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
         groupChannel,

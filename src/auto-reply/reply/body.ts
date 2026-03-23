@@ -1,14 +1,6 @@
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { setAbortMemory } from "./abort-primitives.js";
-
-let sessionStoreRuntimePromise: Promise<
-  typeof import("../../config/sessions/store.runtime.js")
-> | null = null;
-
-function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
+import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
+import { setAbortMemory } from "./abort.js";
 
 export async function applySessionHints(params: {
   baseBody: string;
@@ -31,7 +23,6 @@ export async function applySessionHints(params: {
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        const { updateSessionStore } = await loadSessionStoreRuntime();
         await updateSessionStore(params.storePath, (store) => {
           const entry = store[sessionKey] ?? params.sessionEntry;
           if (!entry) {
