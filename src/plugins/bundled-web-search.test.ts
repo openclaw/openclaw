@@ -69,6 +69,7 @@ describe("bundled web search metadata", () => {
   it("keeps bundled web search compat ids aligned with bundled manifests", () => {
     expect(resolveBundledWebSearchPluginIds({})).toEqual([
       "brave",
+      "exa",
       "firecrawl",
       "google",
       "moonshot",
