@@ -75,7 +75,13 @@ function normalizeQueueAccountId(accountId?: string): string {
   return (accountId ?? "").trim() || "default";
 }
 
-async function resetReconnectEntry(entry: QueuedDelivery, stateDir?: string): Promise<void> {
+function getErrnoCode(err: unknown): string | null {
+  return err && typeof err === "object" && "code" in err
+    ? String((err as { code?: unknown }).code)
+    : null;
+}
+
+async function resetReconnectEntry(entry: QueuedDelivery, stateDir?: string): Promise<boolean> {
   const filePath = path.join(resolveQueueDir(stateDir), `${entry.id}.json`);
   const tmp = `${filePath}.${process.pid}.tmp`;
   const reset: QueuedDelivery = {
@@ -88,7 +94,16 @@ async function resetReconnectEntry(entry: QueuedDelivery, stateDir?: string): Pr
     encoding: "utf-8",
     mode: 0o600,
   });
-  await fs.promises.rename(tmp, filePath);
+  try {
+    await fs.promises.rename(tmp, filePath);
+  } catch (err) {
+    await fs.promises.unlink(tmp).catch(() => {});
+    if (getErrnoCode(err) === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+  return true;
 }
 
 function createEmptyRecoverySummary(): RecoverySummary {
@@ -214,7 +229,15 @@ export async function drainReconnectQueue(opts: {
     );
 
     for (const entry of expired) {
-      await moveToFailed(entry.id, opts.stateDir);
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+      } catch (err) {
+        if (getErrnoCode(err) === "ENOENT") {
+          opts.log.info(`reconnect drain: expired entry ${entry.id} already gone, skipping`);
+          continue;
+        }
+        throw err;
+      }
       opts.log.warn(
         `WhatsApp reconnect drain: expired entry ${entry.id} (TTL exceeded or max retries)`,
       );
@@ -228,12 +251,22 @@ export async function drainReconnectQueue(opts: {
       `WhatsApp reconnect drain: ${eligible.length} pending message(s) for account ${opts.accountId}`,
     );
 
-    await Promise.all(eligible.map((entry) => resetReconnectEntry(entry, opts.stateDir)));
+    const resetEntries: QueuedDelivery[] = [];
+    for (const entry of eligible) {
+      const reset = await resetReconnectEntry(entry, opts.stateDir);
+      if (!reset) {
+        opts.log.info(
+          `reconnect drain: entry ${entry.id} already acked by concurrent recovery, skipping`,
+        );
+        continue;
+      }
+      resetEntries.push(entry);
+    }
 
     const deliver = opts.deliver ?? (await loadDeliverRuntime()).deliverOutboundPayloads;
 
     // Deliver only the reset entries for this account instead of replaying the full queue.
-    for (const entry of eligible) {
+    for (const entry of resetEntries) {
       try {
         await deliver(buildRecoveryDeliverParams(entry, opts.cfg));
         await ackDelivery(entry.id, opts.stateDir);
