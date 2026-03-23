@@ -71,11 +71,11 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
-### Prometheus Avatar `[Alpha]`
+### Prometheus Avatar
 
 Give your OpenClaw agent a Live2D avatar with real-time lip-sync, emotion
 expressions, and text-to-speech. Includes creator tools for AI asset generation
-and one-click deployment to the Prometheus Marketplace.
+and one-click deployment to the Prometheus Marketplace. Currently in alpha.
 
 - **npm:** `@prometheus-avatar/openclaw-plugin`
 - **repo:** [github.com/myths-labs/prometheus-avatar](https://github.com/myths-labs/prometheus-avatar)
