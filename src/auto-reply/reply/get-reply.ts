@@ -239,22 +239,6 @@ export async function getReplyFromConfig(
 
   const finalized = finalizeInboundContext(ctx);
 
-  if (!isFastTestEnv) {
-    // Use original provider/model for media understanding check, not the image model override.
-    // This ensures media understanding runs even if hooks later switch back to a non-vision model.
-    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: { provider: originalProvider, model: originalModel },
-    });
-    logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
-    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-    });
-    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
-  }
   emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
@@ -405,6 +389,43 @@ export async function getReplyFromConfig(
       provider = resolved.ref.provider;
       model = resolved.ref.model;
     }
+  }
+
+  // Media understanding with effective model calculation
+  if (!isFastTestEnv) {
+    // Determine the effective model for media understanding:
+    // 1. If image model override was applied, use that (vision-capable)
+    // 2. If channel model is vision model, use that
+    // 3. Otherwise use default model
+    // This ensures vision-capable models don't get unnecessary captions added.
+    let effectiveModelForMedia: { provider: string; model: string } = {
+      provider: originalProvider,
+      model: originalModel,
+    };
+
+    if (hasAppliedImageModelOverride) {
+      // Image model override was applied - it's vision-capable by definition
+      effectiveModelForMedia = { provider, model };
+    } else if (channelModelOverride && channelModelIsVisionModel) {
+      // Channel model is vision-capable, use that
+      effectiveModelForMedia = { provider, model };
+    }
+
+    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
+      ctx: finalized,
+      cfg,
+      agentDir,
+      activeModel: effectiveModelForMedia,
+    });
+    logIngressStage(
+      "media-understanding",
+      `applied=${appliedMediaUnderstanding ? "1" : "0"} effectiveModel=${effectiveModelForMedia.provider}/${effectiveModelForMedia.model}`,
+    );
+    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
+      ctx: finalized,
+      cfg,
+    });
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
 
   const directiveResult = await resolveReplyDirectives({

@@ -1467,17 +1467,31 @@ export const chatHandlers: GatewayRequestHandlers = {
             ? `${userResolved.ref.provider}/${userResolved.ref.model}`
             : userRawModel;
 
-          // Check if user's stored model is an image model
+          // Check if user's stored model is an image model AND in allowlist
           // Check both full key (provider/model) and raw string for providerless configs
-          if (imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride)) {
+          const storedModelIsImageModel =
+            imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride);
+
+          // Check if stored model is in agent's allowlist
+          const { allowAny, allowedKeys } = buildAllowedModelSet({
+            cfg,
+            catalog: [],
+            defaultProvider,
+            defaultModel: undefined,
+            agentId,
+          });
+          const storedModelInAllowlist = allowAny || allowedKeys.has(userModelKey);
+
+          if (storedModelIsImageModel && storedModelInAllowlist) {
+            // User's stored model is both an image model AND in allowlist
+            // Respect user's choice and don't switch
             context.logGateway.info(
-              `[image-model-switch] User's stored model ${userModelKey} is already an image model, respecting user choice`,
+              `[image-model-switch] User's stored model ${userModelKey} is already an image model and in allowlist, respecting user choice`,
             );
-            // Don't set imageModelOverride, let user's choice take precedence
-          } else {
-            // User's stored model is not an image model, switch to imageModel
+          } else if (storedModelIsImageModel && !storedModelInAllowlist) {
+            // User's stored model is an image model but NOT in allowlist
+            // The stored model will be cleared anyway, switch to configured imageModel
             imageModelOverride = imageModelPrimary;
-            // Filter fallbacks against agent allowlist
             if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
               const filtered = filterFallbacksByAllowlist({
                 fallbacks: imageModelConfig.fallbacks,
@@ -1486,7 +1500,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                 aliasIndex,
                 defaultProvider,
               });
-              // Canonicalize fallbacks with image model's provider context
               imageModelFallbacks = canonicalizeFallbacks({
                 fallbacks: filtered,
                 imageModelRaw: imageModelPrimary,
@@ -1497,7 +1510,31 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageModelFallbacks = [];
             }
             context.logGateway.info(
-              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+              `[image-model-switch] Stored model ${userModelKey} is image-capable but not in agent allowlist, switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            );
+          } else {
+            // User's stored model is not an image model
+            // Switch to imageModel
+            imageModelOverride = imageModelPrimary;
+            if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+              const filtered = filterFallbacksByAllowlist({
+                fallbacks: imageModelConfig.fallbacks,
+                cfg,
+                agentId,
+                aliasIndex,
+                defaultProvider,
+              });
+              imageModelFallbacks = canonicalizeFallbacks({
+                fallbacks: filtered,
+                imageModelRaw: imageModelPrimary,
+                aliasIndex,
+                agentDefaultProvider: defaultProvider,
+              });
+            } else {
+              imageModelFallbacks = [];
+            }
+            context.logGateway.info(
+              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
             );
           }
         } else {
