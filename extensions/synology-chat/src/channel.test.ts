@@ -12,6 +12,7 @@ const mockSendMessage = vi.mocked(sendMessage);
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
     mockSendMessage.mockClear();
+    registerPluginHttpRouteMock.mockClear();
   });
 
   describe("meta", () => {
@@ -108,6 +109,8 @@ describe("createSynologyChatPlugin", () => {
         nasHost: "h",
         webhookPath: "/w",
         dangerouslyAllowNameMatching: false,
+        hasExplicitWebhookPath: true,
+        dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
         allowedUserIds: ["user1"],
         rateLimitPerMinute: 30,
@@ -355,6 +358,85 @@ describe("createSynologyChatPlugin", () => {
       const result = plugin.gateway.startAccount(ctx);
       await expectPendingStartAccountPromise(result, abortController);
       expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining("empty allowedUserIds"));
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
+      const registerMock = registerPluginHttpRouteMock;
+      const plugin = createSynologyChatPlugin();
+      const abortController = new AbortController();
+      const ctx = {
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "shared-token",
+              incomingUrl: "https://nas/incoming",
+              webhookPath: "/webhook/synology-shared",
+              accounts: {
+                alerts: {
+                  enabled: true,
+                  token: "alerts-token",
+                  incomingUrl: "https://nas/alerts",
+                  dmPolicy: "allowlist",
+                  allowedUserIds: ["123"],
+                },
+              },
+            },
+          },
+        },
+        accountId: "alerts",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortController.signal,
+      };
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("must set an explicit webhookPath"),
+      );
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("startAccount refuses duplicate exact webhook paths across accounts", async () => {
+      const registerMock = registerPluginHttpRouteMock;
+      const plugin = createSynologyChatPlugin();
+      const abortController = new AbortController();
+      const ctx = {
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              accounts: {
+                default: {
+                  enabled: true,
+                  token: "default-token",
+                  incomingUrl: "https://nas/default",
+                  webhookPath: "/webhook/synology-shared",
+                  dmPolicy: "allowlist",
+                  allowedUserIds: ["123"],
+                },
+                alerts: {
+                  enabled: true,
+                  token: "alerts-token",
+                  incomingUrl: "https://nas/alerts",
+                  webhookPath: "/webhook/synology-shared",
+                  dmPolicy: "open",
+                },
+              },
+            },
+          },
+        },
+        accountId: "alerts",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortController.signal,
+      };
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("conflicts on webhookPath"),
+      );
       expect(registerMock).not.toHaveBeenCalled();
     });
 

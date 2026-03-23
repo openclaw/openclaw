@@ -1,4 +1,10 @@
+import {
+  DEFAULT_ACCOUNT_ID,
+  listCombinedAccountIds,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
+import { resolveAccount } from "./accounts.js";
 import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler, type WebhookHandlerDeps } from "./webhook-handler.js";
@@ -27,11 +33,12 @@ export function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Prom
 }
 
 export function validateSynologyGatewayAccountStartup(params: {
+  cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
   log?: SynologyGatewayLog;
 }): { ok: true } | { ok: false } {
-  const { accountId, account, log } = params;
+  const { cfg, accountId, account, log } = params;
   if (!account.enabled) {
     log?.info?.(`Synology Chat account ${accountId} is disabled, skipping`);
     return { ok: false };
@@ -45,6 +52,38 @@ export function validateSynologyGatewayAccountStartup(params: {
   if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
     log?.warn?.(
       `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
+    );
+    return { ok: false };
+  }
+  const accountIds = listCombinedAccountIds({
+    configuredAccountIds: Object.keys(cfg.channels?.["synology-chat"]?.accounts ?? {}),
+    implicitAccountId:
+      cfg.channels?.["synology-chat"]?.token || process.env.SYNOLOGY_CHAT_TOKEN
+        ? DEFAULT_ACCOUNT_ID
+        : undefined,
+  });
+  const isMultiAccount = accountIds.length > 1;
+  if (
+    isMultiAccount &&
+    accountId !== DEFAULT_ACCOUNT_ID &&
+    !account.hasExplicitWebhookPath &&
+    !account.dangerouslyAllowInheritedWebhookPath
+  ) {
+    log?.warn?.(
+      `Synology Chat account ${accountId} must set an explicit webhookPath in multi-account setups; refusing inherited shared path. Set channels.synology-chat.accounts.${accountId}.webhookPath or opt in with dangerouslyAllowInheritedWebhookPath=true.`,
+    );
+    return { ok: false };
+  }
+  const conflictingAccounts = accountIds.filter((candidateId) => {
+    if (candidateId === accountId) {
+      return false;
+    }
+    const candidate = resolveAccount(cfg, candidateId);
+    return candidate.enabled && candidate.webhookPath === account.webhookPath;
+  });
+  if (conflictingAccounts.length > 0) {
+    log?.warn?.(
+      `Synology Chat account ${accountId} conflicts on webhookPath ${account.webhookPath} with ${conflictingAccounts.join(", ")}; refusing to start ambiguous shared route.`,
     );
     return { ok: false };
   }
@@ -73,7 +112,6 @@ export function registerSynologyWebhookRoute(params: {
   const unregister = registerPluginHttpRoute({
     path: account.webhookPath,
     auth: "plugin",
-    replaceExisting: true,
     pluginId: CHANNEL_ID,
     accountId: account.accountId,
     log: (msg: string) => log?.info?.(msg),

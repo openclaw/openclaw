@@ -9,6 +9,7 @@ type SynologyChatConfigFields = {
   nasHost?: string;
   webhookPath?: string;
   dangerouslyAllowNameMatching?: boolean;
+  dangerouslyAllowInheritedWebhookPath?: boolean;
   dmPolicy?: "open" | "allowlist" | "disabled";
   allowedUserIds?: string | string[];
   rateLimitPerMinute?: number;
@@ -33,6 +34,8 @@ export interface ResolvedSynologyChatAccount {
   nasHost: string;
   webhookPath: string;
   dangerouslyAllowNameMatching: boolean;
+  hasExplicitWebhookPath: boolean;
+  dangerouslyAllowInheritedWebhookPath: boolean;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
   rateLimitPerMinute: number;

@@ -153,6 +153,43 @@ describe("resolveAccount", () => {
     expect(account.dangerouslyAllowNameMatching).toBe(false);
   });
 
+  it("marks named multi-account webhookPath inheritance as dangerous-off by default", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "base-tok",
+          webhookPath: "/webhook/shared",
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+    const account = resolveAccount(cfg, "work");
+    expect(account.webhookPath).toBe("/webhook/shared");
+    expect(account.hasExplicitWebhookPath).toBe(false);
+    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
+  });
+
+  it("allows named accounts to opt into inherited webhookPath resolution", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "base-tok",
+          webhookPath: "/webhook/shared",
+          dangerouslyAllowInheritedWebhookPath: true,
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+    const account = resolveAccount(cfg, "work");
+    expect(account.webhookPath).toBe("/webhook/shared");
+    expect(account.hasExplicitWebhookPath).toBe(false);
+    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(true);
+  });
+
   it("parses comma-separated allowedUserIds string", () => {
     const cfg = {
       channels: {
