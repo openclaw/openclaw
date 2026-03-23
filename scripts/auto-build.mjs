@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from "child_process";
-import { mkdirSync, rmSync, copyFileSync, cpSync, readFileSync } from "fs";
+import * as fs from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -126,6 +126,18 @@ function copyFiles() {
     copyFileSync(resolve(WORK_DIR, "pnpm-lock.yaml"), resolve(BRAND_DIR, "pnpm-lock.yaml"));
     copyFileSync(resolve(WORK_DIR, "openclaw.mjs"), resolve(BRAND_DIR, "openclaw.mjs"));
     copyFileSync(resolve(WORK_DIR, "auto-deploy.mjs"), resolve(BRAND_DIR, "auto-deploy.mjs"));
+    
+    // 复制文档模板文件（解决 Missing workspace template 错误）
+    try {
+      const docsDir = resolve(WORK_DIR, "docs");
+      if (fs.existsSync(docsDir)) {
+        cpSync(docsDir, resolve(BRAND_DIR, "docs"), { recursive: true });
+        console.log("文档模板文件复制成功");
+      }
+    } catch (error) {
+      console.warn("复制文档模板文件失败:", error.message);
+      // 继续执行，不中断打包过程
+    }
 
     console.log("文件复制成功");
     console.log("\n打包完成！");
