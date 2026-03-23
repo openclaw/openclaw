@@ -131,6 +131,23 @@ function resolveSilentAcpxControlExitErrorCode(params: {
     : params.fallbackCode;
 }
 
+function shouldAttemptEnsureRecovery(error: unknown): boolean {
+  if (!(error instanceof AcpRuntimeError)) {
+    return true;
+  }
+  if (error.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  if (isRecord(error.cause)) {
+    const causeKind = asTrimmedString(error.cause.kind);
+    const eventCount = error.cause.eventCount;
+    if (causeKind === "acpx-control-exit" && typeof eventCount === "number") {
+      return eventCount > 0;
+    }
+  }
+  return !/\bacpx exited with code\s+[1-9]\d*\b/i.test(error.message);
+}
+
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
@@ -463,6 +480,9 @@ export class AcpxRuntime implements AcpRuntime {
           fallbackCode: "ACP_SESSION_INIT_FAILED",
         });
       } catch (error) {
+        if (!shouldAttemptEnsureRecovery(error)) {
+          throw error;
+        }
         const recovered = await this.recoverEnsureFailure({
           sessionName,
           agent,
@@ -1026,6 +1046,13 @@ export class AcpxRuntime implements AcpRuntime {
           stderr: result.stderr,
           exitCode: result.code,
         }),
+        {
+          cause: {
+            kind: "acpx-control-exit",
+            exitCode: result.code ?? null,
+            eventCount: events.length,
+          },
+        },
       );
     }
     return events;
