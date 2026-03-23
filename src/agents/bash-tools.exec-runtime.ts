@@ -153,6 +153,8 @@ export type ExecProcessFailureKind =
   | "aborted"
   | "runtime-error";
 
+type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
 export type ExecProcessOutcome =
   | {
       status: "completed";
@@ -315,7 +317,7 @@ function classifyExecFailureKind(params: {
   exitCode: number;
   isShellFailure: boolean;
   exitSignal: NodeJS.Signals | number | null;
-}): ExecProcessFailureKind {
+}): ExecExitFailureKind {
   if (params.isShellFailure) {
     return params.exitCode === 127 ? "shell-command-not-found" : "shell-not-executable";
   }
@@ -332,7 +334,7 @@ function classifyExecFailureKind(params: {
 }
 
 export function formatExecFailureReason(params: {
-  failureKind: Exclude<ExecProcessFailureKind, "runtime-error">;
+  failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
 }): string {

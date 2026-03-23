@@ -20,6 +20,7 @@ import type {
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
+import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import type {
@@ -574,6 +575,7 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps runtime entry subpaths importable", async () => {
     const [
       coreSdk,
+      textRuntimeSdk,
       pluginEntrySdk,
       channelLifecycleSdk,
       channelPairingSdk,
@@ -581,6 +583,7 @@ describe("plugin-sdk subpath exports", () => {
       ...representativeModules
     ] = await Promise.all([
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
@@ -591,6 +594,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
+    expect(typeof coreSdk.optionalStringEnum).toBe("function");
+    expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
@@ -621,5 +628,9 @@ describe("plugin-sdk subpath exports", () => {
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
+    expect(typeof providerEntrySdk.defineSingleProviderPluginEntry).toBe("function");
   });
 });
