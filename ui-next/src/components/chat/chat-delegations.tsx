@@ -12,7 +12,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "@/store/chat-store";
 import type { DelegationEntry } from "@/store/delegation-store";
+
+function getChatSessionKey(): string | null {
+  return useChatStore.getState().activeSessionKey;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -280,8 +285,11 @@ function DelegationActions({ runId }: { runId: string }) {
         if (result?.sessionKey && result?.task && (action === "resume" || action === "retry")) {
           const prefix = action === "resume" ? "[Delegation Resume]" : "[Delegation Retry]";
           const agentName = result.agentName ?? "the sub-agent";
+          // Use the current web chat session, not the original requester session
+          // (which might be Telegram/Discord, not visible in web UI)
+          const currentSessionKey = getChatSessionKey();
           void sendRpc("chat.send", {
-            sessionKey: result.sessionKey,
+            sessionKey: currentSessionKey ?? result.sessionKey,
             message: `${prefix} Please re-delegate this task to ${agentName}:\n\n${result.task}`,
             idempotencyKey: crypto.randomUUID(),
           });
