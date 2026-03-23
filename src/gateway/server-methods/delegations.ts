@@ -1,4 +1,3 @@
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { getStateDb } from "../../infra/state-db/connection.js";
 import { listActiveDelegations } from "../../orchestration/delegation-tracker-sqlite.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -84,17 +83,14 @@ export const delegationsHandlers: GatewayRequestHandlers = {
         runId,
       );
 
-      // Inject a system message into the requester's session to trigger re-delegation
-      const { enqueueSystemEvent } = await import("../../infra/system-events.js");
-      enqueueSystemEvent(
-        `[Delegation Resume] The previous delegation to ${agentName} was interrupted. Please re-delegate the following task:\n\n${taskText}`,
-        { sessionKey: fullRow.requester_session_key },
-      );
-
-      // Also fire heartbeat as backup
-      requestHeartbeatNow({ reason: "delegation-resume" });
-
-      respond(true, { ok: true, previousRunId: runId });
+      respond(true, {
+        ok: true,
+        previousRunId: runId,
+        sessionKey: fullRow.requester_session_key,
+        agentName,
+        task: taskText,
+        action: "resume",
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));
@@ -184,14 +180,14 @@ export const delegationsHandlers: GatewayRequestHandlers = {
         runId,
       );
 
-      // Inject a retry message into the requester's session to trigger re-delegation
-      const { enqueueSystemEvent } = await import("../../infra/system-events.js");
-      enqueueSystemEvent(
-        `[Delegation Retry] Please re-delegate this task to ${agentName}:\n\n${taskText}`,
-        { sessionKey: fullRow.requester_session_key },
-      );
-
-      respond(true, { ok: true, previousRunId: runId });
+      respond(true, {
+        ok: true,
+        previousRunId: runId,
+        sessionKey: fullRow.requester_session_key,
+        agentName,
+        task: taskText,
+        action: "retry",
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));

@@ -267,8 +267,29 @@ function DelegationActions({ runId }: { runId: string }) {
   const act = (e: React.MouseEvent, action: string, method: string) => {
     e.stopPropagation();
     setActing(action);
-    sendRpc(method, { runId })
-      .catch(() => {})
+    sendRpc<{
+      ok?: boolean;
+      sessionKey?: string;
+      agentName?: string;
+      task?: string;
+      action?: string;
+    }>(method, { runId })
+      .then((result) => {
+        console.log(`[delegation] ${action} succeeded for ${runId.slice(0, 8)}`);
+        // If the RPC returns task context, send a chat message to trigger re-delegation
+        if (result?.sessionKey && result?.task && (action === "resume" || action === "retry")) {
+          const prefix = action === "resume" ? "[Delegation Resume]" : "[Delegation Retry]";
+          const agentName = result.agentName ?? "the sub-agent";
+          void sendRpc("chat.send", {
+            sessionKey: result.sessionKey,
+            message: `${prefix} Please re-delegate this task to ${agentName}:\n\n${result.task}`,
+            idempotencyKey: crypto.randomUUID(),
+          });
+        }
+      })
+      .catch((err) => {
+        console.error(`[delegation] ${action} failed for ${runId.slice(0, 8)}:`, err);
+      })
       .finally(() => setActing(null));
   };
 
