@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Feishu: route `message(..., media=...)` sends through the Feishu outbound media path so file and image attachments actually send instead of being silently dropped. Fixes #52962. Thanks @vincentkoc.
 - ClawHub/skills: resolve the local ClawHub auth token for gateway skill browsing and switch browse-all requests to search so ClawControl stops falling into unauthenticated 429s and empty authenticated skill lists. Fixes #52949. Thanks @vincentkoc.
 - Gateway/model pricing: stop `openrouter/auto` pricing refresh from recursing indefinitely during bootstrap, so OpenRouter auto routes can populate cached pricing and `usage.cost` again. Fixes #53035. Thanks @vincentkoc.
+- Channels/catalog: let external channel catalogs override shipped fallback metadata and honor overridden npm specs during channel setup, so custom channel catalogs no longer fall back to bundled packages when a channel id matches. (#52988)
 
 ## 2026.3.22
 
