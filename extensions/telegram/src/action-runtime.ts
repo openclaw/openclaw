@@ -355,7 +355,8 @@ export async function handleTelegramAction(
       asVoice: readBooleanParam(params, "asVoice"),
       silent: readBooleanParam(params, "silent"),
       forceDocument:
-        (readBooleanParam(params, "forceDocument") || readBooleanParam(params, "asDocument")) ??
+        readBooleanParam(params, "forceDocument") ??
+        readBooleanParam(params, "asDocument") ??
         false,
     });
     return jsonResult({

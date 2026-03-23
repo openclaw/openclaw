@@ -125,7 +125,7 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
     asDocument: Type.Optional(
       Type.Boolean({
         description:
-          "Send files (images, videos, GIFs, etc.) as documents to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
     interactive: Type.Optional(interactiveMessageSchema),
