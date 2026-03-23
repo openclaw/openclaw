@@ -205,8 +205,8 @@ function extractTerms(file, text) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const explicitLangs = args.langs.length > 0;
-  const langs = explicitLangs ? args.langs : detectLangs();
   const allLangs = detectLangs(); // always all langs for path exclusion
+  const langs = explicitLangs ? args.langs : allLangs;
 
   if (langs.length === 0) {
     console.warn("docs:check-i18n-glossary: no glossary files found; skipping.");
