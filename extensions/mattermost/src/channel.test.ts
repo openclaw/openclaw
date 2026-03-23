@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk/mattermost";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +119,26 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).toEqual([]);
+    });
+
+    it("keeps buttons optional in message tool schema", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
+
+      const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
+      const schema = discovery?.schema;
+      if (!schema || Array.isArray(schema)) {
+        throw new Error("expected mattermost message-tool schema");
+      }
+
+      expect(Type.Object(schema.properties).required).toBeUndefined();
     });
 
     it("hides react when actions.reactions is false", () => {

@@ -1,3 +1,5 @@
+import { Type } from "@sinclair/typebox";
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedChannelConfigAdapter,
@@ -89,7 +91,7 @@ function describeMattermostMessageTool({
       enabledAccounts.length > 0
         ? {
             properties: {
-              buttons: createMessageToolButtonsSchema(),
+              buttons: Type.Optional(createMessageToolButtonsSchema()),
             },
           }
         : null,
