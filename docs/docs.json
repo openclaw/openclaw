@@ -93,6 +93,10 @@
       "destination": "/tools/duckduckgo-search"
     },
     {
+      "source": "/exa-search",
+      "destination": "/tools/exa-search"
+    },
+    {
       "source": "/gemini-search",
       "destination": "/tools/gemini-search"
     },
@@ -1127,6 +1131,7 @@
                       "tools/web",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
+                      "tools/exa-search",
                       "tools/firecrawl",
                       "tools/gemini-search",
                       "tools/grok-search",

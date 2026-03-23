@@ -137,4 +137,8 @@ than basic-only scraping.
 2. Firecrawl (if configured)
 3. Basic HTML cleanup (last fallback)
 
-See [Web Search](/tools/web) for the full provider setup and comparison.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Web Fetch](/tools/web-fetch) -- web_fetch tool with Firecrawl fallback
+- [Tavily](/tools/tavily) -- search + extract tools
