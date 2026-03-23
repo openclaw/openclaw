@@ -1,7 +1,12 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
-import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
+import {
+  resolveAgentLane,
+  resolveAgentLaneConcurrency,
+  resolveAgentMaxConcurrent,
+  resolveSubagentMaxConcurrent,
+} from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
@@ -151,6 +156,19 @@ export function createGatewayReloadHandlers(params: {
     setCommandLaneConcurrency(CommandLane.Cron, nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(nextConfig));
     setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(nextConfig));
+
+    // Apply per-agent custom lane concurrency caps on hot-reload.
+    if (nextConfig.agents?.list) {
+      for (const entry of nextConfig.agents.list) {
+        const lane = resolveAgentLane(nextConfig, entry.id);
+        const cap = resolveAgentLaneConcurrency(nextConfig, entry.id);
+        if (lane && cap) {
+          setCommandLaneConcurrency(lane, cap);
+        } else if (lane) {
+          setCommandLaneConcurrency(lane, resolveAgentMaxConcurrent(nextConfig));
+        }
+      }
+    }
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);

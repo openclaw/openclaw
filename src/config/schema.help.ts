@@ -386,6 +386,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
+  "agents.list[].lane":
+    'Custom global queue lane name for this agent\'s inbound runs. Agents with different lanes process messages in parallel instead of sharing the "main" lane. Example: "agent-one-lane".',
+  "agents.list[].laneConcurrency":
+    "Concurrency cap for this agent's custom lane. Defaults to agents.defaults.maxConcurrent when omitted.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":

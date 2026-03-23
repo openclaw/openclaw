@@ -845,6 +845,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
+  "agents.list[].lane": "Agent Queue Lane",
+  "agents.list[].laneConcurrency": "Agent Lane Concurrency",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

@@ -801,6 +801,10 @@ export const AgentEntrySchema = z
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    /** Custom global queue lane for this agent's inbound runs (default: "main"). */
+    lane: z.string().optional(),
+    /** Concurrency cap for this agent's custom lane (default: 4). */
+    laneConcurrency: z.number().int().positive().optional(),
   })
   .strict();
 

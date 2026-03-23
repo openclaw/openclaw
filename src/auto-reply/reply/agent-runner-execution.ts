@@ -16,6 +16,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveAgentLane } from "../../config/agent-limits.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -350,6 +351,10 @@ export async function runAgentTurnWithFallback(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
+                lane: resolveAgentLane(
+                  params.followupRun.run.config,
+                  params.followupRun.run.agentId,
+                ),
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,

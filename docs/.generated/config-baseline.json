@@ -4463,6 +4463,34 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.lane",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Queue Lane",
+      "help": "Custom global queue lane name for this agent's inbound runs. Agents with different lanes process messages in parallel instead of sharing the \"main\" lane. Example: \"agent-one-lane\".",
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.laneConcurrency",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Agent Lane Concurrency",
+      "help": "Concurrency cap for this agent's custom lane. Defaults to agents.defaults.maxConcurrent when omitted.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.memorySearch",
       "kind": "core",
       "type": "object",
