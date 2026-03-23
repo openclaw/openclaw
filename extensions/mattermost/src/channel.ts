@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
@@ -98,7 +97,7 @@ function describeMattermostMessageTool({
       enabledAccounts.length > 0
         ? {
             properties: {
-              buttons: Type.Optional(createMessageToolButtonsSchema()),
+              buttons: createMessageToolButtonsSchema(),
             },
           }
         : null,

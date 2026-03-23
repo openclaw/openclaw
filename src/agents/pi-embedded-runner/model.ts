@@ -5,6 +5,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
   clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
+  resolveProviderRuntimePlugin,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
@@ -33,22 +34,6 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
-type ProviderRuntimeHooks = {
-  prepareProviderDynamicModel: (
-    params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => Promise<void>;
-  runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
-  normalizeProviderResolvedModelWithPlugin: (
-    params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
-  ) => unknown;
-};
-
-const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  prepareProviderDynamicModel,
-  runProviderDynamicModel,
-  normalizeProviderResolvedModelWithPlugin,
-};
-
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -74,53 +59,22 @@ function normalizeResolvedModel(params: {
   model: Model<Api>;
   cfg?: OpenClawConfig;
   agentDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
-  const normalizedInputModel =
-    Array.isArray(params.model.input) && params.model.input.length > 0
-      ? params.model
-      : ({
-          ...params.model,
-          input: ["text"],
-        } as Model<Api>);
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
+  const pluginNormalized = normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
     config: params.cfg,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
       provider: params.provider,
-      modelId: normalizedInputModel.id,
-      model: normalizedInputModel,
+      modelId: params.model.id,
+      model: params.model,
     },
-  }) as Model<Api> | undefined;
+  });
   if (pluginNormalized) {
     return normalizeModelCompat(pluginNormalized);
   }
-  return normalizeResolvedProviderModel({
-    provider: params.provider,
-    model: normalizedInputModel,
-  });
-}
-
-function findInlineModelMatch(params: {
-  providers: Record<string, InlineProviderConfig>;
-  provider: string;
-  modelId: string;
-}) {
-  const inlineModels = buildInlineProviderModels(params.providers);
-  const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && entry.id === params.modelId,
-  );
-  if (exact) {
-    return exact;
-  }
-  const normalizedProvider = normalizeProviderId(params.provider);
-  return inlineModels.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
-  );
+  return normalizeResolvedProviderModel(params);
 }
 
 export { buildModelAliasLines };
@@ -234,30 +188,12 @@ function resolveExplicitModelWithRegistry(params: {
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
+  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
     return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const inlineMatch = findInlineModelMatch({
-    providers: cfg?.models?.providers ?? {},
-    provider,
-    modelId,
-  });
-  if (inlineMatch?.api) {
-    return {
-      kind: "resolved",
-      model: normalizeResolvedModel({
-        provider,
-        cfg,
-        agentDir,
-        model: inlineMatch as Model<Api>,
-        runtimeHooks,
-      }),
-    };
-  }
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
@@ -272,26 +208,24 @@ function resolveExplicitModelWithRegistry(params: {
           providerConfig,
           modelId,
         }),
-        runtimeHooks,
       }),
     };
   }
 
   const providers = cfg?.models?.providers ?? {};
-  const fallbackInlineMatch = findInlineModelMatch({
-    providers,
-    provider,
-    modelId,
-  });
-  if (fallbackInlineMatch?.api) {
+  const inlineModels = buildInlineProviderModels(providers);
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch?.api) {
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: fallbackInlineMatch as Model<Api>,
-        runtimeHooks,
+        model: inlineMatch as Model<Api>,
       }),
     };
   }
@@ -299,18 +233,24 @@ function resolveExplicitModelWithRegistry(params: {
   return undefined;
 }
 
-function resolvePluginDynamicModelWithRegistry(params: {
+export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const explicitModel = resolveExplicitModelWithRegistry(params);
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (explicitModel?.kind === "resolved") {
+    return explicitModel.model;
+  }
+
+  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
+  const pluginDynamicModel = runProviderDynamicModel({
     provider,
     config: cfg,
     context: {
@@ -321,33 +261,20 @@ function resolvePluginDynamicModelWithRegistry(params: {
       modelRegistry,
       providerConfig,
     },
-  }) as Model<Api> | undefined;
-  if (!pluginDynamicModel) {
-    return undefined;
+  });
+  if (pluginDynamicModel) {
+    return normalizeResolvedModel({
+      provider,
+      cfg,
+      agentDir,
+      model: applyConfiguredProviderOverrides({
+        discoveredModel: pluginDynamicModel as Model<Api>,
+        providerConfig,
+        modelId,
+      }),
+    });
   }
-  const overriddenDynamicModel = applyConfiguredProviderOverrides({
-    discoveredModel: pluginDynamicModel,
-    providerConfig,
-    modelId,
-  });
-  return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    model: overriddenDynamicModel,
-    runtimeHooks,
-  });
-}
 
-function resolveConfiguredFallbackModel(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> | undefined {
-  const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
@@ -355,59 +282,35 @@ function resolveConfiguredFallbackModel(params: {
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (!providerConfig && !modelId.startsWith("mock-")) {
-    return undefined;
-  }
-  return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    model: {
-      id: modelId,
-      name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+  if (providerConfig || modelId.startsWith("mock-")) {
+    return normalizeResolvedModel({
       provider,
-      baseUrl: providerConfig?.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
-    } as Model<Api>,
-    runtimeHooks,
-  });
-}
-
-export function resolveModelWithRegistry(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: ModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> | undefined {
-  const explicitModel = resolveExplicitModelWithRegistry(params);
-  if (explicitModel?.kind === "suppressed") {
-    return undefined;
-  }
-  if (explicitModel?.kind === "resolved") {
-    return explicitModel.model;
+      cfg,
+      agentDir,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>,
+    });
   }
 
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
-  if (pluginDynamicModel) {
-    return pluginDynamicModel;
-  }
-
-  return resolveConfiguredFallbackModel(params);
+  return undefined;
 }
 
 export function resolveModel(
@@ -415,11 +318,6 @@ export function resolveModel(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
-  options?: {
-    authStorage?: AuthStorage;
-    modelRegistry?: ModelRegistry;
-    runtimeHooks?: ProviderRuntimeHooks;
-  },
 ): {
   model?: Model<Api>;
   error?: string;
@@ -427,15 +325,14 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = resolveModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
   });
   if (model) {
     return { model, authStorage, modelRegistry };
@@ -454,10 +351,7 @@ export async function resolveModelAsync(
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: {
-    authStorage?: AuthStorage;
-    modelRegistry?: ModelRegistry;
     retryTransientProviderRuntimeMiss?: boolean;
-    runtimeHooks?: ProviderRuntimeHooks;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -466,15 +360,14 @@ export async function resolveModelAsync(
   modelRegistry: ModelRegistry;
 }> {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
   });
   if (explicitModel?.kind === "suppressed") {
     return {
@@ -484,30 +377,34 @@ export async function resolveModelAsync(
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const runtimeHooks = options?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
-    if (attemptOptions?.clearHookCache) {
+  const resolveDynamicAttempt = async (options?: { clearHookCache?: boolean }) => {
+    if (options?.clearHookCache) {
       clearProviderRuntimeHookCache();
     }
-    await runtimeHooks.prepareProviderDynamicModel({
+    const providerPlugin = resolveProviderRuntimePlugin({
       provider,
       config: cfg,
-      context: {
-        config: cfg,
-        agentDir: resolvedAgentDir,
-        provider,
-        modelId,
-        modelRegistry,
-        providerConfig,
-      },
     });
+    if (providerPlugin?.prepareDynamicModel) {
+      await prepareProviderDynamicModel({
+        provider,
+        config: cfg,
+        context: {
+          config: cfg,
+          agentDir: resolvedAgentDir,
+          provider,
+          modelId,
+          modelRegistry,
+          providerConfig,
+        },
+      });
+    }
     return resolveModelWithRegistry({
       provider,
       modelId,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
     });
   };
   let model =

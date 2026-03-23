@@ -15,16 +15,6 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = typeof callGateway;
-
-const defaultSessionsSendA2ADeps = {
-  callGateway,
-};
-
-let sessionsSendA2ADeps: {
-  callGateway: GatewayCaller;
-} = defaultSessionsSendA2ADeps;
-
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
   displayKey: string;
@@ -42,7 +32,7 @@ export async function runSessionsSendA2AFlow(params: {
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
       const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await sessionsSendA2ADeps.callGateway<{ status: string }>({
+      const wait = await callGateway<{ status: string }>({
         method: "agent.wait",
         params: {
           runId: params.waitRunId,
@@ -130,7 +120,7 @@ export async function runSessionsSendA2AFlow(params: {
     });
     if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
       try {
-        await sessionsSendA2ADeps.callGateway({
+        await callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
@@ -157,14 +147,3 @@ export async function runSessionsSendA2AFlow(params: {
     });
   }
 }
-
-export const __testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
-    sessionsSendA2ADeps = overrides
-      ? {
-          ...defaultSessionsSendA2ADeps,
-          ...overrides,
-        }
-      : defaultSessionsSendA2ADeps;
-  },
-};

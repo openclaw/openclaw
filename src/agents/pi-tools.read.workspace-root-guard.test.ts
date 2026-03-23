@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,20 +24,14 @@ function createToolHarness() {
   return { execute, tool };
 }
 
-async function loadModule() {
-  return await import("./pi-tools.read.js");
-}
-
 describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   const root = "/tmp/root";
 
   beforeEach(() => {
     mocks.assertSandboxPath.mockClear();
-    vi.resetModules();
   });
 
   it("maps container workspace paths to host workspace root", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
@@ -52,7 +47,6 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   });
 
   it("maps file:// container workspace paths to host workspace root", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
@@ -67,24 +61,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
-  it("does not remap remote-host file:// paths", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc-remote-file-url", { path: "file://attacker/share/readme.md" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "file://attacker/share/readme.md",
-      cwd: root,
-      root,
-    });
-  });
-
   it("maps @-prefixed container workspace paths to host workspace root", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
@@ -100,7 +77,6 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   });
 
   it("normalizes @-prefixed absolute paths before guard checks", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
@@ -116,7 +92,6 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   });
 
   it("does not remap absolute paths outside the configured container workdir", async () => {
-    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",

@@ -82,8 +82,8 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("returns sync config overrides for read-only callers", async () => {
-    mockContextModuleDeps(() => ({
+  it("can skip async warmup for read-only callers", async () => {
+    const { ensureOpenClawModelsJson } = mockContextModuleDeps(() => ({
       models: {
         providers: {
           openrouter: {
@@ -94,9 +94,11 @@ describe("lookupContextTokens", () => {
     }));
 
     const { lookupContextTokens } = await import("./context.js");
-    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
-      321_000,
-    );
+    expect(
+      lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false }),
+    ).toBeUndefined();
+    await flushAsyncWarmup();
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {

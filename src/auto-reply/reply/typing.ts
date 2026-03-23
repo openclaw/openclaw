@@ -29,18 +29,6 @@ export function createTypingController(params: {
     silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
-  if (!onReplyStart && !onCleanup) {
-    return {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: () => {},
-    };
-  }
   let started = false;
   let active = false;
   let runComplete = false;

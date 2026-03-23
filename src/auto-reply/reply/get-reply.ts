@@ -26,6 +26,10 @@ import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
+function shouldLogCoreIngressTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
+
 type ResetCommandAction = "new" | "reset";
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
@@ -104,6 +108,18 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const ingressTimingEnabled = shouldLogCoreIngressTiming();
+  const ingressStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const logIngressStage = (stage: string, extra?: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    const sessionKey = ctx.SessionKey?.trim() || "(no-session)";
+    const suffix = extra ? ` ${extra}` : "";
+    defaultRuntime.log?.(
+      `[ingress] session=${sessionKey} stage=${stage} elapsedMs=${Date.now() - ingressStartMs}${suffix}`,
+    );
+  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = configOverride ?? loadConfig();
   const targetSessionKey =
@@ -153,6 +169,7 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
+  logIngressStage("workspace-ready");
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -171,16 +188,18 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstandingIfNeeded({
+    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstandingIfNeeded({
+    logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
+    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -199,6 +218,7 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
+  logIngressStage("session-init");
   let {
     sessionCtx,
     sessionEntry,
@@ -291,7 +311,9 @@ export async function getReplyFromConfig(
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
   });
+  logIngressStage("directives-resolved");
   if (directiveResult.kind === "reply") {
+    logIngressStage("early-reply");
     return directiveResult.reply;
   }
 
@@ -403,6 +425,7 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
+  logIngressStage("sandbox-media");
 
   return runPreparedReply({
     ctx,

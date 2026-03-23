@@ -17,8 +17,6 @@ type SynologyChatConfigFields = {
   allowInsecureSsl?: boolean;
 };
 
-export type SynologyWebhookPathSource = "default" | "inherited-base" | "explicit";
-
 /** Raw channel config from openclaw.json channels.synology-chat */
 export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
   accounts?: Record<string, SynologyChatAccountRaw>;
@@ -35,8 +33,8 @@ export interface ResolvedSynologyChatAccount {
   incomingUrl: string;
   nasHost: string;
   webhookPath: string;
-  webhookPathSource: SynologyWebhookPathSource;
   dangerouslyAllowNameMatching: boolean;
+  hasExplicitWebhookPath: boolean;
   dangerouslyAllowInheritedWebhookPath: boolean;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];

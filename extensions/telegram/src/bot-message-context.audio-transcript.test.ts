@@ -1,15 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const transcribeFirstAudioMock = vi.fn();
 const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
 const DEFAULT_WORKSPACE = "/tmp/openclaw";
 const DEFAULT_MENTION_PATTERN = "\\bbot\\b";
 
-vi.mock("./media-understanding.runtime.js", () => ({
+vi.mock("../../../src/media-understanding/audio-preflight.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
-
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 async function buildGroupVoiceContext(params: {
   messageId: number;
@@ -75,13 +74,6 @@ function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGrou
 }
 
 describe("buildTelegramMessageContext audio transcript body", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    transcribeFirstAudioMock.mockReset();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
-  });
-
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 

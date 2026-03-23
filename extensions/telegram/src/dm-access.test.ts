@@ -1,5 +1,5 @@
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
 const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -19,7 +19,7 @@ vi.mock("./api-logging.js", () => ({
 
 import type { Message } from "@grammyjs/types";
 import { normalizeAllowFrom } from "./bot-access.js";
-let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
+import { enforceTelegramDmAccess } from "./dm-access.js";
 
 function createDmMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -38,12 +38,6 @@ function createDmMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe("enforceTelegramDmAccess", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    ({ enforceTelegramDmAccess } = await import("./dm-access.js"));
-  });
-
   it("allows DMs when policy is open", async () => {
     const bot = { api: { sendMessage: vi.fn(async () => undefined) } };
 

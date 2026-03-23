@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -111,7 +110,7 @@ function describeTelegramMessageTool({
   if (discovery.buttonsEnabled) {
     schema.push({
       properties: {
-        buttons: Type.Optional(createMessageToolButtonsSchema()),
+        buttons: createMessageToolButtonsSchema(),
       },
     });
   }

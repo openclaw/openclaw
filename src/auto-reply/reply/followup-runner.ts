@@ -321,7 +321,7 @@ export function createFollowupRunner(params: {
       const cachedContextTokens = lookupCachedContextTokens(modelUsed);
       const lazyContextTokens =
         agentCfgContextTokens == null && cachedContextTokens == null
-          ? lookupContextTokens(modelUsed, { allowAsyncLoad: false })
+          ? lookupContextTokens(modelUsed)
           : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??

@@ -386,9 +386,6 @@ type MessageToolOptions = {
   agentSessionKey?: string;
   sessionId?: string;
   config?: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
-  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
-  runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -624,10 +621,6 @@ function buildMessageToolDescription(options?: {
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
-  const loadConfigForTool = options?.loadConfig ?? loadConfig;
-  const resolveSecretRefsForTool =
-    options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
-  const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const resolvedAgentId = options?.agentSessionKey
     ? resolveSessionAgentId({
@@ -690,7 +683,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
       let cfg = options?.config;
       if (!cfg) {
-        const loadedRaw = loadConfigForTool();
+        const loadedRaw = loadConfig();
         const scope = resolveMessageSecretScope({
           channel: params.channel,
           target: params.target,
@@ -705,7 +698,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           accountId: scope.accountId,
         });
         cfg = (
-          await resolveSecretRefsForTool({
+          await resolveCommandSecretRefsViaGateway({
             config: loadedRaw,
             commandName: "tools.message",
             targetIds: scopedTargets.targetIds,
@@ -772,7 +765,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const result = await runMessageActionForTool({
+      const result = await runMessageAction({
         cfg,
         action,
         params,
