@@ -18,7 +18,7 @@ export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js
 export * from "./agent-media-payload.js";
 export * from "../media-understanding/audio-preflight.ts";
 export * from "../media-understanding/defaults.js";
-export * from "../media-understanding/providers/image-runtime.ts";
+export * from "../media-understanding/image-runtime.ts";
 export * from "../media-understanding/runner.js";
 export * from "../polls.js";
 export {

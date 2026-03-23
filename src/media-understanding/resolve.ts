@@ -12,7 +12,7 @@ import {
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
 } from "./defaults.js";
-import { normalizeMediaProviderId } from "./providers/index.js";
+import { normalizeMediaProviderId } from "./provider-registry.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 

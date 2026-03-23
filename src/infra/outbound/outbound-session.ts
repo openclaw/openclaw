@@ -24,9 +24,9 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-shared.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {

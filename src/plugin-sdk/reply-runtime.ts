@@ -2,6 +2,7 @@
 // off direct src/auto-reply imports by routing common reply primitives here.
 
 export {
+  chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
   chunkTextWithMode,

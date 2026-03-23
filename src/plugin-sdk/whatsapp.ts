@@ -39,8 +39,12 @@ export {
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
-export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export { resolveWhatsAppOutboundTarget } from "../../extensions/whatsapp/src/resolve-outbound-target.js";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "../../extensions/whatsapp/src/normalize-target.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

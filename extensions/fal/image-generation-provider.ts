@@ -1,8 +1,8 @@
 import type {
   GeneratedImageAsset,
-  ImageGenerationProviderPlugin,
-} from "openclaw/plugin-sdk/image-generation-core";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/image-generation-core";
+  ImageGenerationProvider,
+} from "openclaw/plugin-sdk/image-generation";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
@@ -187,7 +187,7 @@ async function fetchImageBuffer(url: string): Promise<{ buffer: Buffer; mimeType
   return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
 
-export function buildFalImageGenerationProvider(): ImageGenerationProviderPlugin {
+export function buildFalImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "fal",
     label: "fal",

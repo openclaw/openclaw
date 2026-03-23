@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getMediaUnderstandingProvider } from "../../media-understanding/providers/index.js";
+import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";

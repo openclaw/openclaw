@@ -10,7 +10,11 @@ export * from "../channels/plugins/normalize/whatsapp.js";
 export * from "../channels/plugins/outbound/interactive.js";
 export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../polls.js";
-export * from "../whatsapp/normalize.js";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "../../extensions/whatsapp/src/normalize-target.js";
 export {
   createAccountStatusSink,
   keepHttpServerTaskAlive,

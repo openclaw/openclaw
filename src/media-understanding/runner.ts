@@ -44,7 +44,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
-} from "./providers/index.js";
+} from "./provider-registry.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -494,7 +494,7 @@ export async function resolveAutoImageModel(params: {
   agentDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const providerRegistry = buildProviderRegistry();
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
