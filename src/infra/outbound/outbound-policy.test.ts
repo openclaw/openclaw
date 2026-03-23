@@ -1,12 +1,7 @@
 import { Container, Separator, TextDisplay } from "@buape/carbon";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -16,26 +11,60 @@ import {
 
 class TestDiscordUiContainer extends Container {}
 
-const discordCrossContextPlugin: Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "messaging"
-> = {
-  ...createChannelTestPluginBase({ id: "discord" }),
-  messaging: {
-    buildCrossContextComponents: ({ originLabel, message, cfg, accountId }) => {
-      const trimmed = message.trim();
-      const components: Array<TextDisplay | Separator> = [];
-      if (trimmed) {
-        components.push(new TextDisplay(message));
-        components.push(new Separator({ divider: true, spacing: "small" }));
-      }
-      components.push(new TextDisplay(`*From ${originLabel}*`));
-      void cfg;
-      void accountId;
-      return [new TestDiscordUiContainer(components)];
-    },
-  },
-};
+const mocks = vi.hoisted(() => ({
+  getChannelMessageAdapter: vi.fn((channel: string) =>
+    channel === "discord"
+      ? {
+          supportsComponentsV2: true,
+          buildCrossContextComponents: ({
+            originLabel,
+            message,
+          }: {
+            originLabel: string;
+            message: string;
+          }) => {
+            const trimmed = message.trim();
+            const components: Array<TextDisplay | Separator> = [];
+            if (trimmed) {
+              components.push(new TextDisplay(message));
+              components.push(new Separator({ divider: true, spacing: "small" }));
+            }
+            components.push(new TextDisplay(`*From ${originLabel}*`));
+            return [new TestDiscordUiContainer(components)];
+          },
+        }
+      : { supportsComponentsV2: false },
+  ),
+  normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (channel === "slack") {
+      return trimmed.replace(/^#/, "");
+    }
+    return trimmed;
+  }),
+  lookupDirectoryDisplay: vi.fn(async ({ targetId }: { targetId: string }) =>
+    targetId.replace(/^#/, ""),
+  ),
+  formatTargetDisplay: vi.fn(
+    ({ target, display }: { target: string; display?: string }) => display ?? target,
+  ),
+}));
+
+vi.mock("./channel-adapters.js", () => ({
+  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+}));
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+}));
+
+vi.mock("./target-resolver.js", () => ({
+  formatTargetDisplay: mocks.formatTargetDisplay,
+  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+}));
 
 const slackConfig = {
   channels: {
@@ -54,11 +83,7 @@ const discordConfig = {
 
 describe("outbound policy helpers", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "discord", plugin: discordCrossContextPlugin, source: "test" },
-      ]),
-    );
+    vi.clearAllMocks();
   });
 
   it("allows cross-provider sends when enabled", () => {
