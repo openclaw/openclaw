@@ -104,14 +104,29 @@ function migrateLegacyNotifyFallback(params: {
     }
 
     if (!params.legacyWebhook) {
+      // No webhook configured: safe to remove notify if delivery won't be affected
+      if (mode === undefined || mode === "none" || mode === "webhook") {
+        delete raw.notify;
+        changed = true;
+      } else {
+        warnings.push(
+          `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset. Removed notify (delivery mode "${mode}" preserved).`,
+        );
+        delete raw.notify;
+        changed = true;
+      }
+      continue;
+    }
+
+    if (mode === "announce") {
       warnings.push(
-        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
+        `Cron job "${jobName}" uses legacy notify fallback alongside delivery mode "announce". Migrate it manually so webhook delivery does not replace existing announce behavior.`,
       );
       continue;
     }
 
     warnings.push(
-      `Cron job "${jobName}" uses legacy notify fallback alongside delivery mode "${mode}". Migrate it manually so webhook delivery does not replace existing announce behavior.`,
+      `Cron job "${jobName}" uses legacy notify fallback alongside delivery mode "${mode}". Migrate it manually to avoid changing delivery behavior.`,
     );
   }
 

@@ -63,8 +63,6 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://coding.dashscope.aliyuncs.com/v1",
 ]);
 
-const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
@@ -525,18 +523,28 @@ export function normalizeProviders(params: {
     // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
     // var name), check whether it matches the canonical env var for this provider.
     // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
-    // to models.json as plaintext. (Fixes #38757)
-    const currentApiKey = normalizedProvider.apiKey;
-    if (
-      typeof currentApiKey === "string" &&
-      currentApiKey.trim() &&
-      !ENV_VAR_NAME_RE.test(currentApiKey.trim())
-    ) {
-      const envVarName = resolveEnvApiKeyVarName(normalizedKey, env);
-      if (envVarName && env[envVarName] === currentApiKey) {
-        mutated = true;
-        normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
-        params.secretRefManagedProviders?.add(normalizedKey);
+    // to models.json as plaintext. Skip this only when sourceProviders already
+    // records the env var reference for this provider.
+    // (Fixes #38757)
+    const sourceProvider = params.sourceProviders?.[normalizedKey];
+    const hasSourceRef =
+      sourceProvider &&
+      typeof sourceProvider.apiKey === "object" &&
+      sourceProvider.apiKey !== null &&
+      "source" in sourceProvider.apiKey;
+    if (params.sourceProviders && !hasSourceRef) {
+      const currentApiKey = normalizedProvider.apiKey;
+      if (
+        typeof currentApiKey === "string" &&
+        currentApiKey.trim() &&
+        !/^[A-Z_][A-Z0-9_]*$/.test(currentApiKey.trim())
+      ) {
+        const envVarName = resolveEnvApiKeyVarName(normalizedKey, env);
+        if (envVarName && env[envVarName] === currentApiKey) {
+          mutated = true;
+          normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+          params.secretRefManagedProviders?.add(normalizedKey);
+        }
       }
     }
 

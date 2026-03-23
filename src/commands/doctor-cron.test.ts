@@ -246,4 +246,99 @@ describe("maybeRepairLegacyCronStore", () => {
       to: "https://example.invalid/cron-finished",
     });
   });
+
+  it("removes notify when webhook is unset and delivery mode is undefined", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+  });
+
+  it("removes notify when webhook is unset and delivery mode is unknown", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        ...createLegacyCronJob(),
+        delivery: { mode: "slack", channel: "general" },
+      },
+    ]);
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Removed notify (delivery mode "slack" preserved)'),
+      "Doctor warnings",
+    );
+  });
+
+  it("warns and preserves notify when webhook is set and delivery mode is unknown", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "unknown-mode-job",
+        name: "Unknown mode job",
+        notify: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent", text: "Status" },
+        delivery: { mode: "slack", channel: "general" },
+        state: {},
+      },
+    ]);
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.notify).toBe(true);
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining('uses legacy notify fallback alongside delivery mode "slack"'),
+      "Doctor warnings",
+    );
+  });
 });
