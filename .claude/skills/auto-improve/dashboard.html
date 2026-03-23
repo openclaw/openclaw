@@ -78,12 +78,12 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <body>
 
 <h1>Operator1 Dashboard</h1>
-<p class="sub">Generated: 3/23/2026, 9:35:47 PM &mdash; Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code></p>
+<p class="sub">Generated: 3/23/2026, 9:48:44 PM &mdash; Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code></p>
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('metrics')">Agent Improvement</div>
   <div class="tab" onclick="switchTab('platform')">Platform Improvement<span class="cnt">1</span></div>
-  <div class="tab" onclick="switchTab('history')">History<span class="cnt">28</span></div>
+  <div class="tab" onclick="switchTab('history')">History<span class="cnt">29</span></div>
 </div>
 
 <!-- ==================== AGENT IMPROVEMENT ==================== -->
@@ -92,12 +92,12 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <div class="grid">
   <div class="card">
     <h2>Composite Score</h2>
-    <div class="mv">0.658<span class="mc flat">-0.000</span></div>
+    <div class="mv">0.650<span class="mc flat">+0.000</span></div>
     <div class="ml">Operator1 (main) &mdash; 5 sessions analyzed</div>
     <div style="margin-top:16px">
       <h3>Metric Breakdown</h3>
       <div class="sg">
-        <div class="si"><div class="v" style="color:#f85149">0.19</div><div class="l">Delegation (0.30)</div></div><div class="si"><div class="v" style="color:#d29922">0.50</div><div class="l">Memory (0.20)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Conciseness (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Silent Reply (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Tool Errors (0.20)</div></div>
+        <div class="si"><div class="v" style="color:#f85149">0.21</div><div class="l">Delegation (0.30)</div></div><div class="si"><div class="v" style="color:#f85149">0.43</div><div class="l">Memory (0.20)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Conciseness (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Silent Reply (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Tool Errors (0.20)</div></div>
       </div>
     </div>
   </div>
@@ -111,6 +111,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
       <button class="filter-btn" onclick="setChartView('trinity')">Trinity</button>
       <button class="filter-btn" onclick="setChartView('all')">All Agents</button>
     </div>
+    <div id="agentMetricsPanel" style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap"></div>
     <div class="ch"><canvas id="trendChart"></canvas></div>
   </div>
 </div>
@@ -120,23 +121,23 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
   <div class="ag">
     <div class="ac"><h4>Operator1 (main)</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span>0.658</span></div>
+        <div class="mr"><span class="l">Composite</span><span>0.650</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
         <div class="mr"><span class="l">Richness</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Memory</span><span>0.500</span></div>
+        <div class="mr"><span class="l">Memory</span><span>0.433</span></div>
       </div><div class="ac"><h4>neo</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
         
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
+        <div class="mr"><span class="l">Write-Back</span><span>0.800</span></div>
         <div class="mr"><span class="l">Richness</span><span>0.625</span></div>
-        <div class="mr"><span class="l">Memory</span><span>0.250</span></div>
+        <div class="mr"><span class="l">Memory</span><span>0.000</span></div>
       </div><div class="ac"><h4>morpheus</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
         
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
+        <div class="mr"><span class="l">Write-Back</span><span>0.800</span></div>
         <div class="mr"><span class="l">Richness</span><span>0.600</span></div>
         <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
       </div><div class="ac"><h4>trinity</h4>
@@ -184,7 +185,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
         <td>session-stability</td>
         <td><span class="b b-low">low</span></td>
         <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
-        <td><span class="b b-pr-open">pr-open</span></td>
+        <td><span class="b b-merged">merged</span></td>
         <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
       </tr></tbody></table>
   </div>
@@ -238,7 +239,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
         <td><span class="b b-low">low</span></td>
         <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
         <td>1</td>
-        <td><span class="b b-pr-open">pr-open</span></td>
+        <td><span class="b b-merged">merged</span></td>
         <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
       </tr></tbody></table>
   </div>
@@ -372,7 +373,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <div id="tab-history" class="tc">
 
 <div class="subtabs">
-  <div class="subtab active" onclick="switchSubTab('agent-hist')">Agent Improvement History<span class="cnt">27</span></div>
+  <div class="subtab active" onclick="switchSubTab('agent-hist')">Agent Improvement History<span class="cnt">28</span></div>
   <div class="subtab" onclick="switchSubTab('platform-hist')">Platform Fix History<span class="cnt">1</span></div>
 </div>
 
@@ -689,6 +690,17 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
       <td>1.000</td>
       <td><span class="b b-keep">keep</span></td>
       <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008); trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600">trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008); trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600</td>
+    </tr><tr>
+      <td>28</td>
+      <td><code>47994c6</code></td>
+      <td><strong>0.650</strong></td>
+      <td>0.213</td>
+      <td>0.433</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td><span class="b b-keep">keep</span></td>
+      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo: add yesterday/pending/we discussed to mid-session memory triggers; score 0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800; trinity_wb unchanged at 0.400">neo: add yesterday/pending/we discussed to mid-session memory triggers; score 0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800; trinity_wb unchanged at 0.400</td>
     </tr></tbody></table></div>
 </div>
 </div>
@@ -713,7 +725,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
       <td><span class="b b-low">low</span></td>
       <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
       <td>1</td>
-      <td><span class="b b-pr-open">pr-open</span></td>
+      <td><span class="b b-merged">merged</span></td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code>session-abort:*:aborted</code></td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
     </tr></tbody></table></div>
@@ -765,7 +777,7 @@ function sortTable(tableId, colIdx, type) {
 }
 
 // Chart data
-const trendData = [{"score":0.614,"delegation":0.352,"memory":0.19,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":0.995,"morpheus_exec":1,"trinity_exec":0.96,"op1_wb":0,"neo_wb":0.333,"morpheus_wb":0,"trinity_wb":0},{"score":0.622,"delegation":0.386,"memory":0.182,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.673,"delegation":0.381,"memory":0.48,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.695,"delegation":0.363,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.744,"delegation":0.384,"memory":0.643,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.763,"delegation":0.4,"memory":0.714,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.47,"memory":0.74,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0},{"score":0.763,"delegation":0.404,"memory":0.71,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.735,"delegation":0.49,"memory":0.442,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.763,"delegation":0.49,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.643,"delegation":0.078,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.976,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.2,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.719,"delegation":0.462,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.167,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.751,"delegation":0.637,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.744,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.743,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.654,"delegation":0.181,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.649,"delegation":0.18,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.65,"delegation":0.183,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.658,"delegation":0.193,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.6,"trinity_wb":0.4}];
+const trendData = [{"score":0.614,"delegation":0.352,"memory":0.19,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":0.995,"morpheus_exec":1,"trinity_exec":0.96,"op1_wb":0,"neo_wb":0.333,"morpheus_wb":0,"trinity_wb":0},{"score":0.622,"delegation":0.386,"memory":0.182,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.673,"delegation":0.381,"memory":0.48,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.695,"delegation":0.363,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.744,"delegation":0.384,"memory":0.643,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.763,"delegation":0.4,"memory":0.714,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.47,"memory":0.74,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0},{"score":0.763,"delegation":0.404,"memory":0.71,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.735,"delegation":0.49,"memory":0.442,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.763,"delegation":0.49,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.643,"delegation":0.078,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.976,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.2,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.719,"delegation":0.462,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.167,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.751,"delegation":0.637,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.744,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.743,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.654,"delegation":0.181,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.649,"delegation":0.18,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.65,"delegation":0.183,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.658,"delegation":0.193,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.6,"trinity_wb":0.4},{"score":0.65,"delegation":0.213,"memory":0.433,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.8,"morpheus_wb":0.8,"trinity_wb":0.4}];
 const labels = trendData.map((_, i) => i + 1);
 
 // Dataset definitions for each view
@@ -818,20 +830,54 @@ if (ctx) {
   trendChart = new Chart(ctx, { type:'line', data:{ labels, datasets:datasets.composite }, options:chartOpts });
 }
 
+// Current agent metrics for inline display
+const agentMetrics = {"main":{"sessions":5,"composite":0.6504347826086956,"delegation":0.21256038647342995,"memory":0.43333333333333335,"conciseness":1,"silent_reply":1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":1},"neo":{"sessions":5,"composite":-1,"delegation":-1,"memory":0,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.8,"richness":0.625},"morpheus":{"sessions":5,"composite":-1,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.8,"richness":0.6},"trinity":{"sessions":5,"composite":-1,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":0.6}};
+
+const metricDefs = {
+  composite: [],
+  op1: [
+    {k:'composite',l:'Composite'},{k:'delegation',l:'Delegation'},{k:'memory',l:'Memory'},
+    {k:'conciseness',l:'Conciseness'},{k:'silent_reply',l:'Silent Reply'},{k:'error_rate',l:'Tool Errors'},
+    {k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'}
+  ],
+  neo: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  morpheus: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  trinity: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  all: [],
+};
+const agentMap = {composite:'main',op1:'main',neo:'neo',morpheus:'morpheus',trinity:'trinity',all:'main'};
+
+function renderMetricsPanel(view) {
+  const panel = document.getElementById('agentMetricsPanel');
+  const defs = metricDefs[view] || [];
+  if (!defs.length) { panel.innerHTML = ''; return; }
+  const agent = agentMetrics[agentMap[view]];
+  if (!agent) { panel.innerHTML = ''; return; }
+  panel.innerHTML = defs.map(d => {
+    const v = agent[d.k];
+    const vs = v >= 0 ? v.toFixed(3) : '-';
+    const c = v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
+    return '<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px 12px;text-align:center;min-width:80px">' +
+      '<div style="font-size:16px;font-weight:700;color:' + c + '">' + vs + '</div>' +
+      '<div style="font-size:10px;color:#8b949e">' + d.l + '</div></div>';
+  }).join('');
+}
+
 function setChartView(view) {
   if (!trendChart) return;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
   trendChart.data.datasets = datasets[view];
   trendChart.update();
+  renderMetricsPanel(view);
 }
 
 // Category breakdown chart
 const catCtx = document.getElementById('categoryChart');
 if (catCtx) {
   const cats = {};
-  [{"category":"session-stability","severity":"low","agent":"main","session_id":"960e888e-9434-4e8e-a7a6-5cd3e076b29c","timestamp":"2026-03-23T18:18:43.171Z","tool_name":"session","error_signature":"session-abort:main:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]},{"category":"session-stability","severity":"low","agent":"neo","session_id":"1556e146-2d2b-4c7f-b591-8fb5d293189c","timestamp":"2026-03-23T09:54:23.504Z","tool_name":"session","error_signature":"session-abort:neo:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]},{"category":"session-stability","severity":"low","agent":"trinity","session_id":"70b91c57-ba3e-496c-8418-a5c37a2e134d","timestamp":"2026-03-23T20:11:45.380Z","tool_name":"session","error_signature":"session-abort:trinity:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]}].forEach(d => { cats[d.category] = (cats[d.category]||0) + 1; });
-  [{"issue":"16","category":"session-stability","severity":"low","pr":"17","status":"pr-open","error_signature":"session-abort:*:aborted","files_changed":"1","description":"Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session"}].forEach(f => { cats[f.category] = (cats[f.category]||0) + 1; });
+  [{"category":"session-stability","severity":"low","agent":"main","session_id":"960e888e-9434-4e8e-a7a6-5cd3e076b29c","timestamp":"2026-03-23T18:18:43.171Z","tool_name":"session","error_signature":"session-abort:main:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]},{"category":"session-stability","severity":"low","agent":"neo","session_id":"79689df1-b1f0-46d4-8000-dbe37c544222","timestamp":"2026-03-23T20:37:38.744Z","tool_name":"session","error_signature":"session-abort:neo:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]},{"category":"session-stability","severity":"low","agent":"trinity","session_id":"f47689e2-adab-4bcf-afdc-fec1dcdae34e","timestamp":"2026-03-23T20:45:05.142Z","tool_name":"session","error_signature":"session-abort:trinity:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]}].forEach(d => { cats[d.category] = (cats[d.category]||0) + 1; });
+  [{"issue":"16","category":"session-stability","severity":"low","pr":"17","status":"merged","error_signature":"session-abort:*:aborted","files_changed":"1","description":"Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session"}].forEach(f => { cats[f.category] = (cats[f.category]||0) + 1; });
   const catLabels = Object.keys(cats);
   const catData = Object.values(cats);
   const catColors = ['#58a6ff','#f85149','#3fb950','#d29922','#a371f7','#79c0ff','#f778ba','#ffa657'];
