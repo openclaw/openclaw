@@ -9,7 +9,6 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
 } from "../../config/sessions/paths.js";
-import { updateSessionStore, updateSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -70,6 +69,8 @@ let contextTokensRuntimePromise: Promise<
 let replyMediaPathsRuntimePromise: Promise<
   typeof import("./reply-media-paths.runtime.js")
 > | null = null;
+let sessionStoreRuntimePromise: Promise<typeof import("../../config/sessions/store.runtime.js")> | null =
+  null;
 
 function loadPiEmbeddedQueueRuntime() {
   piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
@@ -99,6 +100,11 @@ function loadContextTokensRuntime() {
 function loadReplyMediaPathsRuntime() {
   replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
   return replyMediaPathsRuntimePromise;
+}
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
 }
 
 export async function runReplyAgent(params: {
@@ -228,6 +234,7 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
+      const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
@@ -347,6 +354,7 @@ export async function runReplyAgent(params: {
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
     try {
+      const { updateSessionStore } = await loadSessionStoreRuntime();
       await updateSessionStore(storePath, (store) => {
         store[sessionKey] = nextEntry;
       });
@@ -447,6 +455,7 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
+        const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
@@ -503,6 +512,7 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
+        const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
