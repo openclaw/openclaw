@@ -4,6 +4,7 @@ import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createNativeCommandTestParams,
   type NativeCommandTestParams,
@@ -121,6 +122,7 @@ export function createNativeCommandsHarness(params?: {
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    loadWebMedia: vi.fn() as TelegramBotDeps["loadWebMedia"],
     buildModelsProviderData: vi.fn(async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],

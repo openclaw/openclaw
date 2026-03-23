@@ -68,6 +68,7 @@ function createNativeCommandTestParams(
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-4.1" },
     })) as TelegramBotDeps["buildModelsProviderData"],
+    loadWebMedia: vi.fn() as TelegramBotDeps["loadWebMedia"],
     listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };
