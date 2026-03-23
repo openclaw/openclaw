@@ -7,7 +7,7 @@ import {
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   normalizeExecutableToken,
-  resolveDispatchWrapperExecutionPlan,
+  resolveDispatchWrapperTrustPlan,
   unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
@@ -108,6 +108,10 @@ describe("unwrapEnvInvocation", () => {
 describe("unwrapKnownDispatchWrapperInvocation", () => {
   test.each([
     {
+      argv: ["env", "--", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "env", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "nice", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -138,9 +142,27 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
   });
+
+  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
+    "fails closed for blocked dispatch wrapper %s",
+    (wrapper) => {
+      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+        kind: "blocked",
+        wrapper,
+      });
+    },
+  );
 });
 
-describe("resolveDispatchWrapperExecutionPlan", () => {
+describe("resolveDispatchWrapperTrustPlan", () => {
+  test("allows non-semantic env passthrough", () => {
+    expect(resolveDispatchWrapperTrustPlan(["env", "--", "bash", "-lc", "echo hi"])).toEqual({
+      argv: ["bash", "-lc", "echo hi"],
+      wrappers: ["env"],
+      policyBlocked: false,
+    });
+  });
+
   test.each([
     {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
@@ -174,7 +196,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
       wrapper,
       argv: effectiveArgv,
     });
-    expect(resolveDispatchWrapperExecutionPlan(argv)).toEqual({
+    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
       argv: effectiveArgv,
       wrappers: [wrapper],
       policyBlocked: false,
@@ -183,7 +205,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
 
   test("unwraps transparent wrapper chains", () => {
     expect(
-      resolveDispatchWrapperExecutionPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
+      resolveDispatchWrapperTrustPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
     ).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
@@ -192,9 +214,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
   });
 
   test("blocks semantic env usage even when it reaches a shell wrapper", () => {
-    expect(
-      resolveDispatchWrapperExecutionPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"]),
-    ).toEqual({
+    expect(resolveDispatchWrapperTrustPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
       wrappers: ["env"],
       policyBlocked: true,
@@ -204,7 +224,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
 
   test("blocks wrapper overflow beyond the configured depth", () => {
     expect(
-      resolveDispatchWrapperExecutionPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),
+      resolveDispatchWrapperTrustPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),
     ).toEqual({
       argv: ["timeout", "5s", "bash", "-lc", "echo hi"],
       wrappers: ["nohup"],

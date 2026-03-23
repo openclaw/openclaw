@@ -9,11 +9,26 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
   return cfg?.channels?.["synology-chat"];
+}
+
+function getRawAccountConfig(
+  channelCfg: SynologyChatChannelConfig,
+  accountId: string,
+): SynologyChatChannelConfig {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return channelCfg;
+  }
+  return channelCfg.accounts?.[accountId] ?? {};
+}
+
+function hasExplicitWebhookPath(rawAccount: SynologyChatChannelConfig | undefined): boolean {
+  return typeof rawAccount?.webhookPath === "string" && rawAccount.webhookPath.trim().length > 0;
 }
 
 /** Parse allowedUserIds from string or array to string[]. */
@@ -65,6 +80,9 @@ export function resolveAccount(
 ): ResolvedSynologyChatAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = accountId || DEFAULT_ACCOUNT_ID;
+  const accountOverrides =
+    id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
+  const rawAccount = getRawAccountConfig(channelCfg, id);
   const merged = resolveMergedAccountConfig<Record<string, unknown> & SynologyChatChannelConfig>({
     channelConfig: channelCfg as Record<string, unknown> & SynologyChatChannelConfig,
     accounts: channelCfg.accounts as
@@ -80,6 +98,11 @@ export function resolveAccount(
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
+  const explicitWebhookPath = hasExplicitWebhookPath(rawAccount);
+  const allowInheritedWebhookPath =
+    rawAccount.dangerouslyAllowInheritedWebhookPath ??
+    channelCfg.dangerouslyAllowInheritedWebhookPath ??
+    false;
 
   // Merge: account override > base channel config > env var
   return {
@@ -89,6 +112,12 @@ export function resolveAccount(
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
+    dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
+      providerConfig: channelCfg,
+      accountConfig: accountOverrides,
+    }),
+    hasExplicitWebhookPath: explicitWebhookPath,
+    dangerouslyAllowInheritedWebhookPath: allowInheritedWebhookPath,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,
