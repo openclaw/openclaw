@@ -49,6 +49,7 @@ import {
   validateCronForm,
   hasCronFormErrors,
   normalizeCronFormState,
+  resolveCronFormChannels,
   getVisibleCronJobs,
   updateCronJobsFilter,
   updateCronRunsFilter,
@@ -173,6 +174,12 @@ function uniquePreserveOrder(values: string[]): string[] {
     output.push(normalized);
   }
   return output;
+}
+
+function resolveCronChannelIds(state: AppViewState): string[] {
+  return state.channelsSnapshot?.channelMeta?.length
+    ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
+    : (state.channelsSnapshot?.channelOrder ?? []);
 }
 
 type DismissedUpdateBanner = {
@@ -831,9 +838,7 @@ export function renderApp(state: AppViewState) {
                   error: state.cronError,
                   busy: state.cronBusy,
                   form: state.cronForm,
-                  channels: state.channelsSnapshot?.channelMeta?.length
-                    ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
-                    : (state.channelsSnapshot?.channelOrder ?? []),
+                  channels: resolveCronChannelIds(state),
                   channelLabels: state.channelsSnapshot?.channelLabels ?? {},
                   channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                   runsJobId: state.cronRunsJobId,
@@ -856,11 +861,21 @@ export function renderApp(state: AppViewState) {
                   deliveryToSuggestions,
                   accountSuggestions,
                   onFormChange: (patch) => {
-                    state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
+                    state.cronForm = resolveCronFormChannels(
+                      normalizeCronFormState({ ...state.cronForm, ...patch }),
+                      resolveCronChannelIds(state),
+                    );
                     state.cronFieldErrors = validateCronForm(state.cronForm);
                   },
                   onRefresh: () => state.loadCron(),
-                  onAdd: () => addCronJob(state),
+                  onAdd: () => {
+                    state.cronForm = resolveCronFormChannels(
+                      normalizeCronFormState(state.cronForm),
+                      resolveCronChannelIds(state),
+                    );
+                    state.cronFieldErrors = validateCronForm(state.cronForm);
+                    return addCronJob(state);
+                  },
                   onEdit: (job) => startCronEdit(state, job),
                   onClone: (job) => startCronClone(state, job),
                   onCancelEdit: () => cancelCronEdit(state),

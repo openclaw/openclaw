@@ -7,6 +7,7 @@ import {
   loadCronRuns,
   loadMoreCronRuns,
   normalizeCronFormState,
+  resolveCronFormChannels,
   runCronJob,
   startCronEdit,
   startCronClone,
@@ -75,6 +76,38 @@ describe("cron controller", () => {
     });
 
     expect(normalized.deliveryMode).toBe("announce");
+  });
+
+  it("defaults new announce channels to the first concrete channel", () => {
+    const resolved = resolveCronFormChannels(
+      {
+        ...DEFAULT_CRON_FORM,
+        deliveryMode: "announce",
+        failureAlertMode: "custom",
+        failureAlertDeliveryMode: "announce",
+      },
+      ["telegram", "slack"],
+    );
+
+    expect(resolved.deliveryChannel).toBe("telegram");
+    expect(resolved.failureAlertChannel).toBe("telegram");
+  });
+
+  it('preserves explicit "last" cron channels for existing jobs', () => {
+    const resolved = resolveCronFormChannels(
+      {
+        ...DEFAULT_CRON_FORM,
+        deliveryMode: "announce",
+        deliveryChannel: "last",
+        failureAlertMode: "custom",
+        failureAlertDeliveryMode: "announce",
+        failureAlertChannel: "last",
+      },
+      ["telegram", "slack"],
+    );
+
+    expect(resolved.deliveryChannel).toBe("last");
+    expect(resolved.failureAlertChannel).toBe("last");
   });
 
   it("forwards webhook delivery in cron.add payload", async () => {

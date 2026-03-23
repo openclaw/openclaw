@@ -266,6 +266,41 @@ describe("cron view", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
   });
 
+  it("shows the first configured channel instead of last for new announce jobs", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          channels: ["telegram", "slack"],
+          form: { ...DEFAULT_CRON_FORM, deliveryMode: "announce", deliveryChannel: "" },
+        }),
+      ),
+      container,
+    );
+
+    const select = container.querySelector("#cron-delivery-channel");
+    expect(select).toBeInstanceOf(HTMLSelectElement);
+    expect((select as HTMLSelectElement).value).toBe("telegram");
+  });
+
+  it("keeps the last-channel option available for announce delivery", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          channels: ["telegram"],
+          form: { ...DEFAULT_CRON_FORM, deliveryMode: "announce", deliveryChannel: "" },
+        }),
+      ),
+      container,
+    );
+
+    const select = container.querySelector("#cron-delivery-channel");
+    expect(select).toBeInstanceOf(HTMLSelectElement);
+    const options = Array.from((select as HTMLSelectElement).options).map((option) => option.value);
+    expect(options).toContain("last");
+  });
+
   it("calls onJobsFiltersChange when last-run filter changes", () => {
     const container = document.createElement("div");
     const onJobsFiltersChange = vi.fn();

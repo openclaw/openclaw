@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { t } from "../../i18n/index.ts";
+import { resolveCronDefaultChannel } from "../controllers/cron.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -132,10 +133,21 @@ function summarizeSelection(selectedLabels: string[], allLabel: string) {
 }
 
 function buildChannelOptions(props: CronProps): string[] {
-  const options = ["last", ...props.channels.filter(Boolean)];
-  const current = props.form.deliveryChannel?.trim();
-  if (current && !options.includes(current)) {
-    options.push(current);
+  const options = props.channels.filter(Boolean);
+  const currentValues = [
+    props.form.deliveryChannel?.trim() ?? "",
+    props.form.failureAlertChannel?.trim() ?? "",
+  ].filter(Boolean);
+  if (currentValues.length === 0 && options.length === 0) {
+    options.push("");
+  }
+  for (const current of currentValues) {
+    if (!options.includes(current)) {
+      options.push(current);
+    }
+  }
+  if (!options.includes("last")) {
+    options.push("last");
   }
   const seen = new Set<string>();
   return options.filter((value) => {
@@ -148,6 +160,9 @@ function buildChannelOptions(props: CronProps): string[] {
 }
 
 function resolveChannelLabel(props: CronProps, channel: string): string {
+  if (!channel) {
+    return "Select channel";
+  }
   if (channel === "last") {
     return "last";
   }
@@ -355,6 +370,12 @@ export function renderCron(props: CronProps) {
   const isAgentTurn = props.form.payloadKind === "agentTurn";
   const isCronSchedule = props.form.scheduleKind === "cron";
   const channelOptions = buildChannelOptions(props);
+  const selectedDeliveryChannel =
+    resolveCronDefaultChannel(channelOptions, props.form.deliveryChannel) ||
+    (channelOptions.includes("") ? "" : props.form.deliveryChannel);
+  const selectedFailureAlertChannel =
+    resolveCronDefaultChannel(channelOptions, props.form.failureAlertChannel) ||
+    (channelOptions.includes("") ? "" : props.form.failureAlertChannel);
   const selectedJob =
     props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
   const selectedRunTitle =
@@ -954,7 +975,7 @@ export function renderCron(props: CronProps) {
                             : html`
                                 <select
                                   id="cron-delivery-channel"
-                                  .value=${props.form.deliveryChannel || "last"}
+                                  .value=${selectedDeliveryChannel}
                                   @change=${(e: Event) =>
                                     props.onFormChange({
                                       deliveryChannel: (e.target as HTMLSelectElement).value,
@@ -1253,7 +1274,7 @@ export function renderCron(props: CronProps) {
                               <label class="field">
                                 ${renderFieldLabel("Alert channel")}
                                 <select
-                                  .value=${props.form.failureAlertChannel || "last"}
+                                  .value=${selectedFailureAlertChannel}
                                   @change=${(e: Event) =>
                                     props.onFormChange({
                                       failureAlertChannel: (e.target as HTMLSelectElement).value,

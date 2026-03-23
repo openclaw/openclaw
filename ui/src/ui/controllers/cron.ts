@@ -100,6 +100,36 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
   };
 }
 
+export function resolveCronDefaultChannel(channelIds: string[], selectedChannel: string): string {
+  const current = selectedChannel.trim();
+  if (current) {
+    return current;
+  }
+  return channelIds.find((channelId) => channelId.trim() && channelId !== CRON_CHANNEL_LAST) ?? "";
+}
+
+export function resolveCronFormChannels(form: CronFormState, channelIds: string[]): CronFormState {
+  const deliveryChannel =
+    form.deliveryMode === "announce"
+      ? resolveCronDefaultChannel(channelIds, form.deliveryChannel)
+      : form.deliveryChannel;
+  const failureAlertChannel =
+    form.failureAlertMode === "custom" && form.failureAlertDeliveryMode === "announce"
+      ? resolveCronDefaultChannel(channelIds, form.failureAlertChannel)
+      : form.failureAlertChannel;
+  if (
+    deliveryChannel === form.deliveryChannel &&
+    failureAlertChannel === form.failureAlertChannel
+  ) {
+    return form;
+  }
+  return {
+    ...form,
+    deliveryChannel,
+    failureAlertChannel,
+  };
+}
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -603,7 +633,7 @@ function buildFailureAlert(form: CronFormState) {
   const accountId = form.failureAlertAccountId.trim();
   const patch: Record<string, unknown> = {
     after: after > 0 ? Math.floor(after) : undefined,
-    channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
+    channel: form.failureAlertChannel.trim() || undefined,
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
   };
@@ -656,7 +686,7 @@ export async function addCronJob(state: CronState) {
             mode: selectedDeliveryMode,
             channel:
               selectedDeliveryMode === "announce"
-                ? form.deliveryChannel.trim() || "last"
+                ? form.deliveryChannel.trim() || undefined
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
             accountId:
