@@ -405,10 +405,13 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
-        if (info.kind !== "final") {
-          // Only deliver final replies to external messaging channels (WhatsApp).
-          // Block (reasoning/thinking) and tool updates are meant for the internal
-          // web UI only; sending them here leaks chain-of-thought to end users.
+        const reply = resolveSendableOutboundReplyParts(payload);
+        if (info.kind !== "final" && !reply.hasMedia) {
+          // External WhatsApp chats must not receive plain text-only block/tool
+          // updates because those are internal streaming surfaces and may expose
+          // reasoning or other transient progress messages. Media-bearing payloads
+          // are still deliverable so successful tool outputs like TTS audio reach
+          // the user even when emitted before the final reply.
           return;
         }
         await deliverWebReply({
@@ -432,7 +435,6 @@ export async function processMessage(params: {
         });
         const fromDisplay =
           params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(payload);
         const hasMedia = reply.hasMedia;
         whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
         if (shouldLogVerbose()) {
@@ -454,8 +456,9 @@ export async function processMessage(params: {
       onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
-      // WhatsApp delivery intentionally suppresses non-final payloads.
-      // Keep block streaming disabled so final replies are still produced.
+      // Keep block streaming disabled so WhatsApp still converges on final replies.
+      // Delivery additionally suppresses non-final text-only payloads, while still
+      // allowing media-bearing tool/block outputs such as TTS audio.
       disableBlockStreaming: true,
       onModelSelected,
     },

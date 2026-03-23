@@ -283,13 +283,16 @@ describe("web processMessage inbound context", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("suppresses non-final WhatsApp payload delivery", async () => {
+  it("suppresses non-final text-only WhatsApp payload delivery", async () => {
     const rememberSentText = vi.fn();
     await processMessage(createWhatsAppDirectStreamingArgs({ rememberSentText }));
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
-      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+      | ((
+          payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<void>)
       | undefined;
     expect(deliver).toBeTypeOf("function");
 
@@ -301,6 +304,40 @@ describe("web processMessage inbound context", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers non-final WhatsApp payloads when they include media", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(createWhatsAppDirectStreamingArgs({ rememberSentText }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((
+          payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "voice note", mediaUrl: "/tmp/voice.ogg" }, { kind: "tool" });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          text: "voice note",
+          mediaUrl: "/tmp/voice.ogg",
+        }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "voice note",
+      expect.objectContaining({
+        combinedBody: expect.any(String),
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1555",
+      }),
+    );
   });
 
   it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
