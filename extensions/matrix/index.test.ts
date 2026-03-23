@@ -35,6 +35,26 @@ describe("matrix plugin registration", () => {
     });
   }, 240_000);
 
+  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
+    const runtimeApiPath = path.join(
+      process.cwd(),
+      "extensions",
+      "matrix",
+      "src",
+      "runtime-api.ts",
+    );
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(
+        resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath }),
+      ),
+      tryNative: false,
+    });
+
+    expect(jiti(runtimeApiPath)).toMatchObject({
+      resolveMatrixAccountStringValues: expect.any(Function),
+    });
+  }, 240_000);
+
   it("registers the channel without bootstrapping crypto runtime", () => {
     const runtime = {} as never;
     matrixPlugin.register({
