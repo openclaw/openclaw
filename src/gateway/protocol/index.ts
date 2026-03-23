@@ -193,6 +193,8 @@ import {
   SecretsResolveResultSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCompactSmartParams,
+  SessionsCompactSmartParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsListParams,
@@ -412,6 +414,9 @@ export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
 );
 export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
+);
+export const validateSessionsCompactSmartParams = ajv.compile<SessionsCompactSmartParams>(
+  SessionsCompactSmartParamsSchema,
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
@@ -678,6 +683,7 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
+  SessionsCompactSmartParamsSchema,
   SessionsUsageParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
@@ -857,6 +863,7 @@ export type {
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
+  SessionsCompactSmartParams,
   SessionsUsageParams,
   CronJob,
   CronListParams,

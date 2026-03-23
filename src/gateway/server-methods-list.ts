@@ -97,6 +97,7 @@ const BASE_METHODS = [
   "sessions.reset",
   "sessions.delete",
   "sessions.compact",
+  "sessions.compactSmart",
   "sessions.archive",
   "sessions.delegations",
   "sessions.delegations.resume",

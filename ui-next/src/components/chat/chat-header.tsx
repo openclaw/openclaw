@@ -712,11 +712,16 @@ export function ChatHeader({
       const res = await sendRpc<{
         compacted?: boolean;
         reason?: string;
-        kept?: number;
-      }>("sessions.compact", { key: sessionKey });
+        tokensBefore?: number;
+        tokensAfter?: number;
+        summary?: string;
+      }>("sessions.compactSmart", { sessionKey });
       if (res?.compacted) {
-        const saved = res.kept != null ? ` (kept ${res.kept} lines)` : "";
-        toast(`Session compacted${saved}`, "success");
+        const before = res.tokensBefore ?? 0;
+        const after = res.tokensAfter ?? 0;
+        const pct = before > 0 ? Math.round(((before - after) / before) * 100) : 0;
+        const saved = before > 0 && after > 0 ? ` ${before} → ${after} tokens (${pct}% saved)` : "";
+        toast(`Compacted:${saved}`, "success");
         await loadHistory();
       } else {
         const detail = res?.reason ?? "already compact";

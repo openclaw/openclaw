@@ -238,6 +238,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",
+    "sessions.compactSmart",
     "sessions.archive",
     "sessions.delegations.resume",
     "sessions.delegations.cancel",

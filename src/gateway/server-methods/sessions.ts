@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded-runner/compact.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -13,6 +14,7 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsCompactParams,
+  validateSessionsCompactSmartParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
@@ -443,5 +445,90 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+  },
+
+  "sessions.compactSmart": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsCompactSmartParams,
+        "sessions.compactSmart",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const p = params;
+    const sessionKey = requireSessionKey(p.sessionKey, respond);
+    if (!sessionKey) {
+      return;
+    }
+
+    const { cfg, entry } = loadSessionEntry(sessionKey);
+    if (!entry?.sessionId) {
+      respond(true, { compacted: false, reason: "no sessionId" }, undefined);
+      return;
+    }
+
+    // Resolve transcript file path
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(sessionKey);
+    const sessionFile = resolveSessionTranscriptCandidates(
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
+      target.agentId,
+    ).find((candidate) => fs.existsSync(candidate));
+    if (!sessionFile) {
+      respond(true, { compacted: false, reason: "no transcript" }, undefined);
+      return;
+    }
+
+    // Resolve workspace dir from agent config
+    const agentId = target.agentId ?? resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+
+    // Resolve model/provider from session entry
+    const { provider, model } = resolveSessionModelRef(cfg, entry, agentId);
+
+    try {
+      const result = await compactEmbeddedPiSession({
+        sessionId: entry.sessionId,
+        sessionKey,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        provider,
+        model,
+        trigger: "manual",
+        force: true,
+      });
+      if (result.compacted && result.result) {
+        respond(
+          true,
+          {
+            compacted: true,
+            tokensBefore: result.result.tokensBefore,
+            tokensAfter: result.result.tokensAfter,
+            summary: result.result.summary,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          { compacted: false, reason: result.reason ?? "nothing to compact" },
+          undefined,
+        );
+      }
+    } catch (err) {
+      respond(
+        true,
+        {
+          compacted: false,
+          reason: err instanceof Error ? err.message : String(err),
+        },
+        undefined,
+      );
+    }
   },
 };
