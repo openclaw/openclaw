@@ -49,6 +49,10 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   Bot: class {
     api = botApi;
     catch = vi.fn();
@@ -68,6 +72,9 @@ vi.mock("grammy", () => ({
     ) {
       super(message);
     }
+  },
+  GrammyError: class GrammyError extends Error {
+    description = "";
   },
   InputFile: class {},
 }));

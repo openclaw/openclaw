@@ -1,5 +1,4 @@
 import type { Message } from "@grammyjs/types";
-import { GrammyError } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramContext } from "./types.js";
 
@@ -224,11 +223,8 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
-    const fileTooBigError = new GrammyError(
-      "Call to 'getFile' failed!",
-      { ok: false, error_code: 400, description: "Bad Request: file is too big" },
-      "getFile",
-      {},
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 

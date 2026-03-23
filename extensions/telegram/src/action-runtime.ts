@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
-import { resolveTelegramPollVisibility } from "../runtime-api.js";
 import {
   jsonResult,
   readNumberParam,
@@ -69,6 +68,22 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
+
+function resolveTelegramPollVisibility(params: {
+  pollAnonymous?: boolean;
+  pollPublic?: boolean;
+}): boolean | undefined {
+  if (params.pollAnonymous && params.pollPublic) {
+    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+  }
+  if (params.pollAnonymous) {
+    return true;
+  }
+  if (params.pollPublic) {
+    return false;
+  }
+  return undefined;
+}
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
