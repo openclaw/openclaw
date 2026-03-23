@@ -195,6 +195,14 @@ describe("scanStatusJsonFast", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
+  it("skips plugin compatibility loading even when configured channels are present", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+  });
+
   it("skips memory inspection for the lean status --json fast path", async () => {
     const result = await scanStatusJsonFast({}, {} as never);
 

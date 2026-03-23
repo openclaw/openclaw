@@ -352,8 +352,8 @@ describe("registerPreActionHooks", () => {
     });
 
     await runPreAction({
-      parseArgv: ["agents"],
-      processArgv: ["node", "openclaw", "agents", "--json"],
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list", "--json"],
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
@@ -369,8 +369,8 @@ describe("registerPreActionHooks", () => {
     });
 
     await runPreAction({
-      parseArgv: ["agents"],
-      processArgv: ["node", "openclaw", "agents"],
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();

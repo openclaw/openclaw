@@ -23,7 +23,6 @@ import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
-let pluginStatusModulePromise: Promise<typeof import("../plugins/status.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let commandSecretTargetsModulePromise:
   | Promise<typeof import("../cli/command-secret-targets.js")>
@@ -39,11 +38,6 @@ let statusScanDepsRuntimeModulePromise:
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
-}
-
-function loadPluginStatusModule() {
-  pluginStatusModulePromise ??= import("../plugins/status.js");
-  return pluginStatusModulePromise;
 }
 
 function loadConfigIoModule() {
@@ -89,13 +83,6 @@ function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckR
     installKind: "unknown",
     packageManager: "unknown",
   };
-}
-
-function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
-    return true;
-  }
-  return existsSync(resolveConfigPath(process.env));
 }
 
 function resolveDefaultMemoryStorePath(agentId: string): string {
@@ -233,14 +220,9 @@ export async function scanStatusJsonFast(
   const memory = opts.all
     ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
     : null;
-  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? await loadPluginStatusModule().then(({ buildPluginCompatibilityNotices }) =>
-        // Keep plugin status loading off the empty-config `status --json` fast path.
-        // The plugin status module pulls in the full loader graph and materially bloats
-        // startup RSS even when plugin compatibility is never consulted.
-        buildPluginCompatibilityNotices({ config: cfg }),
-      )
-    : [];
+  // `status --json` does not serialize plugin compatibility notices, so keep the
+  // fast path off the full plugin status graph after the initial scoped preload.
+  const pluginCompatibility: StatusScanResult["pluginCompatibility"] = [];
 
   return {
     cfg,
