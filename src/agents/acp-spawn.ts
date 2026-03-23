@@ -54,6 +54,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { registerSubagentRun } from "./subagent-registry.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -896,6 +897,25 @@ export async function spawnAcpDirect(
       error: summarizeError(err),
       childSessionKey: sessionKey,
     };
+  }
+
+  if (!effectiveStreamToParent) {
+    try {
+      registerSubagentRun({
+        runId: childRunId,
+        childSessionKey: sessionKey,
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin: requesterState.origin,
+        requesterDisplayKey: requesterInternalKey,
+        task: params.task,
+        cleanup: spawnMode === "session" ? "keep" : "delete",
+        label: params.label,
+        expectsCompletionMessage: true,
+        spawnMode,
+      });
+    } catch (err) {
+      log.warn(`ACP spawn: failed to register subagent run ${childRunId}: ${summarizeError(err)}`);
+    }
   }
 
   if (effectiveStreamToParent && parentSessionKey) {

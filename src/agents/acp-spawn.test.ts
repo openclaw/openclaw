@@ -18,6 +18,7 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
+import * as subagentRegistry from "./subagent-registry.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -55,6 +56,7 @@ const hoisted = vi.hoisted(() => {
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -72,6 +74,7 @@ const hoisted = vi.hoisted(() => {
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
+    registerSubagentRunMock,
     state,
   };
 });
@@ -90,6 +93,7 @@ const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
   acpSpawnParentStream,
   "resolveAcpSpawnStreamLogPath",
 );
+const registerSubagentRunSpy = vi.spyOn(subagentRegistry, "registerSubagentRun");
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
@@ -383,6 +387,10 @@ describe("spawnAcpDirect", () => {
     areHeartbeatsEnabledSpy
       .mockReset()
       .mockImplementation(() => hoisted.areHeartbeatsEnabledMock());
+    hoisted.registerSubagentRunMock.mockReset();
+    registerSubagentRunSpy
+      .mockReset()
+      .mockImplementation((args) => void hoisted.registerSubagentRunMock(args));
   });
 
   afterEach(() => {
@@ -549,6 +557,37 @@ describe("spawnAcpDirect", () => {
       );
     }
     expectAgentGatewayCall(expectedAgentCall);
+  });
+
+  it("registers ACP runs after successful non-stream dispatch", async () => {
+    const result = await spawnAcpDirect(createSpawnRequest(), createRequesterContext());
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      childSessionKey: result.childSessionKey,
+      requesterSessionKey: "agent:main:telegram:direct:6098642967",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "default",
+        to: "telegram:6098642967",
+        threadId: "1",
+      },
+      requesterDisplayKey: "agent:main:telegram:direct:6098642967",
+      task: "Investigate flaky tests",
+      cleanup: "delete",
+      label: undefined,
+      expectsCompletionMessage: true,
+      spawnMode: "run",
+    });
+    const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
+    );
+    const agentCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex];
+    const registerCallOrder = hoisted.registerSubagentRunMock.mock.invocationCallOrder[0];
+    expect(typeof agentCallOrder).toBe("number");
+    expect(typeof registerCallOrder).toBe("number");
+    expect(registerCallOrder > agentCallOrder).toBe(true);
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
@@ -773,6 +812,7 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
