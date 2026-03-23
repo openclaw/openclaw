@@ -29,6 +29,13 @@ let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 
+async function loadExecApprovalModules() {
+  vi.resetModules();
+  ({ callGatewayTool } = await import("./tools/gateway.js"));
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+}
+
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
     params?: {
@@ -210,10 +217,7 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
-    vi.resetModules();
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    await loadExecApprovalModules();
   });
 
   afterEach(() => {
