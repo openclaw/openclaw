@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { SafeOpenError, readLocalFileSafely } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { type MediaKind, maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
@@ -55,10 +55,43 @@ function resolveWebMediaOptions(params: {
   };
 }
 
+function isWindowsNetworkPath(filePath: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const normalized = filePath.replace(/\//g, "\\");
+  return normalized.startsWith("\\\\?\\UNC\\") || normalized.startsWith("\\\\");
+}
+
+function assertNoWindowsNetworkPath(filePath: string, label = "Path"): void {
+  if (isWindowsNetworkPath(filePath)) {
+    throw new Error(`${label} cannot use Windows network paths: ${filePath}`);
+  }
+}
+
+function safeFileURLToPath(fileUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch {
+    throw new Error(`Invalid file:// URL: ${fileUrl}`);
+  }
+  if (parsed.protocol !== "file:") {
+    throw new Error(`Invalid file:// URL: ${fileUrl}`);
+  }
+  if (parsed.hostname !== "" && parsed.hostname.toLowerCase() !== "localhost") {
+    throw new Error(`file:// URLs with remote hosts are not allowed: ${fileUrl}`);
+  }
+  const filePath = fileURLToPath(parsed);
+  assertNoWindowsNetworkPath(filePath, "Local file URL");
+  return filePath;
+}
+
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
   | "invalid-file-url"
+  | "network-path-not-allowed"
   | "unsafe-bypass"
   | "not-found"
   | "invalid-path"
@@ -84,6 +117,13 @@ async function assertLocalMediaAllowed(
 ): Promise<void> {
   if (localRoots === "any") {
     return;
+  }
+  try {
+    assertNoWindowsNetworkPath(mediaPath, "Local media path");
+  } catch (err) {
+    throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
+      cause: err,
+    });
   }
   const roots = localRoots ?? getDefaultLocalRoots();
   // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
@@ -248,9 +288,9 @@ async function loadWebMediaInternal(
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
-      mediaUrl = fileURLToPath(mediaUrl);
-    } catch {
-      throw new LocalMediaAccessError("invalid-file-url", `Invalid file:// URL: ${mediaUrl}`);
+      mediaUrl = safeFileURLToPath(mediaUrl);
+    } catch (err) {
+      throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
 
@@ -340,6 +380,13 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  }
+  try {
+    assertNoWindowsNetworkPath(mediaUrl, "Local media path");
+  } catch (err) {
+    throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
+      cause: err,
+    });
   }
 
   if ((sandboxValidated || localRoots === "any") && !readFileOverride) {

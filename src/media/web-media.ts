@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
@@ -59,6 +59,7 @@ export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
   | "invalid-file-url"
+  | "network-path-not-allowed"
   | "unsafe-bypass"
   | "not-found"
   | "invalid-path"
@@ -84,6 +85,13 @@ async function assertLocalMediaAllowed(
 ): Promise<void> {
   if (localRoots === "any") {
     return;
+  }
+  try {
+    assertNoWindowsNetworkPath(mediaPath, "Local media path");
+  } catch (err) {
+    throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
+      cause: err,
+    });
   }
   const roots = localRoots ?? getDefaultLocalRoots();
   // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
@@ -248,9 +256,9 @@ async function loadWebMediaInternal(
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
-      mediaUrl = fileURLToPath(mediaUrl);
-    } catch {
-      throw new LocalMediaAccessError("invalid-file-url", `Invalid file:// URL: ${mediaUrl}`);
+      mediaUrl = safeFileURLToPath(mediaUrl);
+    } catch (err) {
+      throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
 
@@ -340,6 +348,13 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  }
+  try {
+    assertNoWindowsNetworkPath(mediaUrl, "Local media path");
+  } catch (err) {
+    throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
+      cause: err,
+    });
   }
 
   if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
