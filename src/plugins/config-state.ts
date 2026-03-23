@@ -72,7 +72,7 @@ const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "minimax-portal-auth": "minimax",
 };
 
-function normalizePluginId(id: string): string {
+export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
   return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
 }
