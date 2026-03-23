@@ -22,7 +22,7 @@ import { useToast } from "@/components/ui/custom/toast";
 import { Separator } from "@/components/ui/separator";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
-import { useChatStore, getMessageText, type SessionEntry } from "@/store/chat-store";
+import { useChatStore, type SessionEntry } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 import type { AgentRow } from "@/types/agents";
 
@@ -763,36 +763,34 @@ export function ChatHeader({
     }
   }, [activeSessionKey, isArchiving, sendRpc, loadSessions, switchSession, toast]);
 
-  // Copy chat transcript
+  // Copy session details to clipboard
   const handleCopyChat = useCallback(() => {
     const store = useChatStore.getState();
     const sessionKey = store.activeSessionKey;
-    const messages = sessionKey ? store.getSessionState(sessionKey).messages : [];
-    if (messages.length === 0) {
-      toast("No messages to copy", "error");
+    if (!sessionKey) {
+      toast("No active session", "error");
       return;
     }
-    const lines: string[] = [];
-    for (const msg of messages) {
-      if (msg.__openclaw?.kind) {
-        continue;
-      } // skip system dividers
-      const role =
-        msg.role === "user"
-          ? "USER"
-          : msg.role === "assistant"
-            ? "ASSISTANT"
-            : msg.role.toUpperCase();
-      const text = getMessageText(msg);
-      if (!text.trim()) {
-        continue;
-      }
-      const ts = msg.timestamp ? new Date(msg.timestamp).toISOString().slice(0, 19) : "";
-      lines.push(`[${ts}] ${role}:\n${text}\n`);
-    }
-    const transcript = lines.join("\n---\n\n");
-    navigator.clipboard.writeText(transcript).then(
-      () => toast("Chat copied to clipboard", "success"),
+    const sessionState = store.getSessionState(sessionKey);
+    const msgCount = sessionState.messages.length;
+    const firstMsg = sessionState.messages[0];
+    const lastMsg = sessionState.messages[msgCount - 1];
+    const startTime = firstMsg?.timestamp
+      ? new Date(firstMsg.timestamp).toISOString().slice(0, 19)
+      : "—";
+    const lastTime = lastMsg?.timestamp
+      ? new Date(lastMsg.timestamp).toISOString().slice(0, 19)
+      : "—";
+
+    const lines = [
+      `Session Key: ${sessionKey}`,
+      `Messages: ${msgCount}`,
+      `Started: ${startTime}`,
+      `Last Activity: ${lastTime}`,
+    ];
+
+    navigator.clipboard.writeText(lines.join("\n")).then(
+      () => toast("Session details copied", "success"),
       () => toast("Failed to copy", "error"),
     );
   }, [toast]);
@@ -1028,7 +1026,7 @@ export function ChatHeader({
                   <button
                     onClick={handleCopyChat}
                     className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors shrink-0 hover:bg-primary/15 hover:text-primary cursor-pointer"
-                    title="Copy full chat transcript to clipboard"
+                    title="Copy session details to clipboard"
                   >
                     <Copy className="h-3 w-3" />
                   </button>
