@@ -1,5 +1,5 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
+import { detectStaleMemoryAgentIndexes } from "../memory/stale-index-diagnostics.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 
 /**
  * Check whether memory search has a usable embedding provider.
@@ -28,6 +29,7 @@ export async function noteMemorySearchHealth(
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
+  let providerNoteMessage: string | null = null;
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
@@ -50,23 +52,18 @@ export async function noteMemorySearchHealth(
         // the model download or node-llama-cpp setup may have failed at runtime.
         if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
           const detail = opts.gatewayMemoryProbe.error?.trim();
-          note(
-            [
-              'Memory search provider is set to "local" and a model path is configured,',
-              "but the gateway reports local embeddings are not ready.",
-              detail ? `Gateway probe: ${detail}` : null,
-              "",
-              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-            "Memory search",
-          );
+          providerNoteMessage = [
+            'Memory search provider is set to "local" and a model path is configured,',
+            "but the gateway reports local embeddings are not ready.",
+            detail ? `Gateway probe: ${detail}` : null,
+            "",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ]
+            .filter(Boolean)
+            .join("\n");
         }
-        return;
-      }
-      note(
-        [
+      } else {
+        providerNoteMessage = [
           'Memory search provider is set to "local" but no local model file was found.',
           "",
           "Fix (pick one):",
@@ -74,85 +71,71 @@ export async function noteMemorySearchHealth(
           `- Switch to a remote provider: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider openai")}`,
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-        ].join("\n"),
-        "Memory search",
-      );
-      return;
-    }
-    // Remote provider — check for API key
-    if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
-      return;
-    }
-    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
-      note(
-        [
+        ].join("\n");
+      }
+    } else if (
+      !(hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir)))
+    ) {
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        providerNoteMessage = [
           `Memory search provider is set to "${resolved.provider}" but the API key was not found in the CLI environment.`,
           "The running gateway reports memory embeddings are ready for the default agent.",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-        ].join("\n"),
-        "Memory search",
-      );
-      return;
+        ].join("\n");
+      } else {
+        const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+        const envVar = providerEnvVar(resolved.provider);
+        providerNoteMessage = [
+          `Memory search provider is set to "${resolved.provider}" but no API key was found.`,
+          `Semantic recall will not work without a valid API key.`,
+          gatewayProbeWarning ? gatewayProbeWarning : null,
+          "",
+          "Fix (pick one):",
+          `- Set ${envVar} in your environment`,
+          `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
+          `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n");
+      }
     }
-    const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-    const envVar = providerEnvVar(resolved.provider);
-    note(
-      [
-        `Memory search provider is set to "${resolved.provider}" but no API key was found.`,
-        `Semantic recall will not work without a valid API key.`,
-        gatewayProbeWarning ? gatewayProbeWarning : null,
-        "",
-        "Fix (pick one):",
-        `- Set ${envVar} in your environment`,
-        `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-        `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
-        "",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].join("\n"),
-      "Memory search",
-    );
-    return;
-  }
-
-  // provider === "auto": check all providers in resolution order
-  if (hasLocalEmbeddings(resolved.local)) {
-    return;
-  }
-  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
-    if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
-      return;
+  } else if (!hasLocalEmbeddings(resolved.local)) {
+    for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
+      if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
+        break;
+      }
+      if (provider === "mistral") {
+        if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+          providerNoteMessage = [
+            'Memory search provider is set to "auto" but the API key was not found in the CLI environment.',
+            "The running gateway reports memory embeddings are ready for the default agent.",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ].join("\n");
+        } else {
+          const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+          providerNoteMessage = [
+            "Memory search is enabled but no embedding provider is configured.",
+            "Semantic recall will not work without an embedding provider.",
+            gatewayProbeWarning ? gatewayProbeWarning : null,
+            "",
+            "Fix (pick one):",
+            "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
+            `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
+            `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
+            `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
+            "",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ].join("\n");
+        }
+      }
     }
   }
 
-  if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
-    note(
-      [
-        'Memory search provider is set to "auto" but the API key was not found in the CLI environment.',
-        "The running gateway reports memory embeddings are ready for the default agent.",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].join("\n"),
-      "Memory search",
-    );
-    return;
+  if (providerNoteMessage) {
+    note(providerNoteMessage, "Memory search");
   }
-  const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
 
-  note(
-    [
-      "Memory search is enabled but no embedding provider is configured.",
-      "Semantic recall will not work without an embedding provider.",
-      gatewayProbeWarning ? gatewayProbeWarning : null,
-      "",
-      "Fix (pick one):",
-      "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
-      `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
-      `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
-      "",
-      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-    ].join("\n"),
-    "Memory search",
-  );
+  await noteStaleMemoryIndexHealth(cfg);
 }
 
 /**
@@ -230,4 +213,31 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+async function noteStaleMemoryIndexHealth(cfg: OpenClawConfig): Promise<void> {
+  const configuredAgentIds = listAgentIds(cfg);
+  if (configuredAgentIds.length === 0) {
+    return;
+  }
+  const staleIndexes = await detectStaleMemoryAgentIndexes(cfg);
+  if (staleIndexes.length === 0) {
+    return;
+  }
+
+  const lines = [
+    "One or more agent memory indexes are stale and missing current workspace files.",
+    ...staleIndexes.map((entry) => {
+      const examples = entry.missingPaths.slice(0, 3).join(", ");
+      const exampleSuffix = entry.missingPaths.length > 0 ? `; missing: ${examples}` : "";
+      return `- ${entry.agentId}: ${entry.staleCount} file(s) missing from ${shortenHomePath(entry.dbPath)}${exampleSuffix}`;
+    }),
+    "",
+    "Fix:",
+    ...staleIndexes.map(
+      (entry) => `- ${formatCliCommand(`openclaw memory index --agent ${entry.agentId}`)}`,
+    ),
+  ];
+
+  note(lines.join("\n"), "Memory search");
 }
