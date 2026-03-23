@@ -9,9 +9,23 @@ import {
   DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION,
   LEGACY_DELEGATED_EXECUTION_TRANSPORT,
   canonicalizeOperatorExecutionTransport,
-  type OperatorBlockerCode,
 } from "./contracts.js";
-import { resolveProjectOpsCommandTarget, type ProjectOpsTargetMode } from "./project-ops-target.js";
+
+type OperatorBlockerCode =
+  | "auth_failed"
+  | "delegate_unavailable"
+  | "dispatch_error"
+  | "dispatch_failed"
+  | "missing_input"
+  | "no_target"
+  | "stale_runtime"
+  | "unmapped_task_type"
+  | "verification_missing";
+import {
+  type ProjectOpsCommand,
+  resolveProjectOpsCommandTarget,
+  type ProjectOpsTargetMode,
+} from "./project-ops-target.js";
 import { resolveOperatorRuntimeFreshness } from "./runtime-freshness.js";
 import { getOperatorTask, patchOperatorTask, submitOperatorTask } from "./task-store.js";
 import type { OperatorTaskRecord } from "./task-store.js";
@@ -510,9 +524,8 @@ function buildDebPayload(task: OperatorTaskRecord): {
 } {
   const inputs = asRecord(task.envelope.inputs) ?? {};
   const team = getResolvedOperatorTaskTeam(task.envelope);
-  const command =
-    resolveExplicitDebCommand(inputs) ??
-    (shouldDispatchPawAndOrderTask(task, team, inputs) ? "task" : "update");
+  const command = (resolveExplicitDebCommand(inputs) ??
+    (shouldDispatchPawAndOrderTask(task, team, inputs) ? "task" : "update")) as ProjectOpsCommand;
   const projectOpsTarget = resolveProjectOpsCommandTarget(command);
   if (!projectOpsTarget) {
     throw new Error("project-ops transport not configured");

@@ -62,6 +62,7 @@ describe("resolveConfigWriteRestart", () => {
       mode,
       actor: {
         actor: "gateway-client",
+        connId: "conn-1",
         deviceId: "device-1",
         clientIp: "127.0.0.1",
       },

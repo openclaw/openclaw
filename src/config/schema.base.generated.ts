@@ -2346,6 +2346,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  triggerTokens: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  targetTokens: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   reserveTokens: {
                     type: "integer",
                     minimum: 0,
@@ -2823,6 +2833,59 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  escalation: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      moderateModel: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              primary: {
+                                type: "string",
+                              },
+                              fallbacks: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      complexModel: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              primary: {
+                                type: "string",
+                              },
+                              fallbacks: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   thinking: {
                     type: "string",
                   },
@@ -3035,6 +3098,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                       },
                       binds: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      allowedSourceRoots: {
                         type: "array",
                         items: {
                           type: "string",
@@ -4025,8 +4094,66 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                       ],
                     },
+                    escalation: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        moderateModel: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                primary: {
+                                  type: "string",
+                                },
+                                fallbacks: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                        complexModel: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                primary: {
+                                  type: "string",
+                                },
+                                fallbacks: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                     thinking: {
                       type: "string",
+                    },
+                    announceTimeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
                     },
                   },
                   additionalProperties: false,
@@ -4227,6 +4354,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                         },
                         binds: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        allowedSourceRoots: {
                           type: "array",
                           items: {
                             type: "string",
@@ -4563,9 +4696,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: {},
                 },
+                skipBootstrap: {
+                  type: "boolean",
+                },
+                bootstrapMaxChars: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                bootstrapTotalMaxChars: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
                 tools: {
                   type: "object",
                   properties: {
+                    maxResponseTokens: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
                     profile: {
                       anyOf: [
                         {
@@ -4745,6 +4896,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   type: "string",
                                 },
                               },
+                              allowedFirstPositionals: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
                               deniedFlags: {
                                 type: "array",
                                 items: {
@@ -4806,6 +4963,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "object",
                       properties: {
                         workspaceOnly: {
+                          type: "boolean",
+                        },
+                        readWorkspaceOnly: {
+                          type: "boolean",
+                        },
+                        writeWorkspaceOnly: {
+                          type: "boolean",
+                        },
+                        editWorkspaceOnly: {
                           type: "boolean",
                         },
                       },
@@ -7133,6 +7299,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                 },
               },
+              sessionScope: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                  {
+                    type: "string",
+                    const: "main_only",
+                  },
+                ],
+              },
             },
             additionalProperties: false,
           },
@@ -7227,6 +7405,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                       },
                     },
+                    allowedFirstPositionals: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
                     deniedFlags: {
                       type: "array",
                       items: {
@@ -7283,6 +7467,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             type: "object",
             properties: {
               workspaceOnly: {
+                type: "boolean",
+              },
+              readWorkspaceOnly: {
+                type: "boolean",
+              },
+              writeWorkspaceOnly: {
+                type: "boolean",
+              },
+              editWorkspaceOnly: {
                 type: "boolean",
               },
             },
@@ -12699,9 +12892,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
       tags: ["tools"],
     },
+    "tools.fs.readWorkspaceOnly": {
+      label: "Workspace-only Read Tool",
+      help: "Restrict only the read tool to the workspace directory. Use this when an agent needs broader read access than write/edit or vice versa.",
+      tags: ["tools"],
+    },
+    "tools.fs.writeWorkspaceOnly": {
+      label: "Workspace-only Write Tool",
+      help: "Restrict only the write tool to the workspace directory. Use this when an agent may read broadly but should only create files in its own workspace.",
+      tags: ["tools"],
+    },
+    "tools.fs.editWorkspaceOnly": {
+      label: "Workspace-only Edit Tool",
+      help: "Restrict only the edit tool to the workspace directory. Use this when an agent may read broadly but should only modify files in its own workspace.",
+      tags: ["tools"],
+    },
     "tools.sessions.visibility": {
       label: "Session Tools Visibility",
-      help: 'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+      help: 'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent and may be further limited by tools.agentToAgent.sessionScope).',
       tags: ["storage", "tools"],
     },
     "tools.exec.notifyOnExit": {
@@ -12753,6 +12961,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Agent-to-Agent Target Allowlist",
       help: "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
       tags: ["access", "tools"],
+    },
+    "tools.agentToAgent.sessionScope": {
+      label: "Agent-to-Agent Session Scope",
+      help: 'Optional cross-agent session-target restriction for session tools: "all" preserves current behavior, while "main_only" limits cross-agent access to each allowed agent\'s main session only.',
+      tags: ["storage", "tools"],
     },
     "tools.elevated": {
       label: "Elevated Tool Access",
@@ -13309,14 +13522,49 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.skipBootstrap": {
+      label: "Skip Bootstrap",
+      help: "When true, skips automatic creation of workspace bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md) when the workspace is first prepared.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.skipBootstrap": {
+      label: "Skip Bootstrap",
+      help: "Per-agent override: when true, skips bootstrap file seeding for this agent's workspace and sandbox copy (overrides agents.defaults.skipBootstrap).",
+      tags: ["advanced"],
+    },
+    "agents.list[].skipBootstrap": {
+      label: "Skip Bootstrap",
+      help: "Per-agent override: when true, skips bootstrap file seeding for this agent's workspace and sandbox copy (overrides agents.defaults.skipBootstrap).",
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
       tags: ["performance"],
     },
+    "agents.list.*.bootstrapMaxChars": {
+      label: "Bootstrap Max Chars",
+      help: "Per-agent override for max characters per injected workspace bootstrap file before truncation (overrides agents.defaults.bootstrapMaxChars).",
+      tags: ["performance"],
+    },
+    "agents.list[].bootstrapMaxChars": {
+      label: "Bootstrap Max Chars",
+      help: "Per-agent override for max characters per injected workspace bootstrap file before truncation (overrides agents.defaults.bootstrapMaxChars).",
+      tags: ["performance"],
+    },
     "agents.defaults.bootstrapTotalMaxChars": {
       label: "Bootstrap Total Max Chars",
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
+      tags: ["performance"],
+    },
+    "agents.list.*.bootstrapTotalMaxChars": {
+      label: "Bootstrap Total Max Chars",
+      help: "Per-agent override for max total characters across all injected workspace bootstrap files (overrides agents.defaults.bootstrapTotalMaxChars).",
+      tags: ["performance"],
+    },
+    "agents.list[].bootstrapTotalMaxChars": {
+      label: "Bootstrap Total Max Chars",
+      help: "Per-agent override for max total characters across all injected workspace bootstrap files (overrides agents.defaults.bootstrapTotalMaxChars).",
       tags: ["performance"],
     },
     "agents.defaults.bootstrapPromptTruncationWarning": {
@@ -13337,6 +13585,46 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.envelopeElapsed": {
       label: "Envelope Elapsed",
       help: 'Include elapsed time in message envelopes ("on" or "off").',
+      tags: ["advanced"],
+    },
+    "agents.defaults.subagents.escalation": {
+      label: "Subagent Escalation Ladder",
+      help: "Optional triage-first model escalation ladder for run-mode subagent spawns. Enable this when most delegated work can start cheap but a subset should be re-routed to stronger models after a hard triage decision.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.subagents.escalation.enabled": {
+      label: "Subagent Escalation Enabled",
+      help: "Enables the triage-first subagent escalation ladder for run-mode sessions_spawn calls that do not pin a model explicitly. Keep this off unless you want cheap-first routing with an automatic respawn handoff path.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.subagents.escalation.moderateModel": {
+      label: "Subagent Moderate Escalation Model",
+      help: "Model used for the moderate escalation tier after triage requests a stronger worker. This should be a clear step up from agents.defaults.subagents.model and is required when escalation.enabled is true.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.subagents.escalation.complexModel": {
+      label: "Subagent Complex Escalation Model",
+      help: "Model used for the complex escalation tier after triage classifies the task as hardest-tier work. Pick your strongest worker model here and keep it distinct from the cheap triage default.",
+      tags: ["advanced"],
+    },
+    "agents.list[].subagents.escalation": {
+      label: "Agent Subagent Escalation Ladder",
+      help: "Per-agent override for the subagent triage escalation ladder. Use this when a specific target agent needs a different cheap-to-strong routing ladder than the global defaults.",
+      tags: ["advanced"],
+    },
+    "agents.list[].subagents.escalation.enabled": {
+      label: "Agent Subagent Escalation Enabled",
+      help: "Per-agent enable switch for the subagent triage escalation ladder. When set, this agent's run-mode subagent spawns use its own escalation ladder instead of only the shared default behavior.",
+      tags: ["advanced"],
+    },
+    "agents.list[].subagents.escalation.moderateModel": {
+      label: "Agent Moderate Escalation Model",
+      help: "Per-agent moderate-tier worker model for escalated subagent tasks. Use this when one agent's medium-complex delegation needs a different stronger model than the defaults ladder.",
+      tags: ["advanced"],
+    },
+    "agents.list[].subagents.escalation.complexModel": {
+      label: "Agent Complex Escalation Model",
+      help: "Per-agent complex-tier worker model for escalated subagent tasks. Use this when one agent's hardest delegated work should route to a different top-tier model than the defaults ladder.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch": {
@@ -14025,6 +14313,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Compaction Mode",
       help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.triggerTokens": {
+      label: "Compaction Trigger Tokens",
+      help: "Model-aware full-context token threshold that should trigger auto-compaction after a successful turn. Use this when you want a literal token trigger instead of setting reserveTokens per model; OpenClaw derives Pi reserveTokens from the active model window and still enforces reserveTokensFloor.",
+      tags: ["security", "auth"],
+    },
+    "agents.defaults.compaction.targetTokens": {
+      label: "Compaction Target Tokens",
+      help: "Strict-best-effort full-context token budget OpenClaw targets after compaction. Use this when you want post-compaction context to stay near a literal token budget; it overrides keepRecentTokens by recomputing the retained-history budget from live context usage when possible.",
+      tags: ["security", "auth"],
     },
     "agents.defaults.compaction.reserveTokens": {
       label: "Compaction Reserve Tokens",

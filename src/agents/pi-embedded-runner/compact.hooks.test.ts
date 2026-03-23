@@ -1,17 +1,13 @@
-/**
- * Compaction hooks test suite. If the Vitest worker hangs after startup on your host:
- * - Run in isolation: pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts
- * - Or with low profile: OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts
- * - Or single fork: pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts --pool forks --poolOptions.forks.singleFork
- */
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-let onSessionTranscriptUpdate!: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
-
-const {
-  hookRunner,
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
+import {
+  contextEngineCompactMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
+  hookRunner,
   loadCompactHooksHarness,
   resolveContextEngineMock,
   resolveMemorySearchConfigMock,
@@ -23,335 +19,12 @@ const {
   sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
-  contextEngineCompactMock,
-  validateAnthropicTurnsMock,
-  resolveTranscriptPolicyMock,
-  createOpenClawCodingToolsMock,
-} = vi.hoisted(() => {
-  const contextEngineCompactMock = vi.fn(async () => ({
-    ok: true as boolean,
-    compacted: true as boolean,
-    reason: undefined as string | undefined,
-    result: { summary: "engine-summary", tokensAfter: 50 } as
-      | { summary: string; tokensAfter: number }
-      | undefined,
-  }));
+} from "./compact.hooks.harness.js";
 
-  return {
-    hookRunner: {
-      hasHooks: vi.fn(),
-      runBeforeCompaction: vi.fn(),
-      runAfterCompaction: vi.fn(),
-    },
-    ensureRuntimePluginsLoaded: vi.fn(),
-    resolveContextEngineMock: vi.fn(async () => ({
-      info: { ownsCompaction: true },
-      compact: contextEngineCompactMock,
-    })),
-    resolveModelMock: vi.fn(
-      (_provider?: string, _modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
-        model: { provider: "openai", api: "responses", id: "fake", input: [] },
-        error: null,
-        authStorage: { setRuntimeApiKey: vi.fn() },
-        modelRegistry: {},
-      }),
-    ),
-    sessionCompactImpl: vi.fn(async () => ({
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      details: { ok: true },
-    })),
-    triggerInternalHook: vi.fn(),
-    sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
-    contextEngineCompactMock,
-    validateAnthropicTurnsMock: vi.fn((messages: unknown[]) => messages),
-    resolveTranscriptPolicyMock: vi.fn(() => ({
-      allowSyntheticToolResults: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-    })),
-    getMemorySearchManagerMock: vi.fn(async () => ({
-      manager: {
-        sync: vi.fn(async () => {}),
-      },
-    })),
-    resolveMemorySearchConfigMock: vi.fn(() => ({
-      sources: ["sessions"],
-      sync: {
-        sessions: {
-          postCompactionForce: true,
-        },
-      },
-    })),
-    resolveSessionAgentIdMock: vi.fn(() => "main"),
-    estimateTokensMock: vi.fn((_message?: unknown) => 10),
-    sessionAbortCompactionMock: vi.fn(),
-    createOpenClawCodingToolsMock: vi.fn(() => []),
-  };
-});
-
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookRunner,
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded,
-}));
-
-vi.mock("../../hooks/internal-hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
-    "../../hooks/internal-hooks.js",
-  );
-  return {
-    ...actual,
-    triggerInternalHook,
-  };
-});
-
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: vi.fn(),
-  getOAuthProviders: vi.fn(() => []),
-}));
-
-vi.mock("@mariozechner/pi-coding-agent", () => {
-  return {
-    AuthStorage: class AuthStorage {},
-    ModelRegistry: class ModelRegistry {},
-    createAgentSession: vi.fn(async () => {
-      const session = {
-        sessionId: "session-1",
-        messages: [
-          { role: "user", content: "hello", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-            timestamp: 3,
-          },
-        ],
-        agent: {
-          replaceMessages: vi.fn((messages: unknown[]) => {
-            session.messages = [...(messages as typeof session.messages)];
-          }),
-          streamFn: vi.fn(),
-        },
-        compact: vi.fn(async () => {
-          // simulate compaction trimming to a single message
-          session.messages.splice(1);
-          return await sessionCompactImpl();
-        }),
-        abortCompaction: sessionAbortCompactionMock,
-        dispose: vi.fn(),
-      };
-      return { session };
-    }),
-    SessionManager: {
-      open: vi.fn(() => ({})),
-    },
-    SettingsManager: {
-      create: vi.fn(() => ({})),
-    },
-    estimateTokens: estimateTokensMock,
-  };
-});
-
-vi.mock("../session-tool-result-guard-wrapper.js", () => ({
-  guardSessionManager: vi.fn(() => ({
-    flushPendingToolResults: vi.fn(),
-  })),
-}));
-
-vi.mock("../pi-settings.js", () => ({
-  ensurePiCompactionReserveTokens: vi.fn(),
-  resolveCompactionReserveTokensFloor: vi.fn(() => 0),
-}));
-
-vi.mock("../models-config.js", () => ({
-  ensureOpenClawModelsJson: vi.fn(async () => {}),
-}));
-
-vi.mock("../model-auth.js", () => ({
-  applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
-  getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
-  resolveModelAuthMode: vi.fn(() => "env"),
-}));
-
-vi.mock("../sandbox.js", () => ({
-  resolveSandboxContext: vi.fn(async () => null),
-}));
-
-vi.mock("../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: vi.fn(async () => {}),
-}));
-
-vi.mock("../session-write-lock.js", () => ({
-  acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
-  resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-}));
-
-vi.mock("../../context-engine/index.js", () => ({
-  ensureContextEnginesInitialized: vi.fn(),
-  resolveContextEngine: resolveContextEngineMock,
-}));
-
-vi.mock("../../process/command-queue.js", () => ({
-  enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
-}));
-
-vi.mock("./lanes.js", () => ({
-  resolveSessionLane: vi.fn(() => "test-session-lane"),
-  resolveGlobalLane: vi.fn(() => "test-global-lane"),
-}));
-
-vi.mock("../context-window-guard.js", () => ({
-  resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
-}));
-
-vi.mock("../bootstrap-files.js", () => ({
-  makeBootstrapWarn: vi.fn(() => () => {}),
-  resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
-}));
-
-vi.mock("../docs-path.js", () => ({
-  resolveOpenClawDocsPath: vi.fn(async () => undefined),
-}));
-
-vi.mock("../channel-tools.js", () => ({
-  listChannelSupportedActions: vi.fn(() => undefined),
-  resolveChannelMessageToolHints: vi.fn(() => undefined),
-}));
-
-vi.mock("../pi-tools.js", () => ({
-  createOpenClawCodingTools: createOpenClawCodingToolsMock,
-}));
-
-vi.mock("./google.js", () => ({
-  logToolSchemasForGoogle: vi.fn(),
-  sanitizeSessionHistory: sanitizeSessionHistoryMock,
-  sanitizeToolsForGoogle: vi.fn(({ tools }: { tools: unknown[] }) => tools),
-}));
-
-vi.mock("./tool-split.js", () => ({
-  splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
-}));
-
-vi.mock("../transcript-policy.js", () => ({
-  resolveTranscriptPolicy: resolveTranscriptPolicyMock,
-}));
-
-vi.mock("./extensions.js", () => ({
-  buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
-}));
-
-vi.mock("./history.js", () => ({
-  getDmHistoryLimitFromSessionKey: vi.fn(() => undefined),
-  limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
-}));
-
-vi.mock("../skills.js", () => ({
-  applySkillEnvOverrides: vi.fn(() => () => {}),
-  applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
-  resolveSkillsPromptForRun: vi.fn(() => undefined),
-}));
-
-vi.mock("../agent-paths.js", () => ({
-  resolveOpenClawAgentDir: vi.fn(() => "/tmp"),
-}));
-
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: resolveSessionAgentIdMock,
-  resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
-}));
-
-vi.mock("../memory-search.js", () => ({
-  resolveMemorySearchConfig: resolveMemorySearchConfigMock,
-}));
-
-vi.mock("../../memory/index.js", () => ({
-  getMemorySearchManager: getMemorySearchManagerMock,
-}));
-
-vi.mock("../date-time.js", () => ({
-  formatUserTime: vi.fn(() => ""),
-  resolveUserTimeFormat: vi.fn(() => ""),
-  resolveUserTimezone: vi.fn(() => ""),
-}));
-
-vi.mock("../defaults.js", () => ({
-  DEFAULT_MODEL: "fake-model",
-  DEFAULT_PROVIDER: "openai",
-  DEFAULT_CONTEXT_TOKENS: 128_000,
-}));
-
-vi.mock("../utils.js", () => ({
-  resolveUserPath: vi.fn((p: string) => p),
-}));
-
-vi.mock("../../infra/machine-name.js", () => ({
-  getMachineDisplayName: vi.fn(async () => "machine"),
-}));
-
-vi.mock("../../config/channel-capabilities.js", () => ({
-  resolveChannelCapabilities: vi.fn(() => undefined),
-}));
-
-vi.mock("../../utils/message-channel.js", () => ({
-  INTERNAL_MESSAGE_CHANNEL: "webchat",
-  normalizeMessageChannel: vi.fn(() => undefined),
-}));
-
-vi.mock("../pi-embedded-helpers.js", () => ({
-  ensureSessionHeader: vi.fn(async () => {}),
-  validateAnthropicTurns: validateAnthropicTurnsMock,
-  validateGeminiTurns: vi.fn((m: unknown[]) => m),
-}));
-
-vi.mock("../pi-project-settings.js", () => ({
-  createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
-    getGlobalSettings: vi.fn(() => ({})),
-  })),
-}));
-
-vi.mock("./sandbox-info.js", () => ({
-  buildEmbeddedSandboxInfo: vi.fn(() => undefined),
-}));
-
-vi.mock("./model.js", () => ({
-  buildModelAliasLines: vi.fn(() => []),
-  resolveModel: resolveModelMock,
-  resolveModelAsync: vi.fn(
-    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
-      resolveModelMock(provider, modelId, agentDir, cfg),
-  ),
-}));
-
-vi.mock("./session-manager-cache.js", () => ({
-  prewarmSessionFile: vi.fn(async () => {}),
-  trackSessionManagerAccess: vi.fn(),
-}));
-
-vi.mock("./system-prompt.js", () => ({
-  applySystemPromptOverrideToSession: vi.fn(),
-  buildEmbeddedSystemPrompt: vi.fn(() => ""),
-  createSystemPromptOverride: vi.fn(() => () => ""),
-}));
-
-vi.mock("./utils.js", () => ({
-  describeUnknownError: vi.fn((err: unknown) => String(err)),
-  mapThinkingLevel: vi.fn(() => "off"),
-  resolveExecToolDefaults: vi.fn(() => undefined),
-}));
-
-import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
-import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-let compactEmbeddedPiSessionDirect!: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
-let compactEmbeddedPiSession!: typeof import("./compact.js").compactEmbeddedPiSession;
-import { log } from "./logger.js";
+let compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
+let compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+let compactTesting: typeof import("./compact.js").__testing;
+let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -435,8 +108,6 @@ beforeEach(() => {
 });
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
-  let embeddedLogWarn: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     ensureRuntimePluginsLoaded.mockReset();
     triggerInternalHook.mockClear();
@@ -454,14 +125,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     sanitizeSessionHistoryMock.mockReset();
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
-    });
-    validateAnthropicTurnsMock.mockReset();
-    validateAnthropicTurnsMock.mockImplementation((messages: unknown[]) => messages);
-    resolveTranscriptPolicyMock.mockReset();
-    resolveTranscriptPolicyMock.mockReturnValue({
-      allowSyntheticToolResults: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
     });
     getMemorySearchManagerMock.mockReset();
     getMemorySearchManagerMock.mockResolvedValue({
@@ -482,8 +145,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
-    embeddedLogWarn?.mockRestore();
-    embeddedLogWarn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     sessionAbortCompactionMock.mockReset();
     sessionMessages.splice(
       0,
@@ -501,19 +162,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     );
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
-
-  afterAll(() => {
-    vi.restoreAllMocks();
-    vi.clearAllMocks();
-  });
-
-  async function _runDirectCompaction(customInstructions = TEST_CUSTOM_INSTRUCTIONS) {
-    return await compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        customInstructions,
-      }),
-    );
-  }
 
   it("bootstraps runtime plugins with the resolved workspace", async () => {
     // This assertion only cares about bootstrap wiring, so stop before the
@@ -977,89 +625,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-  });
-
-  it("ignores embedding-like compaction model overrides and falls back to the session model", async () => {
-    await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              model: "ollama/nomic-embed-text",
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(resolveModelMock).toHaveBeenCalledWith(
-      "anthropic",
-      "claude-opus-4-6",
-      expect.any(String),
-      expect.objectContaining({
-        agents: {
-          defaults: {
-            compaction: {
-              model: "ollama/nomic-embed-text",
-            },
-          },
-        },
-      }),
-    );
-    expect(embeddedLogWarn).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring embedding-like compaction model override"),
-    );
-  });
-
-  it("preserves the latest Anthropic replay-protected assistant turn during compaction validation", async () => {
-    resolveModelMock.mockReturnValue({
-      model: {
-        provider: "anthropic",
-        api: "anthropic-messages",
-        id: "claude-sonnet-4-6",
-        input: [],
-      },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    });
-    resolveTranscriptPolicyMock.mockReturnValue({
-      allowSyntheticToolResults: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      repairToolUseResultPairing: false,
-    });
-    sanitizeSessionHistoryMock.mockResolvedValue([
-      { role: "user", content: "hello", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "final" },
-          { type: "redacted_thinking", data: "opaque" },
-        ],
-        timestamp: 2,
-      },
-    ]);
-
-    await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-    });
-
-    expect(validateAnthropicTurnsMock).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        preserveLatestAssistantMessage: true,
-      }),
-    );
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

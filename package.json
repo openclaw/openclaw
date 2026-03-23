@@ -868,8 +868,7 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
-      "@discordjs/opus",
-      "koffi"
+      "@tloncorp/tlon-skill"
     ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {
@@ -877,9 +876,6 @@
           "strip-ansi": "^7.2.0"
         }
       }
-    },
-    "ignoredBuiltDependencies": [
-      "@tloncorp/tlon-skill"
-    ]
+    }
   }
 }

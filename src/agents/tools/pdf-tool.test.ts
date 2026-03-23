@@ -398,7 +398,11 @@ describe("createPdfTool", () => {
             config: cfg,
             agentDir,
             workspaceDir,
-            fsPolicy: { workspaceOnly: true },
+            fsPolicy: {
+              readWorkspaceOnly: true,
+              writeWorkspaceOnly: true,
+              editWorkspaceOnly: true,
+            },
           }),
         );
 

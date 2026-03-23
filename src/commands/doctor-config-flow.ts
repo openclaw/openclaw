@@ -3,6 +3,9 @@ import path from "node:path";
 import { collectSubagentAllowlistAudit } from "../agents/subagent-target-readiness.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
@@ -49,10 +52,25 @@ import {
   isZalouserMutableGroupEntry,
 } from "../security/mutable-allowlist-detectors.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import { resolveHomeDir } from "../utils.js";
+import {
+  formatConfigPath,
+  noteOpencodeProviderOverrides,
+  resolveConfigPathTarget,
+} from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { runMatrixDoctorSequence } from "./doctor/providers/matrix.js";
+import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
+import {
+  applyLegacyCompatibilityStep,
+  applyUnknownConfigKeyStep,
+} from "./doctor/shared/config-flow-steps.js";
+import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
+import { collectMutableAllowlistWarnings } from "./doctor/shared/mutable-allowlist.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -2051,7 +2069,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
   if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+    const lines = unknownStep.removed.map((p: string) => `- ${p}`).join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 

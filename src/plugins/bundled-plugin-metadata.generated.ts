@@ -29,6 +29,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cwd: {
             type: "string",
           },
+          authPolicy: {
+            type: "string",
+            enum: ["skip", "fail"],
+          },
           permissionMode: {
             type: "string",
             enum: ["approve-all", "approve-reads", "deny-all"],
@@ -88,11 +92,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         expectedVersion: {
           label: "Expected acpx Version",
-          help: 'Exact version to enforce or "any" to skip strict version matching.',
+          help: 'Exact version to enforce (for example 0.2.0) or "any" to skip strict version matching.',
         },
         cwd: {
           label: "Default Working Directory",
           help: "Default cwd for ACP session operations when not set per session.",
+        },
+        authPolicy: {
+          label: "Auth Policy",
+          help: "How acpx should behave when the target ACP adapter requires authentication and no matching credentials are configured.",
         },
         permissionMode: {
           label: "Permission Mode",

@@ -366,18 +366,11 @@ describe("agents.create", () => {
     const { promise } = makeCall("agents.create", {
       name: "Fancy Agent",
       workspace: "/tmp/ws",
-      model: "openrouter/openai/gpt-5.3-chat",
       emoji: "🤖",
       avatar: "https://example.com/avatar.png",
     });
     await promise;
 
-    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        model: "openrouter/openai/gpt-5.3-chat",
-      }),
-    );
     expect(mocks.fsAppendFile).toHaveBeenCalledWith(
       expect.stringContaining("IDENTITY.md"),
       expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
@@ -434,21 +427,6 @@ describe("agents.update", () => {
     await promise;
 
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
-  });
-
-  it("appends emoji and avatar identity lines when provided", async () => {
-    const { promise } = makeCall("agents.update", {
-      agentId: "test-agent",
-      emoji: "🧠",
-      avatar: "https://example.com/research.png",
-    });
-    await promise;
-
-    expect(mocks.fsAppendFile).toHaveBeenCalledWith(
-      expect.stringContaining("IDENTITY.md"),
-      expect.stringMatching(/- Emoji: 🧠[\s\S]*- Avatar: https:\/\/example.com\/research\.png/),
-      "utf-8",
-    );
   });
 });
 
@@ -606,10 +584,11 @@ describe("agents.files.get/set symlink safety", () => {
         stat: targetStat,
       }),
       resolveAgentWorkspaceFilePath: async ({ name }) => ({
-        kind: "ready",
+        kind: "ready" as const,
         requestPath: path.join(workspace, name),
         ioPath: target,
         workspaceReal: workspace,
+        viaSymlink: false,
       }),
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {

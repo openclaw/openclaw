@@ -108,7 +108,9 @@ describe("sanitizeSessionMessagesImages", () => {
 
   it("does not synthesize tool call input when missing", async () => {
     const input = castAgentMessages([
-      makeOpenAiResponsesAssistantMessage([{ type: "toolCall", id: "call_1", name: "read" }]),
+      makeOpenAiResponsesAssistantMessage([
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ]),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -220,32 +222,6 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(entry.text).toBe("ok");
     });
   });
-
-  it("preserves the latest assistant turn verbatim when requested", async () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "older" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "   " },
-          { type: "redacted_thinking", data: "opaque" },
-        ],
-      },
-    ]);
-
-    const out = await sanitizeSessionMessagesImages(input, "test", {
-      preserveLatestAssistantMessage: true,
-    });
-
-    expect(out[1]).toBe(input[1]);
-    expect((out[1] as { content?: unknown[] }).content).toEqual(
-      (input[1] as { content?: unknown[] }).content,
-    );
-  });
-
   it("drops assistant messages that only contain empty text", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,

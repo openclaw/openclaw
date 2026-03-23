@@ -222,10 +222,10 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual(mockMessages);
   });
 
-  it("preserves native tool call ids for Anthropic APIs", async () => {
+  it("passes simple user-only history through for Anthropic APIs", async () => {
     setNonGoogleModelApi();
 
-    await sanitizeSessionHistory({
+    const result = await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
@@ -233,73 +233,10 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: false }),
-    );
+    expect(result).toEqual(mockMessages);
   });
 
-  it("preserves the latest assistant replay block for Anthropic history sanitization", async () => {
-    setNonGoogleModelApi();
-
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "final" },
-          { type: "redacted_thinking", data: "opaque" },
-        ],
-      },
-    ]);
-
-    await sanitizeSessionHistory({
-      messages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      messages,
-      "session:history",
-      expect.objectContaining({
-        preserveLatestAssistantMessage: true,
-      }),
-    );
-  });
-
-  it("keeps final replay-protected assistant message immutable through full Anthropic sanitization", async () => {
-    setNonGoogleModelApi();
-
-    const latestContent = [
-      { type: "thinking", thinking: "reasoning", thinkingSignature: "sig" },
-      { type: "text", text: "final" },
-      { type: "redacted_thinking", data: "opaque" },
-    ];
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      { role: "assistant", content: latestContent },
-    ]);
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    const finalAssistant = result.findLast((m) => m.role === "assistant");
-    expect(finalAssistant).toBeDefined();
-    expect(JSON.stringify(finalAssistant?.content)).toBe(JSON.stringify(latestContent));
-  });
-
-  it("does not sanitize tool call ids for openai-responses", async () => {
+  it("passes simple user-only history through for openai-responses", async () => {
     setNonGoogleModelApi();
 
     const result = await sanitizeWithOpenAIResponses({

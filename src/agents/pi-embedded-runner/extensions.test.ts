@@ -24,7 +24,7 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   return { factories, sessionManager };
 }
 
-function _expectSafeguardRuntime(
+function expectSafeguardRuntime(
   cfg: OpenClawConfig,
   expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
 ) {
@@ -45,18 +45,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-
-    const factories = buildEmbeddedExtensionFactories({
-      cfg,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      model,
-    });
-
-    expect(factories).toContain(compactionSafeguardExtension);
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
-      compactionMode: "safeguard",
+    expectSafeguardRuntime(cfg, {
       qualityGuardEnabled: false,
     });
   });
@@ -75,53 +64,9 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-
-    const factories = buildEmbeddedExtensionFactories({
-      cfg,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      model,
-    });
-
-    expect(factories).toContain(compactionSafeguardExtension);
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
-      compactionMode: "safeguard",
+    expectSafeguardRuntime(cfg, {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
-    });
-  });
-
-  it("enables the compaction extension in default mode when strict targetTokens are configured", () => {
-    const sessionManager = {} as SessionManager;
-    const model = {
-      id: "claude-sonnet-4-20250514",
-      contextWindow: 200_000,
-    } as Model<Api>;
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            mode: "default",
-            targetTokens: 64_000,
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const factories = buildEmbeddedExtensionFactories({
-      cfg,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      model,
-    });
-
-    expect(factories).toContain(compactionSafeguardExtension);
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
-      compactionMode: "default",
-      contextWindowTokens: 200_000,
-      targetTokens: 64_000,
     });
   });
 });

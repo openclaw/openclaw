@@ -1024,7 +1024,7 @@
           "exportName": "ToolPolicySchema",
           "kind": "const",
           "source": {
-            "line": 253,
+            "line": 313,
             "path": "src/config/zod-schema.agent-runtime.ts"
           }
         }
@@ -3378,7 +3378,7 @@
           "exportName": "GatewayRequestHandlerOptions",
           "kind": "type",
           "source": {
-            "line": 112,
+            "line": 113,
             "path": "src/gateway/server-methods/types.ts"
           }
         },

@@ -282,8 +282,11 @@ export function submitOperatorTask(input: unknown): {
     return { created: false, task: normalizeTaskRecord(existing) };
   }
   const created = buildInitialTaskRecord(envelope, {
-    maxRetries: inputRecord?.maxRetries ?? inputRecord?.max_retries,
-    retryAfterMs: inputRecord?.retryAfterMs ?? inputRecord?.retry_after_ms,
+    maxRetries: (inputRecord?.maxRetries ?? inputRecord?.max_retries) as number | undefined,
+    retryAfterMs: (inputRecord?.retryAfterMs ?? inputRecord?.retry_after_ms) as
+      | number
+      | null
+      | undefined,
   });
   store.tasks.unshift(created);
   saveStore(store);
@@ -533,13 +536,14 @@ export function acceptOperatorExternalReceipt(
     if (!isInvalidTaskTransitionError(error)) {
       throw error;
     }
+    const message = error instanceof Error ? error.message : String(error);
     return {
       queued: true,
       task: null,
       pendingReceipt: queueOperatorExternalReceipt(taskId, input, {
-        lastError: error.message,
+        lastError: message,
       }),
-      reason: error.message,
+      reason: message,
     };
   }
 }

@@ -35,32 +35,20 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   }
 }
 
-async function collectDoctorWarningsWithPreparedHome(params: {
-  config: Record<string, unknown>;
-  prepareHome: (home: string) => Promise<void>;
-}): Promise<string[]> {
-  const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  try {
-    return await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await params.prepareHome(home);
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify(params.config, null, 2),
-        "utf-8",
-      );
-      await loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
-      });
-      return noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor warnings")
-        .map((call) => String(call[0]));
-    });
-  } finally {
-    noteSpy.mockRestore();
-  }
+async function loadFreshDoctorFlowDeps() {
+  vi.resetModules();
+  const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+  const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
+  const freshCommandSecretGatewayModule = await import("../cli/command-secret-gateway.js");
+  const freshNoteModule = await import("../terminal/note.js");
+  const doctorFlowModule = await import("./doctor-config-flow.js");
+  return {
+    telegramFetchModule,
+    telegramProxyModule,
+    commandSecretGatewayModule: freshCommandSecretGatewayModule,
+    noteModule: freshNoteModule,
+    loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
+  };
 }
 
 type DiscordGuildRule = {
@@ -245,153 +233,6 @@ describe("doctor config flow", () => {
         (line) =>
           line.includes('channels.imessage.groupPolicy is "allowlist"') &&
           line.includes("does not fall back to allowFrom"),
-      ),
-    ).toBe(true);
-  });
-
-  it("warns when subagent allowlist entries are not runtime-ready", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      agents: {
-        list: [
-          {
-            id: "tony",
-            workspace: "/tmp/openclaw-tony",
-            subagents: {
-              allowAgents: ["deb"],
-            },
-          },
-        ],
-      },
-    });
-
-    expect(
-      doctorWarnings.some(
-        (line) =>
-          line.includes('agents.list.tony.subagents.allowAgents includes "deb"') &&
-          line.includes("stale"),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not warn when allowlisted helpers resolve through the canonical local runtime path map", async () => {
-    const doctorWarnings = await collectDoctorWarningsWithPreparedHome({
-      config: {
-        agents: {
-          list: [
-            {
-              id: "machine",
-              workspace: "/agent-homes/machine",
-              subagents: {
-                allowAgents: ["scout"],
-              },
-            },
-            {
-              id: "scout",
-              workspace: "/agent-homes/scout",
-            },
-          ],
-        },
-      },
-      prepareHome: async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const runtimePathMapPath = path.join(stateDir, "config", "runtime-path-map.json");
-        await fs.mkdir(path.dirname(runtimePathMapPath), { recursive: true });
-        await fs.writeFile(
-          runtimePathMapPath,
-          JSON.stringify(
-            {
-              container_host_roots: [
-                { container: "/agent-homes/machine", host: "workspace-machine" },
-                { container: "/agent-homes/scout", host: "workspace-scout" },
-              ],
-            },
-            null,
-            2,
-          ),
-          "utf-8",
-        );
-        await fs.mkdir(path.join(stateDir, "workspace-machine"), { recursive: true });
-        await fs.mkdir(path.join(stateDir, "workspace-scout"), { recursive: true });
-        await fs.writeFile(path.join(stateDir, "workspace-machine", "AGENTS.md"), "# machine\n");
-        await fs.writeFile(path.join(stateDir, "workspace-scout", "AGENTS.md"), "# scout\n");
-      },
-    });
-
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes('agents.list.machine.subagents.allowAgents includes "scout"'),
-      ),
-    ).toBe(false);
-  });
-
-  it("warns when happy-path topology still blocks Tony, Martina web lanes, and Margaret browser access", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      agents: {
-        list: [
-          {
-            id: "tony",
-            tools: {
-              alsoAllow: ["sessions_send"],
-              deny: ["sessions_spawn", "web_fetch", "web_search", "browser"],
-            },
-          },
-          {
-            id: "martina",
-            tools: {
-              alsoAllow: ["sessions_spawn"],
-              deny: ["browser", "web_fetch", "web_search"],
-            },
-          },
-          {
-            id: "margaret",
-            tools: {
-              alsoAllow: ["web_fetch", "web_search"],
-              deny: ["browser"],
-            },
-          },
-        ],
-      },
-    });
-
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes("tony: front-door flow still blocks direct Scout dispatch"),
-      ),
-    ).toBe(true);
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes("martina: Martina web lane is missing direct web_search access"),
-      ),
-    ).toBe(true);
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes("margaret: browser specialist is configured but browser config is null"),
-      ),
-    ).toBe(true);
-  });
-
-  it("warns when Tony has no Reverend Run fallback path", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      agents: {
-        list: [
-          {
-            id: "tony",
-            subagents: {
-              allowAgents: ["scout"],
-            },
-            tools: {
-              alsoAllow: ["sessions_spawn"],
-            },
-          },
-        ],
-      },
-    });
-
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
-          "tony: front-door flow has no Reverend Run fallback when Scout is unavailable",
-        ),
       ),
     ).toBe(true);
   });

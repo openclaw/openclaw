@@ -335,6 +335,8 @@ describe("gateway agent ACP round-trip", () => {
     expect((failed.payload as { summary?: string } | undefined)?.summary ?? "").toContain(
       "ACP dispatch is disabled",
     );
-    expect(failed.error?.message ?? "").toContain("ACP dispatch is disabled");
+    expect((failed.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "ACP dispatch is disabled",
+    );
   });
 });

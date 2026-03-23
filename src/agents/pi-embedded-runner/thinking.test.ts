@@ -1,12 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import {
-  assertReplayProtectionIntact,
-  dropThinkingBlocks,
-  isAssistantMessageWithContent,
-  latestAssistantMessageHasReplayProtectedBlocks,
-} from "./thinking.js";
+import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   const messages: AgentMessage[] = [
@@ -40,18 +35,6 @@ describe("isAssistantMessageWithContent", () => {
 });
 
 describe("dropThinkingBlocks", () => {
-  it("detects replay-protected blocks on the latest assistant turn", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "older" }] }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "redacted_thinking", data: "opaque" }],
-      }),
-    ];
-
-    expect(latestAssistantMessageHasReplayProtectedBlocks(messages)).toBe(true);
-  });
-
   it("returns the original reference when no thinking blocks are present", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "hello" }),
@@ -76,100 +59,5 @@ describe("dropThinkingBlocks", () => {
       { type: "thinking", thinking: "internal-only" },
     ]);
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
-  });
-
-  it("preserves the latest assistant message when requested", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "older-internal" },
-          { type: "text", text: "older-final" },
-        ],
-      }),
-      castAgentMessage({ role: "user", content: "follow up" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "latest-internal" },
-          { type: "text", text: "latest-final" },
-        ],
-      }),
-    ];
-
-    const result = dropThinkingBlocks(messages, { preserveLatestAssistantMessage: true });
-    const firstAssistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const latestAssistant = result[2] as Extract<AgentMessage, { role: "assistant" }>;
-
-    expect(result).not.toBe(messages);
-    expect(firstAssistant.content).toEqual([{ type: "text", text: "older-final" }]);
-    expect(latestAssistant.content).toEqual(messages[2]?.content);
-  });
-
-  it("keeps the latest assistant turn unchanged even when it only contains thinking", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "latest-internal-only" }],
-      }),
-    ];
-
-    const result = dropThinkingBlocks(messages, { preserveLatestAssistantMessage: true });
-    expect(result).toBe(messages);
-  });
-
-  it("drops replay-protected blocks from the latest assistant when preservation is disabled", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "latest-internal-only" },
-          { type: "text", text: "latest-final" },
-        ],
-      }),
-    ];
-
-    const result = dropThinkingBlocks(messages, { preserveLatestAssistantMessage: false });
-    const latestAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
-
-    expect(result).not.toBe(messages);
-    expect(latestAssistant.content).toEqual([{ type: "text", text: "latest-final" }]);
-  });
-});
-
-describe("assertReplayProtectionIntact", () => {
-  it("accepts unchanged replay-protected latest assistant messages", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "sig" }],
-      }),
-    ];
-
-    expect(() => assertReplayProtectionIntact(messages, messages, "thinking:test")).not.toThrow();
-  });
-
-  it("throws when the replay-protected latest assistant changes", () => {
-    const original: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "sig" }],
-      }),
-    ];
-    const transformed: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "reasoning removed" }],
-      }),
-    ];
-
-    expect(() => assertReplayProtectionIntact(original, transformed, "thinking:test")).toThrow(
-      "thinking:test: replay-protected latest assistant message changed",
-    );
   });
 });

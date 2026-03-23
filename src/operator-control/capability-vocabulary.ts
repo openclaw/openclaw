@@ -115,10 +115,6 @@ export function getCanonicalOperatorCapabilities(params?: VocabularySourceParams
   return [...loadOperatorCapabilityVocabulary(params).canonical].toSorted();
 }
 
-export function getOperatorCapabilityVocabularyStats(): {
-  canonicalCount: number;
-  aliasCount: number;
-};
 export function getOperatorCapabilityVocabularyStats(params?: VocabularySourceParams): {
   canonicalCount: number;
   aliasCount: number;

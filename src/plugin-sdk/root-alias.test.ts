@@ -25,11 +25,11 @@ function loadRootAliasWithStubs(options?: {
   distEntries?: string[];
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
-  processEnv?: Record<string, string | undefined>;
+  aliasPath?: string;
 }) {
   let createJitiCalls = 0;
-  let createJitiOptions: Record<string, unknown> | undefined;
   let jitiLoadCalls = 0;
+  const createJitiOptions: Record<string, unknown>[] = [];
   const loadedSpecifiers: string[] = [];
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
@@ -38,7 +38,7 @@ function loadRootAliasWithStubs(options?: {
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
     {
       process: {
-        env: options?.processEnv ?? {},
+        env: options?.env ?? {},
       },
     },
     { filename: rootAliasPath },
@@ -81,8 +81,7 @@ function loadRootAliasWithStubs(options?: {
       return {
         createJiti(_filename: string, jitiOptions?: Record<string, unknown>) {
           createJitiCalls += 1;
-          createJitiOptions = jitiOptions;
-          lastJitiOptions = jitiOptions;
+          createJitiOptions.push(jitiOptions ?? {});
           return (specifier: string) => {
             jitiLoadCalls += 1;
             loadedSpecifiers.push(specifier);
@@ -99,11 +98,11 @@ function loadRootAliasWithStubs(options?: {
     get createJitiCalls() {
       return createJitiCalls;
     },
-    get createJitiOptions() {
-      return createJitiOptions;
-    },
     get jitiLoadCalls() {
       return jitiLoadCalls;
+    },
+    get createJitiOptions() {
+      return createJitiOptions;
     },
     loadedSpecifiers,
   };
@@ -136,26 +135,15 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.jitiLoadCalls).toBe(0);
   });
 
-  it("disables Jiti fs cache under Vitest", () => {
-    const lazyModule = loadRootAliasWithStubs({
-      processEnv: {
-        VITEST: "true",
-      },
-    });
+  it("does not load the monolithic sdk for promise-like or symbol reflection probes", () => {
+    const lazyModule = loadRootAliasWithStubs();
     const lazyRootSdk = lazyModule.moduleExports;
 
-    expect("slowHelper" in lazyRootSdk).toBe(true);
-    expect(lazyModule.createJitiOptions?.fsCache).toBe(false);
-  });
-
-  it("keeps Jiti fs cache enabled outside Vitest", () => {
-    const lazyModule = loadRootAliasWithStubs({
-      processEnv: {},
-    });
-    const lazyRootSdk = lazyModule.moduleExports;
-
-    expect("slowHelper" in lazyRootSdk).toBe(true);
-    expect(lazyModule.createJitiOptions?.fsCache).toBe(true);
+    expect("then" in lazyRootSdk).toBe(false);
+    expect(Reflect.get(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(lazyModule.createJitiCalls).toBe(0);
+    expect(lazyModule.jitiLoadCalls).toBe(0);
   });
 
   it("loads legacy root exports on demand and preserves reflection", () => {

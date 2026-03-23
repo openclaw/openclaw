@@ -3,10 +3,8 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectEnvVarReferences } from "../config/env-substitution.js";
-import { collectConfigServiceEnvVars } from "../config/env-vars.js";
+import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
@@ -26,52 +24,34 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function collectEnvBackedSecretRefIds(value: unknown, refs: Set<string>): void {
-  if (isSecretRef(value)) {
-    if (value.source === "env") {
-      refs.add(value.id);
-    }
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      collectEnvBackedSecretRefIds(entry, refs);
-    }
-    return;
-  }
-
-  if (isRecord(value)) {
-    for (const entry of Object.values(value)) {
-      collectEnvBackedSecretRefIds(entry, refs);
-    }
-  }
-}
-
-function collectReferencedServiceEnvVars(params: {
+function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
-  value: unknown;
+  authStore?: AuthProfileStore;
 }): Record<string, string> {
+  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
   const entries: Record<string, string> = {};
-  const refs = new Set<string>(collectEnvVarReferences(params.value));
-  collectEnvBackedSecretRefIds(params.value, refs);
 
-  for (const refId of refs) {
-    const value = params.env[refId]?.trim();
+  for (const credential of Object.values(authStore.profiles)) {
+    const ref =
+      credential.type === "api_key"
+        ? credential.keyRef
+        : credential.type === "token"
+          ? credential.tokenRef
+          : undefined;
+    if (!ref || ref.source !== "env") {
+      continue;
+    }
+    const value = params.env[ref.id]?.trim();
     if (!value) {
       continue;
     }
-    entries[refId] = value;
+    entries[ref.id] = value;
   }
 
   return entries;
 }
 
-function _buildGatewayInstallEnvironment(params: {
+function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
@@ -108,7 +88,7 @@ export async function buildGatewayInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
-  const { programArguments, _workingDirectory } = await resolveGatewayProgramArguments({
+  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
@@ -121,7 +101,7 @@ export async function buildGatewayInstallPlan(params: {
     warn: params.warn,
     title: "Gateway runtime",
   });
-  const _serviceEnvironment = buildServiceEnvironment({
+  const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
     launchdLabel:
@@ -132,19 +112,20 @@ export async function buildGatewayInstallPlan(params: {
     // a version-manager bin directory that isn't covered by static PATH guesses.
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
 
-  // Merge config env vars into the service environment (vars + inline env keys).
-  // Config env vars are added first so service-specific vars take precedence.
-  const _environment: Record<string, string | undefined> = {
-    ...collectConfigServiceEnvVars(params.config),
-    ...collectReferencedServiceEnvVars({
+  // Merge env sources into the service environment in ascending priority:
+  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
+  //   2. Config env vars              (openclaw.json env.vars + inline keys)
+  //   3. Auth-profile env refs        (credential store → env var lookups)
+  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  return {
+    programArguments,
+    workingDirectory,
+    environment: buildGatewayInstallEnvironment({
       env: params.env,
-      value: params.config,
-    }),
-    ...collectReferencedServiceEnvVars({
-      env: params.env,
-      value: authStore,
+      config: params.config,
+      authStore: params.authStore,
+      serviceEnvironment,
     }),
   };
 }

@@ -160,7 +160,7 @@ export function resolveOperatorWorkerFreshness(options: {
   now?: number;
 }): OperatorWorkerFreshnessSnapshot {
   return resolveOperatorIdentityFreshness({
-    identity: coerceOperatorRuntimeIdentity(options.ready.identity),
+    identity: coerceOperatorRuntimeIdentity((options.ready as Record<string, unknown>).identity),
     label: "worker",
     env: options.env,
     now: options.now,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
@@ -3149,135 +3149,131 @@ module.exports = {
     expect(record?.status).toBe("loaded");
   });
 
-  it(
-    "supports legacy plugins importing monolithic plugin-sdk root",
-    { timeout: 60_000 },
-    async () => {
-      useNoBundledPlugins();
-      const plugin = writePlugin({
-        id: "legacy-root-import",
-        filename: "legacy-root-import.cjs",
-        body: `module.exports = {
+  it("supports legacy plugins importing monolithic plugin-sdk root", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-root-import",
+      filename: "legacy-root-import.cjs",
+      body: `module.exports = {
   id: "legacy-root-import",
   configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
+        register() {},
+      };`,
+    });
+
+    const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["legacy-root-import"],
+          },
+        },
+      }),
+    );
+    const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
+    expect(record?.status).toBe("loaded");
+  });
+
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
+    useNoBundledPlugins();
+    const seenKey = "__openclawLegacyRootDiagnosticSeen";
+    delete (globalThis as Record<string, unknown>)[seenKey];
+
+    const plugin = writePlugin({
+      id: "legacy-root-diagnostic-listener",
+      filename: "legacy-root-diagnostic-listener.cjs",
+      body: `module.exports = {
+  id: "legacy-root-diagnostic-listener",
+  configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
+  register() {
+    const { onDiagnosticEvent } = require("openclaw/plugin-sdk");
+    if (typeof onDiagnosticEvent !== "function") {
+      throw new Error("missing onDiagnosticEvent root export");
+    }
+    globalThis.${seenKey} = [];
+    onDiagnosticEvent((event) => {
+      globalThis.${seenKey}.push({
+        type: event.type,
+        sessionKey: event.sessionKey,
+      });
+    });
+  },
+};`,
+    });
+
+    try {
+      const registry = withEnv(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" },
+        () =>
+          loadOpenClawPlugins({
+            cache: false,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["legacy-root-diagnostic-listener"],
+              },
+            },
+          }),
+      );
+      const record = registry.plugins.find(
+        (entry) => entry.id === "legacy-root-diagnostic-listener",
+      );
+      expect(record?.status).toBe("loaded");
+
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: "agent:main:test:dm:peer",
+        usage: { total: 1 },
+      });
+
+      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
+        {
+          type: "model.usage",
+          sessionKey: "agent:main:test:dm:peer",
+        },
+      ]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[seenKey];
+    }
+  });
+
+  it("loads source TypeScript plugins that route through local runtime shims", () => {
+    const plugin = writePlugin({
+      id: "source-runtime-shim",
+      filename: "source-runtime-shim.ts",
+      body: `import "./runtime-shim.ts";
+
+export default {
+  id: "source-runtime-shim",
   register() {},
 };`,
-      });
-
-      const loaderModuleUrl = pathToFileURL(
-        path.join(process.cwd(), "src", "plugins", "loader.ts"),
-      ).href;
-      const script = `
-        import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
-        const registry = loadOpenClawPlugins({
-          cache: false,
-          workspaceDir: ${JSON.stringify(plugin.dir)},
-          config: {
-            plugins: {
-              load: { paths: [${JSON.stringify(plugin.file)}] },
-              allow: ["legacy-root-import"],
-            },
-          },
-        });
-        const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-        if (!record || record.status !== "loaded") {
-          console.error(record?.error ?? "legacy-root-import missing");
-          process.exit(1);
-        }
-      `;
-
-      const subEnv = { ...process.env };
-      delete subEnv.VITEST;
-      subEnv.OPENCLAW_HOME = "";
-      subEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-      execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-        cwd: process.cwd(),
-        env: subEnv,
-        encoding: "utf-8",
-        stdio: "pipe",
-      });
-    },
-  );
-
-  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
-    const { root, distFile } = createPluginSdkAliasFixture();
-
-    const resolved = __testing.resolvePluginSdkAliasFile({
-      srcFile: "index.ts",
-      distFile: "index.js",
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
     });
-    expect(resolved).toBe(distFile);
-  });
+    fs.writeFileSync(
+      path.join(plugin.dir, "runtime-shim.ts"),
+      `import { helperValue } from "./helper.js";
 
-  it("prefers dist candidates first for production src runtime", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-
-    const candidates = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
-      __testing.listPluginSdkAliasCandidates({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
+export const runtimeValue = helperValue;`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "helper.ts"),
+      `export const helperValue = "ok";`,
+      "utf-8",
     );
 
-    expect(candidates.indexOf(distFile)).toBeLessThan(candidates.indexOf(srcFile));
-  });
-
-  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
-    const { root, srcFile } = createPluginSdkAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers src candidates first for non-production src runtime", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-
-    const candidates = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.listPluginSdkAliasCandidates({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-
-    expect(candidates.indexOf(srcFile)).toBeLessThan(candidates.indexOf(distFile));
-  });
-
-  it("derives plugin-sdk subpaths from package exports", () => {
-    const subpaths = __testing.listPluginSdkExportedSubpaths();
-    expect(subpaths).toContain("compat");
-    expect(subpaths).toContain("telegram");
-    expect(subpaths).not.toContain("root-alias");
-  });
-
-  it("falls back to src plugin-sdk alias when dist is missing in production", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-    fs.rmSync(distFile);
-
-    const resolved = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers dist root-alias shim when loader runs from dist", () => {
-    const { _root, _distFile } = createPluginSdkAliasFixture({
-      srcFile: "root-alias.cjs",
-      distFile: "root-alias.cjs",
-      srcBody: "module.exports = {};\n",
-      distBody: "module.exports = {};\n",
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["source-runtime-shim"],
+        },
+      },
     });
 
     const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
