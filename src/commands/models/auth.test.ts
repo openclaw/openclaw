@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
+  resolveOpenClawAgentDir: vi.fn(),
   upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
@@ -23,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  syncAuthProfileToSiblings: vi.fn(),
+  resolveSiblingAgentDirs: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
@@ -49,6 +52,19 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
+
+vi.mock("../../agents/agent-paths.js", () => ({
+  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+}));
+
+vi.mock("../../plugins/provider-auth-helpers.js", async (importActual) => {
+  const actual = await importActual<typeof import("../../plugins/provider-auth-helpers.js")>();
+  return {
+    ...actual,
+    syncAuthProfileToSiblings: mocks.syncAuthProfileToSiblings,
+    resolveSiblingAgentDirs: mocks.resolveSiblingAgentDirs,
+  };
+});
 
 vi.mock("../../plugins/providers.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
@@ -147,6 +163,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
+    mocks.resolveSiblingAgentDirs.mockReturnValue(["/tmp/openclaw/agents/main"]);
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -358,7 +376,7 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
-  it("syncs token auth profile to sibling agent directories", async () => {
+  it("setup-token calls syncAuthProfileToSiblings after primary write", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({
       profiles: [
@@ -400,17 +418,27 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
 
-    // Sibling sync is best-effort — on test systems without sibling dirs,
-    // the primary write should still succeed (no throw from missing siblings).
-    expect(runTokenAuth).toHaveBeenCalledOnce();
+    // Sibling sync should be called with the correct profile
+    expect(mocks.syncAuthProfileToSiblings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:manual",
+        credential: expect.objectContaining({
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-oat01-test-token",
+        }),
+        primaryAgentDir: "/tmp/openclaw/agents/main",
+      }),
+    );
   });
 
-  it("paste-token command writes to primary agent dir", async () => {
+  it("paste-token writes to agent dir from resolveOpenClawAgentDir and syncs siblings", async () => {
     const runtime = createRuntime();
     mocks.clackText.mockResolvedValue("sk-ant-oat01-paste-test");
 
     await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
 
+    // Primary write uses resolveOpenClawAgentDir (honors OPENCLAW_AGENT_DIR env)
     expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
       profileId: "anthropic:manual",
       credential: expect.objectContaining({
@@ -419,6 +447,30 @@ describe("modelsAuthLoginCommand", () => {
         token: "sk-ant-oat01-paste-test",
       }),
       agentDir: "/tmp/openclaw/agents/main",
+    });
+
+    // Sibling sync should be called
+    expect(mocks.syncAuthProfileToSiblings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:manual",
+        primaryAgentDir: "/tmp/openclaw/agents/main",
+      }),
+    );
+  });
+
+  it("paste-token honors OPENCLAW_AGENT_DIR override", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("sk-ant-oat01-custom-dir");
+    mocks.resolveOpenClawAgentDir.mockReturnValue("/custom/agent/dir");
+
+    await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: expect.objectContaining({
+        token: "sk-ant-oat01-custom-dir",
+      }),
+      agentDir: "/custom/agent/dir",
     });
   });
 });

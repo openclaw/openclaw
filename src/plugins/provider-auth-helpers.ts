@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -172,7 +173,7 @@ export function applyAuthProfileConfig(
 }
 
 /** Resolve real path, returning null if the target doesn't exist. */
-function safeRealpathSync(dir: string): string | null {
+export function safeRealpathSync(dir: string): string | null {
   try {
     return fs.realpathSync(path.resolve(dir));
   } catch {
@@ -180,7 +181,7 @@ function safeRealpathSync(dir: string): string | null {
   }
 }
 
-function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
+export function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const normalized = path.resolve(primaryAgentDir);
   const parentOfAgent = path.dirname(normalized);
   const candidateAgentsRoot = path.dirname(parentOfAgent);
@@ -212,6 +213,38 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     }
   }
   return result;
+}
+
+/**
+ * Sync an auth profile credential to all sibling agent directories.
+ * Best-effort: individual sibling failures are silently ignored.
+ */
+export function syncAuthProfileToSiblings(params: {
+  profileId: string;
+  credential: AuthProfileCredential;
+  primaryAgentDir: string;
+  /** Pre-resolved sibling dirs to avoid re-scanning the filesystem. */
+  siblingDirs?: string[];
+}): void {
+  const resolvedPrimary = path.resolve(params.primaryAgentDir);
+  const dirs = params.siblingDirs ?? resolveSiblingAgentDirs(resolvedPrimary);
+  const primaryReal = safeRealpathSync(resolvedPrimary);
+
+  for (const siblingDir of dirs) {
+    const siblingReal = safeRealpathSync(siblingDir);
+    if (siblingReal && primaryReal && siblingReal === primaryReal) {
+      continue;
+    }
+    try {
+      upsertAuthProfile({
+        profileId: params.profileId,
+        credential: params.credential,
+        agentDir: siblingDir,
+      });
+    } catch {
+      // Best-effort: sibling sync failure must not block primary onboarding.
+    }
+  }
 }
 
 export async function writeOAuthCredentials(
