@@ -1,4 +1,3 @@
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 
@@ -12,15 +11,33 @@ type RegistryState = {
   version: number;
 };
 
-const state = resolveGlobalSingleton<RegistryState>(REGISTRY_STATE, () => ({
-  registry: createEmptyPluginRegistry(),
-  httpRouteRegistry: null,
-  httpRouteRegistryPinned: false,
-  key: null,
-  version: 0,
-}));
+const state: RegistryState = (() => {
+  const globalState = globalThis as typeof globalThis & {
+    [REGISTRY_STATE]?: RegistryState;
+  };
+  if (!globalState[REGISTRY_STATE]) {
+    globalState[REGISTRY_STATE] = {
+      registry: createEmptyPluginRegistry(),
+      httpRouteRegistry: null,
+      httpRouteRegistryPinned: false,
+      key: null,
+      version: 0,
+    };
+  }
+  return globalState[REGISTRY_STATE];
+})();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
+  if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
+    const stack = new Error().stack
+      ?.split("\n")
+      .slice(2, 5)
+      .map((line) => line.trim())
+      .join(" | ");
+    console.warn(
+      `[plugins][checkpoints] activate registry key=${cacheKey ?? "none"} plugins=${registry.plugins.length} typedHooks=${registry.typedHooks.length}${stack ? ` caller=${stack}` : ""}`,
+    );
+  }
   state.registry = registry;
   if (!state.httpRouteRegistryPinned) {
     state.httpRouteRegistry = registry;

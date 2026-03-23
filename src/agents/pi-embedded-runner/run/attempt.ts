@@ -7,6 +7,10 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -17,10 +21,6 @@ import {
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -1663,6 +1663,7 @@ export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const prevCwd = process.cwd();
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
@@ -1689,6 +1690,7 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
+  process.chdir(effectiveWorkspace);
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -1943,7 +1945,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       workspaceDir: effectiveWorkspace,
-      cwd: effectiveWorkspace,
+      cwd: process.cwd(),
       runtime: {
         host: machineName,
         os: `${os.type()} ${os.release()}`,
@@ -1962,7 +1964,7 @@ export async function runEmbeddedAttempt(
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: effectiveWorkspace,
+      cwd: process.cwd(),
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
@@ -2833,6 +2835,11 @@ export async function runEmbeddedAttempt(
             );
           }
 
+          if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
+            log.warn(
+              `[hooks][checkpoints] attempt llm_input runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("llm_input") === true}`,
+            );
+          }
           if (hookRunner?.hasHooks("llm_input")) {
             hookRunner
               .runLlmInput(
@@ -3105,6 +3112,11 @@ export async function runEmbeddedAttempt(
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
+        if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
+          log.warn(
+            `[hooks][checkpoints] attempt agent_end runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("agent_end") === true}`,
+          );
+        }
         if (hookRunner?.hasHooks("agent_end")) {
           hookRunner
             .runAgentEnd(
@@ -3164,6 +3176,11 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
+      if (process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1") {
+        log.warn(
+          `[hooks][checkpoints] attempt llm_output runId=${params.runId} sessionKey=${params.sessionKey ?? "unknown"} pid=${process.pid} hookRunner=${hookRunner ? "present" : "missing"} hasHooks=${hookRunner?.hasHooks("llm_output") === true}`,
+        );
+      }
       if (hookRunner?.hasHooks("llm_output")) {
         hookRunner
           .runLlmOutput(
@@ -3242,5 +3259,6 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     restoreSkillEnv?.();
+    process.chdir(prevCwd);
   }
 }
