@@ -1,10 +1,15 @@
-import { GatewayRequestError } from "../gateway.ts";
+import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../gateway.ts";
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
   if (!(err instanceof GatewayRequestError)) {
     return false;
   }
-  return (err.message || "").includes("missing scope: operator.read");
+  const detailCode = resolveGatewayErrorDetailCode(err);
+  if (detailCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
+    return true;
+  }
+  return false;
 }
 
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
