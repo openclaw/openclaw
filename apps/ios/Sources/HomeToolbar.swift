@@ -16,61 +16,43 @@ struct HomeToolbar: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(.white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
-                .frame(height: self.contrast == .increased ? 1.0 : 0.6)
-                .allowsHitTesting(false)
+        HStack(spacing: 10) {
+            HomeToolbarStatusButton(
+                gateway: self.gateway,
+                voiceWakeEnabled: self.voiceWakeEnabled,
+                activity: self.activity,
+                brighten: self.brighten,
+                onTap: self.onStatusTap)
+                .homeToolbarSurface(brighten: self.brighten, contrast: self.contrast)
 
-            HStack(spacing: 12) {
-                HomeToolbarStatusButton(
-                    gateway: self.gateway,
-                    voiceWakeEnabled: self.voiceWakeEnabled,
-                    activity: self.activity,
+            Spacer(minLength: 10)
+
+            HStack(spacing: 6) {
+                HomeToolbarActionButton(
+                    systemImage: "text.bubble.fill",
+                    accessibilityLabel: "Chat",
                     brighten: self.brighten,
-                    onTap: self.onStatusTap)
+                    action: self.onChatTap)
 
-                Spacer(minLength: 0)
-
-                HStack(spacing: 8) {
+                if self.talkButtonEnabled {
                     HomeToolbarActionButton(
-                        systemImage: "text.bubble.fill",
-                        accessibilityLabel: "Chat",
+                        systemImage: self.talkActive ? "waveform.circle.fill" : "waveform.circle",
+                        accessibilityLabel: self.talkActive ? "Talk Mode On" : "Talk Mode Off",
                         brighten: self.brighten,
-                        action: self.onChatTap)
-
-                    if self.talkButtonEnabled {
-                        HomeToolbarActionButton(
-                            systemImage: self.talkActive ? "waveform.circle.fill" : "waveform.circle",
-                            accessibilityLabel: self.talkActive ? "Talk Mode On" : "Talk Mode Off",
-                            brighten: self.brighten,
-                            tint: self.talkTint,
-                            isActive: self.talkActive,
-                            action: self.onTalkTap)
-                    }
-
-                    HomeToolbarActionButton(
-                        systemImage: "gearshape.fill",
-                        accessibilityLabel: "Settings",
-                        brighten: self.brighten,
-                        action: self.onSettingsTap)
+                        tint: self.talkTint,
+                        isActive: self.talkActive,
+                        action: self.onTalkTap)
                 }
+
+                HomeToolbarActionButton(
+                    systemImage: "gearshape.fill",
+                    accessibilityLabel: "Settings",
+                    brighten: self.brighten,
+                    action: self.onSettingsTap)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-        }
-        .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [
-                    .white.opacity(self.brighten ? 0.10 : 0.06),
-                    .clear,
-                ],
-                startPoint: .top,
-                endPoint: .bottom)
-                .allowsHitTesting(false)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 7)
+            .homeToolbarSurface(brighten: self.brighten, contrast: self.contrast)
         }
     }
 }
@@ -78,7 +60,6 @@ struct HomeToolbar: View {
 private struct HomeToolbarStatusButton: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorSchemeContrast) private var contrast
 
     var gateway: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -106,6 +87,8 @@ private struct HomeToolbarStatusButton: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .minimumScaleFactor(0.92)
                 }
 
                 if let activity {
@@ -120,20 +103,10 @@ private struct HomeToolbarStatusButton: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(
-                                .white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.22 : 0.16)),
-                                lineWidth: self.contrast == .increased ? 1.0 : 0.6)
-                    }
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
         }
-        .buttonStyle(.plain)
+        .homeToolbarButtonStyle(prominent: false, tint: nil)
         .accessibilityLabel("Connection Status")
         .accessibilityValue(self.accessibilityValue)
         .accessibilityHint(self.gateway == .connected ? "Double tap for gateway actions" : "Double tap to open settings")
@@ -172,8 +145,6 @@ private struct HomeToolbarStatusButton: View {
 }
 
 private struct HomeToolbarActionButton: View {
-    @Environment(\.colorSchemeContrast) private var contrast
-
     let systemImage: String
     let accessibilityLabel: String
     let brighten: Bool
@@ -186,38 +157,75 @@ private struct HomeToolbarActionButton: View {
             Image(systemName: self.systemImage)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(self.isActive ? (self.tint ?? .primary) : .primary)
-                .frame(width: 40, height: 40)
+                .frame(width: 38, height: 38)
+        }
+        .homeToolbarButtonStyle(prominent: self.isActive, tint: self.tint)
+        .accessibilityLabel(self.accessibilityLabel)
+    }
+}
+
+private struct HomeToolbarSurfaceModifier: ViewModifier {
+    let brighten: Bool
+    let contrast: ColorSchemeContrast
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content
+                .glassEffect(.regular, in: Capsule())
+                .shadow(color: .black.opacity(self.brighten ? 0.07 : 0.10), radius: 10, y: 3)
+        } else {
+            content
                 .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
                         .overlay {
-                            if let tint {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                tint.opacity(self.isActive ? 0.22 : 0.14),
-                                                tint.opacity(self.isActive ? 0.08 : 0.04),
-                                                .clear,
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing))
-                                    .blendMode(.overlay)
-                            }
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            Capsule(style: .continuous)
                                 .strokeBorder(
-                                    (self.tint ?? .white).opacity(
-                                        self.isActive
-                                            ? 0.34
-                                            : (self.contrast == .increased ? 0.4 : (self.brighten ? 0.22 : 0.16))
-                                    ),
-                                    lineWidth: self.contrast == .increased ? 1.0 : (self.isActive ? 0.8 : 0.6))
+                                    .white.opacity(self.contrast == .increased ? 0.34 : 0.12),
+                                    lineWidth: self.contrast == .increased ? 1.0 : 0.6)
                         }
+                        .shadow(color: .black.opacity(self.brighten ? 0.08 : 0.12), radius: 10, y: 3)
+                }
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(self.brighten ? 0.08 : 0.05),
+                            .clear,
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing)
+                        .allowsHitTesting(false)
+                        .clipShape(Capsule(style: .continuous))
                 }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(self.accessibilityLabel)
+    }
+}
+
+private struct HomeToolbarButtonStyleModifier: ViewModifier {
+    let prominent: Bool
+    let tint: Color?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            if self.prominent {
+                content
+                    .buttonStyle(GlassProminentButtonStyle())
+                    .tint(self.tint ?? .primary)
+            } else {
+                content.buttonStyle(GlassButtonStyle())
+            }
+        } else {
+            content.buttonStyle(.plain)
+        }
+    }
+}
+
+private extension View {
+    func homeToolbarSurface(brighten: Bool, contrast: ColorSchemeContrast) -> some View {
+        self.modifier(HomeToolbarSurfaceModifier(brighten: brighten, contrast: contrast))
+    }
+
+    func homeToolbarButtonStyle(prominent: Bool, tint: Color?) -> some View {
+        self.modifier(HomeToolbarButtonStyleModifier(prominent: prominent, tint: tint))
     }
 }

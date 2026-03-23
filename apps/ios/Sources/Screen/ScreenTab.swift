@@ -7,7 +7,7 @@ struct ScreenTab: View {
     var body: some View {
         ZStack(alignment: .top) {
             ScreenWebView(controller: self.appModel.screen)
-                .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+                .ignoresSafeArea(.container)
                 .overlay(alignment: .top) {
                     if let errorText = self.appModel.screen.errorText,
                        self.appModel.gatewayServerName == nil

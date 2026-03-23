@@ -475,7 +475,7 @@ private struct CanvasContent: View {
                     .transition(.opacity)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .overlay(alignment: .bottom) {
             HomeToolbar(
                 gateway: self.gatewayStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
@@ -502,6 +502,8 @@ private struct CanvasContent: View {
                 onSettingsTap: {
                     self.openSettings()
                 })
+                .padding(.horizontal, 14)
+                .padding(.bottom, 0)
         }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
