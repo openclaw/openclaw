@@ -652,7 +652,7 @@ describe("trusted-proxy auth", () => {
   });
 });
 
-describe("isLocalDirectRequest — ts.net host-header gate", () => {
+describe("isLocalDirectRequest", () => {
   function makeReq(
     host: string,
     remoteAddress = "127.0.0.1",
@@ -664,10 +664,41 @@ describe("isLocalDirectRequest — ts.net host-header gate", () => {
     } as never;
   }
 
+  it("returns true for direct loopback request without proxy headers", () => {
+    const req = makeReq("localhost:18789");
+    expect(isLocalDirectRequest(req, ["127.0.0.1"])).toBe(true);
+  });
+
+  it("returns false when resolved IP is not loopback (Tailscale XFF without fallback)", () => {
+    const req = makeReq("gateway.tail0947c7.ts.net", "::1", {
+      "x-forwarded-for": "100.75.251.23",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.tail0947c7.ts.net",
+    });
+    expect(isLocalDirectRequest(req, ["127.0.0.1", "::1"], false)).toBe(false);
+  });
+
+  it("returns true via socket fallback when allowRealIpFallback is true (Tailscale Serve)", () => {
+    const req = makeReq("gateway.tail0947c7.ts.net", "::1", {
+      "x-forwarded-for": "100.75.251.23",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.tail0947c7.ts.net",
+    });
+    expect(isLocalDirectRequest(req, ["127.0.0.1", "::1"], true, { allowTailscale: true })).toBe(
+      true,
+    );
+  });
+
+  it("returns false when socket is not loopback even with allowRealIpFallback", () => {
+    const req = makeReq("gateway.example.com", "192.168.1.50", {
+      "x-forwarded-for": "203.0.113.10",
+    });
+    expect(isLocalDirectRequest(req, ["192.168.1.50"], true)).toBe(false);
+  });
+
   it("rejects ts.net host when allowTailscale is not set", () => {
     const req = makeReq("gateway.tailnet.ts.net");
     expect(isLocalDirectRequest(req)).toBe(false);
-    expect(isLocalDirectRequest(req, undefined, false)).toBe(false);
     expect(isLocalDirectRequest(req, undefined, false, {})).toBe(false);
     expect(isLocalDirectRequest(req, undefined, false, { allowTailscale: false })).toBe(false);
   });

@@ -183,8 +183,19 @@ export function resolveClientIp(params: {
     return forwardedIp;
   }
   if (params.allowRealIpFallback) {
-    return parseRealIp(params.realIp);
+    const realIp = parseRealIp(params.realIp);
+    if (realIp) {
+      return realIp;
+    }
   }
+
+  // When no forwarding headers are present at all, the request is directly
+  // from the trusted-proxy host itself (not a proxied client request).
+  // Return the socket address so callers can identify it as local.
+  if (!params.forwardedFor && !params.realIp) {
+    return remote;
+  }
+
   return undefined;
 }
 

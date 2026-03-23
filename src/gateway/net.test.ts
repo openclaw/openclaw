@@ -251,10 +251,10 @@ describe("resolveClientIp", () => {
       expected: undefined,
     },
     {
-      name: "fails closed when trusted proxy omits forwarding headers",
+      name: "returns socket address when trusted proxy omits forwarding headers (direct local request)",
       remoteAddr: "127.0.0.1",
       trustedProxies: ["127.0.0.1"],
-      expected: undefined,
+      expected: "127.0.0.1",
     },
     {
       name: "ignores invalid X-Forwarded-For entries",
