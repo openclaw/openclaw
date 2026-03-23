@@ -49,7 +49,15 @@ describe("removeChannelConfigWizard", () => {
           },
         },
       }))
-      .mockImplementationOnce(() => ({}) as OpenClawConfig);
+      .mockImplementationOnce(
+        ({ cfg }: { cfg: OpenClawConfig; accountId: string }) =>
+          ({
+            ...cfg,
+            channels: {
+              whatsapp: {},
+            },
+          }) as OpenClawConfig,
+      );
     const onAccountRemoved = vi.fn(async () => {});
     const plugin = {
       meta: { id: "whatsapp", label: "WhatsApp" },

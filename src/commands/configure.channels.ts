@@ -9,6 +9,17 @@ import { shortenHomePath } from "../utils.js";
 import { confirm, select } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
 
+function removeChannelSection(cfg: OpenClawConfig, channel: string): OpenClawConfig {
+  const nextChannels: Record<string, unknown> = { ...cfg.channels };
+  delete nextChannels[channel];
+  return {
+    ...cfg,
+    channels: Object.keys(nextChannels).length
+      ? (nextChannels as OpenClawConfig["channels"])
+      : undefined,
+  };
+}
+
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -52,7 +63,8 @@ export async function removeChannelConfigWizard(
       return next;
     }
 
-    const label = getChannelPlugin(channel)?.meta.label ?? channel;
+    const plugin = getChannelPlugin(channel);
+    const label = plugin?.meta.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
         message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
@@ -64,16 +76,8 @@ export async function removeChannelConfigWizard(
       continue;
     }
 
-    const plugin = getChannelPlugin(channel);
     if (!plugin?.config.deleteAccount) {
-      const nextChannels: Record<string, unknown> = { ...next.channels };
-      delete nextChannels[channel];
-      next = {
-        ...next,
-        channels: Object.keys(nextChannels).length
-          ? (nextChannels as OpenClawConfig["channels"])
-          : undefined,
-      };
+      next = removeChannelSection(next, channel);
     } else {
       const accountIds = plugin.config.listAccountIds(next);
       const orderedAccountIds = [...accountIds].toSorted((a, b) => {
@@ -97,6 +101,10 @@ export async function removeChannelConfigWizard(
           accountId,
           runtime,
         });
+      }
+
+      if (next.channels?.[channel] !== undefined) {
+        next = removeChannelSection(next, channel);
       }
     }
 
