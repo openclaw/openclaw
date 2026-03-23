@@ -3,6 +3,7 @@ import type { SessionScope } from "./types.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
+  normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
@@ -21,27 +22,70 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
   return from || "unknown";
 }
 
-/**
- * Resolve the session key with a canonical direct-chat bucket (default: "main").
- * All non-group direct chats collapse to this bucket; groups stay isolated.
- */
-export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
+export function canonicalizeSessionKeyForAgent(params: {
+  sessionKey: string;
+  agentId?: string;
+  mainKey?: string;
+}) {
+  const raw = params.sessionKey.trim().toLowerCase();
+  if (!raw) {
+    return raw;
+  }
+  if (raw === "global" || raw === "unknown") {
+    return raw;
+  }
+  if (raw.startsWith("agent:")) {
+    return raw;
+  }
+  const resolvedAgentId = normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID);
+  const canonicalMainKey = normalizeMainKey(params.mainKey);
+  if (raw === "main" || raw === canonicalMainKey) {
+    return buildAgentMainSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: canonicalMainKey,
+    });
+  }
+  return `agent:${resolvedAgentId}:${raw}`;
+}
+
+export function resolveSessionKeyForAgent(
+  scope: SessionScope,
+  ctx: MsgContext,
+  mainKey?: string,
+  agentId?: string,
+) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
-    return explicit.toLowerCase();
+    return canonicalizeSessionKeyForAgent({
+      sessionKey: explicit,
+      agentId,
+      mainKey,
+    });
   }
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") {
     return raw;
   }
-  const canonicalMainKey = normalizeMainKey(mainKey);
-  const canonical = buildAgentMainSessionKey({
-    agentId: DEFAULT_AGENT_ID,
-    mainKey: canonicalMainKey,
-  });
   const isGroup = raw.includes(":group:") || raw.includes(":channel:");
   if (!isGroup) {
-    return canonical;
+    return canonicalizeSessionKeyForAgent({
+      sessionKey: normalizeMainKey(mainKey),
+      agentId,
+      mainKey,
+    });
   }
-  return `agent:${DEFAULT_AGENT_ID}:${raw}`;
+  return canonicalizeSessionKeyForAgent({
+    sessionKey: raw,
+    agentId,
+    mainKey,
+  });
+}
+
+export function resolveSessionKey(
+  scope: SessionScope,
+  ctx: MsgContext,
+  mainKey?: string,
+  agentId?: string,
+) {
+  return resolveSessionKeyForAgent(scope, ctx, mainKey, agentId);
 }

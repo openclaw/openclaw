@@ -10,6 +10,8 @@ export type GatewaySessionsDefaults = {
 
 export type GatewaySessionRow = {
   key: string;
+  agentId?: string;
+  chatId?: string;
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -22,6 +24,7 @@ export type GatewaySessionRow = {
   chatType?: ChatType;
   origin?: SessionEntry["origin"];
   updatedAt: number | null;
+  archivedAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;

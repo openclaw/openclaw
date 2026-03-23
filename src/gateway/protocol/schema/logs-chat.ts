@@ -27,6 +27,8 @@ export const ChatHistoryParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+    historyMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
+    tailCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   },
   { additionalProperties: false },
 );
@@ -39,6 +41,7 @@ export const ChatSendParamsSchema = Type.Object(
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    historyMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

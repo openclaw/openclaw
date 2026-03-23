@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CommandHandler } from "./commands-types.js";
 import {
+  filterSyntheticSummaryMessages,
+  isSyntheticSummaryMessage,
+} from "../../agents/chat-context-store.js";
+import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
   isEmbeddedPiRunActive,
@@ -11,6 +15,8 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions.js";
+import { persistChatSummary } from "../../gateway/chat-context.js";
+import { readSessionMessages } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
@@ -126,6 +132,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
     });
+    try {
+      const messages = filterSyntheticSummaryMessages(
+        readSessionMessages(sessionId, params.storePath, params.sessionEntry.sessionFile),
+      ).filter((message) => !isSyntheticSummaryMessage(message));
+      const summary = persistChatSummary({
+        agentId: params.agentId ?? "main",
+        sessionKey: params.sessionKey,
+        sessionId,
+        entry: params.sessionEntry,
+        messages,
+      });
+      params.sessionEntry.historyLoadMode = "summary";
+      params.sessionEntry.summaryUpdatedAt = summary.updatedAt;
+      params.sessionEntry.lastCompactedAt = Date.now();
+    } catch {
+      // Best-effort summary persistence after semantic compaction.
+    }
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;

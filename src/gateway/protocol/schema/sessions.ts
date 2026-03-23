@@ -7,6 +7,7 @@ export const SessionsListParamsSchema = Type.Object(
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    includeArchived: Type.Optional(Type.Boolean()),
     /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
@@ -94,6 +95,13 @@ export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     deleteTranscript: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsArchiveParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
   },
   { additionalProperties: false },
 );

@@ -14,7 +14,10 @@ const providerId = "telegram";
 
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
-  const mediaUrl = readStringParam(params, "media", { trim: false });
+  const mediaUrl =
+    readStringParam(params, "media", { trim: false }) ??
+    readStringParam(params, "path", { trim: false }) ??
+    readStringParam(params, "filePath", { trim: false });
   const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
@@ -47,6 +50,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     const gate = createActionGate(cfg.channels?.telegram?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    actions.add("sendAttachment");
     if (gate("reactions")) {
       actions.add("react");
     }
@@ -87,6 +91,18 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
+      const sendParams = readTelegramSendParams(params);
+      return await handleTelegramAction(
+        {
+          action: "sendMessage",
+          ...sendParams,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "sendAttachment") {
       const sendParams = readTelegramSendParams(params);
       return await handleTelegramAction(
         {

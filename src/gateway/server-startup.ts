@@ -22,6 +22,7 @@ import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
+import { runAgentContextMigrationWithBarrier } from "./server-startup-agent-context.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 export async function startGatewaySidecars(params: {
@@ -151,6 +152,9 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
   }
 
+  await runAgentContextMigrationWithBarrier({ cfg: params.cfg, log: params.log }).catch((err) => {
+    params.log.warn(`agent context migration failed: ${String(err)}`);
+  });
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
   });

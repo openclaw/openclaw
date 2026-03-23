@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  syncSessionEntryContextMetadata,
+  upsertChatIndex,
+} from "../../agents/chat-context-store.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -20,6 +24,7 @@ import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
+  canonicalizeSessionKeyForAgent,
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
@@ -198,7 +203,11 @@ export async function initSessionState(params: {
     }
   }
 
-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  sessionKey = canonicalizeSessionKeyForAgent({
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
+    agentId,
+    mainKey,
+  });
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
@@ -361,6 +370,11 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
   }
+  syncSessionEntryContextMetadata({
+    entry: sessionEntry,
+    agentId,
+    sessionKey,
+  });
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
   await updateSessionStore(
@@ -391,6 +405,15 @@ export async function initSessionState(params: {
       reason: "reset",
     });
   }
+
+  upsertChatIndex({
+    agentId,
+    sessionKey,
+    sessionId: sessionEntry.sessionId,
+    historyMode: sessionEntry.historyLoadMode,
+    archivedAt: sessionEntry.archivedAt,
+    summaryUpdatedAt: sessionEntry.summaryUpdatedAt,
+  });
 
   const sessionCtx: TemplateContext = {
     ...ctx,

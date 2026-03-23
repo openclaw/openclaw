@@ -10,6 +10,9 @@ export type ChatState = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
+  chatHistoryMode?: "summary" | "full";
+  chatSummary?: string | null;
+  chatContextInfo?: Record<string, unknown> | null;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -34,15 +37,23 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+      historyMode?: "summary" | "full";
+      summary?: string;
+      context?: Record<string, unknown>;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+      historyMode: state.chatHistoryMode ?? "summary",
+    });
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatHistoryMode =
+      res.historyMode === "full" ? "full" : (state.chatHistoryMode ?? "summary");
+    state.chatSummary = typeof res.summary === "string" ? res.summary : null;
+    state.chatContextInfo = res.context && typeof res.context === "object" ? res.context : null;
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -123,12 +134,18 @@ export async function sendChatMessage(
     : undefined;
 
   try {
+    const shouldAutoCompact = state.chatContextInfo?.shouldAutoCompact === true;
+    if (shouldAutoCompact) {
+      await state.client.request("sessions.compact", { key: state.sessionKey });
+      await loadChatHistory(state);
+    }
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,
+      historyMode: state.chatHistoryMode ?? "summary",
     });
     return runId;
   } catch (err) {

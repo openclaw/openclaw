@@ -63,6 +63,20 @@ export type AppViewState = {
   compactionStatus: CompactionStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
+  chatHistoryMode: "summary" | "full";
+  chatSummary: string | null;
+  chatContextInfo: {
+    totalTokens: number | null;
+    contextWindow: number | null;
+    utilization: number | null;
+    state: string;
+    shouldWarn: boolean;
+    shouldSuggestCompact: boolean;
+    shouldAutoCompact: boolean;
+    warningThreshold: number;
+    compactThreshold: number;
+    hardLimit: number;
+  } | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
@@ -273,6 +287,11 @@ export type AppViewState = {
   setChatMessage: (next: string) => void;
   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
   handleAbortChat: () => Promise<void>;
+  handleCompactChat: () => Promise<void>;
+  handleArchiveChat: () => Promise<void>;
+  handleClearActiveChat: () => Promise<void>;
+  handleSelectChatAgent: (agentId: string) => Promise<void>;
+  handleStartNewChat: () => Promise<void>;
   removeQueuedMessage: (id: string) => void;
   handleChatScroll: (event: Event) => void;
   resetToolStream: () => void;

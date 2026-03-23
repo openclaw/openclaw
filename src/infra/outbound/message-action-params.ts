@@ -85,6 +85,10 @@ export function resolveTelegramAutoThreadId(params: {
   if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
     return undefined;
   }
+  const directChatIdPattern = /^\d+$/;
+  if (directChatIdPattern.test(parsedTo.chatId) && directChatIdPattern.test(parsedChannel.chatId)) {
+    return undefined;
+  }
   return context.currentThreadTs;
 }
 

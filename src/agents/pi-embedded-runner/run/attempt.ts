@@ -7,6 +7,9 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import { canonicalizeSessionKeyForAgent } from "../../../config/sessions/session-key.js";
+import { buildContextBudgetBreakdown } from "../../../gateway/chat-context.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -31,6 +34,12 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import {
+  readChatSummary,
+  buildSummaryContextMessages,
+  formatChatSummary,
+} from "../../chat-context-store.js";
+import { normalizeSummaryHistoryTail, normalizeChatHistoryMode } from "../../context-policy.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -661,9 +670,47 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
+        const runnerSession = resolveCanonicalRunnerSessionIdentity({
+          sessionKey: params.sessionKey,
+          sessionAgentId,
+          mainKey: params.config?.session?.mainKey,
+        });
+        const sessionStore = runnerSession.canonicalSessionKey
+          ? loadSessionStore(
+              resolveStorePath(params.config?.session?.store, { agentId: sessionAgentId }),
+            )
+          : undefined;
+        const sessionEntry = runnerSession.canonicalSessionKey
+          ? sessionStore?.[runnerSession.canonicalSessionKey]
+          : undefined;
+        const sessionSummary = runnerSession.canonicalSessionKey
+          ? readChatSummary({
+              agentId: sessionAgentId,
+              sessionKey: runnerSession.canonicalSessionKey,
+            })
+          : null;
+        const historyMode = normalizeChatHistoryMode(sessionEntry?.historyLoadMode);
+        const summaryTail = normalizeSummaryHistoryTail(undefined);
+        const isolatedHistory = buildSummaryContextMessages({
+          messages: limited,
+          summary: sessionSummary,
+          tailCount: summaryTail,
+          mode: historyMode,
+        }) as AgentMessage[];
+        const contextTrace = buildContextBudgetBreakdown({
+          sessionKey: runnerSession.canonicalSessionKey ?? params.sessionKey ?? params.sessionId,
+          agentId: sessionAgentId,
+          historyMode,
+          summaryText: sessionSummary ? formatChatSummary(sessionSummary) : null,
+          recentTailMessages: isolatedHistory.filter(
+            (message) => !(message as { synthetic?: boolean; summary?: boolean }).synthetic,
+          ),
+          memoryText: null,
+        });
         cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        log.debug("embedded run context trace", contextTrace);
+        if (isolatedHistory.length > 0) {
+          activeSession.agent.replaceMessages(isolatedHistory);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
@@ -1146,4 +1193,20 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
     process.chdir(prevCwd);
   }
+}
+export function resolveCanonicalRunnerSessionIdentity(params: {
+  sessionKey?: string;
+  sessionAgentId: string;
+  mainKey?: string;
+}) {
+  const canonicalSessionKey = params.sessionKey?.trim()
+    ? canonicalizeSessionKeyForAgent({
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        mainKey: params.mainKey,
+      })
+    : undefined;
+  return {
+    canonicalSessionKey,
+  };
 }

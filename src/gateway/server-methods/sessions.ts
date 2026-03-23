@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { archiveChatIndexEntry, upsertChatIndex } from "../../agents/chat-context-store.js";
+import {
+  DEFAULT_SUMMARY_HISTORY_TAIL,
+  buildContextUsageSnapshot,
+} from "../../agents/context-policy.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
@@ -15,10 +20,17 @@ import {
 } from "../../config/sessions.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { abortChatRunsForSessionKey } from "../chat-abort.js";
+import {
+  applyChatHistoryWindow,
+  persistChatSummary,
+  rewriteTranscriptWithSummary,
+} from "../chat-context.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateSessionsArchiveParams,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
@@ -34,6 +46,7 @@ import {
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   pruneLegacyStoreKeys,
+  readSessionMessages,
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -94,6 +107,17 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  context?: Pick<
+    GatewayRequestContext,
+    | "chatAbortControllers"
+    | "chatRunBuffers"
+    | "chatDeltaSentAt"
+    | "chatAbortedRuns"
+    | "removeChatRun"
+    | "agentRunSeq"
+    | "broadcast"
+    | "nodeSendToSession"
+  >;
 }) {
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
@@ -102,6 +126,21 @@ async function ensureSessionRuntimeCleanup(params: {
   }
   clearSessionQueues([...queueKeys]);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
+  if (params.context) {
+    abortChatRunsForSessionKey(
+      {
+        chatAbortControllers: params.context.chatAbortControllers,
+        chatRunBuffers: params.context.chatRunBuffers,
+        chatDeltaSentAt: params.context.chatDeltaSentAt,
+        chatAbortedRuns: params.context.chatAbortedRuns,
+        removeChatRun: params.context.removeChatRun,
+        agentRunSeq: params.context.agentRunSeq,
+        broadcast: params.context.broadcast,
+        nodeSendToSession: params.context.nodeSendToSession,
+      },
+      { sessionKey: params.target.canonicalKey, stopReason: "session_cleanup" },
+    );
+  }
   if (!params.sessionId) {
     return undefined;
   }
@@ -285,7 +324,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     };
     respond(true, result, undefined);
   },
-  "sessions.reset": async ({ params, respond }) => {
+  "sessions.reset": async ({ params, respond, context }) => {
     if (!validateSessionsResetParams(params)) {
       respond(
         false,
@@ -321,7 +360,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     );
     await triggerInternalHook(hookEvent);
     const sessionId = entry?.sessionId;
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    const cleanupError = await ensureSessionRuntimeCleanup({
+      cfg,
+      key,
+      target,
+      sessionId,
+      context,
+    });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
       return;
@@ -371,7 +416,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
-  "sessions.delete": async ({ params, respond }) => {
+  "sessions.delete": async ({ params, respond, context }) => {
     if (!validateSessionsDeleteParams(params)) {
       respond(
         false,
@@ -408,7 +453,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
     const existed = Boolean(entry);
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    const cleanupError = await ensureSessionRuntimeCleanup({
+      cfg,
+      key,
+      target,
+      sessionId,
+      context,
+    });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
       return;
@@ -432,6 +483,55 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
   },
+  "sessions.archive": async ({ params, respond, context }) => {
+    if (!validateSessionsArchiveParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid sessions.archive params: ${formatValidationErrors(validateSessionsArchiveParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const key = String((params as { key?: string }).key ?? "").trim();
+    if (!key) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
+      return;
+    }
+    const cfg = loadConfig();
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const { entry } = loadSessionEntry(key);
+    const sessionId = entry?.sessionId;
+    const cleanupError = await ensureSessionRuntimeCleanup({
+      cfg,
+      key,
+      target,
+      sessionId,
+      context,
+    });
+    if (cleanupError) {
+      respond(false, undefined, cleanupError);
+      return;
+    }
+    const archivedAt = Date.now();
+    const result = await updateSessionStore(target.storePath, (store) => {
+      const { primaryKey, entry } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      if (!entry) {
+        return undefined;
+      }
+      entry.archivedAt = archivedAt;
+      entry.updatedAt = archivedAt;
+      return { key: primaryKey, entry };
+    });
+    if (result === undefined) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+    archiveChatIndexEntry(target.agentId, target.canonicalKey, archivedAt);
+    respond(true, { ok: true, key: target.canonicalKey, archivedAt }, undefined);
+  },
   "sessions.compact": async ({ params, respond }) => {
     if (!validateSessionsCompactParams(params)) {
       respond(
@@ -450,11 +550,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
-
-    const maxLines =
-      typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
-        ? Math.max(1, Math.floor(p.maxLines))
-        : 400;
 
     const cfg = loadConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
@@ -500,25 +595,51 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length <= maxLines) {
+    const allMessages = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      target.storePath,
+      entry?.sessionFile,
+      target.agentId,
+      10,
+      280,
+    );
+    const fullMessages = readSessionMessages(sessionId, target.storePath, entry?.sessionFile);
+    if (fullMessages.length === 0) {
       respond(
         true,
         {
           ok: true,
           key: target.canonicalKey,
           compacted: false,
-          kept: lines.length,
+          reason: "empty transcript",
         },
         undefined,
       );
       return;
     }
 
+    const summary = persistChatSummary({
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      sessionId,
+      entry,
+      messages: fullMessages,
+    });
+    const reduced = applyChatHistoryWindow({
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      messages: fullMessages,
+      entry: { ...entry, historyLoadMode: "summary" },
+      historyMode: "summary",
+      tailCount: DEFAULT_SUMMARY_HISTORY_TAIL,
+    });
+
     const archived = archiveFileOnDisk(filePath, "bak");
-    const keptLines = lines.slice(-maxLines);
-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+    rewriteTranscriptWithSummary({
+      transcriptPath: filePath,
+      summaryText: reduced.summary ?? "[Context summary]",
+      keepMessages: reduced.messages.slice(1),
+    });
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;
@@ -526,11 +647,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       if (!entryToUpdate) {
         return;
       }
-      delete entryToUpdate.inputTokens;
-      delete entryToUpdate.outputTokens;
-      delete entryToUpdate.totalTokens;
-      delete entryToUpdate.totalTokensFresh;
+      entryToUpdate.historyLoadMode = "summary";
+      entryToUpdate.summaryUpdatedAt = summary.updatedAt;
+      entryToUpdate.lastCompactedAt = Date.now();
       entryToUpdate.updatedAt = Date.now();
+    });
+    upsertChatIndex({
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      sessionId,
+      historyMode: "summary",
+      summaryUpdatedAt: summary.updatedAt,
+      archivedAt: entry?.archivedAt,
     });
 
     respond(
@@ -540,7 +668,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         key: target.canonicalKey,
         compacted: true,
         archived,
-        kept: keptLines.length,
+        kept: reduced.messages.length,
+        summary,
+        context: buildContextUsageSnapshot({
+          totalTokens: entry?.totalTokens,
+          contextWindow: entry?.contextTokens,
+        }),
+        preview: allMessages,
       },
       undefined,
     );

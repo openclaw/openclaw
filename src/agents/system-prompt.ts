@@ -119,8 +119,9 @@ function buildMessagingSection(params: {
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
+          "- For real file/media delivery, use `action=sendAttachment` or `action=send` with `media`/`path`/`filePath` instead of describing the file in plain text.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
-          `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+          `- If you use \`message\` (\`action=send\` or \`action=sendAttachment\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
             : params.runtimeChannel
@@ -425,6 +426,11 @@ export function buildAgentSystemPrompt(params: {
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+    "If the user asks you to do work in the workspace, actually do it with tools before replying.",
+    "Never say you are sending, creating, checking, or preparing something unless the relevant tool call already happened successfully.",
+    "Do not stall with progress promises like 'сейчас отправлю', 'добиваю', or 'проверяю' when you can act now.",
+    `For file delivery in chat: locate or create the file, call the message tool to send the attachment, then reply with ONLY ${SILENT_REPLY_TOKEN}.`,
+    "If the user asks for an existing file or database, search the workspace/tools first; ask only after you fail to find it.",
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",

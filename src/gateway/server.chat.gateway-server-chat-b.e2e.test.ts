@@ -224,4 +224,160 @@ describe("gateway server chat", () => {
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     }
   });
+
+  test("hard-limit preflight compacts once and preserves last user input", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    const spy = vi.mocked(getReplyFromConfig);
+
+    try {
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-preflight",
+            updatedAt: Date.now(),
+            totalTokens: 180_000,
+            totalTokensFresh: true,
+            contextTokens: 200_000,
+          },
+        },
+      });
+
+      const transcriptPath = path.join(sessionDir, "sess-preflight.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: "sess-preflight",
+            timestamp: new Date().toISOString(),
+            cwd: process.cwd(),
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "old request" }],
+              timestamp: Date.now() - 2000,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "old reply" }],
+              timestamp: Date.now() - 1000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      spy.mockClear();
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "latest hard limit input",
+        idempotencyKey: "idem-hard-limit-preflight",
+      });
+      expect(sendRes.ok).toBe(true);
+
+      await waitFor(() => spy.mock.calls.length > 0, 2_000);
+      const ctx = spy.mock.calls.at(-1)?.[0] as
+        | { Body?: string; RawBody?: string; BodyForCommands?: string }
+        | undefined;
+      expect(ctx?.Body).toBe("latest hard limit input");
+      expect(ctx?.RawBody).toBe("latest hard limit input");
+      expect(ctx?.BodyForCommands).toBe("latest hard limit input");
+
+      const transcript = await fs.readFile(transcriptPath, "utf-8");
+      const summaryCount = transcript
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { synthetic?: boolean; summary?: boolean };
+          } catch {
+            return null;
+          }
+        })
+        .filter((line) => line?.synthetic === true && line?.summary === true).length;
+      expect(summaryCount).toBe(1);
+    } finally {
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("archive active chat mid-run does not write a late assistant message into archived transcript", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    const spy = vi.mocked(getReplyFromConfig);
+
+    try {
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-archive-mid-run", updatedAt: Date.now() },
+        },
+      });
+
+      const transcriptPath = path.join(sessionDir, "sess-archive-mid-run.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "session", version: 1, id: "sess-archive-mid-run", timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
+        "utf-8",
+      );
+
+      let released = false;
+      spy.mockReset();
+      spy.mockImplementationOnce(async (_ctx, opts) => {
+        opts?.onAgentRunStart?.(opts.runId ?? "idem-archive-mid-run");
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        released = true;
+      });
+
+      const sendResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "send-archive-mid-run",
+        8_000,
+      );
+      sendReq(ws, "send-archive-mid-run", "chat.send", {
+        sessionKey: "main",
+        message: "hello archive",
+        idempotencyKey: "idem-archive-mid-run",
+        timeoutMs: 30_000,
+      });
+      const sendRes = await sendResP;
+      expect(sendRes.ok).toBe(true);
+      await waitFor(() => spy.mock.calls.length > 0, 2_000);
+
+      const archiveRes = await rpcReq<{ ok?: boolean }>(ws, "sessions.archive", {
+        key: "main",
+      });
+      expect(archiveRes.ok).toBe(true);
+      await waitFor(() => released, 2_000);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const transcript = await fs.readFile(transcriptPath, "utf-8");
+      expect(transcript).not.toContain("hello archive");
+      expect(transcript).not.toContain("gateway-injected");
+    } finally {
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
 });

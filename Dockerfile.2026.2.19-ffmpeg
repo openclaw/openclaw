@@ -1,0 +1,9 @@
+FROM ghcr.io/openclaw/openclaw:2026.2.19
+
+USER root
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+USER node

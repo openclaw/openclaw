@@ -56,6 +56,7 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -223,6 +224,11 @@ export const buildTelegramMessageContext = async ({
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
       fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
+      shouldLog: (err) =>
+        !isRecoverableTelegramNetworkError(err, {
+          context: "send",
+          allowMessageMatch: true,
+        }),
     });
   };
 
@@ -232,6 +238,11 @@ export const buildTelegramMessageContext = async ({
         operation: "sendChatAction",
         fn: () =>
           bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
+        shouldLog: (err) =>
+          !isRecoverableTelegramNetworkError(err, {
+            context: "send",
+            allowMessageMatch: true,
+          }),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);

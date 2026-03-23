@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sleep } from "../utils.js";
 import {
   buildGroupDisplayName,
+  canonicalizeSessionKeyForAgent,
   deriveSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
@@ -98,6 +99,23 @@ describe("sessions", () => {
     expect(resolveSessionKey("per-sender", { From: "+1555" }, "primary")).toBe(
       "agent:main:primary",
     );
+  });
+
+  it("canonicalizes direct explicit session keys with agent id", () => {
+    expect(
+      canonicalizeSessionKeyForAgent({
+        sessionKey: "main",
+        agentId: "legal",
+        mainKey: "main",
+      }),
+    ).toBe("agent:legal:main");
+    expect(
+      canonicalizeSessionKeyForAgent({
+        sessionKey: "customer-42",
+        agentId: "rail-business",
+        mainKey: "main",
+      }),
+    ).toBe("agent:rail-business:customer-42");
   });
 
   it("keeps global scope untouched", () => {

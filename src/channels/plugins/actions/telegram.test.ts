@@ -12,8 +12,61 @@ describe("telegramMessageActions", () => {
   it("excludes sticker actions when not enabled", () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
     const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).toContain("sendAttachment");
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
+  });
+
+  it("maps filePath sends into telegram media uploads", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "123",
+        filePath: "/tmp/report.csv",
+        caption: "report",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "123",
+        content: "report",
+        mediaUrl: "/tmp/report.csv",
+      }),
+      cfg,
+    );
+  });
+
+  it("supports explicit sendAttachment for Telegram", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "sendAttachment",
+      params: {
+        to: "123",
+        path: "/tmp/remdep_contacts.csv",
+        caption: "CSV",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "123",
+        content: "CSV",
+        mediaUrl: "/tmp/remdep_contacts.csv",
+      }),
+      cfg,
+    );
   });
 
   it("allows media-only sends and passes asVoice", async () => {

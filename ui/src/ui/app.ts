@@ -43,9 +43,14 @@ import {
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels.ts";
 import {
+  archiveActiveChat as archiveActiveChatInternal,
+  clearActiveChat as clearActiveChatInternal,
+  compactActiveChat as compactActiveChatInternal,
   handleAbortChat as handleAbortChatInternal,
+  handleSelectChatAgent as handleSelectChatAgentInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  startNewChat as startNewChatInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
@@ -134,6 +139,9 @@ export class OpenClawApp extends LitElement {
   @state() compactionStatus: CompactionStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatHistoryMode = this.settings.chatHistoryMode ?? "summary";
+  @state() chatSummary: string | null = null;
+  @state() chatContextInfo: AppViewState["chatContextInfo"] = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
@@ -431,6 +439,33 @@ export class OpenClawApp extends LitElement {
 
   async handleAbortChat() {
     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  }
+
+  async handleCompactChat() {
+    await compactActiveChatInternal(
+      this as unknown as Parameters<typeof compactActiveChatInternal>[0],
+    );
+  }
+
+  async handleArchiveChat() {
+    await archiveActiveChatInternal(
+      this as unknown as Parameters<typeof archiveActiveChatInternal>[0],
+    );
+  }
+
+  async handleClearActiveChat() {
+    await clearActiveChatInternal(this as unknown as Parameters<typeof clearActiveChatInternal>[0]);
+  }
+
+  async handleSelectChatAgent(agentId: string) {
+    await handleSelectChatAgentInternal(
+      this as unknown as Parameters<typeof handleSelectChatAgentInternal>[0],
+      agentId,
+    );
+  }
+
+  async handleStartNewChat() {
+    await startNewChatInternal(this as unknown as Parameters<typeof startNewChatInternal>[0]);
   }
 
   removeQueuedMessage(id: string) {

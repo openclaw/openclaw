@@ -4,12 +4,20 @@ import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  buildContextUsageSnapshot,
+  shouldRunHardLimitPreflightCompact,
+} from "../../agents/context-policy.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -19,6 +27,12 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  applyChatHistoryWindow,
+  compactTranscriptForPreflight,
+  persistChatSummary,
+  resolveEffectiveHistoryMode,
+} from "../chat-context.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -48,6 +62,113 @@ type TranscriptAppendResult = {
 };
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+
+type PreflightCompactGuard = {
+  attempted: boolean;
+  compacted: boolean;
+};
+
+type PreservedUserInput = {
+  inboundMessage: string;
+  parsedMessage: string;
+  parsedImages: ChatImageContent[];
+  normalizedAttachments: Array<{
+    type?: string;
+    mimeType?: string;
+    fileName?: string;
+    content?: string;
+  }>;
+};
+
+const HARD_LIMIT_PREFLIGHTS = new Map<string, Promise<boolean>>();
+
+function createPreflightCompactGuard(): PreflightCompactGuard {
+  return { attempted: false, compacted: false };
+}
+
+export async function performHardLimitPreflightCompact(params: {
+  sessionKey: string;
+  agentId: string;
+  storePath?: string;
+  entry?: {
+    sessionId?: string;
+    sessionFile?: string;
+    totalTokens?: number;
+    totalTokensFresh?: boolean;
+    contextTokens?: number;
+    historyLoadMode?: "summary" | "full";
+    archivedAt?: number;
+    summaryUpdatedAt?: number;
+    lastCompactedAt?: number;
+    updatedAt?: number;
+  };
+  guard: PreflightCompactGuard;
+}): Promise<boolean> {
+  if (params.guard.attempted) {
+    return params.guard.compacted;
+  }
+  params.guard.attempted = true;
+  const shouldCompact = shouldRunHardLimitPreflightCompact({
+    totalTokens: resolveFreshSessionTotalTokens(params.entry),
+    contextWindow: params.entry?.contextTokens,
+  });
+  if (!shouldCompact || !params.entry?.sessionId || !params.storePath) {
+    return false;
+  }
+  const existing = HARD_LIMIT_PREFLIGHTS.get(params.sessionKey);
+  if (existing) {
+    params.guard.compacted = await existing;
+    return params.guard.compacted;
+  }
+  const run = (async () => {
+    const { entry: latestEntry, storePath } = loadSessionEntry(params.sessionKey);
+    const stillNeedsCompact = shouldRunHardLimitPreflightCompact({
+      totalTokens: resolveFreshSessionTotalTokens(latestEntry),
+      contextWindow: latestEntry?.contextTokens,
+    });
+    if (!stillNeedsCompact || !latestEntry?.sessionId || !storePath) {
+      return false;
+    }
+    const transcriptPath = resolveTranscriptPath({
+      sessionId: latestEntry.sessionId,
+      storePath,
+      sessionFile: latestEntry.sessionFile,
+      agentId: params.agentId,
+    });
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+      return false;
+    }
+    const messages = readSessionMessages(latestEntry.sessionId, storePath, latestEntry.sessionFile);
+    const result = compactTranscriptForPreflight({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: latestEntry.sessionId,
+      entry: latestEntry,
+      transcriptPath,
+      messages,
+    });
+    if (!result.compacted) {
+      return false;
+    }
+    await updateSessionStore(storePath, (store) => {
+      const entryToUpdate = store[params.sessionKey];
+      if (!entryToUpdate) {
+        return;
+      }
+      entryToUpdate.historyLoadMode = "summary";
+      entryToUpdate.summaryUpdatedAt = result.summary?.updatedAt ?? Date.now();
+      entryToUpdate.lastCompactedAt = Date.now();
+      entryToUpdate.totalTokensFresh = false;
+      entryToUpdate.updatedAt = Date.now();
+    });
+    return true;
+  })().finally(() => {
+    HARD_LIMIT_PREFLIGHTS.delete(params.sessionKey);
+  });
+  HARD_LIMIT_PREFLIGHTS.set(params.sessionKey, run);
+  params.guard.compacted = await run;
+  return params.guard.compacted;
+}
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -188,6 +309,10 @@ function appendAssistantTranscriptMessage(params: {
   }
 }
 
+function isArchivedSessionEntry(entry: { archivedAt?: number } | undefined): boolean {
+  return typeof entry?.archivedAt === "number" && entry.archivedAt > 0;
+}
+
 function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
   const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
   context.agentRunSeq.set(runId, next);
@@ -245,12 +370,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const { sessionKey, limit, historyMode, tailCount } = params as {
       sessionKey: string;
       limit?: number;
+      historyMode?: "summary" | "full";
+      tailCount?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
     const hardMax = 1000;
@@ -259,14 +387,24 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+    const historyWindow = applyChatHistoryWindow({
+      agentId: sessionAgentId,
+      sessionKey,
+      messages: sanitized,
+      entry,
+      historyMode,
+      tailCount,
+    });
+    const capped = capArrayByJsonBytes(
+      historyWindow.messages,
+      getMaxChatHistoryMessagesBytes(),
+    ).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
       if (configured) {
         thinkingLevel = configured;
       } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
         const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({
@@ -282,6 +420,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: capped,
+      historyMode: historyWindow.historyMode,
+      tailCount: historyWindow.tailCount,
+      summary: historyWindow.summary,
+      context: buildContextUsageSnapshot({
+        totalTokens: resolveFreshSessionTotalTokens(entry),
+        contextWindow: entry?.contextTokens,
+      }),
       thinkingLevel,
       verboseLevel,
     });
@@ -372,6 +517,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      historyMode?: "summary" | "full";
       idempotencyKey: string;
     };
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
@@ -427,14 +573,36 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const preservedUserInput: PreservedUserInput = {
+      inboundMessage,
+      parsedMessage,
+      parsedImages,
+      normalizedAttachments,
+    };
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+    });
+    const effectiveHistoryMode = resolveEffectiveHistoryMode(p.historyMode, entry);
+    if (entry && effectiveHistoryMode !== entry.historyLoadMode) {
+      const { storePath } = loadSessionEntry(rawSessionKey);
+      await updateSessionStore(storePath, (store) => {
+        const current = store[sessionKey];
+        if (!current) {
+          return;
+        }
+        current.historyLoadMode = effectiveHistoryMode;
+      });
+    }
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
     });
     const now = Date.now();
     const clientRunId = p.idempotencyKey;
+    const preflightGuard = createPreflightCompactGuard();
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -488,6 +656,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
+      await performHardLimitPreflightCompact({
+        sessionKey,
+        agentId,
+        storePath: loadSessionEntry(rawSessionKey).storePath,
+        entry,
+        guard: preflightGuard,
+      });
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
@@ -502,22 +677,27 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
-      const trimmedMessage = parsedMessage.trim();
+      const trimmedMessage = preservedUserInput.parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = injectThinking
+        ? `/think ${p.thinking} ${preservedUserInput.parsedMessage}`
+        : preservedUserInput.parsedMessage;
       const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+      const stampedMessage = injectTimestamp(
+        preservedUserInput.parsedMessage,
+        timestampOptsFromConfig(cfg),
+      );
 
       const ctx: MsgContext = {
-        Body: parsedMessage,
+        Body: preservedUserInput.parsedMessage,
         BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
-        RawBody: parsedMessage,
+        RawBody: preservedUserInput.inboundMessage,
         CommandBody: commandBody,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
@@ -532,10 +712,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes,
       };
 
-      const agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-      });
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId,
@@ -567,7 +743,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         replyOptions: {
           runId: clientRunId,
           abortSignal: abortController.signal,
-          images: parsedImages.length > 0 ? parsedImages : undefined,
+          images:
+            preservedUserInput.parsedImages.length > 0
+              ? preservedUserInput.parsedImages
+              : undefined,
           disableBlockStreaming: true,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
@@ -603,30 +782,54 @@ export const chatHandlers: GatewayRequestHandlers = {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
-              });
-              if (appended.ok) {
-                message = appended.message;
+              if (!isArchivedSessionEntry(latestEntry)) {
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
+                });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               } else {
                 context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  `skip assistant transcript append for archived session "${sessionKey}"`,
                 );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+              }
+              if (!isArchivedSessionEntry(latestEntry)) {
+                try {
+                  const latestMessages = readSessionMessages(
+                    sessionId,
+                    latestStorePath,
+                    latestEntry?.sessionFile,
+                  );
+                  persistChatSummary({
+                    agentId,
+                    sessionKey,
+                    sessionId,
+                    entry: latestEntry,
+                    messages: latestMessages,
+                  });
+                } catch (err) {
+                  context.logGateway.warn(`webchat summary update failed: ${formatForLog(err)}`);
+                }
               }
             }
             broadcastChatFinal({

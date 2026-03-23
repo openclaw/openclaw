@@ -142,11 +142,11 @@ describe("runMessageAction threading auto-injection", () => {
       action: "send",
       params: {
         channel: "telegram",
-        target: "telegram:123",
+        target: "telegram:-100123",
         message: "hi",
       },
       toolContext: {
-        currentChannelId: "telegram:123",
+        currentChannelId: "telegram:-100123",
         currentThreadTs: "42",
       },
       agentId: "main",
@@ -158,6 +158,35 @@ describe("runMessageAction threading auto-injection", () => {
     };
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it("does not auto-inject telegram threadId in direct messages", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "telegram:156931940",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "telegram:156931940",
+        currentThreadTs: "3764",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls.at(-1)?.[0] as {
+      threadId?: string;
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.threadId).toBeUndefined();
+    expect(call?.ctx?.params?.threadId).toBeUndefined();
   });
 
   it("skips telegram auto-threading when target chat differs", async () => {
@@ -198,11 +227,11 @@ describe("runMessageAction threading auto-injection", () => {
       action: "send",
       params: {
         channel: "telegram",
-        target: "telegram:group:123",
+        target: "telegram:group:-100123",
         message: "hi",
       },
       toolContext: {
-        currentChannelId: "telegram:123",
+        currentChannelId: "telegram:-100123",
         currentThreadTs: "42",
       },
       agentId: "main",

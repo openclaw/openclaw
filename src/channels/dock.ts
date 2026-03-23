@@ -125,6 +125,15 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         };
       },
     },
+    agentPrompt: {
+      messageToolHints: () => [
+        "- For a real Telegram file attachment, use `message` with `action=sendAttachment` (or `action=send`) and pass `media`, `path`, or `filePath`.",
+        "- If you created a local file during this run, pass its exact `filePath`; Telegram delivery will upload the file, not paste its contents as text.",
+        "- Never claim a file was sent unless the `message` tool already succeeded. If the tool sends the attachment, do not also narrate 'sending' in plain text.",
+        "- When the user says 'пришли файлом', 'скинь сюда', or 'отправь вложением', you must use the message tool for an actual attachment, not answer with the file contents.",
+        "- If the user refers to an existing local database/file, first inspect the workspace with read/find/exec, build the requested export, then send the produced file attachment.",
+      ],
+    },
   },
   whatsapp: {
     id: "whatsapp",

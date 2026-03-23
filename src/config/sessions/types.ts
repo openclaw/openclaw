@@ -23,6 +23,9 @@ export type SessionOrigin = {
 };
 
 export type SessionEntry = {
+  agentId?: string;
+  chatId?: string;
+  archivedAt?: number;
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
    * Stored on the main session entry.
@@ -82,6 +85,9 @@ export type SessionEntry = {
   model?: string;
   contextTokens?: number;
   compactionCount?: number;
+  historyLoadMode?: "summary" | "full";
+  summaryUpdatedAt?: number;
+  lastCompactedAt?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   cliSessionIds?: Record<string, string>;

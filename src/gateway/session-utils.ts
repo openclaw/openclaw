@@ -674,6 +674,7 @@ export function listSessionsFromStore(params: {
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const includeArchived = opts.includeArchived === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -686,7 +687,7 @@ export function listSessionsFromStore(params: {
       : undefined;
 
   let sessions = Object.entries(store)
-    .filter(([key]) => {
+    .filter(([key, entry]) => {
       if (isCronRunSessionKey(key)) {
         return false;
       }
@@ -705,6 +706,9 @@ export function listSessionsFromStore(params: {
           return false;
         }
         return normalizeAgentId(parsed.agentId) === agentId;
+      }
+      if (!includeArchived && typeof entry?.archivedAt === "number" && entry.archivedAt > 0) {
+        return false;
       }
       return true;
     })
@@ -758,6 +762,8 @@ export function listSessionsFromStore(params: {
       const model = resolvedModel.model ?? DEFAULT_MODEL;
       return {
         key,
+        agentId: sessionAgentId,
+        chatId: entry?.chatId,
         entry,
         kind: classifySessionKey(key, entry),
         label: entry?.label,
@@ -769,6 +775,7 @@ export function listSessionsFromStore(params: {
         chatType: entry?.chatType,
         origin,
         updatedAt,
+        archivedAt: entry?.archivedAt,
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,

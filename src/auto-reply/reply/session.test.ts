@@ -257,6 +257,32 @@ describe("initSessionState RawBody", () => {
   });
 });
 
+describe("initSessionState canonical agent metadata", () => {
+  it("writes agent-aware metadata for direct explicit session keys", async () => {
+    const root = await makeCaseDir("openclaw-agent-aware-session-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = {
+      agents: {
+        list: [{ id: "legal" }],
+      },
+      session: { store: storePath, mainKey: "main" },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe("agent:legal:main");
+    expect(result.sessionEntry.agentId).toBe("legal");
+    expect(result.sessionEntry.chatId).toBeTruthy();
+  });
+});
+
 describe("initSessionState reset policy", () => {
   beforeEach(() => {
     vi.useFakeTimers();

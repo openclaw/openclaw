@@ -23,6 +23,8 @@ export type CompactionIndicatorStatus = {
 
 export type ChatProps = {
   sessionKey: string;
+  activeAgentId?: string;
+  agents?: Array<{ id: string; name?: string }>;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
@@ -35,6 +37,17 @@ export type ChatProps = {
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
+  historyMode?: "summary" | "full";
+  summary?: string | null;
+  contextInfo?: {
+    totalTokens?: number | null;
+    contextWindow?: number | null;
+    utilization?: number | null;
+    state?: string;
+    shouldWarn?: boolean;
+    shouldSuggestCompact?: boolean;
+    shouldAutoCompact?: boolean;
+  } | null;
   draft: string;
   queue: ChatQueueItem[];
   connected: boolean;
@@ -63,6 +76,11 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
+  onAgentChange?: (agentId: string) => void;
+  onHistoryModeChange?: (mode: "summary" | "full") => void;
+  onCompactChat?: () => void;
+  onArchiveChat?: () => void;
+  onClearActiveChat?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
@@ -186,6 +204,63 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+function renderContextMeta(props: ChatProps) {
+  const agents = props.agents ?? [];
+  const historyMode = props.historyMode ?? "summary";
+  const totalTokens = props.contextInfo?.totalTokens;
+  const contextWindow = props.contextInfo?.contextWindow;
+  const percent =
+    typeof props.contextInfo?.utilization === "number"
+      ? Math.round(props.contextInfo.utilization * 100)
+      : null;
+  const state = props.contextInfo?.state ?? "ok";
+  return html`
+    <div class="chat-toolbar">
+      <label class="field">
+        <span>Agent</span>
+        <select
+          ?disabled=${agents.length === 0 || !props.onAgentChange}
+          @change=${(e: Event) => props.onAgentChange?.((e.target as HTMLSelectElement).value)}
+        >
+          ${agents.map(
+            (agent) => html`<option value=${agent.id} ?selected=${agent.id === props.activeAgentId}>
+              ${agent.name ?? agent.id}
+            </option>`,
+          )}
+        </select>
+      </label>
+      <label class="field">
+        <span>History</span>
+        <select
+          ?disabled=${!props.onHistoryModeChange}
+          @change=${(e: Event) =>
+            props.onHistoryModeChange?.(
+              (e.target as HTMLSelectElement).value as "summary" | "full",
+            )}
+        >
+          <option value="summary" ?selected=${historyMode === "summary"}>Load summary only</option>
+          <option value="full" ?selected=${historyMode === "full"}>Load full history</option>
+        </select>
+      </label>
+      <div class="pill ${props.contextInfo?.shouldWarn ? "pill--warn" : ""}">
+        <span>Context</span>
+        <span class="mono">
+          ${typeof totalTokens === "number" ? totalTokens.toLocaleString() : "?"}
+          ${typeof contextWindow === "number" ? html` / ${contextWindow.toLocaleString()}` : nothing}
+          ${percent != null ? html` (${percent}%)` : nothing}
+        </span>
+        <span>${state}</span>
+      </div>
+      <div class="chat-toolbar__actions">
+        <button class="btn" type="button" @click=${props.onNewSession}>New chat</button>
+        <button class="btn" type="button" ?disabled=${!props.onCompactChat} @click=${props.onCompactChat}>Compact chat</button>
+        <button class="btn" type="button" ?disabled=${!props.onArchiveChat} @click=${props.onArchiveChat}>Archive chat</button>
+        <button class="btn" type="button" ?disabled=${!props.onClearActiveChat} @click=${props.onClearActiveChat}>Clear active chat</button>
+      </div>
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -270,6 +345,12 @@ export function renderChat(props: ChatProps) {
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
       ${
+        (props.historyMode ?? "summary") === "summary" && props.summary
+          ? html`<div class="callout"><strong>Summary loaded.</strong> ${props.summary}</div>`
+          : nothing
+      }
+
+      ${
         props.focusMode
           ? html`
             <button
@@ -284,6 +365,8 @@ export function renderChat(props: ChatProps) {
           `
           : nothing
       }
+
+      ${renderContextMeta(props)}
 
       <div
         class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"

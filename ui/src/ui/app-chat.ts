@@ -1,5 +1,6 @@
 import type { OpenClawApp } from "./app.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
+import type { UiSettings } from "./storage.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll } from "./app-scroll.ts";
@@ -11,16 +12,27 @@ import { normalizeBasePath } from "./navigation.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
+  client: OpenClawApp["client"];
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
+  chatMessages?: unknown[];
+  chatSummary?: string | null;
+  chatContextInfo?: Record<string, unknown> | null;
+  chatToolMessages?: unknown[];
+  chatStream?: string | null;
+  chatStreamStartedAt?: number | null;
+  compactionStatus?: unknown;
   sessionKey: string;
   basePath: string;
   hello: GatewayHelloOk | null;
+  settings: UiSettings;
+  applySettings: (next: UiSettings) => void;
   chatAvatarUrl: string | null;
+  chatHistoryMode: "summary" | "full";
   refreshSessionsAfterChat: Set<string>;
 };
 
@@ -66,6 +78,62 @@ export async function handleAbortChat(host: ChatHost) {
   }
   host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
+}
+
+export function resetActiveChatRuntimeState(host: ChatHost) {
+  host.chatRunId = null;
+  host.chatSending = false;
+  host.chatQueue = [];
+  host.chatMessage = "";
+  host.chatAttachments = [];
+  host.chatAvatarUrl = null;
+  host.refreshSessionsAfterChat.clear();
+  if ("chatMessages" in host) {
+    host.chatMessages = [];
+  }
+  if ("chatSummary" in host) {
+    host.chatSummary = null;
+  }
+  if ("chatContextInfo" in host) {
+    host.chatContextInfo = null;
+  }
+  if ("chatToolMessages" in host) {
+    host.chatToolMessages = [];
+  }
+  if ("chatStream" in host) {
+    host.chatStream = null;
+  }
+  if ("chatStreamStartedAt" in host) {
+    host.chatStreamStartedAt = null;
+  }
+  if ("compactionStatus" in host) {
+    host.compactionStatus = null;
+  }
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+}
+
+async function resetActiveChatRuntime(host: ChatHost) {
+  if (host.connected && host.chatRunId) {
+    await abortChatRun(host as unknown as OpenClawApp);
+  }
+  resetActiveChatRuntimeState(host);
+}
+
+async function switchActiveChatSession(
+  host: ChatHost,
+  nextSessionKey: string,
+  opts?: { skipRuntimeReset?: boolean },
+) {
+  if (!opts?.skipRuntimeReset) {
+    await resetActiveChatRuntime(host);
+  }
+  host.sessionKey = nextSessionKey;
+  host.applySettings({
+    ...host.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  await refreshChat(host, { scheduleScroll: false });
 }
 
 function enqueueChatMessage(
@@ -215,11 +283,65 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
   }
 }
 
+export async function compactActiveChat(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  await host.client.request("sessions.compact", { key: host.sessionKey });
+  await refreshChat(host, { scheduleScroll: false });
+}
+
+export async function clearActiveChat(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  await resetActiveChatRuntime(host);
+  await host.client.request("sessions.reset", { key: host.sessionKey, reason: "reset" });
+  await refreshChat(host, { scheduleScroll: false });
+}
+
+export async function archiveActiveChat(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const currentSessionKey = host.sessionKey;
+  await resetActiveChatRuntime(host);
+  await host.client.request("sessions.archive", { key: currentSessionKey });
+  const nextSessionKey = buildNewChatSessionKey(host);
+  await switchActiveChatSession(host, nextSessionKey, { skipRuntimeReset: true });
+}
+
+export async function handleSelectChatAgent(host: ChatHost, agentId: string) {
+  const nextSessionKey = buildAgentSessionKey(host, agentId);
+  await switchActiveChatSession(host, nextSessionKey);
+}
+
+export async function startNewChat(host: ChatHost) {
+  await switchActiveChatSession(host, buildNewChatSessionKey(host));
+}
+
 export const flushChatQueueForEvent = flushChatQueue;
 
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
+  mainKey?: string;
 };
+
+function resolveMainKey(host: ChatHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return snapshot?.sessionDefaults?.mainKey?.trim() || "main";
+}
+
+function buildAgentSessionKey(host: ChatHost, agentId: string): string {
+  return `agent:${agentId}:${resolveMainKey(host)}`;
+}
+
+function buildNewChatSessionKey(host: ChatHost): string {
+  const agentId = resolveAgentIdForSession(host) ?? "main";
+  return `agent:${agentId}:chat:${Date.now().toString(36)}`;
+}
 
 function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
