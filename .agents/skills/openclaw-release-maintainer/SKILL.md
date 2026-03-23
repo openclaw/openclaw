@@ -37,7 +37,7 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - For fallback correction tags like `vYYYY.M.D-N`, the repo version locations still stay at `YYYY.M.D`.
 - “Bump version everywhere” means all version locations above except `appcast.xml`.
 - Release signing and notary credentials live outside the repo in the private maintainer docs.
-- The production Sparkle feed lives at `https://openclaw.ai/appcast.xml`, and the canonical published file is `openclaw.ai/public/appcast.xml` in the separate `openclaw.ai` repo.
+- The production Sparkle feed lives at `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`, and the canonical published file is `appcast.xml` on `main` in the `openclaw` repo.
 
 ## Build changelog-backed release notes
 
@@ -80,7 +80,7 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - Include mac release readiness in preflight:
   - if the release includes mac artifacts, run or inspect the mac packaging/notary/appcast flow
   - if the release does not include mac artifacts, explicitly confirm that exception before continuing
-- Treat the `openclaw.ai` appcast update as part of mac release readiness, not an optional follow-up.
+- Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
 - For stable releases, confirm the latest beta already passed the broader release workflows before cutting stable.
 - If any required build, packaging step, or release workflow is red, do not say the release is ready.
 
@@ -89,7 +89,7 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - Core `openclaw` publish uses GitHub trusted publishing.
 - The publish run must be started manually with `workflow_dispatch`.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
-- Mac publish uses `.github/workflows/macos-release.yml`, requires the `mac-release` environment approval, and also needs credentials that can push `openclaw.ai/public/appcast.xml`.
+- Mac publish uses `.github/workflows/macos-release.yml`, requires the `mac-release` environment approval, and must update `appcast.xml` on `main`.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for core releases.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
@@ -106,7 +106,7 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `workflow_dispatch` and the same tag.
 10. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-11. If the release includes mac artifacts, start `.github/workflows/macos-release.yml`, wait for `mac-release` approval, and confirm it updates `openclaw.ai/public/appcast.xml`.
+11. If the release includes mac artifacts, start `.github/workflows/macos-release.yml`, wait for `mac-release` approval, and confirm it updates `appcast.xml` on `main`.
 12. After publish, verify npm and any attached release artifacts.
 
 ## GHSA advisory work

@@ -16,9 +16,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.23.0"
-  SPARKLE_FEED_URL: https://openclaw.ai/appcast.xml
-  OPENCLAW_AI_REPO: openclaw/openclaw.ai
-  OPENCLAW_AI_APPCAST_PATH: public/appcast.xml
+  SPARKLE_FEED_URL: https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
+  APPCAST_PATH: appcast.xml
 
 jobs:
   preflight_macos_release:
@@ -226,18 +225,17 @@ jobs:
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
         run: scripts/package-mac-dist.sh
 
-      - name: Checkout openclaw.ai
+      - name: Checkout main branch for appcast
         uses: actions/checkout@v6
         with:
-          repository: ${{ env.OPENCLAW_AI_REPO }}
-          path: openclaw.ai
-          token: ${{ secrets.OPENCLAW_AI_REPO_TOKEN }}
+          path: openclaw-main
+          ref: main
           fetch-depth: 0
 
-      - name: Seed appcast from openclaw.ai
+      - name: Seed appcast from main
         run: |
           set -euo pipefail
-          APPCAST_SOURCE="openclaw.ai/${OPENCLAW_AI_APPCAST_PATH}"
+          APPCAST_SOURCE="openclaw-main/${APPCAST_PATH}"
           if [[ -f "$APPCAST_SOURCE" ]]; then
             cp "$APPCAST_SOURCE" appcast.xml
           else
@@ -264,22 +262,23 @@ jobs:
             --clobber \
             --repo "$GITHUB_REPOSITORY"
 
-      - name: Publish appcast to openclaw.ai
+      - name: Publish appcast to main
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          APPCAST_DEST="openclaw.ai/${OPENCLAW_AI_APPCAST_PATH}"
+          APPCAST_DEST="openclaw-main/${APPCAST_PATH}"
           mkdir -p "$(dirname "$APPCAST_DEST")"
           cp appcast.xml "$APPCAST_DEST"
-          cd openclaw.ai
+          cd openclaw-main
           git config user.name "openclaw-release-bot"
           git config user.email "releases@openclaw.ai"
-          if git diff --quiet -- "$OPENCLAW_AI_APPCAST_PATH"; then
+          if git diff --quiet -- "$APPCAST_PATH"; then
             echo "Appcast already up to date."
             exit 0
           fi
-          git add "$OPENCLAW_AI_APPCAST_PATH"
+          git add "$APPCAST_PATH"
           git commit -m "macos: update appcast for ${RELEASE_TAG}"
           git push origin HEAD:main
 
