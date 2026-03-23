@@ -33,8 +33,8 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
   };
 });
 
-let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
-let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
+const { AcpSessionManager } = await import("./manager.js");
+const { AcpRuntimeError } = await import("../runtime/errors.js");
 
 const baseCfg = {
   acp: {
@@ -149,10 +149,7 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ AcpSessionManager } = await import("./manager.js"));
-    ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+  beforeEach(() => {
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
@@ -1489,7 +1486,7 @@ describe("AcpSessionManager", () => {
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai-codex/gpt-5.3-codex",
     });
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
@@ -1746,7 +1743,7 @@ describe("AcpSessionManager", () => {
         ...readySessionMeta(),
         runtimeOptions: {
           runtimeMode: "plan",
-          model: "openai-codex/gpt-5.4",
+          model: "openai-codex/gpt-5.3-codex",
           permissionProfile: "strict",
           timeoutSeconds: 120,
         },
@@ -1770,7 +1767,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "model",
-        value: "openai-codex/gpt-5.4",
+        value: "openai-codex/gpt-5.3-codex",
       }),
     );
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
@@ -1812,7 +1809,7 @@ describe("AcpSessionManager", () => {
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         key: "model",
-        value: "gpt-5.4",
+        value: "gpt-5.3-codex",
       }),
     ).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",

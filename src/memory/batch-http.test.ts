@@ -14,9 +14,7 @@ describe("postJsonWithRetry", () => {
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
 
   beforeEach(async () => {
-    vi.resetModules();
     vi.clearAllMocks();
-    vi.resetModules();
     ({ postJsonWithRetry } = await import("./batch-http.js"));
     const retryModule = await import("../infra/retry.js");
     const postJsonModule = await import("./post-json.js");

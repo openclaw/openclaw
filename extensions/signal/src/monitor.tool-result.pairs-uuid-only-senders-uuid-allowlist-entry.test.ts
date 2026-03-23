@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   config,
   flush,
@@ -8,7 +8,9 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
-let monitorSignalProvider: typeof import("./monitor.js").monitorSignalProvider;
+
+// Import after the harness registers `vi.mock(...)` for Signal internals.
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const { replyMock, sendMock, streamMock, upsertPairingRequestMock } =
   getSignalToolResultTestMocks();
@@ -19,11 +21,6 @@ async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider(opts);
 }
 describe("monitorSignalProvider tool results", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ monitorSignalProvider } = await import("./monitor.js"));
-  });
-
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
     const baseChannels = (config.channels ?? {}) as Record<string, unknown>;
     const baseSignal = (baseChannels.signal ?? {}) as Record<string, unknown>;

@@ -92,7 +92,6 @@ const disableIsolation =
   process.env.OPENCLAW_TEST_NO_ISOLATE !== "false";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
-const noIsolateArgs = disableIsolation ? ["--isolate=false"] : [];
 const skipDefaultRuns = process.env.OPENCLAW_TEST_SKIP_DEFAULT === "1";
 const parsePoolOverride = (value, fallback) => {
   if (value === "threads" || value === "forks") {
@@ -446,7 +445,7 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
         "--config",
         "vitest.unit.config.ts",
         `--pool=${defaultUnitPool}`,
-        ...noIsolateArgs,
+        ...(disableIsolation ? ["--isolate=false"] : []),
       ],
     }));
 });
@@ -457,15 +456,7 @@ const heavyUnitBuckets = packFilesByDuration(
 );
 const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
-  args: [
-    "vitest",
-    "run",
-    "--config",
-    "vitest.unit.config.ts",
-    "--pool=forks",
-    ...noIsolateArgs,
-    ...files,
-  ],
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
 const unitThreadEntries =
   unitThreadPinnedFiles.length > 0
@@ -478,7 +469,6 @@ const unitThreadEntries =
             "--config",
             "vitest.unit.config.ts",
             "--pool=threads",
-            ...noIsolateArgs,
             ...unitThreadPinnedFiles,
           ],
         },
@@ -486,15 +476,7 @@ const unitThreadEntries =
     : [];
 const unitIsolatedEntries = unitForkIsolatedFiles.map((file) => ({
   name: `unit-${path.basename(file, ".test.ts")}-isolated`,
-  args: [
-    "vitest",
-    "run",
-    "--config",
-    "vitest.unit.config.ts",
-    "--pool=forks",
-    ...noIsolateArgs,
-    file,
-  ],
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
 }));
 const baseRuns = [
   ...(skipDefaultRuns
@@ -506,28 +488,12 @@ const baseRuns = [
           ...unitHeavyEntries,
           ...unitMemoryIsolatedFiles.map((file) => ({
             name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
-            args: [
-              "vitest",
-              "run",
-              "--config",
-              "vitest.unit.config.ts",
-              "--pool=forks",
-              ...noIsolateArgs,
-              file,
-            ],
+            args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
           })),
           ...unitThreadEntries,
           ...channelSingletonFiles.map((file) => ({
             name: `${path.basename(file, ".test.ts")}-channels-isolated`,
-            args: [
-              "vitest",
-              "run",
-              "--config",
-              "vitest.channels.config.ts",
-              "--pool=forks",
-              ...noIsolateArgs,
-              file,
-            ],
+            args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
           })),
         ]
       : [
@@ -539,7 +505,7 @@ const baseRuns = [
               "--config",
               "vitest.unit.config.ts",
               "--pool=forks",
-              ...noIsolateArgs,
+              ...(disableIsolation ? ["--isolate=false"] : []),
             ],
           },
         ]),
@@ -557,7 +523,7 @@ const baseRuns = [
                   ),
                 }
               : undefined,
-          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
         },
       ]
     : []),
@@ -565,14 +531,7 @@ const baseRuns = [
     ? [
         {
           name: "gateway",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.gateway.config.ts",
-            "--pool=forks",
-            ...noIsolateArgs,
-          ],
+          args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks"],
         },
       ]
     : []),
@@ -615,7 +574,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "--config",
         "vitest.unit.config.ts",
         `--pool=${forceForks ? "forks" : defaultUnitPool}`,
-        ...noIsolateArgs,
+        ...(disableIsolation ? ["--isolate=false"] : []),
         ...filters,
       ],
     };
@@ -623,29 +582,13 @@ const createTargetedEntry = (owner, isolated, filters) => {
   if (owner === "unit-threads") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.unit.config.ts",
-        "--pool=threads",
-        ...noIsolateArgs,
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", ...filters],
     };
   }
   if (owner === "base-threads") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.config.ts",
-        "--pool=threads",
-        ...noIsolateArgs,
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.config.ts", "--pool=threads", ...filters],
     };
   }
   if (owner === "extensions") {
@@ -657,7 +600,6 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "--config",
         "vitest.extensions.config.ts",
         ...(forceForks ? ["--pool=forks"] : []),
-        ...noIsolateArgs,
         ...filters,
       ],
     };
@@ -665,40 +607,25 @@ const createTargetedEntry = (owner, isolated, filters) => {
   if (owner === "gateway") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.gateway.config.ts",
-        "--pool=forks",
-        ...noIsolateArgs,
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks", ...filters],
     };
   }
   if (owner === "channels") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.channels.config.ts",
-        ...noIsolateArgs,
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...filters],
     };
   }
   if (owner === "live") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.live.config.ts", ...noIsolateArgs, ...filters],
+      args: ["vitest", "run", "--config", "vitest.live.config.ts", ...filters],
     };
   }
   if (owner === "e2e") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...noIsolateArgs, ...filters],
+      args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...filters],
     };
   }
   return {
@@ -708,7 +635,6 @@ const createTargetedEntry = (owner, isolated, filters) => {
       "run",
       "--config",
       "vitest.config.ts",
-      ...noIsolateArgs,
       ...(forceForks ? ["--pool=forks"] : []),
       ...filters,
     ],

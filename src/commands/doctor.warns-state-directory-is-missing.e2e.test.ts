@@ -1,24 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot } from "./doctor.e2e-harness.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-const terminalNoteMock = vi.fn();
-
-vi.mock("../terminal/note.js", () => ({
-  note: (...args: unknown[]) => terminalNoteMock(...args),
-}));
+vi.doUnmock("./doctor-state-integrity.js");
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doUnmock("./doctor-state-integrity.js");
+  beforeAll(async () => {
     ({ doctorCommand } = await import("./doctor.js"));
-    terminalNoteMock.mockClear();
   });
 
   it("warns when the state directory is missing", async () => {
@@ -27,14 +20,14 @@ describe("doctor command", () => {
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
     process.env.OPENCLAW_STATE_DIR = missingDir;
+    note.mockClear();
+
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
     });
 
-    const stateNote = terminalNoteMock.mock.calls.find(([message]) =>
-      String(message).includes("state directory missing"),
-    );
+    const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
   });
@@ -62,7 +55,7 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const warned = terminalNoteMock.mock.calls.some(
+    const warned = note.mock.calls.some(
       ([message, title]) =>
         title === "OpenCode" &&
         String(message).includes("models.providers.opencode") &&
@@ -80,6 +73,8 @@ describe("doctor command", () => {
 
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-1234567890";
+    note.mockClear();
+
     try {
       await doctorCommand(createDoctorRuntime(), {
         nonInteractive: true,
@@ -93,7 +88,7 @@ describe("doctor command", () => {
       }
     }
 
-    const warned = terminalNoteMock.mock.calls.some(([message]) =>
+    const warned = note.mock.calls.some(([message]) =>
       String(message).includes("Gateway auth is off or missing a token"),
     );
     expect(warned).toBe(false);
@@ -112,12 +107,14 @@ describe("doctor command", () => {
       },
     });
 
+    note.mockClear();
+
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
     });
 
-    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
     expect(gatewayAuthNote).toBeTruthy();
     expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
     expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
@@ -150,6 +147,7 @@ describe("doctor command", () => {
 
     const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    note.mockClear();
     try {
       await doctorCommand(createDoctorRuntime(), {
         nonInteractive: true,
@@ -163,7 +161,7 @@ describe("doctor command", () => {
       }
     }
 
-    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
     expect(gatewayAuthNote).toBeTruthy();
     expect(String(gatewayAuthNote?.[0])).toContain(
       "Gateway token is managed via SecretRef and is currently unavailable.",

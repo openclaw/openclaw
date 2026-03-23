@@ -3,11 +3,8 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "../cron/isolated-agent.mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
-import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import * as authProfilesModule from "../agents/auth-profiles.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
-import { resolveSession } from "../agents/command/session.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -15,19 +12,13 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import * as sessionPathsModule from "../config/sessions/paths.js";
-import {
-  emitAgentEvent,
-  onAgentEvent,
-  resetAgentEventsForTest,
-  resetAgentRunContextForTest,
-} from "../infra/agent-events.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import * as agentDeliveryModule from "./agent/delivery.js";
 
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
@@ -66,14 +57,6 @@ vi.mock("../agents/workspace.js", () => {
   };
 });
 
-vi.mock("../agents/command/session-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/command/session-store.js")>();
-  return {
-    ...actual,
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
-  };
-});
-
 vi.mock("../agents/skills.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
 }));
@@ -94,6 +77,7 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
 const setRuntimeConfigSnapshotSpy = vi.spyOn(configModule, "setRuntimeConfigSnapshot");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
+const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -106,7 +90,7 @@ function mockConfig(
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
   agentsList?: Array<{ id: string; default?: boolean }>,
 ) {
-  const cfg = {
+  configSpy.mockReturnValue({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
@@ -120,9 +104,7 @@ function mockConfig(
     channels: {
       telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
     },
-  } as OpenClawConfig;
-  configSpy.mockReturnValue(cfg);
-  return cfg;
+  });
 }
 
 async function runWithDefaultAgentConfig(params: {
@@ -186,7 +168,12 @@ function readSessionStore<T>(storePath: string): Record<string, T> {
 }
 
 async function withCrossAgentResumeFixture(
-  run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
+  run: (params: {
+    home: string;
+    storePattern: string;
+    sessionId: string;
+    sessionKey: string;
+  }) => Promise<void>,
 ): Promise<void> {
   await withTempHome(async (home) => {
     const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
@@ -200,11 +187,12 @@ async function withCrossAgentResumeFixture(
         systemSent: true,
       },
     });
-    const cfg = mockConfig(home, storePattern, undefined, undefined, [
+    mockConfig(home, storePattern, undefined, undefined, [
       { id: "dev" },
       { id: "exec", default: true },
     ]);
-    await run({ sessionId, sessionKey, cfg });
+    await agentCommand({ message: "resume me", sessionId }, runtime);
+    await run({ home, storePattern, sessionId, sessionKey });
   });
 }
 
@@ -290,11 +278,6 @@ function createTelegramOutboundPlugin() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest();
-  resetAgentRunContextForTest();
-  resetPluginRuntimeStateForTest();
-  acpManagerTesting.resetAcpSessionManagerForTests();
   configModule.clearRuntimeConfigSnapshot();
   runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
@@ -496,29 +479,19 @@ describe("agentCommand", () => {
   });
 
   it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
-    await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
-      const resolution = resolveSession({ cfg, sessionId });
-      expect(resolution.sessionKey).toBe(sessionKey);
-      const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
-      expect(agentId).toBe("exec");
-      expect(resolveAgentDir(cfg, agentId)).toContain(
-        `${path.sep}agents${path.sep}exec${path.sep}agent`,
-      );
+    await withCrossAgentResumeFixture(async ({ sessionKey }) => {
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionKey).toBe(sessionKey);
+      expect(callArgs?.agentId).toBe("exec");
+      expect(callArgs?.agentDir).toContain(`${path.sep}agents${path.sep}exec${path.sep}agent`);
     });
   });
 
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
-    await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
-      const resolution = resolveSession({ cfg, sessionId });
-      expect(resolution.sessionKey).toBe(sessionKey);
-      const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
-      expect(
-        buildOutboundSessionContext({
-          cfg,
-          sessionKey: resolution.sessionKey,
-          agentId,
-        }),
-      ).toEqual(
+    await withCrossAgentResumeFixture(async ({ sessionKey }) => {
+      const deliverCall = deliverAgentCommandResultSpy.mock.calls.at(-1)?.[0];
+      expect(deliverCall?.opts.sessionKey).toBeUndefined();
+      expect(deliverCall?.outboundSession).toEqual(
         expect.objectContaining({
           key: sessionKey,
           agentId: "exec",

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { startTelegramWebhook } from "./webhook.js";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -93,13 +94,6 @@ vi.mock("grammy", async (importOriginal) => {
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
-
-let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ startTelegramWebhook } = await import("./webhook.js"));
-});
 
 async function fetchWithTimeout(
   input: string,

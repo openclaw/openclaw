@@ -41,11 +41,7 @@ async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, 
   requestUrl.port = String(address.port);
   return await fetch(requestUrl.toString(), {
     method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      "x-plivo-signature-v2": "sig",
-      "x-plivo-signature-v2-nonce": "nonce",
-    },
+    headers: { "content-type": "application/x-www-form-urlencoded" },
     body,
   });
 }

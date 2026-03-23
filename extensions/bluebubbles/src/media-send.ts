@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { basenameFromMediaSource, safeFileURLToPath } from "openclaw/plugin-sdk/infra-runtime";
+import { fileURLToPath } from "node:url";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -30,7 +30,7 @@ function resolveLocalMediaPath(source: string): string {
     return source;
   }
   try {
-    return safeFileURLToPath(source);
+    return fileURLToPath(source);
   } catch {
     throw new Error(`Invalid file:// URL: ${source}`);
   }
@@ -52,11 +52,16 @@ function resolveConfiguredPath(input: string): string {
     throw new Error("Empty mediaLocalRoots entry is not allowed");
   }
   if (trimmed.startsWith("file://")) {
+    let parsed: string;
     try {
-      return safeFileURLToPath(trimmed);
+      parsed = fileURLToPath(trimmed);
     } catch {
       throw new Error(`Invalid file:// URL in mediaLocalRoots: ${input}`);
     }
+    if (!path.isAbsolute(parsed)) {
+      throw new Error(`mediaLocalRoots entries must be absolute paths: ${input}`);
+    }
+    return parsed;
   }
   const resolved = expandHomePath(trimmed);
   if (!path.isAbsolute(resolved)) {
@@ -167,7 +172,25 @@ async function assertLocalMediaPathAllowed(params: {
 }
 
 function resolveFilenameFromSource(source?: string): string | undefined {
-  return basenameFromMediaSource(source);
+  if (!source) {
+    return undefined;
+  }
+  if (source.startsWith("file://")) {
+    try {
+      return path.basename(fileURLToPath(source)) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (HTTP_URL_RE.test(source)) {
+    try {
+      return path.basename(new URL(source).pathname) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const base = path.basename(source);
+  return base || undefined;
 }
 
 export async function sendBlueBubblesMedia(params: {

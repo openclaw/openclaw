@@ -5,11 +5,6 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../browser/control-service.js";
-import {
-  isPersistentBrowserProfileMutation,
-  normalizeBrowserRequestPath,
-  resolveRequestedBrowserProfile,
-} from "../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { loadConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
@@ -226,23 +221,10 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   await ensureBrowserControlService();
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
-  const path = normalizeBrowserRequestPath(pathValue);
-  const body = params.body;
-  const requestedProfile =
-    resolveRequestedBrowserProfile({
-      query: params.query,
-      body,
-      profile: params.profile,
-    }) ?? "";
+  const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
   const allowedProfiles = proxyConfig.allowProfiles;
   if (allowedProfiles.length > 0) {
-    if (isPersistentBrowserProfileMutation(method, path)) {
-      throw new Error(
-        "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
-      );
-    }
-    if (path !== "/profiles") {
+    if (pathValue !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
       if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
         throw new Error("INVALID_REQUEST: browser profile not allowed");
@@ -254,17 +236,20 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     }
   }
 
+  const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
+  const path = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+  const body = params.body;
   const timeoutMs = resolveBrowserProxyTimeout(params.timeoutMs);
   const query: Record<string, unknown> = {};
+  if (requestedProfile) {
+    query.profile = requestedProfile;
+  }
   const rawQuery = params.query ?? {};
   for (const [key, value] of Object.entries(rawQuery)) {
     if (value === undefined || value === null) {
       continue;
     }
     query[key] = typeof value === "string" ? value : String(value);
-  }
-  if (requestedProfile) {
-    query.profile = requestedProfile;
   }
 
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());

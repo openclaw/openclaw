@@ -13,7 +13,6 @@ import {
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -37,6 +36,19 @@ export const SEARCH_PROVIDER_OPTIONS: readonly PluginWebSearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
   });
+
+function sortSearchProviderOptions(
+  providers: PluginWebSearchProviderEntry[],
+): PluginWebSearchProviderEntry[] {
+  return providers.toSorted((left, right) => {
+    const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
 
 function canRepairBundledProviderSelection(
   config: OpenClawConfig,
@@ -74,7 +86,7 @@ export function resolveSearchProviderOptions(
     merged.set(entry.id, entry);
   }
 
-  return sortWebSearchProviders([...merged.values()]);
+  return sortSearchProviderOptions([...merged.values()]);
 }
 
 function resolveSearchProviderEntry(
