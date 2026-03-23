@@ -4242,6 +4242,24 @@
           }
         },
         {
+          "declaration": "export function applyCloudflareAiGatewayConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 85,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyCloudflareAiGatewayProviderConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 41,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
+          }
+        },
+        {
           "declaration": "export function applyOnboardAuthAgentModelsAndProviders(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providers: Record<string, ModelProviderConfig>; }): OpenClawConfig;",
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
@@ -4305,6 +4323,24 @@
           }
         },
         {
+          "declaration": "export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 27,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 8,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
           "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
@@ -4347,6 +4383,24 @@
           "source": {
             "line": 38,
             "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF: \"cloudflare-ai-gateway/claude-sonnet-4-5\";",
+          "exportName": "CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 5,
+            "path": "src/agents/cloudflare-ai-gateway.ts"
+          }
+        },
+        {
+          "declaration": "export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF: \"vercel-ai-gateway/anthropic/claude-opus-4.6\";",
+          "exportName": "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 6,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
           }
         },
         {

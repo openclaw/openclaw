@@ -16,6 +16,16 @@ vi.mock("@line/bot-sdk", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => {
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      child: () => logger,
+    };
+    return logger;
+  },
   logVerbose: () => {},
 }));
 

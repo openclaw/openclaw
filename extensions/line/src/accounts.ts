@@ -1,10 +1,11 @@
-import { type OpenClawConfig, tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
 import type {
   LineAccountConfig,
   LineConfig,
