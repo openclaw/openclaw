@@ -1003,6 +1003,39 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            google: {
+              models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openrouter/google/gemini-2.5-pro",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id",
+        updatedAt: 0,
+        totalTokens: 1205,
+        model: "google/gemini-2.5-pro",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 1.2k/999k");
+    expect(normalized).not.toContain("Context: 1.2k/2.0m");
+  });
+
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {

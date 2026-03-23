@@ -451,6 +451,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
+  const runtimeModelRaw = typeof entry?.model === "string" ? entry.model.trim() : "";
+  const runtimeProviderRaw =
+    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+
+  if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
+    // Legacy sessions can persist raw runtime ids like "google/gemini-2.5-pro"
+    // without a separate provider field. Keep the raw id for context lookup so
+    // provider-qualified resolution does not jump to a different upstream window.
+    contextLookupProvider = undefined;
+    contextLookupModel = runtimeModelRaw;
+  }
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
