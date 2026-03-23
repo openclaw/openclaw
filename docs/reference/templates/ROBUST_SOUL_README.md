@@ -39,9 +39,23 @@ Never give an agent raw bash access if it is connected to external feeds. Sandbo
 ### 3. Secrets Management
 Never store API keys in plaintext `.env` files within the agent's working directory. Use encrypted storage solutions like `sops` or `age`. 
 
+### 4. OVERRIDE MECHANISM – COMPANION TOKEN FILE
+To allow a temporary overwrite of the guardrails you can specify OVERRIDE_TOKEN:
+1. Make the token file writable: `chmod 600 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr -i` on linux)
+2. Add one or more lines in the format: `token-here:reason:expires-or-no-expiry`
+3. Save and re-lock: `chmod 444 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr +i` on linux)
+4. In your next prompt, include the exact token line when requesting the change.
+
+The agent will:
+- Read `ROBUST_SOUL_OVERRIDE_TOKENS.md` using available read tools
+- Check if any non-comment line exactly matches the provided token
+- If match found and date not expired → allow exemption
+
+**Security note:** The token file must remain read-only for the agent process (OS-level protection). Prompt injection cannot create or modify it.
+
 ---
 
-## 🚀 Usage & Quick Test Suite
+### Usage & Quick Test Suite
 
 1. Replace your current `SOUL.md` with the provided `ROBUST_SOUL.md`.
 2. Apply the OS-level file permissions (`chmod 444`).
