@@ -2,7 +2,7 @@
 
 Private mode is an in-progress hardening profile for running OpenClaw against proprietary data.
 
-Phase 1 adds:
+Phase 0/1 adds:
 
 - a `privateMode` config surface
 - startup validation for local-only model providers
@@ -11,11 +11,15 @@ Phase 1 adds:
 
 Current behavior:
 
-- `privateMode` is validation-only in this phase
-- runtime tool enforcement is not implemented yet
-- filesystem, elevated exec, skills, and audit settings are accepted in config now so later phases can enforce them without changing the config shape
+- startup validation rejects disallowed remote model providers and model refs
+- startup validation rejects disallowed remote embedding providers and fallbacks
+- runtime skill env injection can be blocked with `privateMode.skills.blockEnvInjection`
+- runtime elevated exec can be blocked with `privateMode.execution.disableElevatedExec`
+- runtime embedding provider selection rejects remote providers in private mode
+- runtime model fallback chains are filtered to `privateMode.localOnly.allowedProviders`
+- filesystem, sandbox, and audit settings are accepted in config, but their remaining runtime enforcement is still in progress
 
-Recommended Phase 1 baseline:
+Recommended current baseline:
 
 ```json
 {
@@ -63,4 +67,7 @@ Notes:
 
 - If you enable `privateMode` without overriding the default model, validation fails because the built-in default is `anthropic/claude-opus-4-6`.
 - In this phase, `memorySearch.provider` and `memorySearch.fallback` must stay within `local`, `ollama`, or `none`.
+- Runtime model fallback enforcement only allows providers from `privateMode.localOnly.allowedProviders` when private mode is enabled.
+- Runtime embedding enforcement blocks remote auto-selection and explicit remote embedding providers in private mode.
+- Runtime elevated exec and skill env injection enforcement depend on `privateMode.execution.disableElevatedExec` and `privateMode.skills.blockEnvInjection`.
 - The safer long-term default for sandbox workspace exposure is `workspaceAccessDefault: "none"` with explicit read-only corpus mounts.
