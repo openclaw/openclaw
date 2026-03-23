@@ -1,11 +1,11 @@
 import {
   applySetupAccountConfigPatch,
+  createNestedChannelParsedAllowFromPrompt,
   createNestedChannelDmPolicy,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
-  patchNestedChannelConfigSection,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
@@ -24,30 +24,17 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-async function promptAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
-}): Promise<OpenClawConfig> {
-  const current = params.cfg.channels?.googlechat?.dm?.allowFrom ?? [];
-  const entry = await params.prompter.text({
-    message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
-    placeholder: "users/123456789, name@example.com",
-    initialValue: current[0] ? String(current[0]) : undefined,
-    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-  });
-  const parts = splitSetupEntries(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parts);
-  return patchNestedChannelConfigSection({
-    cfg: params.cfg,
-    channel,
-    section: "dm",
-    enabled: true,
-    patch: {
-      policy: "allowlist",
-      allowFrom: unique,
-    },
-  });
-}
+const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
+  channel,
+  section: "dm",
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  enabled: true,
+  message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
+  placeholder: "users/123456789, name@example.com",
+  parseEntries: (raw) => ({
+    entries: mergeAllowFromEntries(undefined, splitSetupEntries(raw)),
+  }),
+});
 
 const googlechatDmPolicy: ChannelSetupDmPolicy = createNestedChannelDmPolicy({
   label: "Google Chat",
