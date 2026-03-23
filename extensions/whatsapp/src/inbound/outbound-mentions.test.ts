@@ -68,11 +68,21 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("@1234567890abc")).toEqual([]);
   });
 
+  it("ignores tokens with underscore, dash, or slash suffix", () => {
+    expect(extractOutboundMentions("@1234567_user")).toEqual([]);
+    expect(extractOutboundMentions("@1234567-foo")).toEqual([]);
+    expect(extractOutboundMentions("@1234567/bar")).toEqual([]);
+  });
+
   it("skips mentions inside backtick code spans", () => {
     expect(extractOutboundMentions("see `@+1234567890` for details")).toEqual([]);
     expect(
       extractOutboundMentions("code `@+1234567890` but also @+9876543210 outside"),
     ).toEqual(["9876543210@s.whatsapp.net"]);
+  });
+
+  it("does not create false mention when code span removal merges tokens", () => {
+    expect(extractOutboundMentions("x`y`@1234567890")).toEqual([]);
   });
 
   it("matches mention followed by punctuation", () => {
