@@ -55,13 +55,17 @@ export function shouldOpenCircuit(failureCount: number): boolean {
 }
 
 export function shouldTransitionToHalfOpen(circuit: CircuitState, now: number): boolean {
-  if (circuit.state !== "OPEN" || circuit.openedAt === null) return false;
+  if (circuit.state !== "OPEN" || circuit.openedAt === null) {
+    return false;
+  }
   const elapsed = now - circuit.openedAt;
   return elapsed >= circuit.cooldownSeconds * 1000;
 }
 
 export function evaluateHalfOpen(circuit: CircuitState): "CLOSE" | "REOPEN" | "TESTING" {
-  if (circuit.state !== "HALF_OPEN") return "TESTING";
+  if (circuit.state !== "HALF_OPEN") {
+    return "TESTING";
+  }
 
   if (circuit.testRequestsProcessed >= circuit.testRequestsAllowed) {
     if (circuit.testSuccessCount >= CIRCUIT_CONFIG.HALF_OPEN_SUCCESS_THRESHOLD) {

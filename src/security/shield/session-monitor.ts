@@ -243,23 +243,35 @@ export function evaluateSession(
   const results: AnomalyResult[] = [];
 
   const r1 = detectAuthFlood(userEvents, undefined, referenceTime);
-  if (r1.triggered) results.push(r1);
+  if (r1.triggered) {
+    results.push(r1);
+  }
 
   const r2 = detectBruteForce(userEvents, undefined, referenceTime);
-  if (r2.triggered) results.push(r2);
+  if (r2.triggered) {
+    results.push(r2);
+  }
 
   const r3 = detectImpossibleTravel(userEvents);
-  if (r3.triggered) results.push(r3);
+  if (r3.triggered) {
+    results.push(r3);
+  }
 
   const r4 = detectDeviceSpray(userEvents, undefined, referenceTime);
-  if (r4.triggered) results.push(r4);
+  if (r4.triggered) {
+    results.push(r4);
+  }
 
   if (allEvents) {
     const r5 = detectGlobalFlood(allEvents, undefined, referenceTime);
-    if (r5.triggered) results.push(r5);
+    if (r5.triggered) {
+      results.push(r5);
+    }
 
     const r6 = detectGlobalFailureSpike(allEvents, undefined, referenceTime);
-    if (r6.triggered) results.push(r6);
+    if (r6.triggered) {
+      results.push(r6);
+    }
   }
 
   return results;

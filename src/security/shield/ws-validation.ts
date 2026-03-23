@@ -139,6 +139,8 @@ export function createConnectionRateTracker(
  * Uses SHA-256 truncated to 16 hex chars for compact storage.
  */
 export function generateDeviceFingerprint(userAgent: string | undefined): string {
-  if (!userAgent) return "unknown";
+  if (!userAgent) {
+    return "unknown";
+  }
   return createHash("sha256").update(userAgent).digest("hex").slice(0, 16);
 }

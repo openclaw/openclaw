@@ -112,7 +112,9 @@ export class GatewayShield {
    * Check if a request to the named function should be allowed.
    */
   checkCircuit(functionName: string): { allowed: boolean; retryAfter?: number } {
-    if (!this.config.circuitBreakerEnabled) return { allowed: true };
+    if (!this.config.circuitBreakerEnabled) {
+      return { allowed: true };
+    }
 
     let circuit = this.circuits.get(functionName);
     if (!circuit) {
@@ -140,10 +142,14 @@ export class GatewayShield {
    * Record a successful function invocation.
    */
   recordSuccess(functionName: string): void {
-    if (!this.config.circuitBreakerEnabled) return;
+    if (!this.config.circuitBreakerEnabled) {
+      return;
+    }
 
     const circuit = this.circuits.get(functionName);
-    if (!circuit) return;
+    if (!circuit) {
+      return;
+    }
 
     const result = recordSuccess(circuit);
     this.circuits.set(functionName, result.circuit);
@@ -153,7 +159,9 @@ export class GatewayShield {
    * Record a failed function invocation.
    */
   recordFailure(functionName: string): void {
-    if (!this.config.circuitBreakerEnabled) return;
+    if (!this.config.circuitBreakerEnabled) {
+      return;
+    }
 
     let circuit = this.circuits.get(functionName);
     if (!circuit) {
@@ -176,7 +184,9 @@ export class GatewayShield {
    * Log and evaluate an auth event for anomalies.
    */
   processAuthEvent(event: SessionEvent): AnomalyResult[] {
-    if (!this.config.sessionMonitorEnabled) return [];
+    if (!this.config.sessionMonitorEnabled) {
+      return [];
+    }
 
     this.totalEventsProcessed++;
     this.sessionEvents.push(event);
@@ -206,7 +216,9 @@ export class GatewayShield {
    * Record a raw request metric for health scoring.
    */
   recordRequestMetric(metric: RequestMetric): void {
-    if (!this.config.healthScoringEnabled) return;
+    if (!this.config.healthScoringEnabled) {
+      return;
+    }
 
     this.requestMetrics.push(metric);
 
@@ -220,7 +232,9 @@ export class GatewayShield {
    * Call periodically (e.g., every 60 seconds).
    */
   computeHealthScores(): Map<string, FunctionHealth> {
-    if (!this.config.healthScoringEnabled) return this.healthScores;
+    if (!this.config.healthScoringEnabled) {
+      return this.healthScores;
+    }
 
     // Only use last 5 minutes of metrics
     const fiveMinAgo = Date.now() - 5 * 60 * 1000;
@@ -272,7 +286,9 @@ export class GatewayShield {
    */
   shouldThrottle(functionName: string, currentRPM: number, baselineRPM: number): boolean {
     const health = this.healthScores.get(functionName);
-    if (!health) return false;
+    if (!health) {
+      return false;
+    }
 
     const decision = makeThrottleDecision(health, currentRPM, baselineRPM);
     return !decision.allowed;
@@ -317,8 +333,12 @@ export class GatewayShield {
    * Returns true if origin is allowed.
    */
   validateOrigin(origin: string | undefined): boolean {
-    if (this.config.allowedOrigins.length === 0) return true;
-    if (!origin) return false;
+    if (this.config.allowedOrigins.length === 0) {
+      return true;
+    }
+    if (!origin) {
+      return false;
+    }
     return this.config.allowedOrigins.includes(origin);
   }
 
@@ -346,11 +366,15 @@ export class GatewayShield {
     const degradedFunctions: string[] = [];
 
     for (const [name, circuit] of this.circuits) {
-      if (circuit.state === "OPEN") openCircuits.push(name);
+      if (circuit.state === "OPEN") {
+        openCircuits.push(name);
+      }
     }
 
     for (const [name, health] of this.healthScores) {
-      if (health.status !== "HEALTHY") degradedFunctions.push(name);
+      if (health.status !== "HEALTHY") {
+        degradedFunctions.push(name);
+      }
     }
 
     return {

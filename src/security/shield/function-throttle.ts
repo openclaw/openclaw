@@ -67,15 +67,21 @@ export function isRequestAllowed(
   baselineRPM: number,
   capacityPercent: number,
 ): boolean {
-  if (capacityPercent === 0) return false;
-  if (capacityPercent === 100) return true;
+  if (capacityPercent === 0) {
+    return false;
+  }
+  if (capacityPercent === 100) {
+    return true;
+  }
 
   const allowedRPM = calculateAllowedRPM(baselineRPM, capacityPercent);
   return currentRPM < allowedRPM;
 }
 
 export function calculateAllowedRPM(baselineRPM: number, capacityPercent: number): number {
-  if (capacityPercent === 0) return 0;
+  if (capacityPercent === 0) {
+    return 0;
+  }
   return Math.max(1, Math.ceil((baselineRPM * capacityPercent) / 100));
 }
 

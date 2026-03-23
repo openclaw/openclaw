@@ -137,7 +137,13 @@ export function buildEmergencyPayload(
   openCircuits: string[],
   criticalDown: string[],
 ): EmergencyPayload {
-  const action = ruleId === "TOTAL_FAILURE" ? "FULL_PAUSE" : "PARTIAL_PAUSE";
+  const ruleActionMap: Record<string, EscalationAction> = {
+    TOTAL_FAILURE: "FULL_PAUSE",
+    GATEWAY_PIPELINE_DOWN: "PARTIAL_PAUSE",
+    MULTI_CRITICAL: "PARTIAL_PAUSE",
+    SINGLE_CRITICAL: "ALERT",
+  };
+  const action: EscalationAction = ruleActionMap[ruleId] ?? "NONE";
 
   return {
     ruleId,

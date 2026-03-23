@@ -57,7 +57,9 @@ export function verifyWebhookSignature(
   secret: string,
 ): boolean {
   const expected = signWebhookPayload(payload, secret);
-  if (expected.length !== signature.length) return false;
+  if (expected.length !== signature.length) {
+    return false;
+  }
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(signature, "hex"));
 }
 
@@ -84,7 +86,9 @@ export function getRetryDelay(attempt: number): number {
 }
 
 export function shouldRetry(responseCode: number | null): boolean {
-  if (responseCode === null) return true;
+  if (responseCode === null) {
+    return true;
+  }
   return responseCode >= 500;
 }
 

@@ -15,19 +15,3 @@ export function buildControlUiCspHeader(): string {
     "connect-src 'self' ws: wss:",
   ].join("; ");
 }
-
-/**
- * Build hardened security headers for all gateway HTTP responses.
- * Provides defense-in-depth beyond CSP.
- */
-export function buildSecurityHeaders(): Record<string, string> {
-  return {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "X-XSS-Protection": "0",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-origin",
-  };
-}

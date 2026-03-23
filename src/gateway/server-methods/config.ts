@@ -539,10 +539,15 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "cmd.exe" : "xdg-open";
     // Security fix: use execFile instead of exec to prevent shell injection.
-    // On Windows, "start" is a shell builtin, so we use cmd.exe /c start instead.
-    const args = platform === "win32" ? ["/c", "start", "", configPath] : [configPath];
+    // On Windows, use PowerShell Start-Process which does not interpret shell
+    // metacharacters in arguments (unlike cmd.exe /c which is itself a shell).
+    const cmd =
+      platform === "darwin" ? "open" : platform === "win32" ? "powershell.exe" : "xdg-open";
+    const args =
+      platform === "win32"
+        ? ["-NoProfile", "-Command", "Start-Process", "-FilePath", configPath]
+        : [configPath];
     execFile(cmd, args, (err) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);

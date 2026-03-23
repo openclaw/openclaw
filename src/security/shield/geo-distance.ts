@@ -47,7 +47,9 @@ export function haversineDistance(lat1: number, lon1: number, lat2: number, lon2
 // ─── Speed Estimation ────────────────────────
 
 export function estimateSpeed(distanceKm: number, timeDeltaSeconds: number): number {
-  if (timeDeltaSeconds <= 0) return Infinity;
+  if (timeDeltaSeconds <= 0) {
+    return Infinity;
+  }
   return (distanceKm / timeDeltaSeconds) * 3600;
 }
 
