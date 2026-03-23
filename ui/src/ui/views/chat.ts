@@ -1253,7 +1253,6 @@ export function renderChat(props: ChatProps) {
                 ? html`
                     <label class="field" title="Switch agent">
                       <select
-                        .value=${props.currentAgentId || "main"}
                         ?disabled=${!props.connected}
                         @change=${(e: Event) => {
                           const next = (e.target as HTMLSelectElement).value.trim();
@@ -1266,7 +1265,14 @@ export function renderChat(props: ChatProps) {
                         ${repeat(
                           props.agentsList.agents,
                           (agent) => agent.id,
-                          (agent) => html`<option value=${agent.id}>${agent.identity?.name || agent.name || agent.id}</option>`,
+                          (agent) => html`
+                            <option
+                              value=${agent.id}
+                              ?selected=${agent.id === (props.currentAgentId || "main")}
+                            >
+                              ${agent.identity?.name || agent.name || agent.id}
+                            </option>
+                          `,
                         )}
                       </select>
                     </label>

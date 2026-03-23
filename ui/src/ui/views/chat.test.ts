@@ -1150,12 +1150,41 @@ describe("chat view", () => {
       container,
     );
 
-    const select = container.querySelector(".agent-chat__toolbar-left select") as HTMLSelectElement | null;
+    const select = container.querySelector<HTMLSelectElement>(".agent-chat__toolbar-left select");
     expect(select).toBeTruthy();
     expect(select?.value).toBe("main");
     select!.value = "java-dev";
     select!.dispatchEvent(new Event("change"));
     await flushTasks();
     expect(onAgentChange).toHaveBeenCalledWith("java-dev");
+  });
+
+  it("renders a non-first current agent as selected on first render", () => {
+    const onAgentChange = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main Assistant" },
+              { id: "java-dev", name: "Java 开发" },
+            ],
+          },
+          currentAgentId: "java-dev",
+          onAgentChange,
+        }),
+      ),
+      container,
+    );
+
+    const select = container.querySelector<HTMLSelectElement>(".agent-chat__toolbar-left select");
+    expect(select).toBeTruthy();
+    expect(select?.value).toBe("java-dev");
+
+    const options = Array.from(select!.querySelectorAll("option"));
+    expect(options[0]?.selected).toBe(false);
+    expect(options[1]?.selected).toBe(true);
   });
 });
