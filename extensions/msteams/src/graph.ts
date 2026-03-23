@@ -90,7 +90,10 @@ export async function resolveTeamGroupId(
   conversationTeamId: string,
 ): Promise<string | null> {
   const cached = teamIdToGroupIdCache.get(conversationTeamId);
-  if (cached && cached.expiresAt > Date.now()) return cached.groupId;
+  if (cached && cached.expiresAt > Date.now()) {
+    // Negative cache: null groupId means lookup already failed recently
+    return cached.groupId || null;
+  }
 
   // Paginate through all teams and match by internalId
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team')`;
@@ -138,6 +141,11 @@ export async function resolveTeamGroupId(
     const rawNext = page["@odata.nextLink"];
     nextPath = rawNext ? rawNext.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "") : null;
   }
+  // Cache the miss to avoid re-scanning on every message
+  teamIdToGroupIdCache.set(conversationTeamId, {
+    groupId: "",
+    expiresAt: Date.now() + TEAM_CACHE_TTL_MS,
+  });
   return null;
 }
 

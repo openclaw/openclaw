@@ -515,17 +515,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }),
         ]);
         const threadMessages: string[] = [];
-        if (parentMsg?.body?.content) {
+        // Skip the parent message if the current activity IS the thread root to avoid duplication.
+        const currentActivityId = activity.id;
+        const isThreadRoot = parentMsg?.id === currentActivityId;
+        if (parentMsg?.body?.content && !isThreadRoot) {
           const sender = parentMsg.from?.user?.displayName ?? "Unknown";
           const content = stripHtmlTags(parentMsg.body.content);
           if (content) {
             threadMessages.push(`${sender}: ${content}`);
           }
         }
-        // Exclude the current message to avoid duplication.
+        // Exclude the current message from replies to avoid duplication.
         // Compare by both id and createdDateTime since Bot Framework activity.id
         // and Graph API reply.id may use different formats.
-        const currentActivityId = activity.id;
         const currentTimestamp =
           activity.timestamp instanceof Date ? activity.timestamp.toISOString() : undefined;
         for (const reply of replies) {
