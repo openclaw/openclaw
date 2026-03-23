@@ -23,6 +23,20 @@ describe("schtasks runtime parsing", () => {
       lastRunResult: "0x0",
     });
   });
+
+  it("parses 'Last Result' key variant (without 'Run') (#47726)", () => {
+    const output = [
+      "TaskName: \\OpenClaw Gateway",
+      "Status: Running",
+      "Last Run Time: 2026/3/16 8:34:15",
+      "Last Result: 267009",
+    ].join("\r\n");
+    expect(parseSchtasksQuery(output)).toEqual({
+      status: "Running",
+      lastRunTime: "2026/3/16 8:34:15",
+      lastRunResult: "267009",
+    });
+  });
 });
 
 describe("scheduled task runtime derivation", () => {

@@ -2,11 +2,18 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import {
+  clearProviderRuntimeHookCache,
+  prepareProviderDynamicModel,
+  resolveProviderRuntimePlugin,
+  runProviderDynamicModel,
+  normalizeProviderResolvedModelWithPlugin,
+} from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
-import { resolveForwardCompatModel } from "../model-forward-compat.js";
+import { normalizeModelCompat } from "../model-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -47,7 +54,26 @@ function sanitizeModelHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function normalizeResolvedModel(params: { provider: string; model: Model<Api> }): Model<Api> {
+function normalizeResolvedModel(params: {
+  provider: string;
+  model: Model<Api>;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> {
+  const pluginNormalized = normalizeProviderResolvedModelWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: params.model.id,
+      model: params.model,
+    },
+  });
+  if (pluginNormalized) {
+    return normalizeModelCompat(pluginNormalized);
+  }
   return normalizeResolvedProviderModel(params);
 }
 
@@ -156,28 +182,34 @@ export function buildInlineProviderModels(
   });
 }
 
-export function resolveModelWithRegistry(params: {
+function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
-}): Model<Api> | undefined {
-  const { provider, modelId, modelRegistry, cfg } = params;
+  agentDir?: string;
+}): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
+  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
-    return undefined;
+    return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeResolvedModel({
-      provider,
-      model: applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
       }),
-    });
+    };
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -187,41 +219,59 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch?.api) {
-    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: inlineMatch as Model<Api>,
+      }),
+    };
   }
 
-  // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
-  // Otherwise, configured providers can default to a generic API and break specific transports.
-  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
-  if (forwardCompat) {
+  return undefined;
+}
+
+export function resolveModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> | undefined {
+  const explicitModel = resolveExplicitModelWithRegistry(params);
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (explicitModel?.kind === "resolved") {
+    return explicitModel.model;
+  }
+
+  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const pluginDynamicModel = runProviderDynamicModel({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir,
+      provider,
+      modelId,
+      modelRegistry,
+      providerConfig,
+    },
+  });
+  if (pluginDynamicModel) {
     return normalizeResolvedModel({
       provider,
+      cfg,
+      agentDir,
       model: applyConfiguredProviderOverrides({
-        discoveredModel: forwardCompat,
+        discoveredModel: pluginDynamicModel as Model<Api>,
         providerConfig,
         modelId,
       }),
-    });
-  }
-
-  // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
-  // should work without being pre-registered in the local catalog.
-  if (normalizedProvider === "openrouter") {
-    return normalizeResolvedModel({
-      provider,
-      model: {
-        id: modelId,
-        name: modelId,
-        api: "openai-completions",
-        provider,
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
-        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
-      } as Model<Api>,
     });
   }
 
@@ -235,6 +285,8 @@ export function resolveModelWithRegistry(params: {
   if (providerConfig || modelId.startsWith("mock-")) {
     return normalizeResolvedModel({
       provider,
+      cfg,
+      agentDir,
       model: {
         id: modelId,
         name: modelId,
@@ -275,7 +327,94 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
+  if (model) {
+    return { model, authStorage, modelRegistry };
+  }
+
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
+export async function resolveModelAsync(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+  options?: {
+    retryTransientProviderRuntimeMiss?: boolean;
+  },
+): Promise<{
+  model?: Model<Api>;
+  error?: string;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+}> {
+  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const explicitModel = resolveExplicitModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
+  if (explicitModel?.kind === "suppressed") {
+    return {
+      error: buildUnknownModelError(provider, modelId),
+      authStorage,
+      modelRegistry,
+    };
+  }
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const resolveDynamicAttempt = async (options?: { clearHookCache?: boolean }) => {
+    if (options?.clearHookCache) {
+      clearProviderRuntimeHookCache();
+    }
+    const providerPlugin = resolveProviderRuntimePlugin({
+      provider,
+      config: cfg,
+    });
+    if (providerPlugin?.prepareDynamicModel) {
+      await prepareProviderDynamicModel({
+        provider,
+        config: cfg,
+        context: {
+          config: cfg,
+          agentDir: resolvedAgentDir,
+          provider,
+          modelId,
+          modelRegistry,
+          providerConfig,
+        },
+      });
+    }
+    return resolveModelWithRegistry({
+      provider,
+      modelId,
+      modelRegistry,
+      cfg,
+      agentDir: resolvedAgentDir,
+    });
+  };
+  let model =
+    explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
+  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
+    // Startup can race the first provider-runtime snapshot load on a fresh
+    // gateway boot. Retry once with a cleared hook cache before surfacing a
+    // user-visible "Unknown model" that disappears on the next message.
+    model = await resolveDynamicAttempt({ clearHookCache: true });
+  }
   if (model) {
     return { model, authStorage, modelRegistry };
   }

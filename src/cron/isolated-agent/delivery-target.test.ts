@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
@@ -21,16 +21,31 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../web/accounts.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
   resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
 }));
 
+const mockedModuleIds = [
+  "../../config/sessions.js",
+  "../../infra/outbound/channel-selection.js",
+  "../../infra/outbound/target-resolver.js",
+  "../../pairing/pairing-store.js",
+  "../../../extensions/whatsapp/src/accounts.js",
+];
+
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
+});
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   return {

@@ -1,10 +1,10 @@
-import type { ChannelOnboardingAdapter, OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import type { ChannelOnboardingAdapter, OpenClawConfig } from "openclaw/plugin-sdk/x";
 import {
   promptAccountId,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   formatDocsLink,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/x";
 import { getXChannel } from "./runtime.js";
 
 const channel = "x" as const;

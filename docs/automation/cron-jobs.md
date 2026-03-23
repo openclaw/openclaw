@@ -261,7 +261,7 @@ Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
 - `delivery.to`: channel-specific recipient target.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
@@ -700,7 +700,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).

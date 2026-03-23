@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/qveris",
+  "version": "2026.3.22",
+  "private": true,
+  "description": "QVeris web search plugin for QVerisBot",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -14,11 +14,20 @@ vi.mock("./safe-open-sync.js", () => ({
   openVerifiedFileSync: (...args: unknown[]) => openVerifiedFileSyncMock(...args),
 }));
 
-const { canUseBoundaryFileOpen, openBoundaryFile, openBoundaryFileSync } =
-  await import("./boundary-file-read.js");
+let canUseBoundaryFileOpen: typeof import("./boundary-file-read.js").canUseBoundaryFileOpen;
+let matchBoundaryFileOpenFailure: typeof import("./boundary-file-read.js").matchBoundaryFileOpenFailure;
+let openBoundaryFile: typeof import("./boundary-file-read.js").openBoundaryFile;
+let openBoundaryFileSync: typeof import("./boundary-file-read.js").openBoundaryFileSync;
 
 describe("boundary-file-read", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      canUseBoundaryFileOpen,
+      matchBoundaryFileOpenFailure,
+      openBoundaryFile,
+      openBoundaryFileSync,
+    } = await import("./boundary-file-read.js"));
     resolveBoundaryPathSyncMock.mockReset();
     resolveBoundaryPathMock.mockReset();
     openVerifiedFileSyncMock.mockReset();
@@ -200,5 +209,32 @@ describe("boundary-file-read", () => {
       error,
     });
     expect(openVerifiedFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("matches boundary file failures by reason with fallback support", () => {
+    const missing = matchBoundaryFileOpenFailure(
+      { ok: false, reason: "path", error: new Error("missing") },
+      {
+        path: () => "missing",
+        fallback: () => "fallback",
+      },
+    );
+    const io = matchBoundaryFileOpenFailure(
+      { ok: false, reason: "io", error: new Error("io") },
+      {
+        io: () => "io",
+        fallback: () => "fallback",
+      },
+    );
+    const validation = matchBoundaryFileOpenFailure(
+      { ok: false, reason: "validation", error: new Error("blocked") },
+      {
+        fallback: (failure) => failure.reason,
+      },
+    );
+
+    expect(missing).toBe("missing");
+    expect(io).toBe("io");
+    expect(validation).toBe("validation");
   });
 });

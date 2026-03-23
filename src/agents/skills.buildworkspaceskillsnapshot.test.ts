@@ -236,9 +236,6 @@ describe("buildWorkspaceSkillSnapshot", () => {
           limits: {
             maxSkillFileBytes: 1000,
           },
-          plugins: {
-            enabled: false,
-          },
         },
       },
     });
@@ -276,9 +273,6 @@ describe("buildWorkspaceSkillSnapshot", () => {
             maxCandidatesPerRoot: 30,
             maxSkillsLoadedPerSource: 30,
           },
-          plugins: {
-            enabled: false,
-          },
         },
       },
     });
@@ -307,9 +301,6 @@ describe("buildWorkspaceSkillSnapshot", () => {
           },
           limits: {
             maxSkillFileBytes: 1000,
-          },
-          plugins: {
-            enabled: false,
           },
         },
       },

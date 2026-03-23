@@ -1,9 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+
+const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+}));
+
+let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+type ProviderAuth = import("./provider-usage.auth.js").ProviderAuth;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -18,12 +26,18 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   afterAll(async () => {
     await fs.rm(suiteRoot, { recursive: true, force: true });
     suiteRoot = "";
     suiteCase = 0;
+  });
+
+  beforeEach(() => {
+    resolveProviderUsageAuthWithPluginMock.mockReset();
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   async function withSuiteHome<T>(
@@ -50,6 +64,13 @@ describe("resolveProviderAuths key normalization", () => {
 
     process.env.HOME = base;
     process.env.USERPROFILE = base;
+    if (process.platform === "win32") {
+      const match = base.match(/^([A-Za-z]:)(.*)$/);
+      if (match) {
+        process.env.HOMEDRIVE = match[1];
+        process.env.HOMEPATH = match[2] || "\\";
+      }
+    }
     delete process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
     for (const [key, value] of Object.entries(env)) {

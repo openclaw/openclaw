@@ -325,6 +325,156 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
   });
 
+  it("falls back to npm when pnpm is unavailable for git installs", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"));
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
+      "utf-8",
+    );
+    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+
+    const stableTag = "v1.0.1-1";
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === "pnpm --version") {
+        throw new Error("spawn pnpm ENOENT");
+      }
+      if (key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm install --no-package-lock --legacy-peer-deps") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm run build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm run ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain("pnpm --version");
+    expect(calls).toContain("corepack --version");
+    expect(calls).toContain("npm --version");
+    expect(calls).toContain("npm install --no-package-lock --legacy-peer-deps");
+    expect(calls).not.toContain("pnpm install");
+  });
+
+  it("bootstraps pnpm via corepack when pnpm is missing", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"));
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
+      "utf-8",
+    );
+    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+
+    const stableTag = "v1.0.1-1";
+    const calls: string[] = [];
+    let pnpmVersionChecks = 0;
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === "pnpm --version") {
+        pnpmVersionChecks += 1;
+        if (pnpmVersionChecks === 1) {
+          throw new Error("spawn pnpm ENOENT");
+        }
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key === "corepack --version") {
+        return { stdout: "0.30.0", stderr: "", code: 0 };
+      }
+      if (key === "corepack enable") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain("corepack enable");
+    expect(calls).toContain("pnpm install");
+    expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
+  });
+
   it("skips update when no git root", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
@@ -439,6 +589,20 @@ describe("runGatewayUpdate", () => {
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
+  });
+
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const { calls, result } = await runNpmGlobalUpdateCase({
+      expectedInstallCommand:
+        "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+      tag: "main",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(calls).toContain(
+      "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+    );
   });
 
   it("falls back to global npm update when git is missing from PATH", async () => {

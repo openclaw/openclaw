@@ -4,10 +4,12 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -29,6 +31,7 @@ apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
 apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
@@ -105,8 +108,6 @@ USER.md
 package-lock.json
 qverisai-*.tgz
 .claude/
-.agents/
-.agents
 .agent/
 skills-lock.json
 
@@ -143,3 +144,6 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
+
+# Deprecated changelog fragment workflow
+changelog/fragments/

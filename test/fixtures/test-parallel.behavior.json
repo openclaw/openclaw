@@ -1,0 +1,38 @@
+{
+  "base": {
+    "threadPinned": [
+      {
+        "file": "src/commands/backup.test.ts",
+        "reason": "Measured ~16% faster under threads than forks on base config after removing process.chdir() from the test."
+      },
+      {
+        "file": "src/auto-reply/reply/commands-acp/install-hints.test.ts",
+        "reason": "Measured ~35% faster under threads than forks on base config after removing process.chdir() from the test."
+      },
+      {
+        "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
+        "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
+      }
+    ]
+  },
+  "extensions": {
+    "isolated": [
+      {
+        "file": "extensions/matrix/src/matrix/sdk.test.ts",
+        "reason": "This suite hoists a matrix-js-sdk module mock that can leak into later Matrix extension files when they share a non-isolated worker."
+      },
+      {
+        "file": "extensions/matrix/src/matrix/client/file-sync-store.test.ts",
+        "reason": "Matrix sdk.test.ts hoists a matrix-js-sdk module mock; keep the sync-store persistence regression in its own forked lane so non-isolated extension workers stay deterministic."
+      },
+      {
+        "file": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
+        "reason": "The replay-handling regression is green alone but can inherit disturbed global stream/Response state from the shared extensions lane, so keep it in its own forked lane for deterministic CI."
+      }
+    ]
+  },
+  "unit": {
+    "isolated": [],
+    "threadPinned": []
+  }
+}

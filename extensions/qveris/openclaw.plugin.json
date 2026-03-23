@@ -1,0 +1,35 @@
+{
+  "id": "qveris",
+  "providerAuthEnvVars": {
+    "qveris": ["QVERIS_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "QVeris API Key",
+      "help": "QVeris API key (fallback: QVERIS_API_KEY env var or tools.qveris.apiKey).",
+      "sensitive": true,
+      "placeholder": "qv-..."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "toolId": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

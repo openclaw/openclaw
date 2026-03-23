@@ -12,8 +12,8 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/compat";
-import { handleXAction, buildChannelConfigSchema } from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/x";
+import { handleXAction, buildChannelConfigSchema } from "openclaw/plugin-sdk/x";
 import { XConfigSchema } from "./config-schema.js";
 import { xOnboardingAdapter } from "./onboarding.js";
 import { getXChannel, getXRuntime } from "./runtime.js";
@@ -61,7 +61,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   } satisfies ChannelCapabilities,
 
   configSchema: buildChannelConfigSchema(XConfigSchema),
-  onboarding: xOnboardingAdapter,
+  setupWizard: xOnboardingAdapter as unknown as ChannelPlugin["setupWizard"],
 
   agentPrompt: {
     messageToolHints: () => [
@@ -72,23 +72,27 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   },
 
   actions: {
-    listActions: (): ChannelMessageActionName[] => [
-      "x-follow",
-      "x-unfollow",
-      "x-dm",
-      "x-like",
-      "x-unlike",
-      "x-repost",
-      "x-unrepost",
-      "x-reply",
-      "x-post",
-      "x-quote",
-      "x-timeline",
-      "x-user-info",
-      "x-me",
-      "x-search",
-      "x-tweet-info",
-    ],
+    describeMessageTool: () => ({
+      actions: [
+        "x-follow",
+        "x-unfollow",
+        "x-dm",
+        "x-like",
+        "x-unlike",
+        "x-repost",
+        "x-unrepost",
+        "x-reply",
+        "x-post",
+        "x-quote",
+        "x-timeline",
+        "x-user-info",
+        "x-me",
+        "x-search",
+        "x-tweet-info",
+      ] satisfies ChannelMessageActionName[],
+      capabilities: [],
+      schema: null,
+    }),
     supportsAction: ({ action }) =>
       [
         "x-follow",

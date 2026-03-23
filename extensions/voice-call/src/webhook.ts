@@ -4,19 +4,32 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/voice-call";
+} from "../api.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
-import type { NormalizedEvent, WebhookContext } from "./types.js";
+import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
+const TRANSCRIPT_LOG_MAX_CHARS = 200;
+
+function sanitizeTranscriptForLog(value: string): string {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+}
 
 type WebhookResponsePayload = {
   statusCode: number;
@@ -55,21 +68,26 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
+  private agentRuntime: CoreAgentDeps | null;
   private stopStaleCallReaper: (() => void) | null = null;
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
+  private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     config: VoiceCallConfig,
     manager: CallManager,
     provider: VoiceCallProvider,
     coreConfig?: CoreConfig,
+    agentRuntime?: CoreAgentDeps,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
     this.provider = provider;
     this.coreConfig = coreConfig ?? null;
+    this.agentRuntime = agentRuntime ?? null;
 
     // Initialize media stream handler if streaming is enabled
     if (this.config.streaming.enabled) {
@@ -82,6 +100,36 @@ export class VoiceCallWebhookServer {
    */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
+  }
+
+  private clearPendingDisconnectHangup(providerCallId: string): void {
+    const existing = this.pendingDisconnectHangups.get(providerCallId);
+    if (!existing) {
+      return;
+    }
+    clearTimeout(existing);
+    this.pendingDisconnectHangups.delete(providerCallId);
+  }
+
+  private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
+    if (!call || call.direction !== "outbound") {
+      return false;
+    }
+
+    // Suppress only while the initial greeting is actively being played.
+    // If playback fails and the call leaves "speaking", do not block auto-response.
+    if (call.state !== "speaking") {
+      return false;
+    }
+
+    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    if (mode !== "conversation") {
+      return false;
+    }
+
+    const initialMessage =
+      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    return initialMessage.length > 0;
   }
 
   /**
@@ -124,18 +172,26 @@ export class VoiceCallWebhookServer {
         return true;
       },
       onTranscript: (providerCallId, transcript) => {
-        console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
-
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
-
-        // Look up our internal call ID from the provider call ID
+        const safeTranscript = sanitizeTranscriptForLog(transcript);
+        console.log(
+          `[voice-call] Transcript for ${providerCallId}: ${safeTranscript} (chars=${transcript.length})`,
+        );
         const call = this.manager.getCallByProviderCallId(providerCallId);
         if (!call) {
           console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
+        }
+        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
+        if (suppressBargeIn) {
+          console.log(
+            `[voice-call] Ignoring barge transcript while initial message is still playing (${providerCallId})`,
+          );
+          return;
+        }
+
+        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
 
         // Create a speech event and process it through the manager
@@ -160,44 +216,63 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+        if (this.provider.name !== "twilio") {
+          return;
         }
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (this.shouldSuppressBargeInForInitialMessage(call)) {
+          return;
+        }
+        (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
-        console.log(`[voice-call] Partial for ${callId}: ${partial}`);
+        const safePartial = sanitizeTranscriptForLog(partial);
+        console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
+        this.clearPendingDisconnectHangup(callId);
+
         // Register stream with provider for TTS routing
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Speak initial message if one was provided when call was initiated
-        // Use setTimeout to allow stream setup to complete
-        setTimeout(() => {
-          this.manager.speakInitialMessage(callId).catch((err) => {
-            console.warn(`[voice-call] Failed to speak initial message:`, err);
-          });
-        }, 500);
+        // Speak initial message immediately (no delay) to avoid stream timeout
+        this.manager.speakInitialMessage(callId).catch((err) => {
+          console.warn(`[voice-call] Failed to speak initial message:`, err);
+        });
       },
-      onDisconnect: (callId) => {
-        console.log(`[voice-call] Media stream disconnected: ${callId}`);
-        // Auto-end call when media stream disconnects to prevent stuck calls.
-        // Without this, calls can remain active indefinitely after the stream closes.
-        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
-        if (disconnectedCall) {
+      onDisconnect: (callId, streamSid) => {
+        console.log(`[voice-call] Media stream disconnected: ${callId} (${streamSid})`);
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).unregisterCallStream(callId, streamSid);
+        }
+
+        this.clearPendingDisconnectHangup(callId);
+        const timer = setTimeout(() => {
+          this.pendingDisconnectHangups.delete(callId);
+          const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+          if (!disconnectedCall) {
+            return;
+          }
+
+          if (this.provider.name === "twilio") {
+            const twilio = this.provider as TwilioProvider;
+            if (twilio.hasRegisteredStream(callId)) {
+              return;
+            }
+          }
+
           console.log(
-            `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
+            `[voice-call] Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`,
           );
           void this.manager.endCall(disconnectedCall.callId).catch((err) => {
             console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
           });
-        }
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).unregisterCallStream(callId);
-        }
+        }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
+        timer.unref?.();
+        this.pendingDisconnectHangups.set(callId, timer);
       },
     };
 
@@ -271,6 +346,11 @@ export class VoiceCallWebhookServer {
    * Stop the webhook server.
    */
   async stop(): Promise<void> {
+    for (const timer of this.pendingDisconnectHangups.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingDisconnectHangups.clear();
+
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
@@ -458,6 +538,10 @@ export class VoiceCallWebhookServer {
       console.warn("[voice-call] Core config missing; skipping auto-response");
       return;
     }
+    if (!this.agentRuntime) {
+      console.warn("[voice-call] Agent runtime missing; skipping auto-response");
+      return;
+    }
 
     try {
       const { generateVoiceResponse } = await import("./response-generator.js");
@@ -465,6 +549,7 @@ export class VoiceCallWebhookServer {
       const result = await generateVoiceResponse({
         voiceConfig: this.config,
         coreConfig: this.coreConfig,
+        agentRuntime: this.agentRuntime,
         callId,
         from: call.from,
         transcript: call.transcript,

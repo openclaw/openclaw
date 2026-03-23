@@ -178,7 +178,9 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (lastRunTime) {
     info.lastRunTime = lastRunTime;
   }
-  const lastRunResult = entries["last run result"];
+  // Some Windows locales/versions emit "Last Result" instead of "Last Run Result".
+  // Accept both so gateway status is not falsely reported as "unknown" (#47726).
+  const lastRunResult = entries["last run result"] ?? entries["last result"];
   if (lastRunResult) {
     info.lastRunResult = lastRunResult;
   }

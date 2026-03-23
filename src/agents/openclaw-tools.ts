@@ -12,6 +12,7 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -93,6 +94,8 @@ export function createOpenClawTools(
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
+    allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -114,6 +117,13 @@ export function createOpenClawTools(
         modelHasVision: options?.modelHasVision,
       })
     : null;
+  const imageGenerateTool = createImageGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -144,6 +154,7 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentChannelProvider: options?.agentChannel,
@@ -188,6 +199,7 @@ export function createOpenClawTools(
       agentChannel: options?.agentChannel,
       config: options?.config,
     }),
+    ...(imageGenerateTool ? [imageGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -267,6 +279,7 @@ export function createOpenClawTools(
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
+    allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
   return [...tools, ...pluginTools];

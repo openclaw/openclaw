@@ -15,4 +15,7 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
-  - "@tloncorp/api"
+
+ignoredBuiltDependencies:
+  - "@discordjs/opus"
+  - koffi

@@ -1,13 +1,13 @@
-import { getChannelDock } from "../channels/dock.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type {
-  ChannelAgentTool,
-  ChannelMessageActionName,
-  ChannelPlugin,
-} from "../channels/plugins/types.js";
+import {
+  createMessageActionDiscoveryContext,
+  resolveMessageActionDiscoveryForPlugin,
+  resolveMessageActionDiscoveryChannelId,
+  __testing as messageActionTesting,
+} from "../channels/plugins/message-action-discovery.js";
+import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { defaultRuntime } from "../runtime.js";
 
 /**
  * Get the list of supported message actions for a specific channel.
@@ -16,16 +16,29 @@ import { defaultRuntime } from "../runtime.js";
 export function listChannelSupportedActions(params: {
   cfg?: OpenClawConfig;
   channel?: string;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
 }): ChannelMessageActionName[] {
-  if (!params.channel) {
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
     return [];
   }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  if (!plugin?.actions?.listActions) {
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  if (!plugin?.actions) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return runPluginListActions(plugin, cfg);
+  return resolveMessageActionDiscoveryForPlugin({
+    pluginId: plugin.id,
+    actions: plugin.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeActions: true,
+  }).actions;
 }
 
 /**
@@ -33,14 +46,26 @@ export function listChannelSupportedActions(params: {
  */
 export function listAllChannelSupportedActions(params: {
   cfg?: OpenClawConfig;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.actions?.listActions) {
-      continue;
-    }
-    const cfg = params.cfg ?? ({} as OpenClawConfig);
-    const channelActions = runPluginListActions(plugin, cfg);
+    const channelActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
+        ...params,
+        currentChannelProvider: plugin.id,
+      }),
+      includeActions: true,
+    }).actions;
     for (const action of channelActions) {
       actions.add(action);
     }
@@ -49,23 +74,31 @@ export function listAllChannelSupportedActions(params: {
 }
 
 /**
- * Get actions from plugins OTHER than the specified channel.
- * Used to build the "cross-channel actions" section in the message tool description.
+ * List cross-channel actions from plugins OTHER than the excluded channel.
+ * Used to surface actions like x-post or x-quote that can be invoked from
+ * any channel and auto-routed to the owning plugin.
  */
 export function listCrossChannelActions(params: {
   cfg?: OpenClawConfig;
   excludeChannel: string;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
   for (const plugin of listChannelPlugins()) {
     if (plugin.id === params.excludeChannel) {
       continue;
     }
-    if (!plugin.actions?.listActions) {
+    if (!plugin.actions) {
       continue;
     }
-    const channelActions = runPluginListActions(plugin, cfg);
+    const channelActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
+        cfg: params.cfg,
+        currentChannelProvider: plugin.id,
+      }),
+      includeActions: true,
+    }).actions;
     for (const action of channelActions) {
       actions.add(action);
     }
@@ -76,23 +109,30 @@ export function listCrossChannelActions(params: {
 /**
  * Resolve the channel that owns a given action.
  * Returns the channel ID if exactly one loaded plugin claims the action, otherwise undefined.
- * Used to route cross-channel actions (e.g. x-post from Feishu → "x").
+ * Used to route cross-channel actions (e.g. x-post from Feishu -> "x").
  */
 export function resolveActionOwningChannel(params: {
   action: string;
   currentChannel?: string;
   cfg?: OpenClawConfig;
 }): string | undefined {
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
   for (const plugin of listChannelPlugins()) {
     if (plugin.id === params.currentChannel) {
       continue;
     }
-    if (!plugin.actions?.listActions) {
+    if (!plugin.actions) {
       continue;
     }
-    const actions = runPluginListActions(plugin, cfg);
-    if (actions.includes(params.action as ChannelMessageActionName)) {
+    const channelActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
+        cfg: params.cfg,
+        currentChannelProvider: plugin.id,
+      }),
+      includeActions: true,
+    }).actions;
+    if (channelActions.includes(params.action as ChannelMessageActionName)) {
       return plugin.id;
     }
   }
@@ -100,7 +140,6 @@ export function resolveActionOwningChannel(params: {
 }
 
 export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
-  // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
   for (const plugin of listChannelPlugins()) {
     const entry = plugin.agentTools;
@@ -126,11 +165,11 @@ export function resolveChannelMessageToolHints(params: {
 
   // Current channel hints
   if (channelId) {
-    const dock = getChannelDock(channelId);
-    const resolve = dock?.agentPrompt?.messageToolHints;
+    const plugin = getChannelPlugin(channelId);
+    const resolve = plugin?.agentPrompt?.messageToolHints;
     if (resolve) {
       const resolved = (resolve({ cfg, accountId: params.accountId }) ?? [])
-        .map((entry) => entry.trim())
+        .map((entry: string) => entry.trim())
         .filter(Boolean);
       hints.push(...resolved);
     }
@@ -138,21 +177,18 @@ export function resolveChannelMessageToolHints(params: {
 
   // Cross-channel hints: include messageToolHints from other loaded plugins
   // that have registered actions (e.g. X plugin providing x-* action hints).
-  // This ensures the model knows about cross-channel capabilities.
   for (const plugin of listChannelPlugins()) {
     if (!plugin.agentPrompt?.messageToolHints) {
       continue;
     }
-    // Skip the current channel (already resolved above)
     if (channelId && plugin.id === channelId) {
       continue;
     }
-    // Only include if the plugin has actions (i.e. it provides cross-channel operations)
-    if (!plugin.actions?.listActions) {
+    if (!plugin.actions) {
       continue;
     }
     const pluginHints = (plugin.agentPrompt.messageToolHints({ cfg, accountId: null }) ?? [])
-      .map((entry) => entry.trim())
+      .map((entry: string) => entry.trim())
       .filter(Boolean);
     hints.push(...pluginHints);
   }
@@ -160,38 +196,8 @@ export function resolveChannelMessageToolHints(params: {
   return hints;
 }
 
-const loggedListActionErrors = new Set<string>();
-
-function runPluginListActions(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-): ChannelMessageActionName[] {
-  if (!plugin.actions?.listActions) {
-    return [];
-  }
-  try {
-    const listed = plugin.actions.listActions({ cfg });
-    return Array.isArray(listed) ? listed : [];
-  } catch (err) {
-    logListActionsError(plugin.id, err);
-    return [];
-  }
-}
-
-function logListActionsError(pluginId: string, err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-  const key = `${pluginId}:${message}`;
-  if (loggedListActionErrors.has(key)) {
-    return;
-  }
-  loggedListActionErrors.add(key);
-  const stack = err instanceof Error && err.stack ? err.stack : null;
-  const details = stack ?? message;
-  defaultRuntime.error?.(`[channel-tools] ${pluginId}.actions.listActions failed: ${details}`);
-}
-
 export const __testing = {
   resetLoggedListActionErrors() {
-    loggedListActionErrors.clear();
+    messageActionTesting.resetLoggedMessageActionErrors();
   },
 };

@@ -6,7 +6,7 @@
  */
 
 import type { OpenClawConfig } from "../config/config.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { getOrCreateClientManager } from "./client.js";
 import { chunkTextForX, X_CHAR_LIMIT } from "./send.js";
 import { loadXPollState, updateXLastTweetId } from "./state.js";

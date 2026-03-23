@@ -9,7 +9,7 @@ title: "Android App"
 
 # Android App (Node)
 
-> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assembleDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 
 ## Support snapshot
 
@@ -163,4 +163,6 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
   - `photos.latest`
   - `contacts.search`, `contacts.add`
   - `calendar.events`, `calendar.add`
+  - `callLog.search`
+  - `sms.search`
   - `motion.activity`, `motion.pedometer`

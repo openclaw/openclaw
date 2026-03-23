@@ -44,6 +44,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "category-edit",
   "category-delete",
   "topic-create",
+  "topic-edit",
   "voice-status",
   "event-list",
   "event-create",
@@ -65,6 +66,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "x-me",
   "x-search",
   "x-tweet-info",
+  "set-profile",
   "set-presence",
   "download-file",
 ] as const;

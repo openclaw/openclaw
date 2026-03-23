@@ -86,15 +86,12 @@ function shouldAttachDeviceIdentityForGatewayCall(params: {
   token?: string;
   password?: string;
 }): boolean {
-  if (!(params.token || params.password)) {
-    return true;
-  }
-  try {
-    const parsed = new URL(params.url);
-    return !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
-  } catch {
-    return true;
-  }
+  void params;
+  // Shared-auth local calls used to skip device identity as an optimization, but
+  // device-less operator connects now have their self-declared scopes stripped.
+  // Keep identity enabled so local authenticated calls stay device-bound and
+  // retain their least-privilege scopes.
+  return true;
 }
 
 export type ExplicitGatewayAuth = {
@@ -175,8 +172,7 @@ export function buildGatewayConnectionDetails(
       : undefined;
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
-      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
+    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
@@ -258,7 +254,6 @@ type ResolvedGatewayCallContext = {
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
   modeOverride?: GatewayCredentialMode;
-  includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
   localPasswordPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
@@ -288,8 +283,7 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   const cliUrlOverride = trimToUndefined(opts.url);
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
-      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
+    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
@@ -330,11 +324,8 @@ async function resolveGatewaySecretInputString(params: {
     value: params.value,
     env: params.env,
     normalize: trimToUndefined,
-    onResolveRefError: (error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-        cause: error,
-      });
+    onResolveRefError: () => {
+      throw new GatewaySecretRefUnavailableError(params.path);
     },
   });
   if (!value) {
@@ -429,7 +420,6 @@ function resolveGatewayCredentialsFromConfigOptions(params: {
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
     modeOverride: context.modeOverride,
-    includeLegacyEnv: context.includeLegacyEnv,
     localTokenPrecedence: context.localTokenPrecedence,
     localPasswordPrecedence: context.localPasswordPrecedence,
     remoteTokenPrecedence: context.remoteTokenPrecedence,
@@ -672,7 +662,6 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
   urlOverrideSource?: "cli" | "env";
   env?: NodeJS.ProcessEnv;
   modeOverride?: GatewayCredentialMode;
-  includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
   localPasswordPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
@@ -704,7 +693,6 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
       : undefined,
     explicitAuth: resolveExplicitGatewayAuth(params.explicitAuth),
     modeOverride,
-    includeLegacyEnv: params.includeLegacyEnv,
     localTokenPrecedence: params.localTokenPrecedence,
     localPasswordPrecedence: params.localPasswordPrecedence,
     remoteTokenPrecedence: params.remoteTokenPrecedence,
