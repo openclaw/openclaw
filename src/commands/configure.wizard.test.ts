@@ -491,4 +491,83 @@ describe("runConfigureWizard", () => {
       }),
     );
   });
+
+  it("skips the API key prompt for keyless web search providers", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.resolveSearchProviderOptions.mockReturnValue([
+      {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search",
+        hint: "Free fallback",
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        docsUrl: "https://docs.openclaw.ai/tools/web",
+        credentialPath: "",
+      },
+    ]);
+    mocks.applySearchProviderSelection.mockImplementation(
+      (cfg: OpenClawConfig, provider: string) => ({
+        ...cfg,
+        tools: {
+          ...cfg.tools,
+          web: {
+            ...cfg.tools?.web,
+            search: {
+              provider,
+              enabled: true,
+            },
+          },
+        },
+        plugins: {
+          ...cfg.plugins,
+          entries: {
+            ...cfg.plugins?.entries,
+            duckduckgo: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    );
+
+    const selectQueue = ["local", "duckduckgo"];
+    const confirmQueue = [true, false];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["web"] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.applySearchProviderSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({ mode: "local" }),
+      }),
+      "duckduckgo",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("works without an API key"),
+      "Web search",
+    );
+  });
 });
