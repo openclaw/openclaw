@@ -44,6 +44,12 @@ import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import {
+  buildSlackExecApprovalPendingBlocks,
+  buildSlackExecApprovalPendingFallbackText,
+  buildSlackExecApprovalResolvedBlocks,
+  buildSlackExecApprovalResolvedFallbackText,
+} from "./exec-approval-blocks.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -550,6 +556,24 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         });
       },
     },
+    execApprovals: {
+      getInitiatingSurfaceState: ({ cfg }) => {
+        const hasTarget = cfg.approvals?.exec?.targets?.some(
+          (t: { channel?: string }) => t.channel === "slack",
+        );
+        return hasTarget ? { kind: "enabled" } : { kind: "disabled" };
+      },
+      buildPendingPayload: ({ request, nowMs }) => {
+        const blocks = buildSlackExecApprovalPendingBlocks(request, nowMs);
+        const text = buildSlackExecApprovalPendingFallbackText(request, nowMs);
+        return { text, channelData: { slack: { blocks } } };
+      },
+      buildResolvedPayload: ({ resolved }) => {
+        const blocks = buildSlackExecApprovalResolvedBlocks(resolved);
+        const text = buildSlackExecApprovalResolvedFallbackText(resolved);
+        return { text, channelData: { slack: { blocks } } };
+      },
+    },
   },
   pairing: {
     text: {
@@ -674,6 +698,30 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           ...(tokenOverride ? { token: tokenOverride } : {}),
         });
       },
+    },
+    sendPayload: async ({ to, payload, accountId, deps, replyToId, threadId, cfg }) => {
+      const slackData = payload.channelData?.slack;
+      const rawBlocks =
+        slackData && typeof slackData === "object" && !Array.isArray(slackData)
+          ? (slackData as { blocks?: unknown }).blocks
+          : undefined;
+      const blocks = rawBlocks ? parseSlackBlocksInput(rawBlocks) : undefined;
+      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+        cfg,
+        accountId: accountId ?? undefined,
+        deps,
+        replyToId,
+        threadId,
+      });
+      const result = await send(to, payload.text ?? "", {
+        cfg,
+        ...(blocks && blocks.length > 0 ? { blocks } : {}),
+        mediaUrl: payload.mediaUrl,
+        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
+        accountId: accountId ?? undefined,
+        ...(tokenOverride ? { token: tokenOverride } : {}),
+      });
+      return { channel: "slack" as const, ...result };
     },
   },
 });

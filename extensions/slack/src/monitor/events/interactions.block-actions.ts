@@ -5,9 +5,15 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { callGatewayLeastPrivilege } from "openclaw/plugin-sdk/gateway-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
+import {
+  SLACK_EXEC_APPROVE_ACTION_PREFIX,
+  buildSlackExecApprovalResolvedBlocks,
+  extractCommandFromPendingBlocks,
+} from "../../exec-approval-blocks.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
@@ -712,6 +718,64 @@ async function updateSlackLegacyBlockAction(params: {
   }
 }
 
+async function handleSlackExecApprovalAction(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+}): Promise<boolean> {
+  const { actionId } = params.parsed;
+  if (!actionId.startsWith(SLACK_EXEC_APPROVE_ACTION_PREFIX)) {
+    return false;
+  }
+  const buttonValue = params.parsed.actionSummary.value ?? "";
+  const separatorIndex = buttonValue.lastIndexOf(":");
+  if (separatorIndex <= 0) {
+    return false;
+  }
+  const approvalId = buttonValue.slice(0, separatorIndex);
+  const decision = buttonValue.slice(separatorIndex + 1);
+  if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
+    return false;
+  }
+  let gatewayOk = false;
+  try {
+    await callGatewayLeastPrivilege({
+      method: "exec.approval.resolve",
+      params: { id: approvalId, decision },
+    });
+    gatewayOk = true;
+  } catch (err) {
+    params.ctx.runtime.log?.(
+      `slack:exec-approval resolve failed for ${approvalId}: ${String(err)}`,
+    );
+  }
+  if (gatewayOk) {
+    try {
+      // Extract the original command text from the pending message's code block
+      // so the resolved card echoes it back instead of showing "unknown".
+      const originalCommand = extractCommandFromPendingBlocks(
+        params.parsed.typedBody.message?.blocks,
+      );
+      const resolvedBlocks = buildSlackExecApprovalResolvedBlocks({
+        id: approvalId,
+        decision,
+        resolvedBy: params.parsed.userId ?? undefined,
+        ts: Date.now(),
+        commandText: originalCommand,
+      });
+      await updateSlackInteractionMessage({
+        ctx: params.ctx,
+        channelId: params.parsed.channelId,
+        messageTs: params.parsed.messageTs,
+        text: `Exec approval resolved: ${decision}`,
+        blocks: resolvedBlocks as (Block | KnownBlock)[],
+      });
+    } catch {
+      // Best-effort message update
+    }
+  }
+  return true;
+}
+
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
   args: SlackActionMiddlewareArgs;
@@ -737,6 +801,9 @@ async function handleSlackBlockAction(params: {
     respond,
   });
   if (!auth.allowed) {
+    return;
+  }
+  if (await handleSlackExecApprovalAction({ ctx: params.ctx, parsed })) {
     return;
   }
   const pluginInteractionData = buildSlackPluginInteractionData({
