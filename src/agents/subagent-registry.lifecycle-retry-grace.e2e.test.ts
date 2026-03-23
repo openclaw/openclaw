@@ -27,9 +27,23 @@ type SessionStoreEntry = {
   accountId?: string;
 };
 
+type GatewayAgentInternalEvent = {
+  status?: string;
+  statusLabel?: string;
+  result?: string;
+};
+
+type GatewayAgentRequestParams = {
+  sessionKey?: string;
+  inputProvenance?: {
+    sourceSessionKey?: string;
+  };
+  internalEvents?: GatewayAgentInternalEvent[];
+};
+
 type GatewayRequest = {
   method?: string;
-  params?: Record<string, unknown>;
+  params?: GatewayAgentRequestParams;
   timeoutMs?: number;
   expectFinal?: boolean;
 };
@@ -271,9 +285,7 @@ describe("subagent registry lifecycle error grace", () => {
 
   function readFirstAnnounceOutcome() {
     const first = getAgentCalls()[0];
-    const event = first?.params?.internalEvents?.[0] as
-      | { status?: string; statusLabel?: string }
-      | undefined;
+    const event = first?.params?.internalEvents?.[0];
     return {
       status: event?.status,
       error: event?.statusLabel,
@@ -298,10 +310,7 @@ describe("subagent registry lifecycle error grace", () => {
   function getAgentResultsForChildSession(childSessionKey: string): string[] {
     return getAgentCalls()
       .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
-      .map((request) => {
-        const event = request.params?.internalEvents?.[0] as { result?: string } | undefined;
-        return event?.result ?? "";
-      });
+      .map((request) => request.params?.internalEvents?.[0]?.result ?? "");
   }
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {
@@ -330,6 +339,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
+    await waitForCleanupCompleted("run-transient-error");
   });
 
   it("announces error when lifecycle error remains terminal after grace window", async () => {
@@ -350,6 +360,7 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
     expect(readFirstAnnounceOutcome()?.error).toContain("fatal failure");
+    await waitForCleanupCompleted("run-terminal-error");
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {
