@@ -257,7 +257,7 @@ export function startImageServer(config?: Partial<ImageServerConfig>): Promise<s
       reject(err);
     });
 
-    serverInstance.listen(currentConfig.port, () => {
+    serverInstance.listen(currentConfig.port, "127.0.0.1", () => {
       const baseUrl = currentConfig.baseUrl || `http://localhost:${currentConfig.port}`;
       resolve(baseUrl);
     });
@@ -393,7 +393,7 @@ export function isImageServerRunning(): boolean {
  */
 export async function ensureImageServer(publicBaseUrl?: string): Promise<string | null> {
   if (isImageServerRunning()) {
-    return publicBaseUrl || currentConfig.baseUrl || `http://0.0.0.0:${currentConfig.port}`;
+    return publicBaseUrl || currentConfig.baseUrl || `http://127.0.0.1:${currentConfig.port}`;
   }
 
   try {
@@ -401,7 +401,7 @@ export async function ensureImageServer(publicBaseUrl?: string): Promise<string 
       port: DEFAULT_CONFIG.port,
       storageDir: DEFAULT_CONFIG.storageDir,
       // 使用用户配置的公网地址
-      baseUrl: publicBaseUrl || `http://0.0.0.0:${DEFAULT_CONFIG.port}`,
+      baseUrl: publicBaseUrl || `http://127.0.0.1:${DEFAULT_CONFIG.port}`,
       ttlSeconds: 3600, // 1 小时过期
     };
     await startImageServer(config);

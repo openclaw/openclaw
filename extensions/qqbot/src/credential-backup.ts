@@ -45,7 +45,10 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
       savedAt: new Date().toISOString(),
     };
     const tmpPath = backupPath + ".tmp";
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", "utf8");
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     fs.renameSync(tmpPath, backupPath);
   } catch {
     // 非关键操作，静默忽略

@@ -90,13 +90,13 @@ export async function sendTextToTarget(
     account.clientSecret,
     async (token) => {
       if (target.type === "c2c") {
-        await sendC2CMessage(token, target.senderId, text, target.messageId, refIdx);
+        await sendC2CMessage(account.appId, token, target.senderId, text, target.messageId, refIdx);
       } else if (target.type === "group" && target.groupOpenid) {
-        await sendGroupMessage(token, target.groupOpenid, text, target.messageId);
+        await sendGroupMessage(account.appId, token, target.groupOpenid, text, target.messageId);
       } else if (target.channelId) {
         await sendChannelMessage(token, target.channelId, text, target.messageId);
       } else if (target.type === "dm") {
-        await sendC2CMessage(token, target.senderId, text, target.messageId, refIdx);
+        await sendC2CMessage(account.appId, token, target.senderId, text, target.messageId, refIdx);
       }
     },
     ctx.log,
@@ -234,6 +234,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       async (token) => {
         if (target.type === "c2c") {
           await sendC2CImageMessage(
+            account.appId,
             token,
             target.senderId,
             imageUrl,
@@ -242,7 +243,13 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
             originalImagePath,
           );
         } else if (target.type === "group" && target.groupOpenid) {
-          await sendGroupImageMessage(token, target.groupOpenid, imageUrl, target.messageId);
+          await sendGroupImageMessage(
+            account.appId,
+            token,
+            target.groupOpenid,
+            imageUrl,
+            target.messageId,
+          );
         } else if (target.channelId) {
           await sendChannelMessage(
             token,
@@ -293,6 +300,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
           async (token) => {
             if (target.type === "c2c") {
               await sendC2CVoiceMessage(
+                account.appId,
                 token,
                 target.senderId,
                 silkBase64,
@@ -301,7 +309,13 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
                 silkPath,
               );
             } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupVoiceMessage(token, target.groupOpenid, silkBase64, target.messageId);
+              await sendGroupVoiceMessage(
+                account.appId,
+                token,
+                target.groupOpenid,
+                silkBase64,
+                target.messageId,
+              );
             } else if (target.channelId) {
               log?.error(
                 `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
@@ -337,6 +351,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
           if (isHttpUrl) {
             if (target.type === "c2c") {
               await sendC2CVideoMessage(
+                account.appId,
                 token,
                 target.senderId,
                 videoPath,
@@ -345,6 +360,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
               );
             } else if (target.type === "group" && target.groupOpenid) {
               await sendGroupVideoMessage(
+                account.appId,
                 token,
                 target.groupOpenid,
                 videoPath,
@@ -370,6 +386,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
             if (target.type === "c2c") {
               await sendC2CVideoMessage(
+                account.appId,
                 token,
                 target.senderId,
                 undefined,
@@ -380,6 +397,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
               );
             } else if (target.type === "group" && target.groupOpenid) {
               await sendGroupVideoMessage(
+                account.appId,
                 token,
                 target.groupOpenid,
                 undefined,
@@ -425,6 +443,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
           if (isHttpUrl) {
             if (target.type === "c2c") {
               await sendC2CFileMessage(
+                account.appId,
                 token,
                 target.senderId,
                 undefined,
@@ -434,6 +453,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
               );
             } else if (target.type === "group" && target.groupOpenid) {
               await sendGroupFileMessage(
+                account.appId,
                 token,
                 target.groupOpenid,
                 undefined,
@@ -456,6 +476,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
             const fileBase64 = fileBuffer.toString("base64");
             if (target.type === "c2c") {
               await sendC2CFileMessage(
+                account.appId,
                 token,
                 target.senderId,
                 fileBase64,
@@ -466,6 +487,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
               );
             } else if (target.type === "group" && target.groupOpenid) {
               await sendGroupFileMessage(
+                account.appId,
                 token,
                 target.groupOpenid,
                 fileBase64,
