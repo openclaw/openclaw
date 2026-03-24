@@ -146,8 +146,8 @@ For any agent that dispatches tasks, the heartbeat protocol should follow this o
 Without this protocol, a multi-agent pipeline stalls silently:
 
 ```
-South → Orchestrator → dispatches to Rhett (research)
-Rhett completes → posts to agents:results ✅
+User → Orchestrator → dispatches to Specialist (research)
+Specialist completes → posts to agents:results ✅
 Orchestrator heartbeat fires → checks agents:tasks:orchestrator (empty) → HEARTBEAT_OK ❌
 ```
 
@@ -159,7 +159,7 @@ With the dispatcher protocol:
 ```
 Orchestrator heartbeat fires → checks agents:tasks:orchestrator (empty)
                              → checks agents:results for own dispatched tasks ← NEW
-                             → finds Rhett's completed result
+                             → finds Specialist's completed result
                              → notifies user, chains next task
                              → marks result seen
                              → HEARTBEAT_OK ✅
@@ -184,7 +184,7 @@ The `requested_by` field is the thread that connects the task to its result acro
 Dispatcher calls publishTask()
   → writes requested_by=<dispatcher> to agents:tasks:{specialist}
   → specialist receives task { requested_by: <dispatcher>, ... }
-  → specialist calls publishResult(..., requestedBy=task.from_agent)
+  → specialist calls publishResult(..., requestedBy=task.requested_by)
   → result written to agents:results { requested_by: <dispatcher>, ... }
   → dispatcher heartbeat scans agents:results, filters requested_by === self
 ```
