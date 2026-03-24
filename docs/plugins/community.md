@@ -59,6 +59,18 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### OpenClaw Memory
+
+Continuity-first memory runtime for OpenClaw with durable SQLite recall,
+user-aware identity binding, and optional local Markdown knowledge retrieval.
+
+- **npm:** `@bamdra/bamdra-openclaw-memory`
+- **repo:** [github.com/bamdra/bamdra-openclaw-memory](https://github.com/bamdra/bamdra-openclaw-memory)
+
+```bash
+openclaw plugins install @bamdra/bamdra-openclaw-memory
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
