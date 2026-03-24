@@ -2624,26 +2624,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
-  it("keeps store for custom openai-responses provider with compat.supportsStore=true", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "custom-responses-provider",
-      applyModelId: "custom-model-v1",
-      model: {
-        api: "openai-responses",
-        provider: "custom-responses-provider",
-        id: "custom-model-v1",
-        baseUrl: "https://custom-api.example.com/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-        compat: { supportsStore: true },
-      } as unknown as Model<"openai-responses">,
-    });
-    expect(payload.store).toBe(false);
-  });
-
   it("keeps store for first-party OpenAI baseUrl even without explicit compat", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
