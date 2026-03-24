@@ -1043,6 +1043,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
                 },
+                toolFallback: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "react",
+                    },
+                    {
+                      type: "string",
+                      const: "none",
+                    },
+                    {
+                      type: "string",
+                      const: "auto",
+                    },
+                  ],
+                },
+                reactProfile: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "minimal",
+                    },
+                    {
+                      type: "string",
+                      const: "verbose",
+                    },
+                  ],
+                },
                 headers: {
                   type: "object",
                   propertyNames: {

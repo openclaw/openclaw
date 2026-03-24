@@ -316,17 +316,17 @@ The ReAct fallback intercepts the text stream and injects a hidden system prompt
             // Set toolFallback to "react" to force prompt-based tool calling
             // Set to "auto" (default) to let OpenClaw auto-discover native tool capabilities
             toolFallback: "react",
-            
+
             // ReAct prompt size. "minimal" saves tokens, "verbose" is safer for "dumb" models
-            reactProfile: "verbose", 
-            
+            reactProfile: "verbose",
+
             contextWindow: 4096,
-            maxTokens: 4096
-          }
-        ]
-      }
-    }
-  }
+            maxTokens: 4096,
+          },
+        ],
+      },
+    },
+  },
 }
 ```
 

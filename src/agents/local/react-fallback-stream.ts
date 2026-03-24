@@ -1,6 +1,6 @@
 /**
  * ReAct Fallback Core Logic
- * 
+ *
  * Provides pure functions to inject ReAct prompts and parse ReAct responses out of standard text streams.
  */
 
@@ -16,19 +16,24 @@ export interface ReActParsedResponse {
 }
 
 export function injectReActPrompt(
-  currentSystemPrompt: string | undefined, 
-  tools: any[], 
-  profile: ReactProfile = "minimal"
+  currentSystemPrompt: string | undefined,
+  tools: unknown[],
+  profile: ReactProfile = "minimal",
 ): string {
   if (!tools || tools.length === 0) {
     return currentSystemPrompt || "";
   }
 
-  const toolDefs = JSON.stringify(tools.map(t => ({
-    name: t.name,
-    description: t.description,
-    parameters: t.parameters
-  })), null, 2);
+  const toolsTyped = tools as Array<{ name: string; description: string; parameters: unknown }>;
+  const toolDefs = JSON.stringify(
+    toolsTyped.map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    })),
+    null,
+    2,
+  );
 
   let reactInstruction = "";
 
@@ -62,8 +67,8 @@ Only output ONE Action per turn. If you do not need to use a tool, simply respon
  * Sanitizes reasoning blocks and extracts tool calls.
  */
 export function parseReActResponse(
-  responseText: string, 
-  isReasoningModel: boolean
+  responseText: string,
+  isReasoningModel: boolean,
 ): ReActParsedResponse {
   let cleanedText = responseText;
 
@@ -76,11 +81,11 @@ export function parseReActResponse(
 
   // 2. Extract Tool Calls
   const toolCalls: ReActParsedResponse["toolCalls"] = [];
-  
+
   // Split by Action: marker to handle multiple calls and nested JSON safely
   const actionSplitRegex = /Action:\s*/gi;
   const parts = cleanedText.split(actionSplitRegex);
-  
+
   let textOutput = parts[0] ?? "";
 
   for (let i = 1; i < parts.length; i++) {
@@ -89,12 +94,41 @@ export function parseReActResponse(
     let jsonEndIndex = -1;
     let foundFirstBrace = false;
 
-    // A robust brace counter to locate the exact end of the JSON object
+    let inString = false;
+    let stringChar = "";
+    let isEscaped = false;
+
+    // A robust brace counter to locate the exact end of the JSON object, respecting strings
     for (let j = 0; j < part.length; j++) {
-      if (part[j] === '{') {
+      const char = part[j];
+
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+
+      if (char === "\\") {
+        isEscaped = true;
+        continue;
+      }
+
+      if (inString) {
+        if (char === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"' || char === "'") {
+        inString = true;
+        stringChar = char;
+        continue;
+      }
+
+      if (char === "{") {
         braceCount++;
         foundFirstBrace = true;
-      } else if (part[j] === '}') {
+      } else if (char === "}") {
         braceCount--;
         if (foundFirstBrace && braceCount === 0) {
           jsonEndIndex = j;
@@ -106,14 +140,14 @@ export function parseReActResponse(
     if (jsonEndIndex !== -1) {
       const jsonStr = part.substring(0, jsonEndIndex + 1);
       const trailingText = part.substring(jsonEndIndex + 1);
-      
+
       try {
         const parsed = JSON.parse(jsonStr);
         if (parsed.tool && parsed.args) {
           toolCalls.push({
             id: `react_call_${Math.random().toString(36).substring(2, 9)}`,
             name: parsed.tool,
-            arguments: parsed.args
+            arguments: parsed.args,
           });
           // Valid tool call parsed, append any trailing text but hide the JSON
           textOutput += trailingText;
@@ -121,7 +155,7 @@ export function parseReActResponse(
           // Valid JSON but not a tool call, restore it
           textOutput += "Action: " + part;
         }
-      } catch (e) {
+      } catch {
         // Invalid JSON, restore it
         textOutput += "Action: " + part;
       }
@@ -133,13 +167,18 @@ export function parseReActResponse(
 
   return {
     text: textOutput.trim(),
-    toolCalls
+    toolCalls,
   };
 }
 
+import type { StreamFn, AgentMessage } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { discoverLocalCapabilities } from "./capabilities-discovery.js";
+import { discoverLocalCapabilities, isLocalProvider } from "./capabilities-discovery.js";
+
+export interface DiscoveryOptions {
+  modelId: string;
+  providerType: "ollama" | "openai-compatible" | "llama.cpp" | "lmstudio" | (string & {});
+}
 
 /**
  * Wraps any Pi Agent StreamFn with the ReAct fallback parser and prompt injector.
@@ -151,18 +190,20 @@ export function wrapStreamFnWithReActFallback(
     providerType: string;
     toolFallback?: "react" | "none" | "auto";
     reactProfile?: "minimal" | "verbose";
-  }
+  },
 ): StreamFn {
   return (model, context, options) => {
     const capabilities = discoverLocalCapabilities({
       modelId: config.modelId,
       providerType: config.providerType,
     });
-    
+
     let shouldApplyFallback = false;
+    const isLocal = isLocalProvider(config.providerType);
+
     if (config.toolFallback === "react") {
       shouldApplyFallback = true;
-    } else if (config.toolFallback !== "none" && capabilities.toolFormat === "none") {
+    } else if (config.toolFallback !== "none" && isLocal && capabilities.toolFormat === "none") {
       shouldApplyFallback = true;
     }
 
@@ -173,14 +214,14 @@ export function wrapStreamFnWithReActFallback(
 
     // Apply fallback logic
     const wrappedStream = createAssistantMessageEventStream();
-    
+
     // Disable native tools since we mapped them to the prompt
     const newContext = { ...context };
     newContext.tools = undefined;
     newContext.systemPrompt = injectReActPrompt(
-      context.systemPrompt, 
-      context.tools ?? [], 
-      config.reactProfile
+      context.systemPrompt,
+      context.tools ?? [],
+      config.reactProfile,
     );
 
     const run = async () => {
@@ -188,41 +229,63 @@ export function wrapStreamFnWithReActFallback(
         const native = await nativeStreamFn(model, newContext, options);
         for await (const chunk of native) {
           if (chunk.type === "done") {
-             // Intercept done: Extract text parts
-             const textParts = chunk.message.content
-                .filter((p: any) => p.type === "text")
-                .map((p: any) => p.text)
-                .join("");
+            // Intercept done: Extract text parts
+            const textParts = (chunk.message.content as Array<{ type: string; text?: string }>)
+              .filter((p) => p.type === "text")
+              .map((p) => p.text ?? "")
+              .join("");
 
-             const parsed = parseReActResponse(textParts, capabilities.isReasoningModel);
-             
-             const newContent: any[] = [];
-             if (parsed.text) {
-               newContent.push({ type: "text", text: parsed.text });
-             }
-             for (const tc of parsed.toolCalls) {
-               newContent.push({ 
-                 type: "toolCall", 
-                 id: tc.id, 
-                 name: tc.name, 
-                 arguments: tc.arguments 
-               });
-             }
+            const parsed = parseReActResponse(textParts, capabilities.isReasoningModel);
 
-             chunk.message.content = newContent;
-             chunk.reason = parsed.toolCalls.length > 0 ? "toolUse" : chunk.reason;
-             
-             wrappedStream.push(chunk);
+            const newContent: Array<{
+              type: string;
+              text?: string;
+              id?: string;
+              name?: string;
+              arguments?: Record<string, unknown>;
+            }> = [];
+            if (parsed.text) {
+              newContent.push({ type: "text", text: parsed.text });
+            }
+            for (const tc of parsed.toolCalls) {
+              newContent.push({
+                type: "toolCall",
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+              });
+            }
+
+            (chunk as { message: { content: unknown } }).message.content = newContent;
+            chunk.reason = parsed.toolCalls.length > 0 ? "toolUse" : chunk.reason;
+
+            wrappedStream.push(chunk);
           } else {
             wrappedStream.push(chunk);
           }
         }
         wrappedStream.end();
-      } catch (err) {
-        wrappedStream.push({ 
-          type: "error", 
-          reason: "error", 
-          error: { role: "assistant", content: [], stopReason: "error" } as any 
+      } catch {
+        wrappedStream.push({
+          type: "error",
+          reason: "error",
+          error: {
+            role: "assistant",
+            content: [] as Array<{ type: "text"; text: string }>,
+            stopReason: "error",
+            api: "",
+            provider: "",
+            model: "",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          } as unknown as AgentMessage,
         });
         wrappedStream.end();
       }

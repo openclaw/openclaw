@@ -7,7 +7,7 @@ export interface CapabilitiesDiscoveryResult {
 
 export interface DiscoveryOptions {
   modelId: string;
-  providerType: "ollama" | "openai-compatible" | "llama.cpp" | "lmstudio" | string;
+  providerType: "ollama" | "openai-compatible" | "llama.cpp" | "lmstudio" | (string & {});
 }
 
 /**
@@ -16,25 +16,25 @@ export interface DiscoveryOptions {
  */
 export function discoverLocalCapabilities(options: DiscoveryOptions): CapabilitiesDiscoveryResult {
   const model = options.modelId.toLowerCase();
-  
+
   // 1. Determine if it's a reasoning model
   // DeepSeek-R1, QwQ, and explicit reasoning variants often emit <think> blocks.
-  const isReasoningModel = 
-    model.includes("deepseek-r1") || 
-    model.includes("qwq") || 
+  const isReasoningModel =
+    model.includes("deepseek-r1") ||
+    model.includes("qwq") ||
     model.includes("-reasoning") ||
     model.includes("think");
 
   // 2. Determine native tool format
   let toolFormat: LocalToolFormat = "none";
 
-  // Force Fallback for known problematic patterns if needed, but let's assume popular ones work 
+  // Force Fallback for known problematic patterns if needed, but let's assume popular ones work
   // if they are standard sizes (unless user overrides later).
-  const isKnownToolCapable = 
-    model.includes("qwen") || 
-    model.includes("llama3") || 
-    model.includes("llama-3") || 
-    model.includes("mistral") || 
+  const isKnownToolCapable =
+    model.includes("qwen") ||
+    model.includes("llama3") ||
+    model.includes("llama-3") ||
+    model.includes("mistral") ||
     model.includes("mixtral") ||
     model.includes("tool-use") ||
     model.includes("coder") ||
@@ -51,13 +51,29 @@ export function discoverLocalCapabilities(options: DiscoveryOptions): Capabiliti
 
   // Very small models (<7B) without specific tool fine-tuning usually fail miserably at native JSON tools.
   // We can loosely detect them. If it's something like "phi-2" or "gemma:2b", fallback to ReAct.
-  const isTooSmall = model.includes("phi-2") || model.includes("gemma:2b") || model.includes("tinyllama");
+  const isTooSmall =
+    model.includes("phi-2") || model.includes("gemma:2b") || model.includes("tinyllama");
   if (isTooSmall && !model.includes("tool")) {
     toolFormat = "none";
   }
 
   return {
     toolFormat,
-    isReasoningModel
+    isReasoningModel,
   };
+}
+
+/**
+ * Determines if a provider type is considered "local" or self-hosted.
+ */
+export function isLocalProvider(providerType: string): boolean {
+  const type = providerType.toLowerCase();
+  return (
+    type === "ollama" ||
+    type === "llama.cpp" ||
+    type === "lmstudio" ||
+    type === "local" ||
+    type.includes("openai-compatible") || // Usually local wrappers
+    type.includes("self-hosted")
+  );
 }

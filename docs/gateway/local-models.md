@@ -155,13 +155,13 @@ To fix this, define your model explicitly and enable the **ReAct Fallback**:
     {
       id: "my-local-model",
       name: "Local Model",
-      
+
       // Forces OpenClaw to inject a ReAct system prompt instead of relying on the proxy's JSON schema parser
-      toolFallback: "react", 
-      
+      toolFallback: "react",
+
       // Depending on the model's intelligence, you can use "minimal" to save tokens or "verbose" for safety
       reactProfile: "minimal",
-      
+
       contextWindow: 120000,
     }
   ]
