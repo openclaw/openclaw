@@ -61,7 +61,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
-  let pendingHistoryRefresh = false;
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -94,18 +93,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
-    pendingHistoryRefresh = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
-  };
-
-  const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
-      return;
-    }
-    pendingHistoryRefresh = false;
-    void loadHistory?.();
   };
 
   const noteSessionRun = (runId: string) => {
@@ -126,16 +116,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const busyActivityStatuses = new Set(["sending", "waiting", "streaming", "running"]);
+
   /**
    * When the gateway finalizes a run whose runId no longer matches activeChatRunId, we normally
    * avoid touching the status line so a concurrent run can keep showing streaming/running.
    * If activeChatRunId is already null and no other session runs remain in flight, the UI can be
    * stuck on "streaming" from deltas that targeted a run whose final arrived "inactive" (e.g.
    * active pointer cleared or reassigned during failover / multi-stage tool flows). Clear in
-   * that orphaned case only.
+   * that orphaned case only — and only when the current status is still a busy indicator, so we
+   * never overwrite a terminal status (error/aborted) set by the most recent active run.
    */
   const shouldClearOrphanedActivityStatus = (): boolean =>
-    !state.activeChatRunId && sessionRuns.size === 0;
+    !state.activeChatRunId && sessionRuns.size === 0 && busyActivityStatuses.has(state.activityStatus);
 
   const finalizeRun = (params: {
     runId: string;
@@ -144,7 +137,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
-    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
     } else if (shouldClearOrphanedActivityStatus()) {
@@ -162,7 +154,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
-    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
     } else if (shouldClearOrphanedActivityStatus()) {
@@ -186,21 +177,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
-      // Local runs with displayable output do not need a history reload.
       if (!opts?.allowLocalWithoutDisplayableFinal) {
-        return;
-      }
-      // Defer the reload if a newer run is active so we preserve the pending
-      // user message, then flush once that active run finishes.
-      if (state.activeChatRunId && state.activeChatRunId !== runId) {
-        pendingHistoryRefresh = true;
         return;
       }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
-    pendingHistoryRefresh = false;
     void loadHistory?.();
   };
 
