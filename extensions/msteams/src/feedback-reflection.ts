@@ -79,6 +79,12 @@ export function buildFeedbackEvent(params: {
   };
 }
 
+export type ParsedReflectionResponse = {
+  learning: string;
+  followUp: boolean;
+  userMessage?: string;
+};
+
 export function buildReflectionPrompt(params: {
   thumbedDownResponse?: string;
   userComment?: string;
@@ -99,15 +105,91 @@ export function buildReflectionPrompt(params: {
 
   parts.push(
     "\nBriefly reflect: what could you improve? Consider tone, length, " +
-      "accuracy, relevance, and specificity. Reply with:\n" +
-      "1. A short adjustment note (1-2 sentences) for your future behavior " +
-      "in this conversation.\n" +
-      "2. Whether you should follow up with the user (yes if the adjustment " +
-      "is non-obvious or you have a clarifying question; no if minor).\n" +
-      "3. If following up, draft a brief message to the user.",
+      "accuracy, relevance, and specificity. Reply with a single JSON object " +
+      'only, no markdown or prose, using this exact shape:\n{"learning":"...",' +
+      '"followUp":false,"userMessage":""}\n' +
+      "- learning: a short internal adjustment note (1-2 sentences) for your " +
+      "future behavior in this conversation.\n" +
+      "- followUp: true only if the user needs a direct follow-up message.\n" +
+      "- userMessage: only the exact user-facing message to send; empty string " +
+      "when followUp is false.",
   );
 
   return parts.join("\n");
+}
+
+function parseBooleanLike(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "yes") {
+      return true;
+    }
+    if (normalized === "false" || normalized === "no") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+function parseStructuredReflectionValue(value: unknown): ParsedReflectionResponse | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as {
+    learning?: unknown;
+    followUp?: unknown;
+    userMessage?: unknown;
+  };
+  const learning = typeof candidate.learning === "string" ? candidate.learning.trim() : undefined;
+  if (!learning) {
+    return null;
+  }
+
+  return {
+    learning,
+    followUp: parseBooleanLike(candidate.followUp) ?? false,
+    userMessage:
+      typeof candidate.userMessage === "string" && candidate.userMessage.trim()
+        ? candidate.userMessage.trim()
+        : undefined,
+  };
+}
+
+export function parseReflectionResponse(text: string): ParsedReflectionResponse | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidates = [
+    trimmed,
+    ...(trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.slice(1, 2) ?? []),
+  ];
+
+  for (const candidateText of candidates) {
+    const candidate = candidateText.trim();
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const parsed = parseStructuredReflectionValue(JSON.parse(candidate));
+      if (parsed) {
+        return parsed;
+      }
+    } catch {
+      // Fall through to the next parse strategy.
+    }
+  }
+
+  // Safe fallback: keep the internal learning, but never auto-message the user.
+  return {
+    learning: trimmed,
+    followUp: false,
+  };
 }
 
 /**
@@ -125,9 +207,9 @@ export function isReflectionAllowed(sessionKey: string, cooldownMs?: number): bo
 /**
  * Record that a reflection was run for a session.
  */
-export function recordReflectionTime(sessionKey: string): void {
+export function recordReflectionTime(sessionKey: string, cooldownMs?: number): void {
   lastReflectionBySession.set(sessionKey, Date.now());
-  pruneExpiredCooldowns(DEFAULT_COOLDOWN_MS);
+  pruneExpiredCooldowns(cooldownMs ?? DEFAULT_COOLDOWN_MS);
 }
 
 /**
@@ -251,12 +333,19 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     return;
   }
 
+  const parsedReflection = parseReflectionResponse(reflectionResponse);
+  if (!parsedReflection) {
+    log.debug?.("reflection produced no structured output");
+    return;
+  }
+
   // Reflection succeeded — record cooldown now
-  recordReflectionTime(sessionKey);
+  recordReflectionTime(sessionKey, cooldownMs);
 
   log.info("reflection complete", {
     sessionKey,
     responseLength: reflectionResponse.length,
+    followUp: parsedReflection.followUp,
   });
 
   // Store the learning in the session
@@ -264,19 +353,16 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     await storeSessionLearning({
       storePath,
       sessionKey: params.sessionKey,
-      learning: reflectionResponse.trim(),
+      learning: parsedReflection.learning,
     });
   } catch (err) {
     log.debug?.("failed to store reflection learning", { error: String(err) });
   }
 
-  // Send proactive follow-up if the reflection suggests one.
-  // Simple heuristic: if the response contains "follow up: yes" or similar,
-  // or if it's reasonably short (a direct message to the user).
-  // For now, always send the reflection as a follow-up — the prompt asks
-  // the agent to decide, and it will draft a user-facing message if appropriate.
+  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const isDirectMessage = conversationType === "personal";
   const shouldNotify =
-    reflectionResponse.toLowerCase().includes("follow up") || reflectionResponse.length < 300;
+    isDirectMessage && parsedReflection.followUp && Boolean(parsedReflection.userMessage);
 
   if (shouldNotify) {
     try {
@@ -286,13 +372,18 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
         await ctx.sendActivity({
           type: "message",
-          text: reflectionResponse.trim(),
+          text: parsedReflection.userMessage!,
         });
       });
       log.info("sent reflection follow-up", { sessionKey });
     } catch (err) {
       log.debug?.("failed to send reflection follow-up", { error: String(err) });
     }
+  } else if (parsedReflection.followUp && !isDirectMessage) {
+    log.debug?.("skipping reflection follow-up outside direct message", {
+      sessionKey,
+      conversationType,
+    });
   }
 }
 

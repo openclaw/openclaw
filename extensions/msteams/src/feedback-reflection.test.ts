@@ -1,13 +1,14 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildFeedbackEvent,
   buildReflectionPrompt,
   clearReflectionCooldowns,
   isReflectionAllowed,
   loadSessionLearnings,
+  parseReflectionResponse,
   recordReflectionTime,
 } from "./feedback-reflection.js";
 
@@ -77,13 +78,47 @@ describe("buildReflectionPrompt", () => {
   it("works without optional params", () => {
     const prompt = buildReflectionPrompt({});
     expect(prompt).toContain("previous response wasn't helpful");
-    expect(prompt).toContain("reflect");
+    expect(prompt).toContain('"followUp":false');
+  });
+});
+
+describe("parseReflectionResponse", () => {
+  it("parses strict JSON output", () => {
+    expect(
+      parseReflectionResponse(
+        '{"learning":"Be more direct next time.","followUp":true,"userMessage":"Sorry about that. I will keep it tighter."}',
+      ),
+    ).toEqual({
+      learning: "Be more direct next time.",
+      followUp: true,
+      userMessage: "Sorry about that. I will keep it tighter.",
+    });
+  });
+
+  it("parses JSON inside markdown fences", () => {
+    expect(
+      parseReflectionResponse(
+        '```json\n{"learning":"Ask a clarifying question first.","followUp":false,"userMessage":""}\n```',
+      ),
+    ).toEqual({
+      learning: "Ask a clarifying question first.",
+      followUp: false,
+      userMessage: undefined,
+    });
+  });
+
+  it("falls back to internal-only learning when parsing fails", () => {
+    expect(parseReflectionResponse("Be more concise.\nFollow up: yes.")).toEqual({
+      learning: "Be more concise.\nFollow up: yes.",
+      followUp: false,
+    });
   });
 });
 
 describe("reflection cooldown", () => {
   afterEach(() => {
     clearReflectionCooldowns();
+    vi.restoreAllMocks();
   });
 
   it("allows first reflection", () => {
@@ -107,6 +142,18 @@ describe("reflection cooldown", () => {
     recordReflectionTime("session-1");
     expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
     expect(isReflectionAllowed("session-2", 60_000)).toBe(true);
+  });
+
+  it("keeps longer custom cooldown entries during pruning", () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    recordReflectionTime("target", 600_000);
+
+    vi.spyOn(Date, "now").mockReturnValue(301_000);
+    for (let index = 0; index <= 500; index += 1) {
+      recordReflectionTime(`session-${index}`, 600_000);
+    }
+
+    expect(isReflectionAllowed("target", 600_000)).toBe(false);
   });
 });
 
