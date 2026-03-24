@@ -95,7 +95,7 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
   // have a different cwd) can locate the file correctly.
   const rawMedia = typeof opts.media === "string" ? opts.media : undefined;
   const mediaUrl = rawMedia
-    ? rawMedia.startsWith("http://") || rawMedia.startsWith("https://") || rawMedia.startsWith("/")
+    ? rawMedia.startsWith("http://") || rawMedia.startsWith("https://") || rawMedia.startsWith("file://") || rawMedia.startsWith("/")
       ? rawMedia
       : resolvePath(process.cwd(), rawMedia)
     : undefined;
@@ -120,7 +120,12 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
         idempotencyKey: randomIdempotencyKey(),
       },
       expectFinal: false,
-      timeoutMs: 15_000,
+      // Use a generous timeout: media uploads or slow networks can take well over
+      // 15 seconds.  The gateway is already doing the real work, so we just need to
+      // wait for it.  2 minutes covers most practical cases; truly stuck sends will
+      // still surface as "server" errors rather than triggering a duplicate-send
+      // fallback.
+      timeoutMs: 120_000,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
