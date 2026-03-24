@@ -7,7 +7,6 @@ BUILD_DIR="./dist"              # 编译产物目录
 ENTRY_FILE="./openclaw.mjs"     # 主入口文件
 PACKAGE_JSON="./package.json"   # 依赖描述文件
 PM2_CONFIG="./ecosystem.config.js" # 本地pm2配置文件（新增）
-CONFIG_TEMPLATE="./config-template" # 自定义配置模板目录（可选）
 
 # ===================== 清理旧产物 =====================
 echo "🔍 清理旧打包产物..."
@@ -30,12 +29,8 @@ cp ${PACKAGE_JSON} ${DEPLOY_DIR}/
 if [ -f ${PM2_CONFIG} ]; then
   cp ${PM2_CONFIG} ${DEPLOY_DIR}/
 else
-  red "❌ 未找到pm2配置文件：${PM2_CONFIG}，请先创建！"
+  echo "❌ 未找到pm2配置文件：${PM2_CONFIG}，请先创建！"
   exit 1
-fi
-# 自定义配置模板（如有）
-if [ -d ${CONFIG_TEMPLATE} ]; then
-  cp -r ${CONFIG_TEMPLATE} ${DEPLOY_DIR}/
 fi
 
 # ===================== 生成打包清单 =====================
