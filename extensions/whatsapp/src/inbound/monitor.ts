@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
@@ -79,7 +81,16 @@ export async function monitorWebInbox(options: {
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
   // Bot's own LID (Linked Identity) — needed for reply-to-bot detection
   // when contextInfo.participant returns a LID instead of a phone JID.
-  const selfLid = (sock.user as { lid?: string } | undefined)?.lid ?? undefined;
+  // Baileys 7 rc9 does not expose lid on sock.user, so read from creds file.
+  const selfLid = (() => {
+    try {
+      const credsPath = path.join(options.authDir ?? "", "creds.json");
+      const creds = JSON.parse(fs.readFileSync(credsPath, "utf-8"));
+      return creds?.me?.lid ?? undefined;
+    } catch {
+      return (sock.user as { lid?: string } | undefined)?.lid ?? undefined;
+    }
+  })();
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
