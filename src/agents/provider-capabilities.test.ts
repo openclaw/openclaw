@@ -5,7 +5,6 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
     case "anthropic":
       return {
         providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
       };
     case "openai":
       return {
@@ -22,9 +21,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         providerFamily: "openai",
       };
     case "github-copilot":
-      return {
-        dropThinkingBlockModelHints: ["claude"],
-      };
+      return {};
     case "kilocode":
       return {
         geminiThoughtSignatureSanitization: true,
@@ -69,7 +66,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: ["claude"],
+      dropThinkingBlockModelHints: [""],
     });
     expect(resolveProviderCapabilities("anthropic-vertex")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -82,7 +79,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: ["claude"],
+      dropThinkingBlockModelHints: [""],
     });
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -95,7 +92,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: ["claude"],
+      dropThinkingBlockModelHints: [""],
     });
   });
 
@@ -112,7 +109,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [],
+      dropThinkingBlockModelHints: [""],
     });
   });
 
@@ -182,6 +179,12 @@ describe("resolveProviderCapabilities", () => {
       shouldDropThinkingBlocksForModel({
         provider: "github-copilot",
         modelId: "claude-3.7-sonnet",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "openai",
+        modelId: "gpt-4o",
       }),
     ).toBe(true);
   });
