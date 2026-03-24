@@ -1103,13 +1103,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (before) {
       const beforeTs = parseInt(before, 10);
       if (!isNaN(beforeTs)) {
-        rawMessages = (rawMessages as Array<{ timestamp?: number }>).filter((msg) => {
+        rawMessages = (rawMessages as Array<{ timestamp?: number | string }>).filter((msg) => {
           const ts = msg.timestamp;
           // Keep messages without timestamps - they're always included
           if (ts === undefined || ts === null) {
             return true;
           }
-          return ts <= beforeTs;
+          // Handle both number and string timestamps
+          const tsNum = typeof ts === "number" ? ts : new Date(ts).getTime();
+          return !isNaN(tsNum) && tsNum <= beforeTs;
         });
       }
     }
@@ -1151,9 +1153,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
 
     // Generate cursor and hasMore from the actual delivered messages
-    const deliveredMessages = bounded.messages as Array<{ timestamp?: number }>;
+    const deliveredMessages = bounded.messages as Array<{ timestamp?: number | string }>;
     const oldestDelivered = deliveredMessages.length > 0 ? deliveredMessages[0] : null;
-    const cursor = oldestDelivered?.timestamp ? String(oldestDelivered.timestamp) : null;
+    const cursorTimestamp = oldestDelivered?.timestamp;
+    const cursor =
+      cursorTimestamp !== undefined && cursorTimestamp !== null
+        ? String(typeof cursorTimestamp === "number" ? cursorTimestamp : new Date(cursorTimestamp).getTime())
+        : null;
     // hasMore only if we have a usable cursor AND there are more messages
     const hasMore = cursor !== null && rawMessages.length > bounded.messages.length;
 
