@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
+- Telegram/streaming: fix silently dropped final answer text when a combined `<think>…</think>answer` payload is delivered after a tool call with `streaming: "partial"` enabled and a reasoning-capable model. (#53762) Thanks @amitgaur.
 
 ## 2026.4.10
 
