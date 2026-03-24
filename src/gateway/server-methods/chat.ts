@@ -1151,27 +1151,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
 
     // Generate cursor and hasMore from the actual delivered messages
-    const delivered = bounded.messages as Array<{ timestamp?: number }>;
-
-    // Find the earliest timestamp in delivered messages
-    let earliestTimestamp: number | undefined = undefined;
-    for (const msg of delivered) {
-      if (msg.timestamp !== undefined && msg.timestamp !== null) {
-        if (earliestTimestamp === undefined || msg.timestamp < earliestTimestamp) {
-          earliestTimestamp = msg.timestamp;
-        }
-      }
-    }
-
-    const cursor = earliestTimestamp !== undefined ? String(earliestTimestamp) : null;
-
-    // Check if there are older messages in rawMessages
-    const hasMore =
-      cursor !== null &&
-      (rawMessages as Array<{ timestamp?: number }>).some((msg) => {
-        const ts = msg.timestamp;
-        return ts !== undefined && ts !== null && ts < earliestTimestamp!;
-      });
+    const deliveredMessages = bounded.messages as Array<{ timestamp?: number }>;
+    const oldestDelivered = deliveredMessages.length > 0 ? deliveredMessages[0] : null;
+    const cursor = oldestDelivered?.timestamp ? String(oldestDelivered.timestamp) : null;
+    // hasMore only if we have a usable cursor AND there are more messages
+    const hasMore = cursor !== null && rawMessages.length > bounded.messages.length;
 
     respond(true, {
       sessionKey,
