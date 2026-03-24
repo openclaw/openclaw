@@ -61,6 +61,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
+  let pendingHistoryRefresh = false;
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -93,6 +94,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
+    pendingHistoryRefresh = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
@@ -146,6 +148,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
+    tryFlushPendingHistoryRefresh();
   };
 
   const terminateRun = (params: {
@@ -172,6 +175,26 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
+  /**
+   * Apply a deferred history reload once it is safe: no in-flight runs remain, and any
+   * activeChatRunId has at least one chat event in this handler (avoids loadHistory racing a
+   * newly active run that has not emitted yet — overlapping local runs).
+   */
+  const tryFlushPendingHistoryRefresh = () => {
+    if (!pendingHistoryRefresh || !loadHistory) {
+      return;
+    }
+    const activeId = state.activeChatRunId;
+    if (activeId && !sessionRuns.has(activeId)) {
+      return;
+    }
+    if (sessionRuns.size > 0) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory();
+  };
+
   const maybeRefreshHistoryForRun = (
     runId: string,
     opts?: { allowLocalWithoutDisplayableFinal?: boolean },
@@ -184,8 +207,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     if (hasConcurrentActiveRun(runId)) {
+      pendingHistoryRefresh = true;
       return;
     }
+    const activeId = state.activeChatRunId;
+    if (activeId && activeId !== runId && !sessionRuns.has(activeId)) {
+      pendingHistoryRefresh = true;
+      return;
+    }
+    pendingHistoryRefresh = false;
     void loadHistory?.();
   };
 
@@ -310,6 +340,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
+    tryFlushPendingHistoryRefresh();
     tui.requestRender();
   };
 
