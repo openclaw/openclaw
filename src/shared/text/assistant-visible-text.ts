@@ -4,7 +4,7 @@ import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 
-function stripRelevantMemoriesTags(text: string): string {
+export function stripRelevantMemoriesTags(text: string): string {
   if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
     return text;
   }
