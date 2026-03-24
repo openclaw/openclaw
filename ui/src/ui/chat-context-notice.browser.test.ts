@@ -75,7 +75,7 @@ describe("chat context notice", () => {
     );
   });
 
-  it("falls back to input tokens when totalTokens is missing", async () => {
+  it("falls back to input tokens when totalTokens is missing, even for stale gateway rows", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -87,6 +87,7 @@ describe("chat context notice", () => {
           key: "main",
           inputTokens: 910,
           contextTokens: 1000,
+          totalTokensFresh: false,
           reasoningLevel: "off",
           model: "openai/gpt-5.2",
         },
@@ -130,6 +131,40 @@ describe("chat context notice", () => {
     expect(notice?.textContent).toContain("Used 180k");
     expect(notice?.textContent).toContain("Higher-rate 200k");
     expect(notice?.textContent).toContain("Limit 1M");
+    expect(notice?.textContent).toContain("Higher-rate billing threshold crossed.");
+  });
+
+  it("uses the default provider when the session model id is unqualified", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.sessionsResult = {
+      count: 1,
+      defaults: {
+        contextTokens: 272000,
+        model: "gpt-5.4",
+        modelProvider: "openai-codex",
+      },
+      sessions: [
+        {
+          key: "main",
+          inputTokens: 300_000,
+          totalTokens: 180_000,
+          contextTokens: 272000,
+          reasoningLevel: "off",
+          model: "gpt-5.4",
+        },
+      ],
+    } as never;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const notice = app.querySelector<HTMLElement>(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Model context");
+    expect(notice?.textContent).toContain("Used 180k");
+    expect(notice?.textContent).toContain("Higher-rate 272k");
+    expect(notice?.textContent).toContain("Limit 1.1M");
     expect(notice?.textContent).toContain("Higher-rate billing threshold crossed.");
   });
 
