@@ -2267,7 +2267,8 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  max-height: 500px;
+  max-height: calc(100vh - 280px);
+  min-height: 200px;
   overflow: auto;
   container-type: inline-size;
 }
