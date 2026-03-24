@@ -576,6 +576,45 @@ describe("feishuPlugin actions", () => {
     ).rejects.toThrow("Feishu thread-reply requires messageId.");
   });
 
+  it("declares card as optional in the tool schema", () => {
+    const discovery = feishuPlugin.actions?.describeMessageTool?.({ cfg });
+    const schema = Array.isArray(discovery?.schema) ? discovery.schema[0] : discovery?.schema;
+    const cardSchema = schema?.properties?.card;
+    expect(cardSchema).toBeDefined();
+    // TypeBox marks Optional schemas with Symbol(TypeBox.Optional) = "Optional".
+    expect(
+      (cardSchema as unknown as Record<symbol, unknown>)?.[Symbol.for("TypeBox.Optional")],
+    ).toBe("Optional");
+  });
+
+  it("sends media-only messages without requiring card", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media_only",
+      details: { messageId: "om_media_only", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        media: "https://example.com/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_group_1",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    );
+    expect(result?.details).toMatchObject({ messageId: "om_media_only" });
+  });
+
   it("fails for unsupported action names", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
