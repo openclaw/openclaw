@@ -2,6 +2,7 @@ import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
+import { extractOutboundMentions } from "./outbound-mentions.js";
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -15,6 +16,12 @@ function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
     ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
     : "unknown";
+}
+
+function mentionsSpread(text: string | undefined): { mentions: string[] } | Record<string, never> {
+  if (!text) return {};
+  const mentions = extractOutboundMentions(text);
+  return mentions.length > 0 ? { mentions } : {};
 }
 
 export function createWebSendApi(params: {
@@ -40,6 +47,7 @@ export function createWebSendApi(params: {
             image: mediaBuffer,
             caption: text || undefined,
             mimetype: mediaType,
+            ...mentionsSpread(text),
           };
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
@@ -50,6 +58,7 @@ export function createWebSendApi(params: {
             caption: text || undefined,
             mimetype: mediaType,
             ...(gifPlayback ? { gifPlayback: true } : {}),
+            ...mentionsSpread(text),
           };
         } else {
           const fileName = sendOptions?.fileName?.trim() || "file";
@@ -61,7 +70,7 @@ export function createWebSendApi(params: {
           };
         }
       } else {
-        payload = { text };
+        payload = { text, ...mentionsSpread(text) };
       }
       const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
