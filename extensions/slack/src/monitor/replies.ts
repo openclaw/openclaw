@@ -64,7 +64,10 @@ export async function deliverReplies(params: {
       let effectiveText = trimmed;
       if (effectiveText && effectiveText.includes(HEARTBEAT_TOKEN)) {
         const stripped = stripHeartbeatToken(effectiveText, { mode: "message" });
-        effectiveText = stripped.shouldSkip ? "" : stripped.text;
+        if (stripped.shouldSkip) {
+          continue;
+        }
+        effectiveText = stripped.text;
       }
       await sendMessageSlack(params.target, effectiveText, {
         token: params.token,

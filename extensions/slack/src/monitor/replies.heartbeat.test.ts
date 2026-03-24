@@ -62,6 +62,58 @@ describe("deliverReplies HEARTBEAT_OK safety-net", () => {
     expect(sendMock).toHaveBeenCalledWith("C123", "Hello, how can I help?", expect.any(Object));
   });
 
+  it("skips block-path message entirely when HEARTBEAT_OK shouldSkip is true", async () => {
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "HEARTBEAT_OK",
+            channelData: {
+              slack: {
+                blocks: [
+                  {
+                    type: "rich_text",
+                    elements: [
+                      {
+                        type: "rich_text_section",
+                        elements: [{ type: "text", text: "HEARTBEAT_OK" }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers block-path message when text has HEARTBEAT_OK mixed with real content", async () => {
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "HEARTBEAT_OK Here is a real reply",
+            channelData: {
+              slack: {
+                blocks: [
+                  { type: "section", text: { type: "mrkdwn", text: "Here is a real reply" } },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    );
+    expect(sendMock).toHaveBeenCalledWith(
+      "C123",
+      expect.not.stringContaining("HEARTBEAT_OK"),
+      expect.objectContaining({ blocks: expect.any(Array) }),
+    );
+  });
+
   it("still delivers media when HEARTBEAT_OK text is stripped", async () => {
     await deliverReplies(
       baseParams({
