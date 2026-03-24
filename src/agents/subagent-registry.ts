@@ -1780,6 +1780,27 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   return latestActive ?? latestEnded;
 }
 
+export function getLatestSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }

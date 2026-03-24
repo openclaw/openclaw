@@ -217,6 +217,81 @@ describe("sendControlledSubagentMessage", () => {
       replyText: undefined,
     });
   });
+
+  it("sends follow-up messages to the newest finished run when stale active rows still exist", async () => {
+    const childSessionKey = "agent:main:subagent:finished-stale-worker";
+    addSubagentRunForTests({
+      runId: "run-stale-active-send",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale active task",
+      cleanup: "keep",
+      createdAt: Date.now() - 9_000,
+      startedAt: Date.now() - 8_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-current-finished-send",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finished task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent") {
+          return { runId: "run-followup-stale-send" } as T;
+        }
+        if (request.method === "agent.wait") {
+          return { status: "done" } as T;
+        }
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-current-finished-send",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "finished task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      runId: "run-followup-stale-send",
+      replyText: undefined,
+    });
+  });
 });
 
 describe("killSubagentRunAdmin", () => {
