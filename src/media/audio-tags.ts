@@ -2,7 +2,7 @@ import { parseInlineDirectives } from "../utils/directive-tags.js";
 
 /**
  * Extract audio mode tag from text.
- * Supports [[audio_as_voice]] to send audio as voice bubble instead of file.
+ * Supports [[audio_as_voice]] to send audio as voice message instead of file.
  * Default is file (preserves backward compatibility).
  */
 export function parseAudioTag(text?: string): {
