@@ -39,6 +39,37 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("accepts broader file/edit alias variants", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alias-broad-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      await writeTool?.execute("tool-alias-broad-1", {
+        file: "broad-alias.txt",
+        content: "hello old value",
+      });
+
+      await editTool?.execute("tool-alias-broad-2", {
+        filePath: "broad-alias.txt",
+        old_text: "old",
+        newString: "new",
+      });
+
+      const result = await readTool?.execute("tool-alias-broad-3", {
+        file: "broad-alias.txt",
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      expect(combinedText).toContain("hello new value");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("coerces structured content blocks for write", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-write-"));
     try {
