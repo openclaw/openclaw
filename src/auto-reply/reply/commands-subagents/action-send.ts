@@ -33,9 +33,6 @@ export async function handleSubagentsSendAction(
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }
-  if (steerRequested && targetResolution.entry.endedAt) {
-    return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
-  }
 
   const controller = resolveCommandSubagentController(params, ctx.requesterKey);
 

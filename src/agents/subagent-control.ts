@@ -643,7 +643,8 @@ export async function steerControlledSubagentRun(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
-  if (params.entry.endedAt) {
+  const targetHasPendingDescendants = countPendingDescendantRuns(params.entry.childSessionKey) > 0;
+  if (params.entry.endedAt && !targetHasPendingDescendants) {
     return {
       status: "done",
       runId: params.entry.runId,
@@ -660,7 +661,13 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+  const currentHasPendingDescendants =
+    currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
+  if (
+    !currentEntry ||
+    currentEntry.runId !== params.entry.runId ||
+    (currentEntry.endedAt && !currentHasPendingDescendants)
+  ) {
     return {
       status: "done",
       runId: params.entry.runId,
