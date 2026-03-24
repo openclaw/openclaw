@@ -841,6 +841,8 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const canQueueWhileRunActive = isBusy || canAbort;
+  const showStopButton = canAbort && isBusy;
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
@@ -1337,7 +1339,7 @@ export function renderChat(props: ChatProps) {
             </button>
 
             ${
-              canAbort && (isBusy || props.sending)
+              showStopButton
                 ? html`
                   <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
                     ${icons.stop}
@@ -1353,7 +1355,7 @@ export function renderChat(props: ChatProps) {
                       props.onSend();
                     }}
                     ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
+                    title=${canQueueWhileRunActive ? "Queue" : "Send"}
                   >
                     ${icons.send}
                   </button>

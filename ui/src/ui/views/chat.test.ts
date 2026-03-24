@@ -626,6 +626,31 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
+  it("keeps send available to queue while a run is active but stream is temporarily idle", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          sending: false,
+          stream: null,
+          onAbort: () => undefined,
+          onSend,
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    expect(stopButton).toBeNull();
+    const queueButton = container.querySelector<HTMLButtonElement>('button[title="Queue"]');
+    expect(queueButton).not.toBeNull();
+    queueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("New session");
+  });
+
   it("shows a new session button when aborting is unavailable", () => {
     const container = document.createElement("div");
     const onNewSession = vi.fn();
