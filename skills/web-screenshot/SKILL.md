@@ -28,25 +28,32 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 
 2. browser(action="act", kind="evaluate", fn="(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*=\"opacity: 0\"],[style*=\"opacity:0\"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager'; if (img.dataset.src) img.src = img.dataset.src }); return 'done' })()")
 
-3. Incremental scroll to trigger remaining observers:
-   browser(action="act", kind="evaluate", fn="(() => { const h = document.body.scrollHeight; const step = Math.ceil(h / 5); for (let i = step; i <= h; i += step) window.scrollTo(0, i); return 'scrolled' })()")
+3. Incremental scroll with async pauses to trigger IntersectionObservers:
+   browser(action="act", kind="evaluate", fn="(async () => { const h = document.body.scrollHeight; const step = Math.ceil(h / 5); for (let i = step; i <= h; i += step) { window.scrollTo(0, i); await new Promise(r => setTimeout(r, 300)) } return 'scrolled' })()")
 
 4. Wait 2 seconds (exec: sleep 2)
 
-5. browser(action="act", kind="evaluate", fn="(() => { window.scrollTo(0, 0); return 'top' })()")
+5. Re-apply reveal injection (observers may have added new classes during scroll):
+   browser(action="act", kind="evaluate", fn="<same reveal script as step 2>")
 
-6. Wait 1 second
+6. browser(action="act", kind="evaluate", fn="(() => { window.scrollTo(0, 0); return 'top' })()")
 
-7. browser(action="screenshot", fullPage=true)  ← Desktop
+7. Wait 1 second
 
-8. Repeat reveal injection for mobile (responsive breakpoints may re-hide elements):
+8. browser(action="screenshot", fullPage=true)  ← Desktop
+
+9. Resize to mobile and repeat full reveal + scroll pass:
    browser(action="act", kind="resize", width=375, height=812)
    browser(action="act", kind="evaluate", fn="<same reveal script as step 2>")
+   browser(action="act", kind="evaluate", fn="<same async scroll script as step 3>")
+   Wait 2 seconds
+   browser(action="act", kind="evaluate", fn="<same reveal script as step 2>")
+   browser(action="act", kind="evaluate", fn="(() => { window.scrollTo(0, 0); return 'top' })()")
    Wait 1 second
 
-9. browser(action="screenshot", fullPage=true)  ← Mobile
+10. browser(action="screenshot", fullPage=true)  ← Mobile
 
-10. browser(action="act", kind="resize", width=1280, height=800)  ← Reset viewport
+11. browser(action="act", kind="resize", width=1280, height=800)  ← Reset viewport
 ```
 
 ### What the Script Does
@@ -54,9 +61,10 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 1. **Forces all reveal elements visible** — Selects elements with class names containing `reveal`, `fade`, `animate`, or `scroll` and overrides their opacity, transform, and visibility
 2. **Catches inline-styled hidden elements** — Finds elements with `opacity: 0` in their inline style
 3. **Triggers lazy images** — Changes `loading="lazy"` to `eager` and copies `data-src` to `src` for custom lazy-loading implementations
-4. **Incrementally scrolls** — Steps through the page in chunks (not a single jump) to reliably fire all IntersectionObservers
-5. **Scrolls back to top** — Returns to page start for a clean full-page screenshot
-6. **Re-applies after mobile resize** — Responsive CSS may re-hide elements at different breakpoints
+4. **Incrementally scrolls with pauses** — Steps through the page in chunks with 300ms async pauses between each step, giving IntersectionObservers time to fire and render
+5. **Re-applies reveal after scroll** — Observers may add new hidden classes during scroll, so reveal injection runs again
+6. **Scrolls back to top** — Returns to page start for a clean full-page screenshot
+7. **Full mobile pass** — After resize, repeats the complete reveal + scroll + reveal cycle because responsive breakpoints often mount mobile-only blocks or reinitialize observers
 
 ### Compact One-Liner (Copy-Paste Ready)
 

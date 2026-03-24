@@ -38,11 +38,14 @@ const revealScript = `
 `;
 
 const scrollScript = `
-  const h = document.body.scrollHeight;
-  const step = Math.ceil(h / 10);
-  for (let i = step; i <= h; i += step) {
-    window.scrollTo(0, i);
-  }
+  (async () => {
+    const h = document.body.scrollHeight;
+    const step = Math.ceil(h / 10);
+    for (let i = step; i <= h; i += step) {
+      window.scrollTo(0, i);
+      await new Promise(r => setTimeout(r, 300));
+    }
+  })()
 `;
 
 async function captureScreenshot(browser, url, outputPath, viewportOpts) {
