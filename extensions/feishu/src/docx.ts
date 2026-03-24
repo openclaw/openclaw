@@ -125,10 +125,15 @@ function normalizeChildIds(children: unknown): string[] {
 
 // Convert API may return `blocks` in a non-render order.
 // Reconstruct the document tree using first_level_block_ids plus children/parent links,
-// then emit blocks in pre-order so Descendant/Children APIs receive a deterministic sequence.
-function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
+// then emit blocks in pre-order so Descendant/Children APIs receive one normalized tree contract.
+function normalizeConvertedBlockTree(
+  blocks: any[],
+  firstLevelIds: string[],
+): { orderedBlocks: any[]; rootIds: string[] } {
   if (blocks.length <= 1) {
-    return blocks;
+    const rootIds =
+      blocks.length === 1 && typeof blocks[0]?.block_id === "string" ? [blocks[0].block_id] : [];
+    return { orderedBlocks: blocks, rootIds };
   }
 
   const byId = new Map<string, any>();
@@ -163,7 +168,7 @@ function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
     firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
   ).filter((id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index);
 
-  const ordered: any[] = [];
+  const orderedBlocks: any[] = [];
   const visited = new Set<string>();
 
   const visit = (blockId: string) => {
@@ -172,7 +177,7 @@ function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
     }
     visited.add(blockId);
     const block = byId.get(blockId);
-    ordered.push(block);
+    orderedBlocks.push(block);
     for (const childId of normalizeChildIds(block?.children)) {
       visit(childId);
     }
@@ -187,11 +192,11 @@ function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
     if (typeof block?.block_id === "string") {
       visit(block.block_id);
     } else {
-      ordered.push(block);
+      orderedBlocks.push(block);
     }
   }
 
-  return ordered;
+  return { orderedBlocks, rootIds };
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
@@ -332,14 +337,14 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   const chunks = splitMarkdownByHeadings(markdown);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
   const allBlocks: any[] = [];
-  const allFirstLevelBlockIds: string[] = [];
+  const allRootIds: string[] = [];
   for (const chunk of chunks) {
     const { blocks, firstLevelBlockIds } = await convertMarkdownWithFallback(client, chunk);
-    const sorted = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
-    allBlocks.push(...sorted);
-    allFirstLevelBlockIds.push(...firstLevelBlockIds);
+    const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
+    allBlocks.push(...orderedBlocks);
+    allRootIds.push(...rootIds);
   }
-  return { blocks: allBlocks, firstLevelBlockIds: allFirstLevelBlockIds };
+  return { blocks: allBlocks, firstLevelBlockIds: allRootIds };
 }
 
 /** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
@@ -717,8 +722,11 @@ async function uploadFileBlock(
   // Create a placeholder text block first
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
   const converted = await convertMarkdown(client, placeholderMd);
-  const sorted = sortBlocksByFirstLevel(converted.blocks, converted.firstLevelBlockIds);
-  const { children: inserted } = await insertBlocks(client, docToken, sorted, blockId);
+  const { orderedBlocks } = normalizeConvertedBlockTree(
+    converted.blocks,
+    converted.firstLevelBlockIds,
+  );
+  const { children: inserted } = await insertBlocks(client, docToken, orderedBlocks, blockId);
 
   // Get the first inserted block - we'll delete it and create the file in its place
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK return shape
@@ -897,11 +905,11 @@ async function writeDoc(
   }
 
   logger?.info?.(`feishu_doc: Converted to ${blocks.length} blocks, inserting...`);
-  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
+  const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
   const { children: inserted } =
     blocks.length > BATCH_SIZE
-      ? await insertBlocksInBatches(client, docToken, sortedBlocks, firstLevelBlockIds, logger)
-      : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds);
+      ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
+      : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
@@ -927,11 +935,11 @@ async function appendDoc(
   }
 
   logger?.info?.(`feishu_doc: Converted to ${blocks.length} blocks, inserting...`);
-  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
+  const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
   const { children: inserted } =
     blocks.length > BATCH_SIZE
-      ? await insertBlocksInBatches(client, docToken, sortedBlocks, firstLevelBlockIds, logger)
-      : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds);
+      ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
+      : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
@@ -987,7 +995,7 @@ async function insertDoc(
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
   if (blocks.length === 0) throw new Error("Content is empty");
-  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
+  const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
 
   logger?.info?.(
     `feishu_doc: Converted to ${blocks.length} blocks, inserting at index ${insertIndex}...`,
@@ -997,13 +1005,13 @@ async function insertDoc(
       ? await insertBlocksInBatches(
           client,
           docToken,
-          sortedBlocks,
-          firstLevelBlockIds,
+          orderedBlocks,
+          rootIds,
           logger,
           parentId,
           insertIndex,
         )
-      : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds, {
+      : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds, {
           parentBlockId: parentId,
           index: insertIndex,
         });
@@ -1140,10 +1148,13 @@ async function writeTableCells(
 
       const text = rowValues[c] ?? "";
       const converted = await convertMarkdown(client, text);
-      const sorted = sortBlocksByFirstLevel(converted.blocks, converted.firstLevelBlockIds);
+      const { orderedBlocks } = normalizeConvertedBlockTree(
+        converted.blocks,
+        converted.firstLevelBlockIds,
+      );
 
-      if (sorted.length > 0) {
-        await insertBlocks(client, docToken, sorted, cellId);
+      if (orderedBlocks.length > 0) {
+        await insertBlocks(client, docToken, orderedBlocks, cellId);
       }
 
       written++;
