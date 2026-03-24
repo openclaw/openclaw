@@ -6,16 +6,6 @@ describe("line runtime api", () => {
   it("loads through Jiti without duplicate export errors", () => {
     const root = process.cwd();
     const runtimeApiPath = path.join(root, "extensions", "line", "runtime-api.ts");
-    const pluginSdkSubpaths = [
-      "core",
-      "channel-config-schema",
-      "reply-runtime",
-      "testing",
-      "channel-contract",
-      "setup",
-      "status-helpers",
-      "line-runtime",
-    ];
     const script = `
 import fs from "node:fs";
 import path from "node:path";
@@ -23,16 +13,20 @@ import { createJiti } from "jiti";
 
 const root = ${JSON.stringify(root)};
 const runtimeApiPath = ${JSON.stringify(runtimeApiPath)};
-const alias = Object.fromEntries(
-  ${JSON.stringify(pluginSdkSubpaths)}.map((name) => {
-    const distPath = path.join(root, "dist", "plugin-sdk", name + ".js");
-    const srcPath = path.join(root, "src", "plugin-sdk", name + ".ts");
-    return [
-      "openclaw/plugin-sdk/" + name,
-      fs.existsSync(distPath) ? distPath : srcPath,
-    ];
-  }),
-);
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const exportedSubpaths = Object.keys(pkg.exports ?? {})
+  .filter((key) => key.startsWith("./plugin-sdk/"))
+  .map((key) => key.slice("./plugin-sdk/".length))
+  .filter((name) => name && !name.includes("/"));
+const aliasEntries = exportedSubpaths.map((name) => {
+  const distPath = path.join(root, "dist", "plugin-sdk", name + ".js");
+  const srcPath = path.join(root, "src", "plugin-sdk", name + ".ts");
+  return [
+    "openclaw/plugin-sdk/" + name,
+    fs.existsSync(distPath) ? distPath : srcPath,
+  ];
+});
+const alias = Object.fromEntries(aliasEntries);
 const jiti = createJiti(path.join(root, "openclaw.mjs"), {
   interopDefault: true,
   tryNative: false,
