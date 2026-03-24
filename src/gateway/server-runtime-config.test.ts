@@ -264,7 +264,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           tailscale: { mode: "serve" },
         }),
       ).rejects.toThrow(
-        "tailscale serve/funnel requires gateway auth — refusing to start with auth.mode=none when tailscale is active",
+        "tailscale serve requires gateway auth — refusing to start with auth.mode=none when tailscale serve is active",
       );
     });
 
