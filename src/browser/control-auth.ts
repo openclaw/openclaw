@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 
@@ -85,7 +86,7 @@ export async function ensureBrowserControlAuth(params: {
   // failed temporarily; overwriting would cause config drift.
   if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
     const existingTokenValue = latestCfg.gateway?.auth?.token;
-    if (existingTokenValue != null && typeof existingTokenValue !== "string") {
+    if (coerceSecretRef(existingTokenValue, latestCfg.secrets?.defaults)) {
       return { auth };
     }
     const generatedToken = crypto.randomBytes(24).toString("hex");
