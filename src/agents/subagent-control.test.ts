@@ -428,6 +428,83 @@ describe("killAllControlledSubagentRuns", () => {
     expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current-bulk");
   });
+
+  it("does not let a stale bulk entry suppress the current live entry for the same child key", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-shadow-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current-shadow",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current shadow task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-stale-shadow",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "stale shadow task",
+          cleanup: "keep",
+          createdAt: Date.now() - 9_000,
+          startedAt: Date.now() - 8_000,
+        },
+        {
+          runId: "run-current-shadow",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "current shadow task",
+          cleanup: "keep",
+          createdAt: Date.now() - 4_000,
+          startedAt: Date.now() - 3_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 1,
+      labels: ["current shadow task"],
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
 });
 
 describe("steerControlledSubagentRun", () => {
