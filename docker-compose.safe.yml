@@ -44,6 +44,9 @@ services:
     environment:
       OPENAI_BASE_URL: http://aep-proxy:8899/v1
       ANTHROPIC_BASE_URL: http://aep-proxy:8899/v1
+      AEP_ENTITY: ${AEP_ENTITY:-}
+      AEP_CLASSIFICATION: ${AEP_CLASSIFICATION:-}
+      AEP_TRACE_ID: ${AEP_TRACE_ID:-}
     depends_on:
       aep-proxy:
         condition: service_healthy
