@@ -7,7 +7,12 @@ import {
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
+import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import {
+  buildUnknownModelError,
+  resolveModelWithRegistry,
+} from "../agents/pi-embedded-runner/model.js";
 import { coerceImageAssistantText } from "../agents/tools/image-tool.helpers.js";
 import type {
   ImageDescriptionRequest,
@@ -49,9 +54,14 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const model = resolveModelWithRegistry({
+    modelRegistry,
+    provider: resolvedRef.provider,
+    modelId: resolvedRef.model,
+    cfg: params.cfg,
+  });
   if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    throw new Error(buildUnknownModelError({ provider: resolvedRef.provider, modelId: resolvedRef.model, cfg: params.cfg, agentDir: params.agentDir }));
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
@@ -119,6 +129,26 @@ function isUnknownModelError(err: unknown): boolean {
   return err instanceof Error && /^Unknown model:/i.test(err.message);
 }
 
+// resolveModelWithRegistry may synthesize a text-only fallback model when a provider config
+// (e.g. baseUrl) is present but the model has no registry entry. For MiniMax VLM models that
+// is effectively the same as "unknown" — preserve the fallback path.
+function isImageNotSupportedError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("Model does not support images:");
+}
+
+// Returns true when the user has explicitly restricted a model to text-only via
+// models.providers.[provider].models[].input. A synthesized fallback model (no
+// registry entry) never has an explicit config entry, so this stays false for it.
+function isExplicitlyTextOnlyModel(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+  modelId: string,
+): boolean {
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  const entry = providerConfig?.models?.find((m) => m.id === modelId);
+  return entry !== undefined && entry.input !== undefined && !entry.input.includes("image");
+}
+
 function resolveConfiguredProviderBaseUrl(
   cfg: ImageDescriptionRequest["cfg"],
   provider: string,
@@ -162,7 +192,11 @@ export async function describeImagesWithModel(
     apiKey = resolved.apiKey;
     model = resolved.model;
   } catch (err) {
-    if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
+    if (
+      !isMinimaxVlmModel(params.provider, params.model) ||
+      isExplicitlyTextOnlyModel(params.cfg, params.provider, params.model) ||
+      (!isUnknownModelError(err) && !isImageNotSupportedError(err))
+    ) {
       throw err;
     }
     const fallback = await resolveMinimaxVlmFallbackRuntime(params);

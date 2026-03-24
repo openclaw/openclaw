@@ -3,6 +3,9 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { buildUnknownModelError, resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,7 +15,6 @@ import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -104,6 +106,36 @@ function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedCont
 // Run PDF prompt with model fallback
 // ---------------------------------------------------------------------------
 
+// Returns true when the model is definitively known to be text-only — either
+// because the user explicitly declared it in models.providers.[provider].models[].input,
+// or because the model registry has an entry that declares text-only input.
+// Synthesized fallback models (provider has a baseUrl but the model has no registry
+// entry and no explicit config) are excluded: their input defaults to ["text"] as a
+// placeholder, not a deliberate declaration, so callers can try the next candidate.
+function isKnownTextOnlyModel(
+  cfg: OpenClawConfig | undefined,
+  modelRegistry: { find(provider: string, modelId: string): { input?: string[] } | undefined },
+  provider: string,
+  modelId: string,
+): boolean {
+  // Explicitly configured as text-only via models.providers.<provider>.models[].input
+  const providerConfig = findNormalizedProviderValue(cfg?.models?.providers, provider);
+  const entry = providerConfig?.models?.find((m) => m.id === modelId);
+  if (entry !== undefined && entry.input !== undefined && !entry.input.includes("image")) {
+    return true;
+  }
+  // Registry-backed and declared text-only (not a synthesized fallback with a default input)
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, modelId);
+  const registryModel = modelRegistry.find(normalizedProvider, normalizedModelId);
+  return (
+    registryModel !== undefined &&
+    Array.isArray(registryModel.input) &&
+    registryModel.input.length > 0 &&
+    !registryModel.input.includes("image")
+  );
+}
+
 type PdfSandboxConfig = {
   root: string;
   bridge: SandboxFsBridge;
@@ -143,7 +175,15 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = resolveModelWithRegistry({
+        modelRegistry,
+        provider,
+        modelId,
+        cfg: effectiveCfg,
+      });
+      if (!model) {
+        throw new Error(buildUnknownModelError({ provider, modelId, cfg: effectiveCfg, agentDir: params.agentDir }));
+      }
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
@@ -190,6 +230,15 @@ async function runPdfPrompt(params: {
       const extractions = await getExtractions();
       const hasImages = extractions.some((e) => e.images.length > 0);
       if (hasImages && !model.input?.includes("image")) {
+        // resolveModelWithRegistry may synthesize a text-only fallback model when a provider
+        // config (e.g. baseUrl) is present but the model has no registry entry. That synthetic
+        // model defaults to text-only input, which is effectively the same as "unknown" —
+        // throw so runWithImageModelFallback can try the next candidate instead of silently
+        // dropping PDF images. Registry-backed models with a definitive text-only declaration
+        // are allowed through to the text-extraction fallback below.
+        if (!isKnownTextOnlyModel(effectiveCfg, modelRegistry, provider, modelId)) {
+          throw new Error(`Model ${provider}/${modelId} does not support images.`);
+        }
         const hasText = extractions.some((e) => e.text.trim().length > 0);
         if (!hasText) {
           throw new Error(

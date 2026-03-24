@@ -324,4 +324,53 @@ describe("describeImageWithModel", () => {
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
+
+  it("rethrows image-not-supported error when model is explicitly text-only under a non-canonical provider key", async () => {
+    // Provider key in cfg uses non-canonical casing ("MiniMax-Portal" instead of "minimax-portal").
+    // Before the fix, isExplicitlyTextOnlyModel used a direct property lookup and returned false,
+    // causing the fallback to describeImagesWithMinimax despite the explicit text-only restriction.
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "minimax-portal",
+        id: "MiniMax-VL-01",
+        input: ["text"],
+        api: "openai-responses",
+        baseUrl: "https://api.minimax.io/v1",
+      })),
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              "MiniMax-Portal": {
+                baseUrl: "",
+                models: [
+                  {
+                    id: "MiniMax-VL-01",
+                    name: "MiniMax-VL-01",
+                    reasoning: false,
+                    input: ["text" as const],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-portal",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Model does not support images:");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

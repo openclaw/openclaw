@@ -282,6 +282,82 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("uses text extraction for registry-backed text-only model when PDF has images", async () => {
+    // Regression: registry-backed text-only models should use text extraction, not throw
+    await withTempAgentDir(async (agentDir) => {
+      // Model IS in the registry with input: ["text"] (definitive text-only declaration)
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted text from PDF",
+        images: [{ base64: "aW1n", mimeType: "image/png", pageIndex: 0 }],
+      } as never);
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "text-only summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" });
+
+      expect(extractSpy).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "text-only summary" }],
+        details: { native: false, model: OPENAI_PDF_MODEL },
+      });
+    });
+  });
+
+  it("throws for synthesized fallback model (not in registry) when PDF has images", async () => {
+    // Synthesized fallback models (baseUrl configured but no registry entry) should throw
+    // so runWithImageModelFallback can try the next candidate
+    await withTempAgentDir(async (agentDir) => {
+      // Model is NOT in the registry (modelFound: false) but provider has a baseUrl config
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
+      vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
+        setRuntimeApiKey: vi.fn(),
+      } as never);
+      vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({
+        find: () => undefined,
+      } as never);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
+      vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never); // pragma: allowlist secret
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
+
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted text",
+        images: [{ base64: "aW1n", mimeType: "image/png", pageIndex: 0 }],
+      } as never);
+
+      // Provider has a baseUrl (synthesized fallback scenario) but model not in registry
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            pdfModel: { primary: "custom-provider/some-model" },
+          },
+        },
+        models: {
+          providers: {
+            "custom-provider": { baseUrl: "https://custom.example.com/v1" },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" }),
+      ).rejects.toThrow(/does not support images|image model/i);
+    });
+  });
+
   it("tool parameters have correct schema shape", async () => {
     await loadCreatePdfTool();
     const schema = PdfToolSchema;
