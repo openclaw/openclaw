@@ -83,6 +83,7 @@ export default definePluginEntry({
           const providerSetup = await loadProviderSetup();
           const provider = await providerSetup.buildLemonadeProvider({
             baseUrl: explicit?.baseUrl,
+            apiKey: lemonadeKey ?? explicit?.apiKey,
           });
           if (provider.models.length === 0 && !lemonadeKey && !explicit) {
             return null;
