@@ -6,7 +6,7 @@ import {
   formatCliCommand,
   mergeScopedSearchConfig,
   normalizeFreshness,
-  normalizeToIsoDate,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -478,29 +478,17 @@ function createBraveToolDefinition(
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
-      const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
-      if (rawDateAfter && !dateAfter) {
-        return {
-          error: "invalid_date",
-          message: "date_after must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
+      const parsedDateRange = parseIsoDateRange({
+        rawDateAfter,
+        rawDateBefore,
+        invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+        invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+        invalidDateRangeMessage: "date_after must be before date_before.",
+      });
+      if ("error" in parsedDateRange) {
+        return parsedDateRange;
       }
-      const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
-      if (rawDateBefore && !dateBefore) {
-        return {
-          error: "invalid_date",
-          message: "date_before must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
-      if (dateAfter && dateBefore && dateAfter > dateBefore) {
-        return {
-          error: "invalid_date_range",
-          message: "date_after must be before date_before.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
+      const { dateAfter, dateBefore } = parsedDateRange;
 
       const cacheKey = buildSearchCacheKey([
         "brave",

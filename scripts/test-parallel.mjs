@@ -116,9 +116,10 @@ const parsePoolOverride = (value, fallback) => {
   }
   return fallback;
 };
-// Even on low-memory hosts, keep the isolated lane split so files like
-// git-commit.test.ts still get the worker/process isolation they require.
-const shouldSplitUnitRuns = testProfile !== "serial";
+// Even on low-memory or fully serial hosts, keep the unit lane split so
+// long-lived workers do not accumulate the whole unit transform graph.
+const shouldSplitUnitRuns = true;
+const useLowProfileUnitSchedulingDefaults = testProfile === "low" || testProfile === "serial";
 let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -327,26 +328,20 @@ const parseEnvNumber = (name, fallback) => {
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
-const defaultHeavyUnitFileLimit =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 90
-      : testProfile === "low"
-        ? 36
-        : highMemLocalHost
-          ? 80
-          : 60;
-const defaultHeavyUnitLaneCount =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 6
-      : testProfile === "low"
-        ? 4
-        : highMemLocalHost
-          ? 5
-          : 4;
+const defaultHeavyUnitFileLimit = isMacMiniProfile
+  ? 90
+  : useLowProfileUnitSchedulingDefaults
+    ? 36
+    : highMemLocalHost
+      ? 80
+      : 60;
+const defaultHeavyUnitLaneCount = isMacMiniProfile
+  ? 6
+  : useLowProfileUnitSchedulingDefaults
+    ? 4
+    : highMemLocalHost
+      ? 5
+      : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -356,8 +351,7 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const defaultMemoryHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const defaultMemoryHeavyUnitFileLimit = isCI ? 64 : useLowProfileUnitSchedulingDefaults ? 8 : 16;
 const memoryHeavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
   defaultMemoryHeavyUnitFileLimit,
@@ -502,8 +496,13 @@ const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
-const defaultUnitFastBatchTargetMs =
-  testProfile === "low" ? 10_000 : isCI && !isWindows ? 45_000 : 0;
+const defaultUnitFastBatchTargetMs = useLowProfileUnitSchedulingDefaults
+  ? 10_000
+  : isCI && !isWindows
+    ? 45_000
+    : highMemLocalHost
+      ? 45_000
+      : 0;
 const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,

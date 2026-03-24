@@ -46,6 +46,8 @@ export {
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
+export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 
 export type {
   CreateSandboxBackendParams,

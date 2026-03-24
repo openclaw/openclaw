@@ -1,43 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loggingState } from "../logging/state.js";
 import {
   applyStatusScanDefaults,
-  createStatusGatewayCallModuleMock,
-  createStatusGatewayProbeModuleMock,
   createStatusMemorySearchConfig,
   createStatusMemorySearchManager,
-  createStatusOsSummaryModuleMock,
-  createStatusPluginRegistryModuleMock,
-  createStatusPluginStatusModuleMock,
-  createStatusScanDepsRuntimeModuleMock,
+  createStatusScanSharedMocks,
   createStatusSummary,
+  loadStatusScanModuleForTest,
   withTemporaryEnv,
 } from "./status.scan.test-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-fast-json-missing-${process.pid}.json`),
-  hasPotentialConfiguredChannels: vi.fn(),
-  readBestEffortConfig: vi.fn(),
-  resolveCommandSecretRefsViaGateway: vi.fn(),
-  getUpdateCheckResult: vi.fn(),
-  getAgentLocalStatuses: vi.fn(),
-  getStatusSummary: vi.fn(),
-  getMemorySearchManager: vi.fn(),
-  buildGatewayConnectionDetails: vi.fn(),
-  probeGateway: vi.fn(),
-  resolveGatewayProbeAuthResolution: vi.fn(),
-  ensurePluginRegistryLoaded: vi.fn(),
-  buildPluginCompatibilityNotices: vi.fn(() => []),
+const mocks = {
+  ...createStatusScanSharedMocks("status-fast-json"),
   getStatusCommandSecretTargetIds: vi.fn(() => []),
   resolveMemorySearchConfig: vi.fn(),
-}));
+};
 
 let originalForceStderr: boolean;
+let loggingStateRef: typeof import("../logging/state.js").loggingState;
+let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
-  originalForceStderr = loggingState.forceConsoleToStderr;
-  loggingState.forceConsoleToStderr = false;
   applyStatusScanDefaults(mocks, {
     sourceConfig: createStatusMemorySearchConfig(),
     resolvedConfig: createStatusMemorySearchConfig(),
@@ -48,61 +31,14 @@ beforeEach(() => {
   mocks.resolveMemorySearchConfig.mockReturnValue({
     store: { path: "/tmp/main.sqlite" },
   });
+  ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
+  ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+  originalForceStderr = loggingStateRef.forceConsoleToStderr;
+  loggingStateRef.forceConsoleToStderr = false;
 });
-
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
-}));
-
-vi.mock("../config/io.js", () => ({
-  readBestEffortConfig: mocks.readBestEffortConfig,
-}));
-
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    resolveConfigPath: mocks.resolveConfigPath,
-  };
-});
-
-vi.mock("../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
-}));
-
-vi.mock("../cli/command-secret-targets.js", () => ({
-  getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
-}));
-
-vi.mock("./status.update.js", () => ({ getUpdateCheckResult: mocks.getUpdateCheckResult }));
-vi.mock("./status.agent-local.js", () => ({ getAgentLocalStatuses: mocks.getAgentLocalStatuses }));
-vi.mock("./status.summary.js", () => ({ getStatusSummary: mocks.getStatusSummary }));
-vi.mock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
-vi.mock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
-
-vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
-}));
-
-vi.mock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
-
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: mocks.probeGateway,
-}));
-
-vi.mock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
-
-vi.mock("../process/exec.js", () => ({
-  runExec: vi.fn(),
-}));
-
-vi.mock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
-vi.mock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
-
-const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
 
 afterEach(() => {
-  loggingState.forceConsoleToStderr = originalForceStderr;
+  loggingStateRef.forceConsoleToStderr = originalForceStderr;
 });
 
 describe("scanStatusJsonFast", () => {
@@ -111,14 +47,14 @@ describe("scanStatusJsonFast", () => {
 
     let stderrDuringLoad = false;
     mocks.ensurePluginRegistryLoaded.mockImplementation(() => {
-      stderrDuringLoad = loggingState.forceConsoleToStderr;
+      stderrDuringLoad = loggingStateRef.forceConsoleToStderr;
     });
 
     await scanStatusJsonFast({}, {} as never);
 
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalled();
     expect(stderrDuringLoad).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {

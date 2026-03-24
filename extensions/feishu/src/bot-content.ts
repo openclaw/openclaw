@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { parsePostContent } from "./post.js";
@@ -44,24 +45,6 @@ export type ResolvedFeishuGroupSession = {
   replyInThread: boolean;
   threadReply: boolean;
 };
-
-function buildFeishuConversationId(params: {
-  chatId: string;
-  scope: GroupSessionScope | "group_sender";
-  topicId?: string;
-  senderOpenId?: string;
-}): string {
-  switch (params.scope) {
-    case "group_sender":
-      return `${params.chatId}:sender:${params.senderOpenId}`;
-    case "group_topic":
-      return `${params.chatId}:topic:${params.topicId}`;
-    case "group_topic_sender":
-      return `${params.chatId}:topic:${params.topicId}:sender:${params.senderOpenId}`;
-    default:
-      return params.chatId;
-  }
-}
 
 export function resolveFeishuGroupSession(params: {
   chatId: string;

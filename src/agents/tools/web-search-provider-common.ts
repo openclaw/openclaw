@@ -206,6 +206,50 @@ export function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
+export function parseIsoDateRange(params: {
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  docs?: string;
+}):
+  | { dateAfter?: string; dateBefore?: string }
+  | {
+      error: "invalid_date" | "invalid_date_range";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const dateAfter = params.rawDateAfter ? normalizeToIsoDate(params.rawDateAfter) : undefined;
+  if (params.rawDateAfter && !dateAfter) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateAfterMessage,
+      docs,
+    };
+  }
+
+  const dateBefore = params.rawDateBefore ? normalizeToIsoDate(params.rawDateBefore) : undefined;
+  if (params.rawDateBefore && !dateBefore) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateBeforeMessage,
+      docs,
+    };
+  }
+
+  if (dateAfter && dateBefore && dateAfter > dateBefore) {
+    return {
+      error: "invalid_date_range",
+      message: params.invalidDateRangeMessage,
+      docs,
+    };
+  }
+
+  return { dateAfter, dateBefore };
+}
+
 export function normalizeFreshness(
   value: string | undefined,
   provider: "brave" | "perplexity",

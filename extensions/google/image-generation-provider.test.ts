@@ -2,6 +2,45 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 
+function mockGoogleApiKeyAuth() {
+  vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    apiKey: "google-test-key",
+    source: "env",
+    mode: "api-key",
+  });
+}
+
+function installGoogleFetchMock(params?: {
+  data?: string;
+  mimeType?: string;
+  inlineDataKey?: "inlineData" | "inline_data";
+}) {
+  const mimeType = params?.mimeType ?? "image/png";
+  const data = params?.data ?? "png-data";
+  const inlineDataKey = params?.inlineDataKey ?? "inlineData";
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                [inlineDataKey]: {
+                  [inlineDataKey === "inlineData" ? "mimeType" : "mime_type"]: mimeType,
+                  data: Buffer.from(data).toString("base64"),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("Google image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -133,31 +172,8 @@ describe("Google image-generation provider", () => {
   });
 
   it("sends reference images and explicit resolution for edit flows", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [
-          {
-            content: {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: "image/png",
-                    data: Buffer.from("png-data").toString("base64"),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
 
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
@@ -206,31 +222,8 @@ describe("Google image-generation provider", () => {
   });
 
   it("forwards explicit aspect ratio without forcing a default when size is omitted", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [
-          {
-            content: {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: "image/png",
-                    data: Buffer.from("png-data").toString("base64"),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
 
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
@@ -264,31 +257,8 @@ describe("Google image-generation provider", () => {
   });
 
   it("normalizes a configured bare Google host to the v1beta API root", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [
-          {
-            content: {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: "image/png",
-                    data: Buffer.from("png-data").toString("base64"),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
 
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({

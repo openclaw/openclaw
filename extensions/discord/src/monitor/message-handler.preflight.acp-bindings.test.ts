@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/extensions/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      ensureConfiguredBindingRouteReadyMock(...args),
-    resolveConfiguredBindingRoute: (...args: unknown[]) =>
-      resolveConfiguredBindingRouteMock(...args),
-  };
+  return await createConfiguredBindingConversationRuntimeModuleMock(
+    {
+      ensureConfiguredBindingRouteReadyMock,
+      resolveConfiguredBindingRouteMock,
+    },
+    importOriginal,
+  );
 });
 
 import { __testing as sessionBindingTesting } from "../../../../src/infra/outbound/session-binding-service.js";

@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseCompletedTestFileLines,
@@ -106,5 +108,39 @@ describe("scripts/test-parallel memory trace parsing", () => {
         },
       ],
     });
+  });
+});
+
+describe("scripts/test-parallel lane planning", () => {
+  it("keeps serial profile on split unit lanes instead of one giant unit worker", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_PROFILE: "serial",
+      },
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("unit-fast");
+    expect(output).not.toContain("unit filters=all maxWorkers=1");
+  });
+
+  it("recycles default local unit-fast runs into bounded batches", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CI: "",
+        OPENCLAW_TEST_LIST_LANES: "1",
+      },
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("unit-fast-batch-");
+    expect(output).not.toContain("unit-fast filters=all maxWorkers=");
   });
 });

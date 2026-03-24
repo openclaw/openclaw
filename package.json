@@ -181,6 +181,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/github-copilot-token": {
+      "types": "./dist/plugin-sdk/github-copilot-token.d.ts",
+      "default": "./dist/plugin-sdk/github-copilot-token.js"
+    },
     "./plugin-sdk/cli-runtime": {
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"

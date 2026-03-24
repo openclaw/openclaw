@@ -20,8 +20,50 @@ const createMockConfig = () => ({
 
 let mockConfig: Record<string, unknown> = createMockConfig();
 
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+function createScopedSessionStores() {
+  return new Map<string, Record<string, unknown>>([
+    [
+      "/tmp/main/sessions.json",
+      {
+        "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+      },
+    ],
+    [
+      "/tmp/support/sessions.json",
+      {
+        main: { sessionId: "s-support", updatedAt: 20 },
+      },
+    ],
+  ]);
+}
+
+function installScopedSessionStores(syncUpdates = false) {
+  const stores = createScopedSessionStores();
+  loadSessionStoreMock.mockClear();
+  updateSessionStoreMock.mockClear();
+  callGatewayMock.mockClear();
+  loadCombinedSessionStoreForGatewayMock.mockClear();
+  loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
+  });
+  if (syncUpdates) {
+    updateSessionStoreMock.mockImplementation(
+      (storePath: string, store: Record<string, unknown>) => {
+        if (storePath) {
+          stores.set(storePath, store);
+        }
+      },
+    );
+  }
+  return stores;
+}
+
+async function createSessionsModuleMock(
+  importOriginal: () => Promise<typeof import("../config/sessions.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -37,108 +79,37 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
     resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
       opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
   };
-});
+}
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
+function createGatewayCallModuleMock() {
+  return {
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  };
+}
 
-vi.mock("../gateway/session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+async function createGatewaySessionUtilsModuleMock(
+  importOriginal: () => Promise<typeof import("../gateway/session-utils.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadCombinedSessionStoreForGateway: (cfg: unknown) =>
       loadCombinedSessionStoreForGatewayMock(cfg),
   };
-});
+}
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+async function createConfigModuleMock(
+  importOriginal: () => Promise<typeof import("../config/config.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadConfig: () => mockConfig,
   };
-});
+}
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: async () => [
-    {
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      name: "Claude Sonnet 4.6",
-      contextWindow: 200000,
-    },
-    {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      contextWindow: 400000,
-    },
-  ],
-}));
-
-vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: () => ({ profiles: {} }),
-  resolveAuthProfileDisplayLabel: () => undefined,
-  resolveAuthProfileOrder: () => [],
-}));
-
-vi.mock("../agents/model-auth.js", () => ({
-  resolveEnvApiKey: () => null,
-  resolveUsableCustomProviderApiKey: () => null,
-  resolveModelAuthMode: () => "api-key",
-}));
-
-vi.mock("../infra/provider-usage.js", () => ({
-  resolveUsageProviderId: () => undefined,
-  loadProviderUsageSummary: async () => ({
-    updatedAt: Date.now(),
-    providers: [],
-  }),
-  formatUsageSummaryLine: () => null,
-}));
-
-let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
-
-async function loadFreshOpenClawToolsForSessionStatusTest() {
-  vi.resetModules();
-  vi.doMock("../config/sessions.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/sessions.js")>();
-    return {
-      ...actual,
-      loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-      updateSessionStore: async (
-        storePath: string,
-        mutator: (store: Record<string, unknown>) => Promise<void> | void,
-      ) => {
-        const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
-        await mutator(store);
-        updateSessionStoreMock(storePath, store);
-        return store;
-      },
-      resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
-        opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
-    };
-  });
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
-  vi.doMock("../gateway/session-utils.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
-    return {
-      ...actual,
-      loadCombinedSessionStoreForGateway: (cfg: unknown) =>
-        loadCombinedSessionStoreForGatewayMock(cfg),
-    };
-  });
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: () => mockConfig,
-    };
-  });
-  vi.doMock("../agents/model-catalog.js", () => ({
+function createModelCatalogModuleMock() {
+  return {
     loadModelCatalog: async () => [
       {
         provider: "anthropic",
@@ -153,25 +124,57 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
         contextWindow: 400000,
       },
     ],
-  }));
-  vi.doMock("../agents/auth-profiles.js", () => ({
+  };
+}
+
+function createAuthProfilesModuleMock() {
+  return {
     ensureAuthProfileStore: () => ({ profiles: {} }),
     resolveAuthProfileDisplayLabel: () => undefined,
     resolveAuthProfileOrder: () => [],
-  }));
-  vi.doMock("../agents/model-auth.js", () => ({
+  };
+}
+
+function createModelAuthModuleMock() {
+  return {
     resolveEnvApiKey: () => null,
     resolveUsableCustomProviderApiKey: () => null,
     resolveModelAuthMode: () => "api-key",
-  }));
-  vi.doMock("../infra/provider-usage.js", () => ({
+  };
+}
+
+function createProviderUsageModuleMock() {
+  return {
     resolveUsageProviderId: () => undefined,
     loadProviderUsageSummary: async () => ({
       updatedAt: Date.now(),
       providers: [],
     }),
     formatUsageSummaryLine: () => null,
-  }));
+  };
+}
+
+vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
+vi.mock("../config/config.js", createConfigModuleMock);
+vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
+vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
+vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+
+let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
+
+async function loadFreshOpenClawToolsForSessionStatusTest() {
+  vi.resetModules();
+  vi.doMock("../config/sessions.js", createSessionsModuleMock);
+  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
+  vi.doMock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
+  vi.doMock("../config/config.js", createConfigModuleMock);
+  vi.doMock("../agents/model-catalog.js", createModelCatalogModuleMock);
+  vi.doMock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
+  vi.doMock("../agents/model-auth.js", createModelAuthModuleMock);
+  vi.doMock("../infra/provider-usage.js", createProviderUsageModuleMock);
   vi.doMock("../auto-reply/group-activation.js", () => ({
     normalizeGroupActivation: (value: unknown) => value ?? "always",
   }));
@@ -306,31 +309,7 @@ describe("session_status tool", () => {
   });
 
   it("resolves sessionKey=current to the requester agent session", async () => {
-    loadSessionStoreMock.mockClear();
-    updateSessionStoreMock.mockClear();
-    callGatewayMock.mockClear();
-    loadCombinedSessionStoreForGatewayMock.mockClear();
-    const stores = new Map<string, Record<string, unknown>>([
-      [
-        "/tmp/main/sessions.json",
-        {
-          "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
-        },
-      ],
-      [
-        "/tmp/support/sessions.json",
-        {
-          main: { sessionId: "s-support", updatedAt: 20 },
-        },
-      ],
-    ]);
-    loadSessionStoreMock.mockImplementation((storePath: string) => {
-      return stores.get(storePath) ?? {};
-    });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: Object.fromEntries([...stores.values()].flatMap((s) => Object.entries(s))),
-    });
+    installScopedSessionStores();
 
     const tool = getSessionStatusTool("agent:support:main");
 
@@ -559,33 +538,7 @@ describe("session_status tool", () => {
   });
 
   it("scopes bare session keys to the requester agent", async () => {
-    loadSessionStoreMock.mockClear();
-    updateSessionStoreMock.mockClear();
-    const stores = new Map<string, Record<string, unknown>>([
-      [
-        "/tmp/main/sessions.json",
-        {
-          "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
-        },
-      ],
-      [
-        "/tmp/support/sessions.json",
-        {
-          main: { sessionId: "s-support", updatedAt: 20 },
-        },
-      ],
-    ]);
-    loadSessionStoreMock.mockImplementation((storePath: string) => {
-      return stores.get(storePath) ?? {};
-    });
-    updateSessionStoreMock.mockImplementation(
-      (_storePath: string, store: Record<string, unknown>) => {
-        // Keep map in sync for resolveSessionEntry fallbacks if needed.
-        if (_storePath) {
-          stores.set(_storePath, store);
-        }
-      },
-    );
+    installScopedSessionStores(true);
 
     const tool = getSessionStatusTool("agent:support:main");
 
