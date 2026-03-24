@@ -1159,11 +1159,15 @@ const memoryTraceEnabled =
     (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
 const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
 const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
-const heapSnapshotIntervalMs = Math.max(
+const requestedHeapSnapshotIntervalMs = Math.max(
   0,
   parseEnvNumber("OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS", 0),
 );
-const heapSnapshotMinIntervalMs = 5000;
+const heapSnapshotMinIntervalMs = 1000;
+const heapSnapshotIntervalMs =
+  requestedHeapSnapshotIntervalMs > 0
+    ? Math.max(heapSnapshotMinIntervalMs, requestedHeapSnapshotIntervalMs)
+    : 0;
 const heapSnapshotEnabled =
   process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
 const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
