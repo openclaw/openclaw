@@ -237,7 +237,9 @@ describe("scripts/docker/setup.sh", () => {
     expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
 
     const prestartLines = lines.slice(0, gatewayStartIdx);
-    expect(prestartLines.some((line) => line.includes("run --rm openclaw-cli"))).toBe(false);
+    expect(prestartLines.some((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line))).toBe(
+      false,
+    );
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
