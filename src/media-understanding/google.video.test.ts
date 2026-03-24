@@ -110,4 +110,40 @@ describe("describeGeminiVideo", () => {
       Buffer.from("video-bytes").toString("base64"),
     );
   });
+
+  it("keeps versionless Gemini base URLs verbatim", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video-bytes"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1500,
+      baseUrl: "https://example.com",
+      fetchFn,
+    });
+
+    const { url } = getRequest();
+    expect(url).toBe("https://example.com/models/gemini-3-flash-preview:generateContent");
+  });
+
+  it("preserves explicit Gemini API versions in configured base URLs", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video-bytes"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1500,
+      baseUrl: "https://example.com/v1",
+      fetchFn,
+    });
+
+    const { url } = getRequest();
+    expect(url).toBe("https://example.com/v1/models/gemini-3-flash-preview:generateContent");
+  });
 });

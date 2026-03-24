@@ -1,9 +1,38 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../src/infra/net/ssrf.js";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 
+const TEST_NET_IP = "203.0.113.10";
+
+function stubPinnedHostname(hostname: string) {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const addresses = [TEST_NET_IP];
+  return {
+    hostname: normalized,
+    addresses,
+    lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+  };
+}
+
 describe("Google image-generation provider", () => {
+  let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn>;
+  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resolvePinnedHostnameWithPolicySpy = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
+    resolvePinnedHostnameSpy = vi
+      .spyOn(ssrf, "resolvePinnedHostname")
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
+  });
+
   afterEach(() => {
+    resolvePinnedHostnameWithPolicySpy?.mockRestore();
+    resolvePinnedHostnameSpy?.mockRestore();
+    resolvePinnedHostnameWithPolicySpy = undefined;
+    resolvePinnedHostnameSpy = undefined;
     vi.restoreAllMocks();
   });
 
@@ -260,6 +289,104 @@ describe("Google image-generation provider", () => {
           },
         }),
       }),
+    );
+  });
+
+  it("keeps versionless Gemini base URLs verbatim", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("png-data").toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://example.com",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/models/gemini-3.1-flash-image-preview:generateContent",
+      expect.any(Object),
+    );
+  });
+
+  it("preserves explicit Gemini API versions in configured base URLs", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("png-data").toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://example.com/v1",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/v1/models/gemini-3.1-flash-image-preview:generateContent",
+      expect.any(Object),
     );
   });
 });

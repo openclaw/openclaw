@@ -763,7 +763,7 @@ describe("native PDF provider API calls", () => {
     expect(url).toContain("https://generativelanguage.googleapis.com/v1beta/models/");
   });
 
-  it("geminiAnalyzePdf preserves explicit Gemini API versions in custom base URLs", async () => {
+  it("geminiAnalyzePdf keeps the historical PDF suffixing for custom versioned base URLs", async () => {
     const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
     const fetchMock = mockFetchResponse({
       ok: true,
@@ -779,8 +779,26 @@ describe("native PDF provider API calls", () => {
     );
 
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain("https://proxy.example.com/gemini/v1/models/");
-    expect(url).not.toContain("/v1/v1beta/");
+    expect(url).toContain("https://proxy.example.com/gemini/v1/v1beta/models/");
+  });
+
+  it("geminiAnalyzePdf keeps OpenAI-compatible proxy prefixes on the historical PDF path", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://proxy.example.com/openai/v1",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("https://proxy.example.com/openai/v1/v1beta/models/");
   });
 });
 

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
-import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -43,7 +42,9 @@ let createGeminiEmbeddingProvider: typeof import("./embeddings-gemini.js").creat
 let DEFAULT_GEMINI_EMBEDDING_MODEL: typeof import("./embeddings-gemini.js").DEFAULT_GEMINI_EMBEDDING_MODEL;
 let GEMINI_EMBEDDING_2_MODELS: typeof import("./embeddings-gemini.js").GEMINI_EMBEDDING_2_MODELS;
 let isGeminiEmbedding2Model: typeof import("./embeddings-gemini.js").isGeminiEmbedding2Model;
+let resolveGeminiEmbeddingClient: typeof import("./embeddings-gemini.js").resolveGeminiEmbeddingClient;
 let resolveGeminiOutputDimensionality: typeof import("./embeddings-gemini.js").resolveGeminiOutputDimensionality;
+let ssrfModule: typeof import("../infra/net/ssrf.js");
 
 beforeEach(async () => {
   vi.useRealTimers();
@@ -56,8 +57,10 @@ beforeEach(async () => {
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     GEMINI_EMBEDDING_2_MODELS,
     isGeminiEmbedding2Model,
+    resolveGeminiEmbeddingClient,
     resolveGeminiOutputDimensionality,
   } = await import("./embeddings-gemini.js"));
+  ssrfModule = await import("../infra/net/ssrf.js");
 });
 
 afterEach(() => {
@@ -72,6 +75,20 @@ function mockResolvedProviderKey(apiKey = "test-key") {
     mode: "api-key",
     source: "test",
   });
+}
+
+function mockPublicPinnedHostname() {
+  return vi
+    .spyOn(ssrfModule, "resolvePinnedHostnameWithPolicy")
+    .mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrfModule.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
 }
 
 type GeminiFetchMock =
@@ -562,5 +579,83 @@ describe("gemini model normalization", () => {
 
     const result = await provider.embedBatch([]);
     expect(result).toEqual([]);
+  });
+});
+
+describe("resolveGeminiEmbeddingClient base URL handling", () => {
+  it("uses the default Gemini base URL when no override is configured", async () => {
+    mockResolvedProviderKey();
+
+    const client = await resolveGeminiEmbeddingClient({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(client.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("keeps versionless configured base URLs verbatim", async () => {
+    mockResolvedProviderKey();
+
+    const client = await resolveGeminiEmbeddingClient({
+      config: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://proxy.example.com",
+            },
+          },
+        },
+      } as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(client.baseUrl).toBe("https://proxy.example.com");
+  });
+
+  it("preserves explicit Gemini API versions in configured base URLs", async () => {
+    mockResolvedProviderKey();
+
+    const client = await resolveGeminiEmbeddingClient({
+      config: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://proxy.example.com/v1",
+            },
+          },
+        },
+      } as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(client.baseUrl).toBe("https://proxy.example.com/v1");
+  });
+
+  it("strips /openai compat suffixes before applying version handling", async () => {
+    mockResolvedProviderKey();
+
+    const client = await resolveGeminiEmbeddingClient({
+      config: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://proxy.example.com/openai/v1",
+            },
+          },
+        },
+      } as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(client.baseUrl).toBe("https://proxy.example.com");
   });
 });

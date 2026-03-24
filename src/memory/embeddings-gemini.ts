@@ -5,7 +5,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { ensureGeminiVersionSegment, normalizeGeminiBaseUrl } from "../utils/gemini-url.js";
+import { normalizeGeminiBaseUrl } from "../utils/gemini-url.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
@@ -294,11 +294,9 @@ export async function resolveGeminiEmbeddingClient(
       );
 
   const providerConfig = options.config.models?.providers?.google;
-  const baseUrl = ensureGeminiVersionSegment(
-    normalizeGeminiBaseUrl(
-      remoteBaseUrl || providerConfig?.baseUrl?.trim(),
-      DEFAULT_GEMINI_BASE_URL,
-    ),
+  const baseUrl = normalizeGeminiBaseUrl(
+    remoteBaseUrl || providerConfig?.baseUrl?.trim(),
+    DEFAULT_GEMINI_BASE_URL,
   );
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
