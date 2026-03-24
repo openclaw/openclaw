@@ -222,7 +222,7 @@ async function main() {
     // 7. 完成提示
     logger.success('\n🎉 打包全流程完成！');
     console.log(`📂 打包目录：${path.resolve(config.DEPLOY_DIR)}`);
-    console.log('🚀 下一步：将该目录上传到服务器（如 /opt/openclaw），执行 deploy.js 部署');
+    console.log('🚀 下一步：将该目录上传到服务器（如 /opt/openclaw），执行 deploy.mjs 部署');
 
   } catch (err) {
     logger.error(`打包过程出错：${err.message}`);
