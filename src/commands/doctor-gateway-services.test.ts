@@ -21,6 +21,7 @@ vi.mock("node:fs/promises", async () => {
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
+  stage: vi.fn(),
   install: vi.fn(),
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
@@ -73,6 +74,7 @@ vi.mock("../daemon/service-audit.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     readCommand: mocks.readCommand,
+    stage: mocks.stage,
     install: mocks.install,
   }),
 }));
@@ -108,12 +110,19 @@ function makeDoctorIo() {
 function makeDoctorPrompts() {
   return {
     confirm: vi.fn().mockResolvedValue(true),
-    confirmRepair: vi.fn().mockResolvedValue(true),
-    confirmAggressive: vi.fn().mockResolvedValue(true),
-    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+    confirmAutoFix: vi.fn().mockResolvedValue(true),
+    confirmAggressiveAutoFix: vi.fn().mockResolvedValue(true),
+    confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
     select: vi.fn().mockResolvedValue("node"),
     shouldRepair: false,
     shouldForce: false,
+    repairMode: {
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    },
   };
 }
 
@@ -209,6 +218,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }),
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -247,6 +257,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         }),
       );
+      expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
   });
@@ -292,6 +303,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -328,6 +340,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -363,6 +376,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -414,10 +428,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
-  it("skips service config reinstalls during non-interactive update repairs", async () => {
+  it("stages service config repairs during non-interactive update repairs", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
@@ -466,6 +481,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).toHaveBeenCalledTimes(1);
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -512,6 +528,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         config: cfg,
       }),
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -554,6 +571,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
             }),
           }),
         );
+        expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
       },
     );
@@ -591,6 +609,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
 
         expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.stage).toHaveBeenCalledTimes(1);
         expect(mocks.install).not.toHaveBeenCalled();
       },
     );
@@ -634,6 +653,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
             config: cfg,
           }),
         );
+        expect(mocks.stage).not.toHaveBeenCalled();
       },
     );
   });
@@ -669,12 +689,19 @@ describe("maybeScanExtraGatewayServices", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const prompter = {
       confirm: vi.fn(),
-      confirmRepair: vi.fn(),
-      confirmAggressive: vi.fn(),
-      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+      confirmAutoFix: vi.fn(),
+      confirmAggressiveAutoFix: vi.fn(),
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
       select: vi.fn(),
       shouldRepair: false,
       shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
     };
 
     await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);

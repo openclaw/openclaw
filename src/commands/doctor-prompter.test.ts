@@ -51,13 +51,13 @@ describe("createDoctorPrompter", () => {
       }),
     ).resolves.toBe(true);
     await expect(
-      prompter.confirmRepair({
+      prompter.confirmAutoFix({
         message: "Repair gateway service config?",
         initialValue: false,
       }),
     ).resolves.toBe(true);
     await expect(
-      prompter.confirmSkipInNonInteractive({
+      prompter.confirmRuntimeRepair({
         message: "Repair launch agent bootstrap?",
         initialValue: false,
       }),
@@ -84,7 +84,7 @@ describe("createDoctorPrompter", () => {
     });
 
     await expect(
-      prompter.confirmAggressive({
+      prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config?",
         initialValue: true,
       }),
@@ -112,13 +112,13 @@ describe("createDoctorPrompter", () => {
     });
 
     await expect(
-      prompter.confirmRepair({
+      prompter.confirmAutoFix({
         message: "Repair gateway service config?",
         initialValue: false,
       }),
     ).resolves.toBe(true);
     await expect(
-      prompter.confirmSkipInNonInteractive({
+      prompter.confirmRuntimeRepair({
         message: "Restart gateway service now?",
         initialValue: true,
       }),
@@ -146,7 +146,7 @@ describe("createDoctorPrompter", () => {
     });
 
     await expect(
-      prompter.confirmAggressive({
+      prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config?",
         initialValue: false,
       }),
