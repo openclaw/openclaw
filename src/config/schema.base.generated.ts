@@ -5728,6 +5728,92 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     additionalProperties: false,
                   },
+                  brightdata: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      baseUrl: {
+                        type: "string",
+                      },
+                      unlockerZone: {
+                        type: "string",
+                      },
+                      timeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                 },
                 additionalProperties: false,
               },
@@ -13000,6 +13086,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
     },
+    "tools.web.fetch.brightdata.enabled": {
+      label: "Enable Bright Data Fallback",
+      help: "Enable Bright Data fallback for web_fetch (if configured).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.brightdata.apiKey": {
+      label: "Bright Data API Token",
+      help: "Bright Data API token (fallback: BRIGHTDATA_API_TOKEN env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.fetch.brightdata.baseUrl": {
+      label: "Bright Data API Base URL",
+      help: "Bright Data API base URL (default: https://api.brightdata.com).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.brightdata.unlockerZone": {
+      label: "Bright Data Unlocker Zone",
+      help: "Bright Data unlocker zone for web_fetch fallback requests (default: mcp_unlocker).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.brightdata.timeoutSeconds": {
+      label: "Bright Data Timeout (sec)",
+      help: "Timeout in seconds for Bright Data requests.",
+      tags: ["performance", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -16035,6 +16147,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "plugins.entries.*.config": {
       label: "Plugin Config",
       help: "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
+      tags: ["advanced"],
+    },
+    "plugins.entries.brightdata.config.webSearch": {
+      label: "Bright Data Web Search",
+      help: "Bright Data web search plugin settings for API authentication and endpoint overrides used by the bundled Bright Data search, scrape, and browser tools.",
+      tags: ["advanced"],
+    },
+    "plugins.entries.brightdata.config.webSearch.apiKey": {
+      label: "Bright Data API Token",
+      help: "Bright Data API token for the bundled Bright Data plugin (fallback: BRIGHTDATA_API_TOKEN env var).",
+      tags: ["security", "auth"],
+    },
+    "plugins.entries.brightdata.config.webSearch.baseUrl": {
+      label: "Bright Data API Base URL",
+      help: "Bright Data API base URL override (default: https://api.brightdata.com).",
       tags: ["advanced"],
     },
     "plugins.installs": {

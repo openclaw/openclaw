@@ -46880,11 +46880,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Bright Data Web Search",
-      "help": "Bright Data web search plugin settings for API authentication and endpoint overrides used by the bundled Bright Data search, scrape, and browser tools.",
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -64588,122 +64584,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "tools.web.fetch.brightdata",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.fetch.brightdata.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "label": "Bright Data API Token",
-      "help": "Bright Data API token (fallback: BRIGHTDATA_API_TOKEN env var).",
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.fetch.brightdata.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Bright Data API Base URL",
-      "help": "Bright Data API base URL (default: https://api.brightdata.com).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Bright Data Fallback",
-      "help": "Enable Bright Data fallback for web_fetch (if configured).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.timeoutSeconds",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Bright Data Timeout (sec)",
-      "help": "Timeout in seconds for Bright Data requests.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.brightdata.unlockerZone",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Bright Data Unlocker Zone",
-      "help": "Bright Data unlocker zone for web_fetch fallback requests (default: mcp_unlocker).",
-      "hasChildren": false
     },
     {
       "path": "tools.web.fetch.cacheTtlMinutes",

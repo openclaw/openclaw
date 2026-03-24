@@ -84,18 +84,18 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                             | API key                                     |
-| -------------------------------------- | -------------------------- | --------------------------------------------------- | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode         | `BRAVE_API_KEY`                             |
-| [Bright Data](/tools/brightdata)       | Structured snippets        | Engine, cursor, and geo targeting via `brightdata_search` | `BRIGHTDATA_API_TOKEN`                |
-| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | Region, SafeSearch                                  | None (key-free)                             |
-| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction       | `EXA_API_KEY`                               |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                         | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                                  | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                                  | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                                  | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits    | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                            | `TAVILY_API_KEY`                            |
+| Provider                               | Result style               | Filters                                                   | API key                                     |
+| -------------------------------------- | -------------------------- | --------------------------------------------------------- | ------------------------------------------- |
+| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode               | `BRAVE_API_KEY`                             |
+| [Bright Data](/tools/brightdata)       | Structured snippets        | Engine, cursor, and geo targeting via `brightdata_search` | `BRIGHTDATA_API_TOKEN`                      |
+| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | Region, SafeSearch                                        | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction             | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                               | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                                        | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                                        | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                                        | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits          | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                                  | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
 
