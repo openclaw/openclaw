@@ -403,6 +403,9 @@ const resolveEntryTimingEstimator = (entry) => {
   if (config === "vitest.channels.config.ts") {
     return estimateChannelDurationMs;
   }
+  if (config === "vitest.extensions.config.ts") {
+    return estimateChannelDurationMs;
+  }
   return null;
 };
 const estimateEntryFilesDurationMs = (entry, files) => {
@@ -451,10 +454,45 @@ const channelSharedCandidateFiles = allKnownTestFiles.filter(
     channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
     !channelIsolatedFileSet.has(file),
 );
+const defaultExtensionsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
+const extensionsBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_EXTENSIONS_BATCH_TARGET_MS",
+  defaultExtensionsBatchTargetMs,
+);
 const extensionIsolatedEntries = extensionForkIsolatedFiles.map((file) => ({
   name: `extensions-${path.basename(file, ".test.ts")}-isolated`,
   args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
 }));
+// Shared extensions workers can retain a very large transform graph across
+// hundreds of plugin files on forks/non-isolated runs. Recycle that lane in
+// bounded batches so teardown happens before the worker reaches CI memory-cliff
+// territory and starts surfacing spurious worker-shutdown errors.
+const extensionsSharedBatches = splitFilesByDurationBudget(
+  extensionSharedCandidateFiles,
+  extensionsBatchTargetMs,
+  estimateChannelDurationMs,
+);
+const extensionsSharedEntries = extensionsSharedBatches
+  .filter((batch) => batch.length > 0)
+  .map((batch, batchIndex) => ({
+    name:
+      extensionsSharedBatches.length === 1
+        ? "extensions"
+        : `extensions-batch-${String(batchIndex + 1)}`,
+    serialPhase: "extensions",
+    includeFiles: batch,
+    estimatedDurationMs: estimateEntryFilesDurationMs(
+      { args: ["vitest", "run", "--config", "vitest.extensions.config.ts"] },
+      batch,
+    ),
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-extensions-include-${String(batchIndex + 1)}`,
+        batch,
+      ),
+    },
+    args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
+  }));
 const channelIsolatedEntries = channelIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-channels-isolated`,
   args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
@@ -624,25 +662,7 @@ const baseRuns = [
             ],
           },
         ]),
-  ...(includeExtensionsSuite
-    ? [
-        ...extensionIsolatedEntries,
-        {
-          name: "extensions",
-          includeFiles: extensionSharedCandidateFiles,
-          env:
-            extensionSharedCandidateFiles.length > 0
-              ? {
-                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-                    "vitest-extensions-include",
-                    extensionSharedCandidateFiles,
-                  ),
-                }
-              : undefined,
-          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
-        },
-      ]
-    : []),
+  ...(includeExtensionsSuite ? [...extensionIsolatedEntries, ...extensionsSharedEntries] : []),
   ...(includeChannelsSuite
     ? [
         ...channelIsolatedEntries.map((entry) => ({
