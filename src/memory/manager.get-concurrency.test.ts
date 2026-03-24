@@ -130,7 +130,7 @@ describe("memory manager cache hydration", () => {
     expect(Object.is(second, first)).toBe(false);
     expect(hoisted.providerCreateCalls).toBe(0);
 
-    await second?.close?.();
     await first?.close?.();
+    await second?.close?.();
   });
 });
