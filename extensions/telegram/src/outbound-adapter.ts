@@ -3,8 +3,11 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,

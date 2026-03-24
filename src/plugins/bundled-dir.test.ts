@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
 const tempDirs: string[] = [];
-const originalCwd = process.cwd();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalVitest = process.env.VITEST;
 
@@ -16,7 +15,7 @@ function makeRepoRoot(prefix: string): string {
 }
 
 afterEach(() => {
-  process.chdir(originalCwd);
+  vi.restoreAllMocks();
   if (originalBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -43,7 +42,7 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    process.chdir(repoRoot);
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "dist-runtime", "extensions")),
@@ -59,7 +58,7 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    process.chdir(repoRoot);
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "dist", "extensions")),
@@ -77,7 +76,7 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    process.chdir(repoRoot);
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     process.env.VITEST = "true";
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
@@ -98,7 +97,7 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    process.chdir(repoRoot);
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     delete process.env.VITEST;
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(

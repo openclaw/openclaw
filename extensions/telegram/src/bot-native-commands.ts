@@ -51,6 +51,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -63,6 +64,7 @@ import {
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
+  resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -118,10 +120,7 @@ export type RegisterTelegramHandlerParams = {
     ctx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: {
-      messageIdOverride?: string;
-      forceWasMentioned?: boolean;
-    },
+    options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
@@ -185,7 +184,19 @@ async function resolveTelegramCommandAuth(params: {
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const getChat =
+    typeof (bot.api as { getChat?: unknown }).getChat === "function"
+      ? ((bot.api as { getChat: (chatId: string | number) => Promise<unknown> }).getChat.bind(
+          bot.api,
+        ) as (chatId: string | number) => Promise<unknown>)
+      : undefined;
+  const isForum = await resolveTelegramForumFlag({
+    chatId,
+    chatType: msg.chat.type,
+    isGroup,
+    isForum: (msg.chat as { is_forum?: boolean }).is_forum,
+    getChat,
+  });
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,
@@ -504,7 +515,7 @@ export const registerTelegramNativeCommands = ({
     const threadSpec = resolveTelegramThreadSpec({
       isGroup,
       isForum,
-      messageThreadId,
+      messageThreadId: resolvedThreadId ?? messageThreadId,
     });
     let { route, configuredBinding } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,

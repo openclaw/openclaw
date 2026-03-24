@@ -28,6 +28,17 @@ describe("doctor empty allowlist policy warnings", () => {
     ]);
   });
 
+  it("stays quiet for zalouser hybrid route-and-sender group access", () => {
+    const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
+      account: { groupPolicy: "allowlist" },
+      channelName: "zalouser",
+      doctorFixCommand: "openclaw doctor --fix",
+      prefix: "channels.zalouser",
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
   it("stays quiet for channels that do not use sender-based group allowlists", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },

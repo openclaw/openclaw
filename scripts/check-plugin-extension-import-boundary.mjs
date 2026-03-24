@@ -5,6 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import {
+  collectTypeScriptInventory,
+  diffInventoryEntries,
+  normalizeRepoPath,
+  runBaselineInventoryCheck,
+  resolveRepoSpecifier,
+  visitModuleSpecifiers,
+} from "./lib/guard-inventory-utils.mjs";
+import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
   runAsScript,
@@ -19,6 +27,8 @@ const baselinePath = path.join(
   "fixtures",
   "plugin-extension-import-boundary-inventory.json",
 );
+let cachedInventoryPromise = null;
+let cachedExpectedInventoryPromise = null;
 
 const bundledWebSearchProviders = new Set([
   "brave",
@@ -37,10 +47,6 @@ const bundledWebSearchPluginIds = new Set([
   "xai",
 ]);
 
-function normalizePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
-
 function compareEntries(left, right) {
   return (
     left.file.localeCompare(right.file) ||
@@ -49,16 +55,6 @@ function compareEntries(left, right) {
     left.specifier.localeCompare(right.specifier) ||
     left.reason.localeCompare(right.reason)
   );
-}
-
-function resolveSpecifier(specifier, importerFile) {
-  if (specifier.startsWith(".")) {
-    return normalizePath(path.resolve(path.dirname(importerFile), specifier));
-  }
-  if (specifier.startsWith("/")) {
-    return normalizePath(specifier);
-  }
-  return null;
 }
 
 function classifyResolvedExtensionReason(kind, resolvedPath) {
@@ -83,67 +79,27 @@ function pushEntry(entries, entry) {
 
 function scanImportBoundaryViolations(sourceFile, filePath) {
   const entries = [];
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
-  function visit(node) {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      const specifier = node.moduleSpecifier.text;
-      const resolvedPath = resolveSpecifier(specifier, filePath);
-      if (resolvedPath?.startsWith("extensions/")) {
-        pushEntry(entries, {
-          file: normalizePath(filePath),
-          line: toLine(sourceFile, node.moduleSpecifier),
-          kind: "import",
-          specifier,
-          resolvedPath,
-          reason: classifyResolvedExtensionReason("import", resolvedPath),
-        });
-      }
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      const specifier = node.moduleSpecifier.text;
-      const resolvedPath = resolveSpecifier(specifier, filePath);
-      if (resolvedPath?.startsWith("extensions/")) {
-        pushEntry(entries, {
-          file: normalizePath(filePath),
-          line: toLine(sourceFile, node.moduleSpecifier),
-          kind: "export",
-          specifier,
-          resolvedPath,
-          reason: classifyResolvedExtensionReason("export", resolvedPath),
-        });
-      }
-    } else if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteral(node.arguments[0])
-    ) {
-      const specifier = node.arguments[0].text;
-      const resolvedPath = resolveSpecifier(specifier, filePath);
-      if (resolvedPath?.startsWith("extensions/")) {
-        pushEntry(entries, {
-          file: normalizePath(filePath),
-          line: toLine(sourceFile, node.arguments[0]),
-          kind: "dynamic-import",
-          specifier,
-          resolvedPath,
-          reason: classifyResolvedExtensionReason("dynamic-import", resolvedPath),
-        });
-      }
+  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
+    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+    if (!resolvedPath?.startsWith("extensions/")) {
+      return;
     }
-
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
+    pushEntry(entries, {
+      file: relativeFile,
+      line: toLine(sourceFile, specifierNode),
+      kind,
+      specifier,
+      resolvedPath,
+      reason: classifyResolvedExtensionReason(kind, resolvedPath),
+    });
+  });
   return entries;
 }
 
 function scanWebSearchRegistrySmells(sourceFile, filePath) {
-  const relativeFile = normalizePath(filePath);
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (relativeFile !== "src/plugins/web-search-providers.ts") {
     return [];
   }
@@ -193,7 +149,7 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
 }
 
 function shouldSkipFile(filePath) {
-  const relativeFile = normalizePath(filePath);
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
   return (
     relativeFile === "src/plugins/bundled-web-search-registry.ts" ||
     relativeFile.startsWith("src/plugins/contracts/") ||
@@ -202,42 +158,55 @@ function shouldSkipFile(filePath) {
 }
 
 export async function collectPluginExtensionImportBoundaryInventory() {
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots))
-    .filter((filePath) => !shouldSkipFile(filePath))
-    .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-
-  const inventory = [];
-  for (const filePath of files) {
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    );
-    inventory.push(...scanImportBoundaryViolations(sourceFile, filePath));
-    inventory.push(...scanWebSearchRegistrySmells(sourceFile, filePath));
+  if (cachedInventoryPromise) {
+    return cachedInventoryPromise;
   }
 
-  return inventory.toSorted(compareEntries);
+  cachedInventoryPromise = (async () => {
+    const files = (await collectTypeScriptFilesFromRoots(scanRoots))
+      .filter((filePath) => !shouldSkipFile(filePath))
+      .toSorted((left, right) =>
+        normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+      );
+    return await collectTypeScriptInventory({
+      ts,
+      files,
+      compareEntries,
+      collectEntries(sourceFile, filePath) {
+        return [
+          ...scanImportBoundaryViolations(sourceFile, filePath),
+          ...scanWebSearchRegistrySmells(sourceFile, filePath),
+        ];
+      },
+    });
+  })();
+
+  try {
+    return await cachedInventoryPromise;
+  } catch (error) {
+    cachedInventoryPromise = null;
+    throw error;
+  }
 }
 
 export async function readExpectedInventory() {
-  return JSON.parse(await fs.readFile(baselinePath, "utf8"));
+  if (cachedExpectedInventoryPromise) {
+    return cachedExpectedInventoryPromise;
+  }
+
+  cachedExpectedInventoryPromise = fs
+    .readFile(baselinePath, "utf8")
+    .then((contents) => JSON.parse(contents));
+  try {
+    return await cachedExpectedInventoryPromise;
+  } catch (error) {
+    cachedExpectedInventoryPromise = null;
+    throw error;
+  }
 }
 
 export function diffInventory(expected, actual) {
-  const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
-  const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
-  return {
-    missing: expected
-      .filter((entry) => !actualKeys.has(JSON.stringify(entry)))
-      .toSorted(compareEntries),
-    unexpected: actual
-      .filter((entry) => !expectedKeys.has(JSON.stringify(entry)))
-      .toSorted(compareEntries),
-  };
+  return diffInventoryEntries(expected, actual, compareEntries);
 }
 
 function formatInventoryHuman(inventory) {
@@ -266,41 +235,24 @@ function formatEntry(entry) {
   return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const json = argv.includes("--json");
-  const actual = await collectPluginExtensionImportBoundaryInventory();
-  const expected = await readExpectedInventory();
-  const { missing, unexpected } = diffInventory(expected, actual);
-  const matchesBaseline = missing.length === 0 && unexpected.length === 0;
+export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.slice(2), io) {
+  return await runBaselineInventoryCheck({
+    argv,
+    io,
+    collectActual: collectPluginExtensionImportBoundaryInventory,
+    readExpected: readExpectedInventory,
+    diffInventory,
+    formatInventoryHuman,
+    formatEntry,
+  });
+}
 
-  if (json) {
-    process.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
-  } else {
-    console.log(formatInventoryHuman(actual));
-    console.log(
-      matchesBaseline
-        ? `Baseline matches (${actual.length} entries).`
-        : `Baseline mismatch (${unexpected.length} unexpected, ${missing.length} missing).`,
-    );
-    if (!matchesBaseline) {
-      if (unexpected.length > 0) {
-        console.error("Unexpected entries:");
-        for (const entry of unexpected) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-      if (missing.length > 0) {
-        console.error("Missing baseline entries:");
-        for (const entry of missing) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-    }
+export async function main(argv = process.argv.slice(2), io) {
+  const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
+  if (!io && exitCode !== 0) {
+    process.exit(exitCode);
   }
-
-  if (!matchesBaseline) {
-    process.exit(1);
-  }
+  return exitCode;
 }
 
 runAsScript(import.meta.url, main);

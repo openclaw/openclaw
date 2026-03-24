@@ -1,4 +1,6 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
@@ -29,8 +31,8 @@ export const discordSetupWizard = createDiscordSetupWizardProxy(
 export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
   sectionKey: DISCORD_CHANNEL,
   listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
@@ -72,13 +74,14 @@ export function createDiscordPluginBase(params: {
     config: {
       ...discordConfigAdapter,
       isConfigured: (account) => Boolean(account.token?.trim()),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.token?.trim()),
-        tokenSource: account.tokenSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.token?.trim()),
+          extra: {
+            tokenSource: account.tokenSource,
+          },
+        }),
     },
     setup: params.setup,
   }) as Pick<

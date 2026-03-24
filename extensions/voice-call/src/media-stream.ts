@@ -79,7 +79,7 @@ const DEFAULT_MAX_CONNECTIONS = 128;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
-function sanitizeLogText(value: string, maxChars: number): string {
+export function sanitizeLogText(value: string, maxChars: number): string {
   const sanitized = value
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")

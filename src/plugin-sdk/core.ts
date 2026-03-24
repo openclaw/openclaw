@@ -86,6 +86,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { definePluginEntry } from "./plugin-entry.js";
+export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -137,6 +138,7 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
+/** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
   for (const provider of providers) {
@@ -148,10 +150,15 @@ export function stripChannelTargetPrefix(raw: string, ...providers: string[]): s
   return trimmed;
 }
 
+/** Remove generic target-kind prefixes such as `user:` or `group:`. */
 export function stripTargetKindPrefix(raw: string): string {
   return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
 }
 
+/**
+ * Build the canonical outbound session route payload returned by channel
+ * message adapters.
+ */
 export function buildChannelOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -181,7 +188,8 @@ export function buildChannelOutboundSessionRoute(params: {
   };
 }
 
-type DefineChannelPluginEntryOptions<TPlugin extends ChannelPlugin = ChannelPlugin> = {
+/** Options for a channel plugin entry that should register a channel capability. */
+type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
@@ -227,8 +235,14 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
     >
   >;
 
-// Shared channel-plugin entry boilerplate for bundled and third-party channels.
-export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
+/**
+ * Canonical entry helper for channel plugins.
+ *
+ * This wraps `definePluginEntry(...)`, registers the channel capability, and
+ * optionally exposes extra full-runtime registration such as tools or gateway
+ * handlers that only make sense outside setup-only registration modes.
+ */
+export function defineChannelPluginEntry<TPlugin>({
   id,
   name,
   description,
@@ -244,7 +258,7 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
     configSchema,
     register(api: OpenClawPluginApi) {
       setRuntime?.(api.runtime);
-      api.registerChannel({ plugin });
+      api.registerChannel({ plugin: plugin as ChannelPlugin });
       if (api.registrationMode !== "full") {
         return;
       }
@@ -253,7 +267,12 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
   });
 }
 
-// Shared setup-entry shape so bundled channels do not duplicate `{ plugin }`.
+/**
+ * Minimal setup-entry helper for channels that ship a separate `setup-entry.ts`.
+ *
+ * The setup entry only needs to export `{ plugin }`, but using this helper
+ * keeps the shape explicit in examples and generated typings.
+ */
 export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
   return { plugin };
 }

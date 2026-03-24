@@ -107,14 +107,19 @@ vi.mock("./commands-context-report.js", () => ({
 
 vi.resetModules();
 
-const { addSubagentRunForTests, listSubagentRunsForRequester, resetSubagentRegistryForTests } =
-  await import("../../agents/subagent-registry.js");
+const {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
+  resetSubagentRegistryForTests,
+} = await import("../../agents/subagent-registry.js");
 const { setDefaultChannelPluginRegistryForTests } =
   await import("../../commands/channel-test-helpers.js");
 const internalHooks = await import("../../hooks/internal-hooks.js");
 const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
   await import("../../agents/pi-embedded.js");
+const { __testing: subagentControlTesting } = await import("../../agents/subagent-control.js");
 const { resetBashChatCommandForTests } = await import("./bash-command.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 const { buildCommandsPaginationKeyboard } = await import("./commands-info.js");
@@ -133,10 +138,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await fs.rm(testWorkspaceDir, { recursive: true, force: true });
+  await fs.rm(testWorkspaceDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  });
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllTimers();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -179,7 +191,12 @@ async function withTempConfigPath<T>(
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previous;
     }
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 }
 
@@ -805,6 +822,143 @@ describe("handleCommands owner gating for privileged show commands", () => {
       const result = await handleCommands(testCase.build());
       testCase.assert(result);
     }
+  });
+
+  it("returns an explicit unauthorized reply for native privileged commands", async () => {
+    const configParams = buildParams(
+      "/config show",
+      {
+        commands: { config: true, text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    configParams.command.senderIsOwner = false;
+
+    const configResult = await handleCommands(configParams);
+    expect(configResult).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+
+    const pluginParams = buildParams(
+      "/plugins list",
+      {
+        commands: { plugins: true, text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    pluginParams.command.senderIsOwner = false;
+
+    const pluginResult = await handleCommands(pluginParams);
+    expect(pluginResult).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+  });
+});
+
+describe("handleCommands /send owner gating", () => {
+  it("blocks authorized non-owner senders from mutating session send policy", async () => {
+    const params = buildParams("/send off", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = false;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(sessionEntry.sendPolicy).toBe("allow");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("allow");
+  });
+
+  it("allows owners to mutate session send policy", async () => {
+    const params = buildParams("/send off", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy-owner",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Send policy set to off");
+    expect(sessionEntry.sendPolicy).toBe("deny");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("deny");
+  });
+
+  it("returns an explicit unauthorized reply for native /send from non-owners", async () => {
+    const params = buildParams(
+      "/send off",
+      {
+        commands: { text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    params.command.senderIsOwner = false;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy-native",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+    expect(sessionEntry.sendPolicy).toBe("allow");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("allow");
   });
 });
 
@@ -1586,7 +1740,10 @@ describe("handleCommands context", () => {
 describe("handleCommands subagents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockClear().mockImplementation(async () => ({}));
+    callGatewayMock.mockReset().mockImplementation(async () => ({}));
+    subagentControlTesting.setDepsForTest({
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
   });
 
   it("lists subagents when none exist", async () => {
@@ -1916,6 +2073,46 @@ describe("handleCommands subagents", () => {
     expect(result.reply).toBeUndefined();
   });
 
+  it("kills descendants when numeric target 1 is an ended orchestrator still waiting on children", async () => {
+    const now = Date.now();
+    const parentKey = "agent:main:subagent:orchestrator-ended";
+    const childKey = "agent:main:subagent:orchestrator-ended:subagent:worker";
+
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended",
+      childSessionKey: parentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 110_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-orchestrator-child-active",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/kill 1", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(childKey)?.endedAt).toBeTypeOf("number");
+  });
+
   it("sends follow-up messages to finished subagents", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: { runId?: string } };
@@ -2082,6 +2279,156 @@ describe("handleCommands subagents", () => {
     expect(trackedRuns).toHaveLength(1);
     expect(trackedRuns[0].runId).toBe("run-steer-1");
     expect(trackedRuns[0].endedAt).toBeUndefined();
+  });
+
+  it("steers ended orchestrators that are still waiting on active descendants", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-steer-ended-parent" };
+      }
+      return {};
+    });
+    const parentKey = "agent:main:subagent:orchestrator-ended";
+    const childKey = "agent:main:subagent:orchestrator-ended:subagent:child";
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-steer-ended-parent.json");
+    await updateSessionStore(storePath, (store) => {
+      store[parentKey] = {
+        sessionId: "ended-parent-session",
+        updatedAt: Date.now(),
+      };
+      store[childKey] = {
+        sessionId: "active-child-session",
+        updatedAt: Date.now(),
+      };
+    });
+    addSubagentRunForTests({
+      runId: "run-ended-parent",
+      childSessionKey: parentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+      endedAt: Date.now() - 110_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-active-child",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/steer 1 regroup around the remaining child work", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("steered");
+    const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(trackedRuns[0].runId).toBe("run-steer-ended-parent");
+  });
+
+  it("lists ended orchestrators that are still waiting on active descendants in /agents", async () => {
+    const parentKey = "agent:main:subagent:agents-ended-parent";
+    const childKey = "agent:main:subagent:agents-ended-parent:subagent:child";
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-agents-ended-parent.json");
+    await updateSessionStore(storePath, (store) => {
+      store[parentKey] = {
+        sessionId: "agents-ended-parent-session",
+        updatedAt: Date.now(),
+      };
+      store[childKey] = {
+        sessionId: "agents-active-child-session",
+        updatedAt: Date.now(),
+      };
+    });
+    addSubagentRunForTests({
+      runId: "run-agents-ended-parent",
+      childSessionKey: parentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+      endedAt: Date.now() - 110_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-agents-active-child",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "subagent:agents-ended-parent",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/agents", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("agents:");
+    expect(result.reply?.text).toContain("orchestrate child workers");
+  });
+
+  it("dedupes stale rows for the same child session in /agents", async () => {
+    const childKey = "agent:main:subagent:agents-dedupe";
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-agents-dedupe.json");
+    await updateSessionStore(storePath, (store) => {
+      store[childKey] = {
+        sessionId: "agents-dedupe-session",
+        updatedAt: Date.now(),
+      };
+    });
+    addSubagentRunForTests({
+      runId: "run-agents-dedupe-new",
+      childSessionKey: childKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current worker label",
+      cleanup: "keep",
+      createdAt: Date.now() - 10_000,
+      startedAt: Date.now() - 10_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-agents-dedupe-old",
+      childSessionKey: childKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale worker label",
+      cleanup: "keep",
+      createdAt: Date.now() - 20_000,
+      startedAt: Date.now() - 20_000,
+      endedAt: Date.now() - 15_000,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/agents", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("current worker label");
+    expect(result.reply?.text).not.toContain("stale worker label");
   });
 
   it("restores announce behavior when /steer replacement dispatch fails", async () => {

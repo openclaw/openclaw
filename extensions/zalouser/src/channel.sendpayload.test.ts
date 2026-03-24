@@ -112,9 +112,8 @@ describe("zalouserPlugin outbound sendPayload", () => {
 describe("zalouserPlugin messaging target normalization", () => {
   it("normalizes user/group aliases to canonical targets", () => {
     const normalize = zalouserPlugin.messaging?.normalizeTarget;
-    expect(normalize).toBeTypeOf("function");
     if (!normalize) {
-      return;
+      throw new Error("normalizeTarget unavailable");
     }
     expect(normalize("zlu:g:30003")).toBe("group:30003");
     expect(normalize("zalouser:u:20002")).toBe("user:20002");
@@ -125,9 +124,8 @@ describe("zalouserPlugin messaging target normalization", () => {
 
   it("treats canonical and provider-native user/group targets as ids", () => {
     const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
-    expect(looksLikeId).toBeTypeOf("function");
     if (!looksLikeId) {
-      return;
+      throw new Error("looksLikeId unavailable");
     }
     expect(looksLikeId("user:20002")).toBe(true);
     expect(looksLikeId("group:30003")).toBe(true);

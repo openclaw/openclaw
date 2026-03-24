@@ -3,7 +3,6 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -16,12 +15,13 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
   GatewaySessionRow,
+  ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
@@ -46,11 +46,16 @@ export type SlashCommandResult = {
   };
 };
 
+export type SlashCommandContext = {
+  chatModelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: ModelCatalogEntry[];
+};
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
   commandName: string,
   args: string,
+  context: SlashCommandContext = {},
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
@@ -68,7 +73,7 @@ export async function executeSlashCommand(
     case "compact":
       return await executeCompact(client, sessionKey);
     case "model":
-      return await executeModel(client, sessionKey, args);
+      return await executeModel(client, sessionKey, args, context);
     case "think":
       return await executeThink(client, sessionKey, args);
     case "fast":
@@ -125,16 +130,18 @@ async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
+  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const available = models.map((m: ModelCatalogEntry) => m.id);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -151,14 +158,20 @@ async function executeModel(
   }
 
   try {
-    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
-      key: sessionKey,
-      model: args.trim(),
-    });
-    const resolvedValue = resolveServerChatModelValue(
+    const [patched, resolvedModelCatalog] = await Promise.all([
+      client.request<SessionsPatchResult>("sessions.patch", {
+        key: sessionKey,
+        model: args.trim(),
+      }),
+      modelCatalog
+        ? Promise.resolve(modelCatalog)
+        : loadModelCatalog(client, { allowFailure: true }),
+    ]);
+    const resolvedValue = resolvePreferredServerChatModel(
       patched.resolved?.model ?? args.trim(),
       patched.resolved?.modelProvider,
-    );
+      resolvedModelCatalog,
+    ).value;
     return {
       content: `Model set to \`${args.trim()}\`.`,
       action: "refresh",
@@ -546,12 +559,27 @@ function resolveCurrentSession(
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
   const [sessions, models] = await Promise.all([
     client.request<SessionsListResult>("sessions.list", {}),
-    client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+    loadModelCatalog(client),
   ]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
-    models: models?.models ?? [],
+    models,
   };
+}
+
+async function loadModelCatalog(
+  client: GatewayBrowserClient,
+  opts?: { allowFailure?: boolean },
+): Promise<ModelCatalogEntry[]> {
+  try {
+    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+    return result?.models ?? [];
+  } catch (err) {
+    if (opts?.allowFailure) {
+      return [];
+    }
+    throw err;
+  }
 }
 
 function resolveCurrentThinkingLevel(

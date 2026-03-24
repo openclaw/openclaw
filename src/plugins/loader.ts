@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -15,7 +15,7 @@ import {
 } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { clearPluginCommands } from "./commands.js";
+import { clearPluginCommands } from "./command-registry-state.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
@@ -101,6 +101,7 @@ type CachedPluginState = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
+let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
 const registryCache = new Map<string, CachedPluginState>();
 const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
@@ -139,7 +140,15 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
-  maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+  get maxPluginRegistryCacheEntries() {
+    return pluginRegistryCacheEntryCap;
+  },
+  setMaxPluginRegistryCacheEntriesForTest(value?: number) {
+    pluginRegistryCacheEntryCap =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.max(1, Math.floor(value))
+        : MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+  },
 };
 
 function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
@@ -158,7 +167,7 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
     registryCache.delete(cacheKey);
   }
   registryCache.set(cacheKey, state);
-  while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
+  while (registryCache.size > pluginRegistryCacheEntryCap) {
     const oldestKey = registryCache.keys().next().value;
     if (!oldestKey) {
       break;

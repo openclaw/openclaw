@@ -9,7 +9,7 @@ import {
 import type { ProviderPlugin } from "./types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("./providers.js", () => ({
+vi.mock("./providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
@@ -20,9 +20,50 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
   } satisfies ProviderPlugin;
 }
 
+function createSglangSetupProvider() {
+  return makeProvider({
+    id: "sglang",
+    label: "SGLang",
+    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+    wizard: {
+      setup: {
+        choiceLabel: "SGLang setup",
+        groupId: "sglang",
+        groupLabel: "SGLang",
+      },
+    },
+  });
+}
+
+function createSglangConfig() {
+  return {
+    plugins: {
+      allow: ["sglang"],
+    },
+  };
+}
+
+function resolveWizardOptionsTwice(params: {
+  config?: object;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}) {
+  resolveProviderWizardOptions({
+    config: params.config ?? createSglangConfig(),
+    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
+    env: params.env,
+  });
+  resolveProviderWizardOptions({
+    config: params.config ?? createSglangConfig(),
+    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
+    env: params.env,
+  });
+}
+
 describe("provider wizard boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("uses explicit setup choice ids and bound method ids", () => {
@@ -200,6 +241,164 @@ describe("provider wizard boundaries", () => {
         hint: "OpenAI-compatible local runtime",
       },
     ]);
+  });
+
+  it("reuses provider resolution across wizard consumers for the same config and env", () => {
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+        modelPicker: {
+          label: "SGLang server",
+          methodId: "server",
+        },
+      },
+    });
+    const config = {};
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    expect(
+      resolveProviderWizardOptions({
+        config,
+        workspaceDir: "/tmp/workspace",
+        env,
+      }),
+    ).toHaveLength(1);
+    expect(
+      resolveProviderModelPickerEntries({
+        config,
+        workspaceDir: "/tmp/workspace",
+        env,
+      }),
+    ).toHaveLength(1);
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProviders).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+  });
+
+  it("invalidates the wizard cache when config or env contents change in place", () => {
+    const provider = createSglangSetupProvider();
+    const config = createSglangConfig();
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home-a" } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    expect(
+      resolveProviderWizardOptions({
+        config,
+        workspaceDir: "/tmp/workspace",
+        env,
+      }),
+    ).toHaveLength(1);
+
+    config.plugins.allow = ["vllm"];
+    env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+
+    expect(
+      resolveProviderWizardOptions({
+        config,
+        workspaceDir: "/tmp/workspace",
+        env,
+      }),
+    ).toHaveLength(1);
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips provider-wizard memoization when plugin cache opt-outs are set", () => {
+    const provider = createSglangSetupProvider();
+    const config = createSglangConfig();
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveWizardOptionsTwice({ config, env });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips provider-wizard memoization when discovery cache ttl is zero", () => {
+    const provider = createSglangSetupProvider();
+    const config = createSglangConfig();
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveWizardOptionsTwice({ config, env });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
+    vi.useFakeTimers();
+    const provider = createSglangSetupProvider();
+    const config = {};
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    vi.advanceTimersByTime(4);
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    vi.advanceTimersByTime(2);
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
+    const provider = createSglangSetupProvider();
+    const config = {};
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
 
   it("routes model-selected hooks only to the matching provider", async () => {

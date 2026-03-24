@@ -8,7 +8,7 @@ import {
   buildServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
-  isNvmNode,
+  isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
 } from "./service-env.js";
 
@@ -388,30 +388,11 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
   });
 
-  it("maps legacy CLAWDBOT_GATEWAY_TOKEN to OPENCLAW_GATEWAY_TOKEN for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user", CLAWDBOT_GATEWAY_TOKEN: " legacy-token " },
-    });
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("legacy-token");
-  });
-
-  it("prefers OPENCLAW_GATEWAY_TOKEN over legacy CLAWDBOT_GATEWAY_TOKEN", () => {
-    const env = buildNodeServiceEnvironment({
-      env: {
-        HOME: "/home/user",
-        OPENCLAW_GATEWAY_TOKEN: "openclaw-token",
-        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
-      },
-    });
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("openclaw-token");
-  });
-
-  it("omits OPENCLAW_GATEWAY_TOKEN when both token env vars are empty", () => {
+  it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
         OPENCLAW_GATEWAY_TOKEN: "   ",
-        CLAWDBOT_GATEWAY_TOKEN: " ",
       },
     });
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
@@ -534,17 +515,19 @@ describe("resolveGatewayStateDir", () => {
   });
 });
 
-describe("isNvmNode", () => {
+describe("isNodeVersionManagerRuntime", () => {
   it("returns true when NVM_DIR env var is set", () => {
-    expect(isNvmNode({ NVM_DIR: "/home/user/.nvm" })).toBe(true);
+    expect(isNodeVersionManagerRuntime({ NVM_DIR: "/home/user/.nvm" })).toBe(true);
   });
 
   it("returns true when execPath contains /.nvm/", () => {
-    expect(isNvmNode({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(true);
+    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(
+      true,
+    );
   });
 
   it("returns false when neither NVM_DIR nor nvm execPath", () => {
-    expect(isNvmNode({}, "/usr/bin/node")).toBe(false);
+    expect(isNodeVersionManagerRuntime({}, "/usr/bin/node")).toBe(false);
   });
 });
 

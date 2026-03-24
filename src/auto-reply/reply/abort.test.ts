@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  __testing as abortTesting,
   getAbortMemory,
   getAbortMemorySizeForTest,
   isAbortRequestText,
@@ -17,6 +18,7 @@ import {
   tryFastAbortFromMessage,
 } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import { __testing as queueCleanupTesting } from "./queue/cleanup.js";
 import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -26,7 +28,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
-  clearCommandLane: vi.fn(),
+  clearCommandLane: vi.fn(() => 1),
 }));
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
@@ -40,6 +42,7 @@ const subagentRegistryMocks = vi.hoisted(() => ({
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -161,8 +164,29 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
   }
 
+  beforeEach(() => {
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: acpManagerMocks.resolveSession,
+          cancelSession: acpManagerMocks.cancelSession,
+        }) as never) as never,
+      abortEmbeddedPiRun: () => true,
+      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+    });
+    queueCleanupTesting.setDepsForTests({
+      resolveEmbeddedSessionLane: (key) => `session:${key.trim() || "main"}`,
+      clearCommandLane: commandQueueMocks.clearCommandLane,
+    });
+    commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
+  });
+
   afterEach(() => {
     resetAbortMemoryForTest();
+    abortTesting.resetDepsForTests();
+    queueCleanupTesting.resetDepsForTests();
+    commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
   });
@@ -666,6 +690,74 @@ describe("abort detection", () => {
     expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-2", childSessionKey: depth2Key }),
+    );
+  });
+
+  it("cascade stop still traverses an ended current parent when a stale older active row exists", async () => {
+    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
+    subagentRegistryMocks.markSubagentRunTerminated.mockClear();
+    const sessionKey = "telegram:parent";
+    const depth1Key = "agent:main:subagent:child-ended-stale";
+    const depth2Key = "agent:main:subagent:child-ended-stale:subagent:grandchild-active";
+    const now = Date.now();
+    const { cfg } = await createAbortConfig({
+      nowMs: now,
+      sessionIdsByKey: {
+        [sessionKey]: "session-parent",
+        [depth1Key]: "session-child-ended-stale",
+        [depth2Key]: "session-grandchild-active",
+      },
+    });
+
+    subagentRegistryMocks.listSubagentRunsForRequester
+      .mockReturnValueOnce([
+        {
+          runId: "run-stale-parent",
+          childSessionKey: depth1Key,
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: "telegram:parent",
+          task: "stale orchestrator",
+          cleanup: "keep",
+          createdAt: now - 2_000,
+          startedAt: now - 1_900,
+        },
+        {
+          runId: "run-current-parent",
+          childSessionKey: depth1Key,
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: "telegram:parent",
+          task: "current orchestrator",
+          cleanup: "keep",
+          createdAt: now - 1_000,
+          startedAt: now - 900,
+          endedAt: now - 500,
+          outcome: { status: "ok" },
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          runId: "run-active-child",
+          childSessionKey: depth2Key,
+          requesterSessionKey: depth1Key,
+          requesterDisplayKey: depth1Key,
+          task: "leaf worker",
+          cleanup: "keep",
+          createdAt: now - 400,
+        },
+      ])
+      .mockReturnValueOnce([]);
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:parent",
+      to: "telegram:parent",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expectSessionLaneCleared(depth2Key);
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-active-child", childSessionKey: depth2Key }),
     );
   });
 });
