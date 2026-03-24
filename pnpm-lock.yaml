@@ -384,6 +384,8 @@ importers:
 
   extensions/elevenlabs: {}
 
+  extensions/ernie: {}
+
   extensions/exa: {}
 
   extensions/fal: {}

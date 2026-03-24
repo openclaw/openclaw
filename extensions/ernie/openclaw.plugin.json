@@ -1,5 +1,6 @@
 {
   "id": "ernie",
+  "enabledByDefault": true,
   "providers": ["ernie"],
   "providerAuthEnvVars": {
     "ernie": ["ERNIE_API_KEY"]

@@ -51,7 +51,6 @@ export type BuiltInAuthChoice =
   | "qwen-api-key"
   | "modelstudio-standard-api-key-cn"
   | "modelstudio-standard-api-key"
-  | "ernie-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
@@ -148,7 +147,6 @@ export type OnboardOptions = {
   qianfanApiKey?: string;
   modelstudioStandardApiKeyCn?: string;
   modelstudioStandardApiKey?: string;
-  ernieApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;
