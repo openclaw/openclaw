@@ -7,6 +7,7 @@ import {
   recordAllowlistUse,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
+  resolvePolicyAllowlistCandidatePath,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
@@ -575,7 +576,7 @@ async function executeSystemRunPhase(
         phase.agentId,
         match,
         phase.commandText,
-        phase.segments[0]?.resolution?.resolvedPath,
+        resolvePolicyAllowlistCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
       );
     }
   }
