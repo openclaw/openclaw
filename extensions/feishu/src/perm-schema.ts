@@ -51,6 +51,9 @@ const LINK_SHARE_ENTITIES = [
 
 export const FeishuPermSchema = Type.Object(
   {
+    accountId: Type.Optional(
+      Type.String({ description: "Optional Feishu account override for multi-account setups" }),
+    ),
     action: stringEnum(ACTIONS, {
       description:
         "Action to perform: list, add, remove, transfer_owner, get_public, update_public",
@@ -59,14 +62,14 @@ export const FeishuPermSchema = Type.Object(
     type: stringEnum(TOKEN_TYPES, { description: "Feishu file type" }),
     member_type: Type.Optional(
       stringEnum(MEMBER_TYPES, {
-        description: "Member ID type for add, remove, or transfer_owner",
+        description: "Member ID type required for add, remove, or transfer_owner",
       }),
     ),
     member_id: Type.Optional(
-      Type.String({ description: "Member ID for add, remove, or transfer_owner" }),
+      Type.String({ description: "Member ID required for add, remove, or transfer_owner" }),
     ),
     perm: Type.Optional(
-      stringEnum(PERMISSIONS, { description: "Permission level for add action" }),
+      stringEnum(PERMISSIONS, { description: "Permission level required for add" }),
     ),
     need_notification: Type.Optional(
       Type.Boolean({ description: "Notify target member during transfer_owner" }),

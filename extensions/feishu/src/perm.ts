@@ -77,7 +77,7 @@ const CREATE_TOKEN_TYPES = new Set<CreateTokenType>([
 ]);
 
 function requireStringField(value: string | undefined, name: string) {
-  if (!value) {
+  if (value == null || value === "") {
     throw new Error(`${name} is required for this action`);
   }
   return value;
