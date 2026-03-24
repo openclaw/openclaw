@@ -1021,7 +1021,11 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.activeTalkProvider = cfg.activeProvider
-        self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
+        let configuredSilenceMs = cfg.silenceTimeoutMs
+        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
+        let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
+        self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
         self.speechLocaleID = cfg.speechLocaleID
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
