@@ -97,9 +97,9 @@ function collectCandidateAgentDirs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveOpenClawAgentDir(env), env));
+  dirs.add(resolveUserPath(resolveOpenClawAgentDir(), env));
   for (const agentId of listAgentIds(config)) {
-    dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
+    dirs.add(resolveUserPath(resolveAgentDir(config, agentId), env));
   }
   return [...dirs];
 }

@@ -86,7 +86,8 @@ export type ChannelSetupWizard = {
   onAccountRecorded?: ChannelOnboardingAdapter["onAccountRecorded"];
 };
 
-type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "setup">;
+type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "setup"> &
+  Partial<Pick<ChannelPlugin, "capabilities">>;
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -163,7 +164,10 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
       shouldPromptAccountIds,
       forceAllowFrom,
     }) => {
-      const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg });
+      const defaultAccountId = resolveChannelDefaultAccountId({
+        plugin: plugin as ChannelPlugin,
+        cfg,
+      });
       const accountId = await resolveAccountIdForConfigure({
         cfg,
         prompter,
@@ -250,11 +254,11 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           existing: existingAllowFrom,
           token: resolvedCredentialValue,
           message: wizard.allowFrom.message,
-          placeholder: wizard.allowFrom.placeholder,
+          placeholder: wizard.allowFrom.placeholder ?? "",
           label: wizard.allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
           parseInputs: wizard.allowFrom.parseInputs ?? splitOnboardingEntries,
           parseId: wizard.allowFrom.parseId,
-          invalidWithoutTokenNote: wizard.allowFrom.invalidWithoutCredentialNote,
+          invalidWithoutTokenNote: wizard.allowFrom.invalidWithoutCredentialNote ?? "",
           resolveEntries: wizard.allowFrom.resolveEntries
             ? async ({ entries }) =>
                 wizard.allowFrom!.resolveEntries!({

@@ -688,7 +688,9 @@ export async function promptResolvedAllowFrom(params: {
   parseInputs: (value: string) => string[];
   parseId: (value: string) => string | null;
   invalidWithoutTokenNote: string;
-  resolveEntries: (params: { token: string; entries: string[] }) => Promise<AllowFromResolution[]>;
+  resolveEntries?:
+    | ((params: { token: string; entries: string[] }) => Promise<AllowFromResolution[]>)
+    | null;
 }): Promise<string[]> {
   while (true) {
     const entry = await params.prompter.text({
@@ -707,12 +709,13 @@ export async function promptResolvedAllowFrom(params: {
       return mergeAllowFromEntries(params.existing, ids);
     }
 
-    const results = await params
-      .resolveEntries({
-        token: params.token,
-        entries: parts,
-      })
-      .catch(() => null);
+    const results =
+      (await params
+        .resolveEntries?.({
+          token: params.token,
+          entries: parts,
+        })
+        .catch(() => null)) ?? null;
     if (!results) {
       await params.prompter.note("Failed to resolve usernames. Try again.", params.label);
       continue;

@@ -246,6 +246,13 @@ export type ChannelThreadingAdapter = {
    * Kept for compatibility with older extensions/docks.
    */
   allowTagsWhenOff?: boolean;
+  resolveAutoThreadId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    to?: string;
+    toolContext?: unknown;
+    replyToId?: string | null;
+  }) => string | null | undefined;
   buildToolContext?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -336,6 +343,9 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
 };
 
 export type ChannelToolSend = {
@@ -357,6 +367,10 @@ export type ChannelMessageActionAdapter = {
   supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
+  requiresTrustedRequesterSender?: (params: {
+    action: ChannelMessageActionName;
+    toolContext: ChannelMessageActionContext["toolContext"];
+  }) => boolean;
 };
 
 export type ChannelPollResult = {
