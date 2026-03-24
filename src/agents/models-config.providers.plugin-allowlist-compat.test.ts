@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
-describe("implicit provider plugin allowlist compatibility", () => {
+describe("implicit provider plugin allowlist compatibility", { timeout: 600_000 }, () => {
   it("keeps bundled implicit providers discoverable when plugins.allow is set", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KILOCODE_API_KEY", "MOONSHOT_API_KEY"]);

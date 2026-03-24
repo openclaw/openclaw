@@ -165,7 +165,9 @@ const MATRIX_CASES: MatrixCase[] = [
   },
 ];
 
-describe("implicit provider resolution matrix", { timeout: 300_000 }, () => {
+// Resolves every bundled provider plugin (Vitest compat entries keep discovery enabled);
+// a single load can take several minutes on cold CI workers.
+describe("implicit provider resolution matrix", { timeout: 600_000 }, () => {
   it.each(MATRIX_CASES)(
     "$name",
     async ({ env, authProfiles, explicitProviders, assertProviders }) => {

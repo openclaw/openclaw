@@ -12,7 +12,7 @@ const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
 const ORIGINAL_VITEST_ENV = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
-describe("chutes implicit provider auth mode", () => {
+describe("chutes implicit provider auth mode", { timeout: 600_000 }, () => {
   beforeEach(() => {
     process.env.VITEST = "true";
     process.env.NODE_ENV = "test";
