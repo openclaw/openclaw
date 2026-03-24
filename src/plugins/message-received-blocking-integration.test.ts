@@ -142,6 +142,39 @@ describe("async policy enforcement via blocking handler", () => {
     expect(callOrder).toContain("blocking-completed");
     // Observer may or may not have completed yet (it's async)
   });
+
+  it("observer mutation does not affect blocking handler input", async () => {
+    // Observer that mutates its event — should NOT affect blocking handler
+    const observerHandler = vi.fn().mockImplementation(async (event) => {
+      event.content = "mutated-by-observer";
+    });
+
+    let blockingReceivedContent: string | undefined;
+    const blockingHandler = vi.fn().mockImplementation(async (event) => {
+      blockingReceivedContent = event.content;
+      return undefined;
+    });
+
+    const registry = createMockPluginRegistry([
+      { hookName: "message_received", handler: observerHandler },
+      {
+        hookName: "message_received",
+        handler: blockingHandler,
+        messageReceivedMode: "blocking",
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    await runner.runMessageReceived(
+      { from: "user-1", content: "original-content" },
+      { channelId: "slack" },
+    );
+
+    // Observer saw and mutated its own copy
+    expect(observerHandler).toHaveBeenCalled();
+    // Blocking handler received the original, unmutated content
+    expect(blockingReceivedContent).toBe("original-content");
+  });
 });
 
 // ---------------------------------------------------------------------------
