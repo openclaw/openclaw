@@ -394,7 +394,9 @@ function parseCronField(field: string, min: number, max: number): number[] {
         const [s, e] = stepMatch[1].split("-").map(Number);
         start = Math.max(min, s);
         end = Math.min(max, e);
-        if (start > end) continue;
+        if (start > end) {
+          continue;
+        }
       }
       for (let i = start; i <= end; i += step) {
         values.add(i);
@@ -406,7 +408,9 @@ function parseCronField(field: string, min: number, max: number): number[] {
     if (rangeMatch) {
       const start = Math.max(min, parseInt(rangeMatch[1], 10));
       const end = Math.min(max, parseInt(rangeMatch[2], 10));
-      if (start > end) continue;
+      if (start > end) {
+        continue;
+      }
       for (let i = start; i <= end; i++) {
         values.add(i);
       }
