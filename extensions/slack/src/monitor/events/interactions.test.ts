@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.fn();
 const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
@@ -197,9 +197,12 @@ function createContext(overrides?: {
 }
 
 describe("registerSlackInteractionEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
+  });
+
+  beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
