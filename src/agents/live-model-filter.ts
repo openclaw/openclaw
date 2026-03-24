@@ -5,6 +5,19 @@ export type ModelRef = {
   id?: string | null;
 };
 
+function isHighSignalClaudeModelId(id: string): boolean {
+  if (!/\bclaude\b/i.test(id)) {
+    return true;
+  }
+  if (/\bhaiku\b/i.test(id)) {
+    return false;
+  }
+  if (/\bclaude-3(?:[-.]5|[-.]7)\b/i.test(id)) {
+    return false;
+  }
+  return true;
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = ref.provider?.trim().toLowerCase() ?? "";
   const id = ref.id?.trim().toLowerCase() ?? "";
@@ -23,4 +36,12 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return pluginDecision;
   }
   return false;
+}
+
+export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const id = ref.id?.trim().toLowerCase() ?? "";
+  if (!isModernModelRef(ref) || !id) {
+    return false;
+  }
+  return isHighSignalClaudeModelId(id);
 }

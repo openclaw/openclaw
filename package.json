@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.23",
+  "version": "2026.3.24",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -586,6 +586,7 @@
     "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
+    "audit:seams": "node scripts/audit-seams.mjs",
     "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
@@ -683,6 +684,7 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "pnpm config:docs:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
+    "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
@@ -819,7 +821,7 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.16.2"
+    "node-llama-cpp": "3.18.1"
   },
   "peerDependenciesMeta": {
     "node-llama-cpp": {
@@ -832,7 +834,7 @@
   "engines": {
     "node": ">=22.16.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
