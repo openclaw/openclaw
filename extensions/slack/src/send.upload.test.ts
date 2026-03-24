@@ -32,6 +32,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
+let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -66,7 +67,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
   beforeAll(async () => {
     vi.resetModules();
-    ({ sendMessageSlack } = await import("./send.js"));
+    ({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
   });
 
   beforeEach(() => {
@@ -74,6 +75,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
+    clearSlackDmChannelCache();
   });
 
   afterEach(() => {
@@ -119,6 +121,44 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
       expect.objectContaining({ channel_id: "D99RESOLVED" }),
     );
+  });
+
+  it("caches DM channel resolution per account", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("user:UABC123", "first", {
+      token: "xoxb-test",
+      client,
+    });
+    await sendMessageSlack("user:UABC123", "second", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledTimes(1);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "D99RESOLVED",
+        text: "second",
+      }),
+    );
+  });
+
+  it("scopes DM channel resolution cache by token identity", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("user:UABC123", "first", {
+      token: "xoxb-test-a",
+      client,
+    });
+    await sendMessageSlack("user:UABC123", "second", {
+      token: "xoxb-test-b",
+      client,
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledTimes(2);
   });
 
   it("sends file directly to channel without conversations.open", async () => {
