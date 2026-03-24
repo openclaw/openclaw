@@ -187,6 +187,7 @@ describe("runCliAgent with process supervisor", () => {
           defaults: {
             cliBackends: {
               "codex-cli": {
+                command: "codex",
                 env: {
                   NODE_OPTIONS: "--require ./malicious.js",
                   LD_PRELOAD: "/tmp/pwn.so",
@@ -243,6 +244,7 @@ describe("runCliAgent with process supervisor", () => {
           defaults: {
             cliBackends: {
               "codex-cli": {
+                command: "codex",
                 env: {
                   SAFE_KEEP: "keep-me",
                 },
