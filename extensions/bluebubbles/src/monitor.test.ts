@@ -1307,6 +1307,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       const sender = "+15551234567";
       const guid = "assoc-scope-replay-1";
+      const editedAt = Date.now();
 
       await handleBlueBubblesWebhookRequest(
         createMockRequest("POST", "/bluebubbles-webhook", {
@@ -1318,9 +1319,9 @@ describe("BlueBubbles webhook monitor", () => {
             isFromMe: false,
             guid,
             associatedMessageGuid: guid,
-            dateEdited: Date.now(),
+            dateEdited: editedAt,
             chatGuid: "iMessage;-;+15551234567",
-            date: Date.now(),
+            date: editedAt,
           },
         }),
         createMockResponse(),
@@ -1335,9 +1336,65 @@ describe("BlueBubbles webhook monitor", () => {
             isGroup: false,
             isFromMe: false,
             associatedMessageGuid: guid,
-            dateEdited: Date.now(),
+            dateEdited: editedAt,
             chatGuid: "iMessage;-;+15551234567",
-            date: Date.now(),
+            date: editedAt,
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("dedupes retries when updated-message drifts from guid-only to associated-guid-only", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const sender = "+15551234567";
+      const guid = "assoc-shape-drift-1";
+      const editedAt = Date.now();
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "Edited once",
+            handle: { address: sender },
+            isGroup: false,
+            isFromMe: false,
+            guid,
+            dateEdited: editedAt,
+            chatGuid: "iMessage;-;+15551234567",
+            date: editedAt,
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "Edited once",
+            handle: { address: sender },
+            isGroup: false,
+            isFromMe: false,
+            associatedMessageGuid: guid,
+            dateEdited: editedAt,
+            chatGuid: "iMessage;-;+15551234567",
+            date: editedAt,
           },
         }),
         createMockResponse(),

@@ -289,6 +289,7 @@ function buildInboundReplayKey(params: {
       ? String(message.associatedMessageType)
       : "";
   const replyToId = message.replyToId?.trim() ?? "";
+  const canonicalReplyToId = replyToId === stableIdentity ? "" : replyToId;
   const replyToSenderFingerprint = computeReplayTextFingerprint(message.replyToSender ?? "");
   const replyToBodyFingerprint = computeReplayTextFingerprint(message.replyToBody ?? "");
   const textFingerprint = computeReplayTextFingerprint(message.text);
@@ -303,9 +304,9 @@ function buildInboundReplayKey(params: {
     stableIdentity,
     itemType,
     dateEdited,
-    associatedMessageGuid ?? "",
+    stableIdentity,
     associatedMessageType,
-    replyToId,
+    canonicalReplyToId,
     replyToSenderFingerprint,
     replyToBodyFingerprint,
     textFingerprint,

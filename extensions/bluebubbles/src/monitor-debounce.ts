@@ -133,13 +133,11 @@ export function createBlueBubblesDebounceRegistry(params: {
   const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
   const stableUpdatedMessageTails = new Map<string, Promise<void>>();
   const resolveStableUpdatedMessageIdentity = (message: NormalizedWebhookMessage) => {
-    const associatedMessageGuid = message.associatedMessageGuid?.trim();
-    if (associatedMessageGuid) {
-      return `assoc:${associatedMessageGuid}`;
-    }
     const messageId = message.messageId?.trim();
-    if (messageId) {
-      return `msg:${messageId}`;
+    const associatedMessageGuid = message.associatedMessageGuid?.trim();
+    const stableIdentity = messageId || associatedMessageGuid;
+    if (stableIdentity) {
+      return `msg:${stableIdentity}`;
     }
     return undefined;
   };

@@ -221,4 +221,66 @@ describe("createBlueBubblesDebounceRegistry", () => {
       "end:second edit",
     ]);
   });
+
+  it("serializes stable updated-message edits when identity drifts from guid to associated guid", async () => {
+    const order: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const target = createTarget();
+    const registry = createBlueBubblesDebounceRegistry({
+      processMessage: async () => undefined,
+    });
+    const debouncer = registry.getOrCreateDebouncer(target);
+    const createdDebouncer = (
+      target as unknown as {
+        core: {
+          channel: {
+            debounce: {
+              createInboundDebouncer: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      }
+    ).core.channel.debounce.createInboundDebouncer.mock.results[0]?.value as {
+      enqueue: ReturnType<typeof vi.fn>;
+      flushKey: ReturnType<typeof vi.fn>;
+    };
+    createdDebouncer.enqueue.mockImplementation(
+      async (entry: { message: NormalizedWebhookMessage }) => {
+        order.push(`start:${entry.message.text}`);
+        if (entry.message.text === "first edit") {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        order.push(`end:${entry.message.text}`);
+      },
+    );
+
+    const first = debouncer.enqueue({
+      target,
+      eventType: "updated-message",
+      message: createMessage({ messageId: "msg-2", text: "first edit" }),
+    });
+    await Promise.resolve();
+    const second = debouncer.enqueue({
+      target,
+      eventType: "updated-message",
+      message: createMessage({
+        associatedMessageGuid: "msg-2",
+        text: "second edit",
+      }),
+    });
+    await Promise.resolve();
+
+    expect(order).toEqual(["start:first edit"]);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    expect(order).toEqual([
+      "start:first edit",
+      "end:first edit",
+      "start:second edit",
+      "end:second edit",
+    ]);
+  });
 });
