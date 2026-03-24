@@ -18,6 +18,14 @@ vi.mock("./register.backup.js", () => ({
   },
 }));
 
+vi.mock("./register.migrate.js", () => ({
+  registerMigrateCommand: (program: Command) => {
+    const migrate = program.command("migrate");
+    migrate.command("export");
+    migrate.command("import");
+  },
+}));
+
 vi.mock("./register.maintenance.js", () => ({
   registerMaintenanceCommands: (program: Command) => {
     program.command("doctor");
@@ -74,6 +82,7 @@ describe("command-registry", () => {
     expect(names).toContain("config");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
+    expect(names).toContain("migrate");
     expect(names).toContain("sessions");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("status");
@@ -139,6 +148,21 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
+  });
+
+  it("registerCoreCliByName resolves migrate command", async () => {
+    const program = createProgram();
+    const found = await registerCoreCliByName(program, testProgramContext, "migrate");
+    expect(found).toBe(true);
+    const migrateCmd = program.commands.find((c) => c.name() === "migrate");
+    expect(migrateCmd).toBeDefined();
+  });
+
+  it("includes migrate in core CLI command names and subcommand list", () => {
+    const names = getCoreCliCommandNames();
+    expect(names).toContain("migrate");
+    const subcommands = getCoreCliCommandsWithSubcommands();
+    expect(subcommands).toContain("migrate");
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

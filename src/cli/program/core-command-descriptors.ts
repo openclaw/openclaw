@@ -32,6 +32,11 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "migrate",
+    description: "Export and import OpenClaw state for cross-device migration",
+    hasSubcommands: true,
+  },
+  {
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,

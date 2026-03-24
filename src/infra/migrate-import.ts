@@ -571,12 +571,12 @@ export async function importMigrateArchive(
     const resolvedTempDir = await fs.realpath(tempDir);
     const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
 
-    // Process each asset.
-    for (const importAsset of importAssets) {
-      const manifestAsset = manifest.assets.find(
-        (a) => a.sourcePath === importAsset.sourcePath && a.kind === importAsset.kind,
-      );
-      if (!manifestAsset) {
+    // Process each asset. importAssets is derived from manifest.assets via
+    // .map(), so they share indices — use direct index access instead of .find().
+    for (let i = 0; i < importAssets.length; i++) {
+      const importAsset = importAssets[i];
+      const manifestAsset = manifest.assets[i];
+      if (!importAsset || !manifestAsset) {
         continue;
       }
 
