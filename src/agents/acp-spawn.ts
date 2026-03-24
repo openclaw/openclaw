@@ -495,21 +495,26 @@ function resolveAcpSpawnStreamPlan(params: {
   requester: AcpSpawnRequesterState;
 }): AcpSpawnStreamPlan {
   // For mode=run without thread binding, implicitly route output to parent
-  // only for spawned subagent orchestrator sessions with heartbeat enabled
-  // AND a session-local heartbeat delivery route (target=last + usable last route).
-  // Skip requester sessions that are thread-bound (or carrying thread context)
-  // so user-facing threads do not receive unsolicited ACP progress chatter
-  // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
-  // (not params.mode) so default mode selection works.
+  // so the spawning session receives the completion result. Previously this
+  // was restricted to subagent orchestrator sessions only, which meant main
+  // sessions never received ACP run results (see openclaw#52967).
+  // Now enabled for any session with a valid parent key, falling back to
+  // the original subagent-specific heuristic when heartbeat routing is
+  // available. Skip requester sessions that are thread-bound (or carrying
+  // thread context) so user-facing threads do not receive unsolicited ACP
+  // progress chatter unless streamTo="parent" is explicitly requested.
   const implicitStreamToParent =
     !params.streamToParentRequested &&
     params.spawnMode === "run" &&
     !params.requestThreadBinding &&
-    params.requester.isSubagentSession &&
-    !params.requester.hasActiveSubagentBinding &&
+    Boolean(params.requester.parentSessionKey) &&
     !params.requester.hasThreadContext &&
-    params.requester.heartbeatEnabled &&
-    params.requester.heartbeatRelayRouteUsable;
+    // Subagent orchestrators with heartbeat relay use the optimised path;
+    // all other sessions (including main) always get the relay.
+    (!params.requester.isSubagentSession ||
+      (!params.requester.hasActiveSubagentBinding &&
+        params.requester.heartbeatEnabled &&
+        params.requester.heartbeatRelayRouteUsable));
 
   return {
     implicitStreamToParent,
@@ -748,6 +753,7 @@ export async function spawnAcpDirect(
     streamToParentRequested,
     requester: requesterState,
   });
+
 
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
