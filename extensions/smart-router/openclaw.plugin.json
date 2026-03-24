@@ -1,0 +1,46 @@
+{
+  "id": "smart-router",
+  "name": "Smart Router",
+  "description": "Intelligent rule-based model routing. Classifies prompt complexity and routes to the optimal model using your own API keys.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable smart routing."
+      },
+      "confidenceThreshold": {
+        "type": "number",
+        "description": "Minimum confidence to apply tier routing. Below this, defaults to medium tier.",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "debug": {
+        "type": "boolean",
+        "description": "Log classification decisions for debugging."
+      },
+      "tiers": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "simple": { "$ref": "#/$defs/tierMapping" },
+          "medium": { "$ref": "#/$defs/tierMapping" },
+          "complex": { "$ref": "#/$defs/tierMapping" },
+          "reasoning": { "$ref": "#/$defs/tierMapping" }
+        }
+      }
+    },
+    "$defs": {
+      "tierMapping": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string" },
+          "model": { "type": "string" }
+        },
+        "required": ["provider", "model"]
+      }
+    }
+  }
+}
