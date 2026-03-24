@@ -221,6 +221,19 @@ private actor AsyncGate {
     }
 }
 
+private actor AsyncCounter {
+    private var value: Int
+
+    init(_ initialValue: Int = 0) {
+        self.value = initialValue
+    }
+
+    func increment() -> Int {
+        self.value += 1
+        return self.value
+    }
+}
+
 private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
@@ -1031,6 +1044,43 @@ extension TestChatTransportState {
         try await Task.sleep(for: .milliseconds(50))
         #expect(await transport.compactSessionKeys() == ["main"])
         #expect(await MainActor.run { vm.errorText } == "Please wait before compacting this session again.")
+    }
+
+    @Test func compactTriggerAllowsImmediateRetryAfterFailure() async throws {
+        let history = historyPayload()
+        let attemptCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            compactSessionHook: { _ in
+                let next = await attemptCount.increment()
+                if next == 1 {
+                    throw NSError(
+                        domain: "TestCompact",
+                        code: 42,
+                        userInfo: [NSLocalizedDescriptionKey: "temporary failure"])
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run {
+            vm.input = "/compact"
+            vm.send()
+        }
+
+        try await waitUntil("first compact attempted") {
+            await transport.compactSessionKeys() == ["main"]
+        }
+        #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
+
+        await MainActor.run {
+            vm.input = "/compact"
+            vm.send()
+        }
+
+        try await waitUntil("second compact attempted") {
+            await transport.compactSessionKeys() == ["main", "main"]
+        }
+        #expect(await MainActor.run { vm.errorText } == nil)
     }
 
     @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
