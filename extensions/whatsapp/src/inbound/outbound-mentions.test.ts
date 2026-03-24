@@ -79,6 +79,11 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("@1234567é")).toEqual([]);
   });
 
+  it("ignores tokens with non-ASCII digit suffix (Arabic-Indic, fullwidth)", () => {
+    expect(extractOutboundMentions("@1234567\u0661")).toEqual([]); // Arabic-Indic ١
+    expect(extractOutboundMentions("@1234567\uFF12")).toEqual([]); // Fullwidth ２
+  });
+
   it("skips mentions inside backtick code spans", () => {
     expect(extractOutboundMentions("see `@+1234567890` for details")).toEqual([]);
     expect(extractOutboundMentions("code `@+1234567890` but also @+9876543210 outside")).toEqual([
