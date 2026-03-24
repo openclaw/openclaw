@@ -7,6 +7,7 @@ import type {
   MigrateComponent,
   MigrateManifest,
 } from "../commands/migrate-shared.js";
+import { VALID_MIGRATE_ASSET_KINDS } from "../commands/migrate-shared.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -83,13 +84,19 @@ export function parseManifest(raw: string): MigrateManifest {
     if (!isRecord(asset)) {
       throw new Error("Migration manifest contains a non-object asset.");
     }
+    const kind = typeof asset.kind === "string" ? asset.kind.trim() : "";
+    if (!kind || !VALID_MIGRATE_ASSET_KINDS.includes(kind)) {
+      throw new Error(
+        `Migration manifest asset has unsupported kind: "${kind}". Valid kinds: ${VALID_MIGRATE_ASSET_KINDS.join(", ")}`,
+      );
+    }
     const sourcePath = typeof asset.sourcePath === "string" ? asset.sourcePath.trim() : "";
     const archivePath = typeof asset.archivePath === "string" ? asset.archivePath.trim() : "";
     if (!sourcePath || !archivePath) {
       throw new Error("Migration manifest asset is missing sourcePath or archivePath.");
     }
     assets.push({
-      kind: asset.kind as MigrateAssetKind,
+      kind: kind as MigrateAssetKind,
       sourcePath,
       archivePath,
       agentId: typeof asset.agentId === "string" ? asset.agentId : undefined,
@@ -479,7 +486,12 @@ export async function importMigrateArchive(
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await mergeConfigFiles(targetPath, extractedPath);
       } else {
-        // Copy/overwrite.
+        // In overwrite mode, remove the existing target first so that stale
+        // files from a previous deployment don't survive the import.
+        const extractedStat = await fs.lstat(extractedPath);
+        if (extractedStat.isDirectory()) {
+          await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
+        }
         await copyRecursive(extractedPath, targetPath);
       }
     }

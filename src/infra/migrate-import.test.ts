@@ -211,4 +211,32 @@ describe("parseManifest", () => {
   it("rejects invalid JSON", () => {
     expect(() => parseManifest("not json")).toThrow("not valid JSON");
   });
+
+  it("rejects assets with unknown kind", () => {
+    const json = validManifestJson({
+      assets: [{ kind: "unknown_thing", sourcePath: "/some/path", archivePath: "some/archive" }],
+    });
+    expect(() => parseManifest(json)).toThrow("unsupported kind");
+  });
+
+  it("rejects assets with empty kind", () => {
+    const json = validManifestJson({
+      assets: [{ kind: "", sourcePath: "/some/path", archivePath: "some/archive" }],
+    });
+    expect(() => parseManifest(json)).toThrow("unsupported kind");
+  });
+
+  it("accepts all valid asset kinds", () => {
+    const json = validManifestJson({
+      assets: [
+        { kind: "config", sourcePath: "/a", archivePath: "x/payload/a" },
+        { kind: "credentials", sourcePath: "/b", archivePath: "x/payload/b" },
+        { kind: "workspace", sourcePath: "/c", archivePath: "x/payload/c" },
+        { kind: "agents", sourcePath: "/d", archivePath: "x/payload/d" },
+        { kind: "state", sourcePath: "/e", archivePath: "x/payload/e" },
+      ],
+    });
+    const manifest = parseManifest(json);
+    expect(manifest.assets).toHaveLength(5);
+  });
 });

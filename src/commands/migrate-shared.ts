@@ -6,11 +6,20 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
-import { pathExists, shortenHomePath } from "../utils.js";
+import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
 export type MigrateAssetKind = "config" | "credentials" | "workspace" | "agents" | "state";
+
+export const VALID_MIGRATE_ASSET_KINDS: readonly string[] = [
+  "config",
+  "credentials",
+  "workspace",
+  "agents",
+  "state",
+] as const;
 
 export type MigrateComponent = "config" | "credentials" | "workspace" | "sessions";
 
@@ -126,15 +135,40 @@ async function discoverAgentIds(stateDir: string): Promise<string[]> {
   }
 }
 
+/**
+ * Resolve workspace directories scoped to specific agent IDs by looking up
+ * their workspace config from agents.list[].
+ */
+function resolveAgentScopedWorkspaceDirs(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+): string[] {
+  const dirs: string[] = [];
+  const agentIdSet = new Set(agentIds);
+  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of list) {
+    const agentRecord = agent as { id?: string; workspace?: string };
+    if (typeof agentRecord.id === "string" && agentIdSet.has(agentRecord.id)) {
+      if (typeof agentRecord.workspace === "string" && agentRecord.workspace.trim()) {
+        dirs.push(resolveUserPath(agentRecord.workspace));
+      }
+    }
+  }
+  return dirs;
+}
+
 export async function resolveMigratePlanFromDisk(params: {
   components?: readonly MigrateComponent[];
   agents?: readonly string[];
   nowMs?: number;
 }): Promise<MigratePlan> {
   const components = params.components ?? ALL_MIGRATE_COMPONENTS;
-  const stateDir = resolveStateDir();
-  const configPath = resolveConfigPath();
-  const oauthDir = resolveOAuthDir();
+  // Canonicalize path roots so they share a consistent prefix with the
+  // canonicalized asset sourcePaths recorded later. Without this, a
+  // symlinked state dir would cause import remapping to fall through.
+  const stateDir = await canonicalizeExistingPath(resolveStateDir());
+  const configPath = await canonicalizeExistingPath(resolveConfigPath());
+  const oauthDir = await canonicalizeExistingPath(resolveOAuthDir());
   const archiveRoot = buildMigrateArchiveRoot(params.nowMs);
 
   const configSnapshot = await readConfigFileSnapshot();
@@ -146,7 +180,19 @@ export async function resolveMigratePlanFromDisk(params: {
   });
 
   const includeWorkspace = isComponentIncluded("workspace", components);
-  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
+  let workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
+
+  // When --agents is specified, filter workspace dirs to only include those
+  // belonging to the requested agents (from agents.list[].workspace in config).
+  if (includeWorkspace && params.agents && params.agents.length > 0 && configSnapshot.config) {
+    const agentWorkspaceDirs = resolveAgentScopedWorkspaceDirs(
+      configSnapshot.config,
+      params.agents,
+    );
+    if (agentWorkspaceDirs.length > 0) {
+      workspaceDirs = agentWorkspaceDirs;
+    }
+  }
 
   const included: MigrateAsset[] = [];
   const skipped: SkippedMigrateAsset[] = [];
