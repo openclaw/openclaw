@@ -142,6 +142,31 @@ describe("ensureBrowserControlAuth", () => {
     expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
   });
 
+  it("does not regenerate token when trusted-proxy config already has one", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "previously-generated-token",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+        trustedProxies: ["192.168.1.1"],
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    // Existing token is reused — no re-generation or config write.
+    expect(result).toEqual({ auth: { token: "previously-generated-token" } });
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("reuses auth from latest config snapshot", async () => {
     const cfg: OpenClawConfig = {
       browser: {
