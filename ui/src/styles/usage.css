@@ -58,6 +58,7 @@
 .usage-header {
   position: relative;
   overflow: visible;
+  z-index: 2;
 }
 
 .usage-header.pinned {
@@ -351,7 +352,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-filter-popover,
 .usage-export-popover {
   position: absolute;
-  right: 0;
   top: calc(100% + 8px);
   width: min(320px, calc(100vw - 48px));
   padding: 12px;
@@ -363,7 +363,12 @@ details.usage-filter-select summary::-webkit-details-marker,
   z-index: 12;
 }
 
+.usage-filter-popover {
+  left: 0;
+}
+
 .usage-export-popover {
+  right: 0;
   width: 220px;
 }
 
