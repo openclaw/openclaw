@@ -1,6 +1,6 @@
 import type { Client } from "@buape/carbon";
 import { MessageType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchMock,
   loadConfigMock,
@@ -16,12 +16,14 @@ let createDiscordMessageHandler: typeof import("./monitor/message-handler.js").c
 let __resetDiscordChannelInfoCacheForTest: typeof import("./monitor/message-utils.js").__resetDiscordChannelInfoCacheForTest;
 let createNoopThreadBindingManager: typeof import("./monitor/thread-bindings.js").createNoopThreadBindingManager;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ ChannelType } = await import("@buape/carbon"));
   ({ createDiscordMessageHandler } = await import("./monitor/message-handler.js"));
   ({ __resetDiscordChannelInfoCacheForTest } = await import("./monitor/message-utils.js"));
   ({ createNoopThreadBindingManager } = await import("./monitor/thread-bindings.js"));
+});
+
+beforeEach(async () => {
   __resetDiscordChannelInfoCacheForTest();
   sendMock.mockClear().mockResolvedValue(undefined);
   updateLastRouteMock.mockClear();

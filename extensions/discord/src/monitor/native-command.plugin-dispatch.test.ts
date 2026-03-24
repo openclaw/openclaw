@@ -283,7 +283,6 @@ async function expectBoundStatusCommandDispatch(params: {
 
 describe("Discord native plugin command dispatch", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
   });
 
