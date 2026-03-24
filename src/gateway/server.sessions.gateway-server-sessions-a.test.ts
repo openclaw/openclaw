@@ -38,8 +38,16 @@ const sessionHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async (_event: unknown) => {}),
 }));
 
+const beforeResetHookMocks = vi.hoisted(() => ({
+  runBeforeReset: vi.fn(async () => {}),
+}));
+
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
+}));
+
+const beforeResetHookState = vi.hoisted(() => ({
+  hasBeforeResetHook: false,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -108,7 +116,9 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
       hasHooks: (hookName: string) =>
-        hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook,
+        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook),
+      runBeforeReset: beforeResetHookMocks.runBeforeReset,
       runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
     })),
   };
@@ -262,6 +272,8 @@ describe("gateway server sessions", () => {
     sessionHookMocks.hasInternalHookListeners.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
+    beforeResetHookMocks.runBeforeReset.mockClear();
+    beforeResetHookState.hasBeforeResetHook = false;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -2289,6 +2301,59 @@ describe("gateway server sessions", () => {
       },
     });
     expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    ws.close();
+  });
+
+  test("sessions.reset emits before_reset hook with transcript context", async () => {
+    const { dir } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    beforeResetHookState.hasBeforeResetHook = true;
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = (
+      beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionFile: transcriptPath,
+      reason: "new",
+      messages: [
+        {
+          role: "user",
+          content: "hello from transcript",
+        },
+      ],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+    });
     ws.close();
   });
 
