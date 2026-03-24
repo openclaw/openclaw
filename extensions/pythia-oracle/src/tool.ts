@@ -79,6 +79,64 @@ type ToolCallResponse = {
   };
 };
 
+function tryParseSseJsonPayload(buffer: string): unknown | undefined {
+  const normalized = buffer.replace(/\r\n/g, "\n");
+  const blocks = normalized.split("\n\n");
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const dataLines = trimmed
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).trimStart());
+    if (dataLines.length === 0) {
+      continue;
+    }
+    return JSON.parse(dataLines.join("\n"));
+  }
+  return undefined;
+}
+
+async function readMcpJsonResponse<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    return (await response.json()) as T;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Pythia returned an empty event stream.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = tryParseSseJsonPayload(buffer);
+      if (parsed !== undefined) {
+        return parsed as T;
+      }
+    }
+    buffer += decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+
+  const parsed = tryParseSseJsonPayload(buffer);
+  if (parsed !== undefined) {
+    return parsed as T;
+  }
+
+  throw new Error("Pythia returned an event stream without a JSON payload.");
+}
+
 function parsePositiveNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;
@@ -425,7 +483,7 @@ async function openMcpSession(params: {
     throw new Error("Pythia initialize did not return Mcp-Session-Id");
   }
 
-  const initializeBody = (await initializeResponse.json()) as MpcInitializeResponse;
+  const initializeBody = await readMcpJsonResponse<MpcInitializeResponse>(initializeResponse);
   if (initializeBody.error?.message) {
     throw new Error(initializeBody.error.message);
   }
@@ -698,7 +756,7 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
         response: toolResponse,
       });
 
-      const responseBody = (await toolResponse.json()) as ToolCallResponse;
+      const responseBody = await readMcpJsonResponse<ToolCallResponse>(toolResponse);
       return jsonResult(extractOraclePayload(responseBody));
     },
   };
@@ -714,4 +772,5 @@ export const __testing = {
   savePaymentState,
   maybeRecordPaidResponse,
   extractOraclePayload,
+  readMcpJsonResponse,
 };

@@ -90,4 +90,25 @@ describe("pythia-oracle helpers", () => {
       }),
     ).toEqual({ response: "You are optimizing the wrong thing." });
   });
+
+  it("parses MCP event-stream responses", async () => {
+    const response = new Response(
+      'event: message\r\ndata: {"jsonrpc":"2.0","id":"call-1","result":{"structuredContent":{"response":"decoded"}}}\r\n\r\n',
+      {
+        headers: {
+          "content-type": "text/event-stream",
+        },
+      },
+    );
+
+    await expect(__testing.readMcpJsonResponse(response)).resolves.toEqual({
+      jsonrpc: "2.0",
+      id: "call-1",
+      result: {
+        structuredContent: {
+          response: "decoded",
+        },
+      },
+    });
+  });
 });
