@@ -1,13 +1,14 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyRouteForUrl } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type PinnedDispatcherPolicy,
+  type SsrFTransportContext,
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
@@ -89,6 +90,40 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
+}
+
+function resolveSsrFTransportContext(params: {
+  mode: GuardedFetchMode;
+  hasEnvProxyRoute: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): SsrFTransportContext {
+  if (params.dispatcherPolicy?.mode === "explicit-proxy") {
+    return { mode: "trusted-proxy", proxy: "explicit-proxy" };
+  }
+  if (params.dispatcherPolicy?.mode === "env-proxy") {
+    return { mode: "trusted-proxy", proxy: "env-proxy" };
+  }
+  if (params.mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && params.hasEnvProxyRoute) {
+    return { mode: "trusted-proxy", proxy: "env-proxy" };
+  }
+  return { mode: "direct" };
+}
+
+function resolveHopSsrFPolicy(params: {
+  mode: GuardedFetchMode;
+  canUseTrustedEnvProxy: boolean;
+  policy?: SsrFPolicy;
+}): SsrFPolicy | undefined {
+  if (
+    params.mode !== GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY ||
+    params.canUseTrustedEnvProxy ||
+    params.policy?.allowRfc2544BenchmarkRange !== true
+  ) {
+    return params.policy;
+  }
+
+  const { allowRfc2544BenchmarkRange: _discard, ...rest } = params.policy;
+  return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -207,17 +242,34 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     let dispatcher: Dispatcher | null = null;
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
+      const hasEnvProxyRoute = hasEnvHttpProxyRouteForUrl(parsedUrl);
+      const canUseTrustedEnvProxy =
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasEnvProxyRoute;
+      const hopPolicy = resolveHopSsrFPolicy({
+        mode,
+        canUseTrustedEnvProxy,
         policy: params.policy,
       });
-      const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+      const transportContext = resolveSsrFTransportContext({
+        mode,
+        hasEnvProxyRoute,
+        dispatcherPolicy: params.dispatcherPolicy,
+      });
+      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        lookupFn: params.lookupFn,
+        policy: hopPolicy,
+        transportContext,
+      });
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        dispatcher = createPinnedDispatcher(
+          pinned,
+          params.dispatcherPolicy,
+          hopPolicy,
+          transportContext,
+        );
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

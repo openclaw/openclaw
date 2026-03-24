@@ -6,6 +6,7 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webFetchTesting } from "./web-fetch.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 import { createWebFetchTool } from "./web-tools.js";
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
 type MockResponse = {
   ok: boolean;
@@ -147,15 +148,20 @@ describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34", "93.184.216.35"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname, params = {}) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        const addresses = ["93.184.216.34", "93.184.216.35"];
+        return await resolvePinnedHostnameWithPolicy(normalized, {
+          ...params,
+          lookupFn: (async () =>
+            addresses.map((address) => ({
+              address,
+              family: address.includes(":") ? 6 : 4,
+            }))) as unknown as ssrf.LookupFn,
+        });
+      },
+    );
   });
 
   afterEach(() => {

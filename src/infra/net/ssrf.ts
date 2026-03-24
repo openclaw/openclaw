@@ -30,6 +30,10 @@ export class SsrFBlockedError extends Error {
 
 export type LookupFn = typeof dnsLookup;
 
+export type SsrFTransportContext =
+  | { mode: "direct" }
+  | { mode: "trusted-proxy"; proxy: "env-proxy" | "explicit-proxy" };
+
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
@@ -81,6 +85,23 @@ function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseB
   };
 }
 
+function isRfc2544ContinuationRequested(policy?: SsrFPolicy): boolean {
+  return policy?.allowRfc2544BenchmarkRange === true;
+}
+
+function withEffectiveRfc2544Policy(
+  policy: SsrFPolicy | undefined,
+  allowRfc2544BenchmarkRange: boolean,
+): SsrFPolicy | undefined {
+  if (!policy) {
+    return allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange: true } : undefined;
+  }
+  return {
+    ...policy,
+    allowRfc2544BenchmarkRange,
+  };
+}
+
 function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
@@ -110,6 +131,26 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
   // Tighten only "ipv4-ish" literals (numbers + optional 0x prefix). Hostnames like
   // "example.com" must stay in hostname policy handling and not be treated as malformed IPs.
   return parts.every((part) => /^[0-9]+$/.test(part) || /^0x/i.test(part));
+}
+
+function isIpLiteralInputHost(hostname: string): boolean {
+  if (parseCanonicalIpAddress(hostname)) {
+    return true;
+  }
+  if (hostname.includes(":")) {
+    return false;
+  }
+  if (!isCanonicalDottedDecimalIPv4(hostname) && isLegacyIpv4Literal(hostname)) {
+    return true;
+  }
+  return looksLikeUnsupportedIpv4Literal(hostname);
+}
+
+function shouldAllowRfc2544OnDnsResults(params: {
+  hostname: string;
+  policy?: SsrFPolicy;
+}): boolean {
+  return isRfc2544ContinuationRequested(params.policy) && !isIpLiteralInputHost(params.hostname);
 }
 
 // Returns true for private/internal and special-use non-global addresses.
@@ -310,7 +351,11 @@ function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
 
 export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
-  params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
+  params: {
+    lookupFn?: LookupFn;
+    policy?: SsrFPolicy;
+    transportContext?: SsrFTransportContext;
+  } = {},
 ): Promise<PinnedHostname> {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -319,6 +364,16 @@ export async function resolvePinnedHostnameWithPolicy(
 
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, params.policy);
+  // Keep input-host checks strict. RFC2544 continuation is only considered
+  // for DNS answers from hostname targets (never literal-IP input hosts).
+  const hostPolicy = withEffectiveRfc2544Policy(params.policy, false);
+  const dnsResolvedPolicy = withEffectiveRfc2544Policy(
+    params.policy,
+    shouldAllowRfc2544OnDnsResults({
+      hostname: normalized,
+      policy: params.policy,
+    }),
+  );
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
@@ -326,7 +381,7 @@ export async function resolvePinnedHostnameWithPolicy(
 
   if (!skipPrivateNetworkChecks) {
     // Phase 1: fail fast for literal hosts/IPs before any DNS lookup side-effects.
-    assertAllowedHostOrIpOrThrow(normalized, params.policy);
+    assertAllowedHostOrIpOrThrow(normalized, hostPolicy);
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
@@ -337,7 +392,7 @@ export async function resolvePinnedHostnameWithPolicy(
 
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
-    assertAllowedResolvedAddressesOrThrow(results, params.policy);
+    assertAllowedResolvedAddressesOrThrow(results, dnsResolvedPolicy);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -372,7 +427,9 @@ function resolvePinnedDispatcherLookup(
   pinned: PinnedHostname,
   override?: PinnedHostnameOverride,
   policy?: SsrFPolicy,
+  transportContext?: SsrFTransportContext,
 ): PinnedHostname["lookup"] {
+  void transportContext;
   if (!override) {
     return pinned.lookup;
   }
@@ -386,8 +443,15 @@ function resolvePinnedDispatcherLookup(
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  const overridePolicy = withEffectiveRfc2544Policy(
+    policy,
+    shouldAllowRfc2544OnDnsResults({
+      hostname: pinned.hostname,
+      policy,
+    }),
+  );
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
-    assertAllowedResolvedAddressesOrThrow(records, policy);
+    assertAllowedResolvedAddressesOrThrow(records, overridePolicy);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
@@ -400,9 +464,15 @@ export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
+  transportContext?: SsrFTransportContext,
 ): Dispatcher {
   const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
-  const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
+  const lookup = resolvePinnedDispatcherLookup(
+    pinned,
+    policy?.pinnedHostname,
+    ssrfPolicy,
+    transportContext,
+  );
 
   if (!policy || policy.mode === "direct") {
     return new Agent({

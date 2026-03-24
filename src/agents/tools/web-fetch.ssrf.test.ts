@@ -4,7 +4,7 @@ import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 
 const lookupMock = vi.fn();
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
 function redirectResponse(location: string): Response {
   return {
@@ -62,14 +62,15 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params = {}) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
     );
   });
 
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -109,6 +110,45 @@ describe("web_fetch SSRF protection", () => {
 
     await expectBlockedUrl(tool, "https://private.test/resource", /private|internal|blocked/i);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks RFC2544 fake-IP DNS answers without trusted proxy transport context", async () => {
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+
+    const fetchSpy = setMockFetch();
+    const tool = await createWebFetchToolForTest();
+
+    await expectBlockedUrl(
+      tool,
+      "https://proxy-fake-ip.test/resource",
+      /private|internal|blocked/i,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows RFC2544 fake-IP DNS answers when trusted proxy transport context is enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = await createWebFetchToolForTest();
+
+    const result = await tool?.execute?.("call", { url: "https://proxy-fake-ip.test/resource" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps literal RFC2544 IP targets blocked even in proxy-aware mode", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const fetchSpy = setMockFetch();
+    const tool = await createWebFetchToolForTest();
+
+    await expectBlockedUrl(tool, "https://198.18.0.153/resource", /private|internal|blocked/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
   });
 
   it("blocks redirects to private hosts", async () => {

@@ -58,7 +58,7 @@ describe("ssrf pinning", () => {
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
   });
 
-  it("allows RFC2544 benchmark range addresses only when policy explicitly opts in", async () => {
+  it("allows RFC2544 benchmark range DNS answers when explicitly allowed by policy", async () => {
     const lookup = vi.fn(async () => [
       { address: "198.18.0.153", family: 4 },
     ]) as unknown as LookupFn;
@@ -67,11 +67,33 @@ describe("ssrf pinning", () => {
       /private|internal/i,
     );
 
-    const pinned = await resolvePinnedHostnameWithPolicy("api.telegram.org", {
+    const directPinned = await resolvePinnedHostnameWithPolicy("api.telegram.org", {
       lookupFn: lookup,
       policy: { allowRfc2544BenchmarkRange: true },
     });
+    expect(directPinned.addresses).toContain("198.18.0.153");
+
+    const pinned = await resolvePinnedHostnameWithPolicy("api.telegram.org", {
+      lookupFn: lookup,
+      policy: { allowRfc2544BenchmarkRange: true },
+      transportContext: { mode: "trusted-proxy", proxy: "env-proxy" },
+    });
     expect(pinned.addresses).toContain("198.18.0.153");
+  });
+
+  it("never allows literal RFC2544 IP targets even with trusted proxy transport context", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("198.18.0.153", {
+        lookupFn: lookup,
+        policy: { allowRfc2544BenchmarkRange: true },
+        transportContext: { mode: "trusted-proxy", proxy: "env-proxy" },
+      }),
+    ).rejects.toThrow(/private|internal/i);
+    expect(lookup).not.toHaveBeenCalled();
   });
 
   it("falls back for non-matching hostnames", async () => {

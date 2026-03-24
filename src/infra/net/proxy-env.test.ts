@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasEnvHttpProxyRouteForUrl,
   hasEnvHttpProxyConfigured,
   hasProxyEnvConfigured,
   resolveEnvHttpProxyUrl,
@@ -84,5 +85,63 @@ describe("resolveEnvHttpProxyUrl", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveEnvHttpProxyUrl("http", env)).toBe("http://lower-http.test:8080");
+  });
+});
+
+describe("hasEnvHttpProxyRouteForUrl", () => {
+  it("returns true when HTTPS env proxy is configured and target is not bypassed", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(true);
+  });
+
+  it("returns false when only ALL_PROXY is configured", () => {
+    const env = {
+      ALL_PROXY: "http://proxy.test:8080",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(false);
+  });
+
+  it("returns false when NO_PROXY bypasses the target hostname", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+      NO_PROXY: "public.example",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(false);
+  });
+
+  it("treats lower-case no_proxy as authoritative over upper-case NO_PROXY", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+      no_proxy: "",
+      NO_PROXY: "public.example",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(true);
+  });
+
+  it("honors NO_PROXY host:port entries", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+      NO_PROXY: "public.example:8443",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(true);
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example:8443/resource", env)).toBe(false);
+  });
+
+  it("does not treat URL-shaped NO_PROXY tokens as hostname bypass entries", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+      NO_PROXY: "https://public.example",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://public.example/resource", env)).toBe(true);
+  });
+
+  it("treats wildcard bypass as global only when NO_PROXY is exactly '*'", () => {
+    const env = {
+      HTTPS_PROXY: "http://proxy.test:8080",
+      NO_PROXY: "*,public.example",
+    } as NodeJS.ProcessEnv;
+    expect(hasEnvHttpProxyRouteForUrl("https://unrelated.example/resource", env)).toBe(true);
   });
 });

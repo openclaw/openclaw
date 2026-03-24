@@ -1,10 +1,17 @@
+import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
-import { logDebug } from "../../logger.js";
+import { hasEnvHttpProxyRouteForUrl } from "../../infra/net/proxy-env.js";
+import { type SsrFPolicy, SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { logDebug, logInfo } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isLegacyIpv4Literal,
+  parseCanonicalIpAddress,
+} from "../../shared/net/ip.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -45,6 +52,7 @@ const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const WEB_FETCH_INTERNAL_SSRF_POLICY: SsrFPolicy = { allowRfc2544BenchmarkRange: true };
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
@@ -207,6 +215,28 @@ function resolveMaxRedirects(value: unknown, fallback: number): number {
   return Math.max(0, Math.floor(parsed));
 }
 
+function looksLikeUnsupportedIpv4Literal(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length === 0 || parts.length > 4) {
+    return false;
+  }
+  if (parts.some((part) => part.length === 0)) {
+    return true;
+  }
+  return parts.every((part) => /^[0-9]+$/.test(part) || /^0x/i.test(part));
+}
+
+function isLiteralIpHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (parseCanonicalIpAddress(normalized)) {
+    return true;
+  }
+  if (!isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized)) {
+    return true;
+  }
+  return looksLikeUnsupportedIpv4Literal(normalized);
+}
+
 function looksLikeHtml(value: string): boolean {
   const trimmed = value.trimStart();
   if (!trimmed) {
@@ -250,6 +280,22 @@ const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
   includeWarning: false,
 }).length;
+const ENV_PROXY_ROUTE_FINGERPRINT_KEYS = [
+  "http_proxy",
+  "HTTP_PROXY",
+  "https_proxy",
+  "HTTPS_PROXY",
+  "no_proxy",
+  "NO_PROXY",
+] as const;
+
+function resolveEnvProxyRouteFingerprint(env: NodeJS.ProcessEnv = process.env): string {
+  const payload = ENV_PROXY_ROUTE_FINGERPRINT_KEYS.map((key) => {
+    const raw = env[key];
+    return `${key}=${typeof raw === "string" ? raw : "<unset>"}`;
+  }).join("\n");
+  return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 16);
+}
 
 function wrapWebFetchContent(
   value: string,
@@ -458,6 +504,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -512,14 +559,6 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
-  );
-  const cached = readCache(FETCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -529,27 +568,70 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
+  const hasTrustedEnvProxyRoute = hasEnvHttpProxyRouteForUrl(parsedUrl);
+  const envProxyRouteFingerprint = resolveEnvProxyRouteFingerprint();
+  const cacheKey = normalizeCacheKey(
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:proxy-aware-rfc2544:env-proxy-route-${hasTrustedEnvProxyRoute ? "on" : "off"}:env-proxy-route-state-${envProxyRouteFingerprint}`,
+  );
+  const cached = readCache(FETCH_CACHE, cacheKey);
+  if (cached) {
+    return { ...cached.value, cached: true };
+  }
 
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
+  const requestInit: RequestInit = {
+    headers: {
+      Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+      "User-Agent": params.userAgent,
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  };
   try {
-    const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
-      maxRedirects: params.maxRedirects,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      },
-    });
-    res = result.response;
-    finalUrl = result.finalUrl;
-    release = result.release;
+    try {
+      // Keep the initial attempt on strict SSRF defaults; fake-IP continuation is
+      // only considered in the narrow trusted env-proxy retry branch below.
+      const result = await fetchWithWebToolsNetworkGuard({
+        url: params.url,
+        maxRedirects: params.maxRedirects,
+        timeoutSeconds: params.timeoutSeconds,
+        useEnvProxy: false,
+        init: requestInit,
+      });
+      res = result.response;
+      finalUrl = result.finalUrl;
+      release = result.release;
+    } catch (error) {
+      const shouldRetryViaEnvProxy =
+        error instanceof SsrFBlockedError &&
+        hasTrustedEnvProxyRoute &&
+        !isLiteralIpHostname(parsedUrl.hostname);
+      if (!shouldRetryViaEnvProxy) {
+        throw error;
+      }
+      logInfo(
+        "[web-fetch] strict SSRF blocked initial URL fetch; retrying hostname target via trusted env-proxy",
+      );
+      let retryResult: Awaited<ReturnType<typeof fetchWithWebToolsNetworkGuard>>;
+      try {
+        retryResult = await fetchWithWebToolsNetworkGuard({
+          url: params.url,
+          maxRedirects: params.maxRedirects,
+          timeoutSeconds: params.timeoutSeconds,
+          policy: params.ssrfPolicy,
+          useEnvProxy: true,
+          init: requestInit,
+        });
+      } catch (retryError) {
+        logDebug("[web-fetch] trusted env-proxy retry failed after strict SSRF block");
+        throw retryError;
+      }
+      res = retryResult.response;
+      finalUrl = retryResult.finalUrl;
+      release = retryResult.release;
+    }
 
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
@@ -741,6 +823,9 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  // Internal-only policy signal: continuation stays transport-aware and never
+  // becomes a user-configurable SSRF bypass surface.
+  const ssrfPolicy = WEB_FETCH_INTERNAL_SSRF_POLICY;
   const firecrawl = resolveFirecrawlConfig(fetch);
   const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
   const shouldResolveFirecrawlApiKey =
@@ -787,6 +872,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

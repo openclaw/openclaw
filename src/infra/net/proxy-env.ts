@@ -53,3 +53,126 @@ export function hasEnvHttpProxyConfigured(
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
+
+function resolveNoProxyEnvValue(env: NodeJS.ProcessEnv): string {
+  const lowerNoProxy = normalizeProxyEnvValue(env.no_proxy);
+  if (lowerNoProxy !== undefined) {
+    return lowerNoProxy ?? "";
+  }
+  const upperNoProxy = normalizeProxyEnvValue(env.NO_PROXY);
+  return upperNoProxy ?? "";
+}
+
+function resolveUrlDefaultPort(protocol: string): number | null {
+  if (protocol === "http:") {
+    return 80;
+  }
+  if (protocol === "https:") {
+    return 443;
+  }
+  return null;
+}
+
+function resolveUrlPort(url: URL): number | null {
+  if (url.port) {
+    const parsed = Number.parseInt(url.port, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return resolveUrlDefaultPort(url.protocol);
+}
+
+function normalizeNoProxyHostname(value: string): string {
+  let normalized = value.trim().toLowerCase();
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  normalized = normalized.replace(/^\*?\./, "");
+  return normalized;
+}
+
+function parseNoProxyEntry(entry: string): { hostname: string; port?: number } | null {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed === "*") {
+    return { hostname: "*" };
+  }
+
+  let hostname = trimmed;
+  let port: number | undefined;
+  if (trimmed.startsWith("[")) {
+    const ipv6Match = trimmed.match(/^\[([^\]]+)\](?::(\d+))?$/);
+    if (ipv6Match) {
+      hostname = ipv6Match[1] ?? trimmed;
+      if (ipv6Match[2]) {
+        const parsedPort = Number.parseInt(ipv6Match[2], 10);
+        if (Number.isFinite(parsedPort)) {
+          port = parsedPort;
+        }
+      }
+    }
+  } else if (trimmed.indexOf(":") === trimmed.lastIndexOf(":")) {
+    const hostPortMatch = trimmed.match(/^(.+):(\d+)$/);
+    if (hostPortMatch) {
+      hostname = hostPortMatch[1] ?? trimmed;
+      const parsedPort = Number.parseInt(hostPortMatch[2], 10);
+      if (Number.isFinite(parsedPort)) {
+        port = parsedPort;
+      }
+    }
+  }
+
+  const normalizedHostname = normalizeNoProxyHostname(hostname);
+  if (!normalizedHostname) {
+    return null;
+  }
+  return port ? { hostname: normalizedHostname, port } : { hostname: normalizedHostname };
+}
+
+function noProxyBypassesUrl(url: URL, env: NodeJS.ProcessEnv): boolean {
+  const noProxyValue = resolveNoProxyEnvValue(env);
+  if (!noProxyValue) {
+    return false;
+  }
+  if (noProxyValue === "*") {
+    return true;
+  }
+
+  const targetHostname = normalizeNoProxyHostname(url.hostname);
+  const targetPort = resolveUrlPort(url);
+  if (!targetHostname) {
+    return false;
+  }
+
+  const entries = noProxyValue.split(/[,\s]+/);
+  for (const entry of entries) {
+    const parsed = parseNoProxyEntry(entry);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.port !== undefined && targetPort !== null && parsed.port !== targetPort) {
+      continue;
+    }
+    if (targetHostname === parsed.hostname || targetHostname.endsWith(`.${parsed.hostname}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasEnvHttpProxyRouteForUrl(
+  url: URL | string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const parsedUrl = typeof url === "string" ? new URL(url) : url;
+  const protocol =
+    parsedUrl.protocol === "http:" ? "http" : parsedUrl.protocol === "https:" ? "https" : null;
+  if (!protocol) {
+    return false;
+  }
+  if (!hasEnvHttpProxyConfigured(protocol, env)) {
+    return false;
+  }
+  return !noProxyBypassesUrl(parsedUrl, env);
+}

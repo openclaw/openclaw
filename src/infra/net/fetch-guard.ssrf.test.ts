@@ -130,14 +130,96 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {
+  it("allows fake-IP DNS continuation in strict mode when explicitly allowed by policy", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
     const result = await fetchWithSsrFGuard({
-      url: "http://198.18.0.153/file",
+      url: "https://proxy.fake.test/file",
       fetchImpl,
+      lookupFn,
       policy: { allowRfc2544BenchmarkRange: true },
     });
+
     expect(result.response.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("allows fake-IP DNS continuation only in trusted proxy transport mode", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://proxy.fake.test/file",
+      fetchImpl,
+      lookupFn,
+      policy: { allowRfc2544BenchmarkRange: true },
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("blocks fake-IP continuation when only ALL_PROXY is set in trusted env-proxy mode", async () => {
+    vi.stubEnv("ALL_PROXY", "socks5://127.0.0.1:1080");
+    const lookupFn = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://proxy.fake.test/file",
+        fetchImpl,
+        lookupFn,
+        policy: { allowRfc2544BenchmarkRange: true },
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks fake-IP continuation when NO_PROXY bypasses env proxy for target", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "proxy.fake.test");
+    const lookupFn = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://proxy.fake.test/file",
+        fetchImpl,
+        lookupFn,
+        policy: { allowRfc2544BenchmarkRange: true },
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("never allows literal RFC2544 IP targets even in trusted proxy mode", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://198.18.0.153/file",
+        fetchImpl,
+        policy: { allowRfc2544BenchmarkRange: true },
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("fails closed for plain HTTP targets when explicit proxy mode requires pinned DNS", async () => {
@@ -163,6 +245,33 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectedError: /private|internal|blocked/i,
       lookupFn,
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks fake-IP continuation on redirect hops when NO_PROXY bypasses trusted env-proxy routing", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "redirected.proxy.fake.test");
+    const lookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "entry.proxy.fake.test" || hostname === "redirected.proxy.fake.test") {
+        return [{ address: "198.18.0.153", family: 4 }];
+      }
+      return [{ address: "93.184.216.34", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://redirected.proxy.fake.test/file"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://entry.proxy.fake.test/start",
+        fetchImpl,
+        lookupFn,
+        policy: { allowRfc2544BenchmarkRange: true },
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    // First hop is fetched, redirect hop is blocked before fetch when NO_PROXY bypasses env proxy.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
