@@ -112,10 +112,11 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
 }
 
 // Strict allowlist patterns to prevent option injection and malicious package names.
-const SAFE_BREW_FORMULA = /^[a-z0-9][a-z0-9+._-]*(\/[a-z0-9][a-z0-9+._-]*){0,2}$/;
+const SAFE_BREW_FORMULA = /^[a-z0-9][a-z0-9+._@-]*(\/[a-z0-9][a-z0-9+._@-]*){0,2}$/;
 const SAFE_NODE_PACKAGE = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-z0-9^~>=<.*|-]+)?$/;
 const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
-const SAFE_UV_PACKAGE = /^[a-z0-9][a-z0-9._-]*(>=?[a-z0-9._-]+)?$/i;
+const SAFE_UV_PACKAGE =
+  /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
 
 function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
   const trimmed = value.trim();
