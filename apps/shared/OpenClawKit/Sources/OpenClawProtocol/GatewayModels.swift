@@ -2797,6 +2797,7 @@ public struct CronJob: Codable, Sendable {
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
+    public let hooks: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -2814,7 +2815,8 @@ public struct CronJob: Codable, Sendable {
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?,
-        state: [String: AnyCodable])
+        state: [String: AnyCodable],
+        hooks: [String: AnyCodable]?)
     {
         self.id = id
         self.agentid = agentid
@@ -2832,6 +2834,7 @@ public struct CronJob: Codable, Sendable {
         self.delivery = delivery
         self.failurealert = failurealert
         self.state = state
+        self.hooks = hooks
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2851,6 +2854,7 @@ public struct CronJob: Codable, Sendable {
         case delivery
         case failurealert = "failureAlert"
         case state
+        case hooks
     }
 }
 
