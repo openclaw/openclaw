@@ -604,6 +604,100 @@ describe("GatewayShield", () => {
     expect(escalation.action).toBe("PARTIAL_PAUSE");
   });
 
+  it("REOPEN transition resets openedAt and doubles cooldownSeconds", () => {
+    // 1. Trip the circuit open
+    for (let i = 0; i < CIRCUIT_CONFIG.FAILURE_THRESHOLD; i++) {
+      shield.recordFailure("reopen-fn");
+    }
+    let status = shield.getStatus();
+    let circuit = status.circuits.get("reopen-fn")!;
+    expect(circuit.state).toBe("OPEN");
+    const originalCooldown = circuit.cooldownSeconds;
+
+    // 2. Manually advance openedAt so the next checkCircuit sees HALF_OPEN
+    //    (we mutate via the internal map exposed by getStatus snapshot,
+    //     so instead we use recordSuccess/recordFailure timing)
+    //    Simpler: directly poke the circuit via repeated checkCircuit calls
+    //    after enough time.  Use a fresh shield to control timing.
+    const timedShield = new GatewayShield();
+    for (let i = 0; i < CIRCUIT_CONFIG.FAILURE_THRESHOLD; i++) {
+      timedShield.recordFailure("reopen-fn");
+    }
+
+    // Get direct access to the circuit via the status snapshot
+    // Then re-create with manipulated openedAt
+    status = timedShield.getStatus();
+    circuit = status.circuits.get("reopen-fn")!;
+    expect(circuit.state).toBe("OPEN");
+
+    // Force the circuit into HALF_OPEN by manipulating the internal map:
+    // We use the fact that checkCircuit reads from `this.circuits`
+    // and the pure checkCircuit transitions OPEN→HALF_OPEN when cooldown expires.
+    // So we record enough failing test requests to trigger REOPEN via checkCircuit.
+
+    // Use a third approach: trip open, wait out cooldown (fake via direct circuit manipulation).
+    // Since GatewayShield doesn't expose setCircuit, we'll test via the pure functions
+    // and verify the GatewayShield path by using the real flow:
+
+    // Create a shield, trip it, then use the integration test approach:
+    const s = new GatewayShield();
+    for (let i = 0; i < CIRCUIT_CONFIG.FAILURE_THRESHOLD; i++) {
+      s.recordFailure("test-reopen");
+    }
+    status = s.getStatus();
+    circuit = status.circuits.get("test-reopen")!;
+    expect(circuit.state).toBe("OPEN");
+    expect(circuit.cooldownSeconds).toBe(CIRCUIT_CONFIG.COOLDOWN_SECONDS);
+
+    // We can't easily fast-forward time in the integration class,
+    // so verify the fix via the pure circuit-breaker functions + gateway-shield behavior:
+    // Create a HALF_OPEN circuit that will REOPEN, and call checkCircuit on it.
+    let halfOpenCircuit: import("./circuit-breaker.js").CircuitState = {
+      functionName: "direct-reopen",
+      state: "HALF_OPEN",
+      failureCount: CIRCUIT_CONFIG.FAILURE_THRESHOLD,
+      lastFailureAt: Date.now(),
+      openedAt: Date.now() - 120_000, // opened 2 min ago
+      halfOpenAt: Date.now() - 1000,
+      cooldownSeconds: CIRCUIT_CONFIG.COOLDOWN_SECONDS,
+      testRequestsAllowed: CIRCUIT_CONFIG.HALF_OPEN_TEST_REQUESTS,
+      testRequestsProcessed: CIRCUIT_CONFIG.HALF_OPEN_TEST_REQUESTS, // all slots used
+      testSuccessCount: 0, // all failed → REOPEN
+    };
+
+    // Pure function says REOPEN → state: "OPEN"
+    const pureResult = checkCircuit(halfOpenCircuit, Date.now());
+    expect(pureResult.state).toBe("OPEN");
+
+    // Now verify that the GatewayShield class properly handles this transition.
+    // We inject the half-open circuit into a fresh shield and call checkCircuit.
+    const reopenShield = new GatewayShield();
+    // Use recordFailure to create the circuit, then manipulate via getStatus internals.
+    // Actually, the simplest E2E path: open → simulate cooldown by creating a circuit
+    // that's already past cooldown.  We access the private map via a type assertion.
+    const shieldAny = reopenShield as unknown as { circuits: Map<string, import("./circuit-breaker.js").CircuitState> };
+    shieldAny.circuits.set("direct-reopen", halfOpenCircuit);
+
+    const beforeCheck = Date.now();
+    const result = reopenShield.checkCircuit("direct-reopen");
+    const afterCheck = Date.now();
+
+    expect(result.allowed).toBe(false);
+
+    // Verify the circuit was properly reopened
+    const finalCircuit = reopenShield.getStatus().circuits.get("direct-reopen")!;
+    expect(finalCircuit.state).toBe("OPEN");
+    // openedAt should be recent (the fix)
+    expect(finalCircuit.openedAt).toBeGreaterThanOrEqual(beforeCheck);
+    expect(finalCircuit.openedAt).toBeLessThanOrEqual(afterCheck);
+    // cooldownSeconds should be doubled (the fix)
+    expect(finalCircuit.cooldownSeconds).toBe(
+      Math.min(CIRCUIT_CONFIG.COOLDOWN_SECONDS * 2, CIRCUIT_CONFIG.MAX_COOLDOWN_SECONDS),
+    );
+    // halfOpenAt should be cleared
+    expect(finalCircuit.halfOpenAt).toBeNull();
+  });
+
   it("validates WebSocket payloads", () => {
     expect(shield.validateWsPayload(100, false)).toBeNull();
     expect(shield.validateWsPayload(100 * 1024, false)).not.toBeNull();

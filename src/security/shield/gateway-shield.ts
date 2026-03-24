@@ -126,11 +126,30 @@ export class GatewayShield {
 
     // Apply state transition if check indicates it
     if (result.state !== circuit.state) {
-      circuit = { ...circuit, state: result.state };
       if (result.state === "HALF_OPEN") {
-        circuit.halfOpenAt = Date.now();
-        circuit.testRequestsProcessed = 0;
-        circuit.testSuccessCount = 0;
+        circuit = {
+          ...circuit,
+          state: "HALF_OPEN",
+          halfOpenAt: Date.now(),
+          testRequestsProcessed: 0,
+          testSuccessCount: 0,
+        };
+      } else if (result.state === "OPEN" && circuit.state === "HALF_OPEN") {
+        // REOPEN — apply exponential backoff exactly like reopenCircuit() does
+        circuit = {
+          ...circuit,
+          state: "OPEN",
+          openedAt: Date.now(),
+          halfOpenAt: null,
+          cooldownSeconds: Math.min(
+            circuit.cooldownSeconds * 2,
+            CIRCUIT_CONFIG.MAX_COOLDOWN_SECONDS,
+          ),
+          testRequestsProcessed: 0,
+          testSuccessCount: 0,
+        };
+      } else {
+        circuit = { ...circuit, state: result.state };
       }
       this.circuits.set(functionName, circuit);
     }
