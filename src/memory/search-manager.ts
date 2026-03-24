@@ -71,11 +71,7 @@ export async function getMemorySearchManager(params: {
       });
       if (primary) {
         if (statusOnly) {
-          const wrapper = new CachedStatusMemoryManager(primary, () => {
-            QMD_MANAGER_CACHE.delete(cacheKey);
-          });
-          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-          return { manager: wrapper };
+          return { manager: primary };
         }
         const wrapper = new FallbackMemoryManager(
           {
@@ -144,59 +140,6 @@ class BorrowedMemoryManager implements MemorySearchManager {
   }
 
   async close() {}
-}
-
-class CachedStatusMemoryManager implements MemorySearchManager {
-  private closed = false;
-
-  constructor(
-    private readonly inner: MemorySearchManager,
-    private readonly onClose: () => void,
-  ) {}
-
-  async search(
-    query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
-  ) {
-    return await this.inner.search(query, opts);
-  }
-
-  async readFile(params: { relPath: string; from?: number; lines?: number }) {
-    return await this.inner.readFile(params);
-  }
-
-  status() {
-    return this.inner.status();
-  }
-
-  async sync(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) {
-    await this.inner.sync?.(params);
-  }
-
-  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    return await this.inner.probeEmbeddingAvailability();
-  }
-
-  async probeVectorAvailability() {
-    return await this.inner.probeVectorAvailability();
-  }
-
-  async close() {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    try {
-      await this.inner.close?.();
-    } finally {
-      this.onClose();
-    }
-  }
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
