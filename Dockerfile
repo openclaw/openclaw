@@ -237,6 +237,12 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 ENV NODE_ENV=production
 
+# Ensure the node user's home directory exists with correct ownership.
+# Some base image variants or layer caching edge cases may omit /home/node,
+# causing ENOENT when the agent tries to mkdir state paths under $HOME.
+# See: https://github.com/openclaw/openclaw/issues/50290
+RUN mkdir -p /home/node && chown node:node /home/node
+
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
