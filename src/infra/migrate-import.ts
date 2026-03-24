@@ -405,6 +405,9 @@ export async function importMigrateArchive(
   const localStateDir = resolveStateDir();
   const localConfigPath = resolveConfigPath();
   const localOAuthDir = resolveOAuthDir();
+  const resolvedRemapWorkspace = opts.remapWorkspace
+    ? resolveUserPath(opts.remapWorkspace)
+    : undefined;
 
   // Build import plan: map each manifest asset to a local target path.
   const importAssets: MigrateImportAsset[] = manifest.assets.map((asset) => {
@@ -417,7 +420,7 @@ export async function importMigrateArchive(
       localStateDir,
       localConfigPath,
       localOAuthDir,
-      remapWorkspace: opts.remapWorkspace,
+      remapWorkspace: resolvedRemapWorkspace,
       kind: asset.kind,
     });
 
@@ -470,51 +473,49 @@ export async function importMigrateArchive(
       }
 
       const extractedPath = path.join(tempDir, manifestAsset.archivePath);
-      const resolvedTempDir = path.resolve(tempDir);
-      const resolvedExtracted = path.resolve(extractedPath);
+      const resolvedTempDir = await fs.realpath(tempDir);
+      const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
 
-      // Constrain to the payload subdirectory within the archive root.
-      // This rejects paths like ".", "${archiveRoot}/manifest.json", or traversal attempts.
-      const payloadRoot = path.resolve(path.join(tempDir, manifest.archiveRoot, "payload"));
+      // Lexical check first: reject obviously bad paths before touching the filesystem.
+      const resolvedExtracted = path.resolve(extractedPath);
       if (!resolvedExtracted.startsWith(payloadRoot + path.sep)) {
         warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
         continue;
       }
 
-      // Also verify the path stays within the temp directory (belt-and-suspenders).
-      if (!resolvedExtracted.startsWith(resolvedTempDir + path.sep)) {
-        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
-        continue;
-      }
-
-      const targetPath = importAsset.targetPath;
-
+      // Canonicalize through realpath to detect parent-directory symlinks
+      // that could escape the extraction tree despite passing the lexical check.
+      let realExtracted: string;
       try {
-        await fs.access(extractedPath);
+        realExtracted = await fs.realpath(extractedPath);
       } catch {
         warnings.push(`Asset not found in archive: ${manifestAsset.archivePath}`);
         continue;
       }
-
-      // Reject symlinked payloads before any read operation.
-      const payloadStat = await fs.lstat(extractedPath);
-      if (payloadStat.isSymbolicLink()) {
-        warnings.push(`Skipping symlinked payload: ${manifestAsset.archivePath}`);
+      if (!realExtracted.startsWith(resolvedTempDir + path.sep)) {
+        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
         continue;
       }
+
+      // Use the canonicalized path for all subsequent operations.
+      const targetPath = importAsset.targetPath;
+
+      // realExtracted is already canonicalized via fs.realpath, so all
+      // symlinks (including parent-directory symlinks) have been resolved.
+      // Any symlink escaping the temp tree was already caught above.
 
       if (importAsset.kind === "config" && merge) {
         // Deep merge config.
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await mergeConfigFiles(targetPath, extractedPath);
+        await mergeConfigFiles(targetPath, realExtracted);
       } else {
         // In overwrite mode, remove the existing target first so that stale
         // files from a previous deployment don't survive the import.
-        const extractedStat = await fs.lstat(extractedPath);
+        const extractedStat = await fs.lstat(realExtracted);
         if (extractedStat.isDirectory()) {
           await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
         }
-        await copyRecursive(extractedPath, targetPath);
+        await copyRecursive(realExtracted, targetPath);
       }
     }
   } finally {
