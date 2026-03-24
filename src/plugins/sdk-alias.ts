@@ -17,6 +17,8 @@ type PluginSdkPackageJson = {
   bin?: string | Record<string, unknown>;
 };
 
+const STARTUP_ARGV1 = process.argv[1];
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
@@ -73,6 +75,27 @@ function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | n
   return subpaths.length > 0 ? subpaths : null;
 }
 
+function resolveTrustedOpenClawRootFromArgvHint(params: {
+  argv1?: string;
+  cwd: string;
+}): string | null {
+  if (!params.argv1) {
+    return null;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: params.cwd,
+    argv1: params.argv1,
+  });
+  if (!packageRoot) {
+    return null;
+  }
+  const packageJson = readPluginSdkPackageJson(packageRoot);
+  if (!packageJson) {
+    return null;
+  }
+  return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
+}
+
 function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
   let cursor = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
@@ -112,13 +135,13 @@ function resolveLoaderPluginSdkPackageRoot(
   const cwd = params.cwd ?? path.dirname(params.modulePath);
   const fromCwd = resolveOpenClawPackageRootSync({ cwd });
   const fromExplicitHints =
-    params.argv1 || params.moduleUrl
+    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
+    (params.moduleUrl
       ? resolveOpenClawPackageRootSync({
           cwd,
-          ...(params.argv1 ? { argv1: params.argv1 } : {}),
-          ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
+          moduleUrl: params.moduleUrl,
         })
-      : null;
+      : null);
   return (
     fromCwd ??
     fromExplicitHints ??
@@ -287,18 +310,21 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+export function buildPluginLoaderAliasMap(
+  modulePath: string,
+  argv1: string | undefined = STARTUP_ARGV1,
+): Record<string, string> {
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
-    argv1: process.argv[1],
+    argv1,
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
   return {
     ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath, argv1: process.argv[1] }),
+    ...resolvePluginSdkScopedAliasMap({ modulePath, argv1 }),
   };
 }
 
