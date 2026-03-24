@@ -316,7 +316,12 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
+    const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+    const routedCounts = delivery.getRoutedCounts();
+    // Attempt final TTS synthesis for ttsMode="final" (independent of delivery status).
+    // This ensures routed ACP flows still get final audio even after block delivery.
+    let ttsSucceeded = false;
+    if (ttsMode === "final" && hasAccumulatedBlockText) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
           payload: { text: accumulatedBlockText },
@@ -327,17 +332,42 @@ export async function tryDispatchAcpReply(params: {
           ttsAuto: params.sessionTtsAuto,
         });
         if (ttsSyntheticReply.mediaUrl) {
+          // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
+          // Pass audioAsVoice to avoid re-entering TTS synthesis.
           const delivered = await delivery.deliver("final", {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           });
           queuedFinal = queuedFinal || delivered;
+          if (delivered) {
+            ttsSucceeded = true; // TTS succeeded AND delivered, skip text fallback
+          }
         }
       } catch (err) {
         logVerbose(
           `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+        // TTS failed, fall through to text fallback
       }
+    }
+    // Only attempt text fallback if a terminal delivery has not happened yet.
+    // Block routing alone is not enough here because some ACP parent surfaces only expose
+    // terminal replies, so routed block text can still leave the user with no visible result.
+    // For non-routed flows, we still skip the final-only guard because dispatcher counts are not
+    // tracked here and we want to recover when earlier block sends fail.
+    // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
+    const shouldSkipTextFallback =
+      ttsMode === "all" ||
+      ttsSucceeded ||
+      (params.shouldRouteToOriginating && routedCounts.final > 0);
+    if (!shouldSkipTextFallback && hasAccumulatedBlockText) {
+      // Fallback to text-only delivery (no TTS).
+      // For routed flows, use delivery.deliver with skipTts to bypass TTS re-entry.
+      // For non-routed flows, use dispatcher directly to bypass TTS.
+      const delivered = params.shouldRouteToOriginating
+        ? await delivery.deliver("final", { text: accumulatedBlockText }, { skipTts: true })
+        : params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
+      queuedFinal = queuedFinal || delivered;
     }
 
     if (shouldEmitResolvedIdentityNotice) {
