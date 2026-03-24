@@ -33,6 +33,10 @@ apps/android/.cxx/
 apps/android/.kotlin/
 apps/android/benchmark/results/
 
+# Python artifacts
+**/__pycache__/
+*.pyc
+
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
