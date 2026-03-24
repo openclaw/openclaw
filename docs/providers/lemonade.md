@@ -13,11 +13,9 @@ title: "Lemonade"
 
 OpenClaw connects to Lemonade using the `openai-completions` API and **auto-discovers** available models when the server is running — no API key or extra configuration required.
 
-## Quick start
-
-1. Install and start Lemonade Server (see [Lemonade getting started](https://lemonade-server.ai/docs/getting_started/)):
-
-The server runs on `http://127.0.0.1:8000` by default, with OpenAI-compatible endpoints at `/v1/`.
+1. Install and start Lemonade Server (see [Lemonade getting started](https://lemonade-server.ai/docs/getting_started/)). Once running,
+   the server listens on `http://127.0.0.1:8000` by default, with OpenAI-compatible endpoints at `/api/v1/`.
+The server runs on `http://127.0.0.1:8000` by default, with OpenAI-compatible endpoints at `/api/v1/`.
 
 2. Select a model (replace with one of your Lemonade model IDs from `GET /api/v1/models`):
 
