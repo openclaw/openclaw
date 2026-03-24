@@ -24,7 +24,13 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import {
+  applyModelOverrideToSessionEntry,
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "openclaw/plugin-sdk/config-runtime";
+import { resolveConfiguredBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";
@@ -45,7 +51,10 @@ import {
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
-import { resolveDiscordBoundConversationRoute } from "./route-resolution.js";
+import {
+  resolveDiscordBoundConversationRoute,
+  resolveDiscordEffectiveRoute,
+} from "./route-resolution.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
@@ -255,7 +264,7 @@ async function resolveDiscordModelPickerRoute(params: {
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
     : undefined;
-  return resolveDiscordBoundConversationRoute({
+  const route = resolveDiscordBoundConversationRoute({
     cfg,
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -266,6 +275,30 @@ async function resolveDiscordModelPickerRoute(params: {
     conversationId: rawChannelId,
     parentConversationId: threadParentId,
     boundSessionKey: threadBinding?.targetSessionKey,
+  });
+  const configuredRoute =
+    threadBinding == null
+      ? resolveConfiguredBindingRoute({
+          cfg,
+          route,
+          conversation: {
+            channel: "discord",
+            accountId,
+            conversationId: rawChannelId,
+            parentConversationId: threadParentId,
+          },
+        })
+      : null;
+  const configuredBinding = configuredRoute?.bindingResolution ?? null;
+  const boundSessionKey =
+    threadBinding?.targetSessionKey?.trim() ||
+    configuredRoute?.boundSessionKey?.trim() ||
+    undefined;
+  return resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey,
+    configuredRoute,
+    matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
 }
 
@@ -300,6 +333,35 @@ function resolveDiscordModelPickerCurrentModel(params: {
   } catch {
     return fallback;
   }
+}
+
+async function persistDiscordModelPickerSelection(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  route: ResolvedAgentRoute;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}) {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  await updateSessionStore(storePath, (store) => {
+    const entry = store[params.route.sessionKey];
+    if (!entry) {
+      return;
+    }
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: params.provider,
+        model: params.model,
+        isDefault:
+          params.provider === params.defaultProvider && params.model === params.defaultModel,
+      },
+    });
+    store[params.route.sessionKey] = entry;
+  });
 }
 
 export async function replyWithDiscordModelPickerProviders(params: {
@@ -734,6 +796,19 @@ export async function handleDiscordModelPickerInteraction(params: {
       );
       return;
     }
+
+    await persistDiscordModelPickerSelection({
+      cfg: ctx.cfg,
+      route,
+      provider: parsedModelRef.provider,
+      model: parsedModelRef.model,
+      defaultProvider: pickerData.resolvedDefault.provider,
+      defaultModel: pickerData.resolvedDefault.model,
+    }).catch((error) => {
+      logVerbose(
+        `discord: failed to persist model picker selection ${resolvedModelRef} for session key ${route.sessionKey}: ${String(error)}`,
+      );
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 250));
 
