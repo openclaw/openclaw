@@ -234,6 +234,7 @@ export async function createGatewayRuntimeState(params: {
     return {
       canvasHost,
       releasePluginRouteRegistry: () => {
+        // Releases both pinned HTTP-route and channel registries set at startup.
         releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
         releasePinnedPluginChannelRegistry(params.pluginRegistry);
       },
