@@ -61,6 +61,8 @@ export type DiscordGuildChannelConfig = {
   includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
   autoThread?: boolean;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
