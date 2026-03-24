@@ -28,6 +28,7 @@ export type CanonicalInboundMessageHookContext = {
   messageId?: string;
   senderId?: string;
   senderName?: string;
+  senderManagedAccountId?: string;
   senderUsername?: string;
   senderE164?: string;
   provider?: string;
@@ -52,6 +53,9 @@ export type CanonicalSentMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   messageId?: string;
+  threadId?: string | number;
+  sessionKey?: string;
+  agentId?: string;
   isGroup?: boolean;
   groupId?: string;
 };
@@ -97,6 +101,7 @@ export function deriveInboundMessageHookContext(
       ctx.MessageSidLast,
     senderId: ctx.SenderId,
     senderName: ctx.SenderName,
+    senderManagedAccountId: ctx.SenderManagedAccountId,
     senderUsername: ctx.SenderUsername,
     senderE164: ctx.SenderE164,
     provider: ctx.Provider,
@@ -122,6 +127,9 @@ export function buildCanonicalSentMessageHookContext(params: {
   accountId?: string;
   conversationId?: string;
   messageId?: string;
+  threadId?: string | number;
+  sessionKey?: string;
+  agentId?: string;
   isGroup?: boolean;
   groupId?: string;
 }): CanonicalSentMessageHookContext {
@@ -134,6 +142,9 @@ export function buildCanonicalSentMessageHookContext(params: {
     accountId: params.accountId,
     conversationId: params.conversationId ?? params.to,
     messageId: params.messageId,
+    threadId: params.threadId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     isGroup: params.isGroup,
     groupId: params.groupId,
   };
@@ -296,6 +307,7 @@ export function toPluginMessageReceivedEvent(
       messageId: canonical.messageId,
       senderId: canonical.senderId,
       senderName: canonical.senderName,
+      senderManagedAccountId: canonical.senderManagedAccountId,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
@@ -312,6 +324,17 @@ export function toPluginMessageSentEvent(
     content: canonical.content,
     success: canonical.success,
     ...(canonical.error ? { error: canonical.error } : {}),
+    metadata: {
+      channel: canonical.channelId,
+      accountId: canonical.accountId,
+      conversationId: canonical.conversationId,
+      messageId: canonical.messageId,
+      threadId: canonical.threadId,
+      sessionKey: canonical.sessionKey,
+      agentId: canonical.agentId,
+      isGroup: canonical.isGroup,
+      groupId: canonical.groupId,
+    },
   };
 }
 
@@ -333,6 +356,7 @@ export function toInternalMessageReceivedContext(
       threadId: canonical.threadId,
       senderId: canonical.senderId,
       senderName: canonical.senderName,
+      senderManagedAccountId: canonical.senderManagedAccountId,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,

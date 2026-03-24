@@ -61,6 +61,7 @@ function maybeBootstrapChannelPlugin(params: {
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
+      inheritSharedRuntimeOptions: true,
     });
   } catch {
     // Allow a follow-up resolution attempt if bootstrap failed transiently.
