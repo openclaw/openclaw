@@ -16,6 +16,12 @@ describe("extractMessagingToolSend", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "telegram" }),
             messaging: { normalizeTarget: normalizeTelegramMessagingTarget },
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) => ({
+                to: typeof args.to === "string" ? args.to : undefined,
+                accountId: typeof args.accountId === "string" ? args.accountId : undefined,
+              }),
+            },
           },
           source: "test",
         },
@@ -82,20 +88,29 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadId).toBe("42");
   });
 
-  it("tracks channelId and targets aliases for suppression matching", () => {
+  it("tracks channelId when it is the only legacy target alias", () => {
     const result = extractMessagingToolSends("message", {
       action: "send",
       channel: "telegram",
       channelId: "555",
-      targets: ["123", "456"],
       threadId: "99",
     });
 
     expect(result).toEqual([
       { tool: "message", provider: "telegram", to: "telegram:555", threadId: "99" },
-      { tool: "message", provider: "telegram", to: "telegram:123", threadId: "99" },
-      { tool: "message", provider: "telegram", to: "telegram:456", threadId: "99" },
     ]);
+  });
+
+  it("prefers the resolved send target over stray alias fields", () => {
+    const result = extractMessagingToolSends("message", {
+      action: "send",
+      channel: "telegram",
+      to: "123",
+      channelId: "555",
+      targets: ["456", "789"],
+    });
+
+    expect(result).toEqual([{ tool: "message", provider: "telegram", to: "telegram:123" }]);
   });
 
   it("tracks implicit current-route sends when message target is omitted", () => {
@@ -135,6 +150,20 @@ describe("extractMessagingToolSend", () => {
 
     expect(result).toEqual({
       tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+      threadId: "77",
+    });
+  });
+
+  it("captures messageThreadId aliases for Telegram sends", () => {
+    const result = extractMessagingToolSend("telegram", {
+      to: "123",
+      messageThreadId: 77,
+    });
+
+    expect(result).toEqual({
+      tool: "telegram",
       provider: "telegram",
       to: "telegram:123",
       threadId: "77",

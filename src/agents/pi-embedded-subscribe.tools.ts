@@ -359,6 +359,9 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
 }
 
 function normalizeMessageToolTarget(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
   if (typeof value !== "string") {
     return undefined;
   }
@@ -366,22 +369,16 @@ function normalizeMessageToolTarget(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function resolveMessageToolTargets(
+function resolveMessageToolTarget(
   args: Record<string, unknown>,
   currentChannelId?: string,
-): string[] {
-  const explicitTargets = [
-    normalizeMessageToolTarget(args.to),
-    normalizeMessageToolTarget(args.target),
-    normalizeMessageToolTarget(args.channelId),
-    ...(Array.isArray(args.targets)
-      ? args.targets.map((value) => normalizeMessageToolTarget(value))
-      : []),
-  ].filter((value): value is string => Boolean(value));
-  if (explicitTargets.length > 0) {
-    return Array.from(new Set(explicitTargets));
-  }
-  return currentChannelId ? [currentChannelId] : [];
+): string | undefined {
+  return (
+    normalizeMessageToolTarget(args.target) ??
+    normalizeMessageToolTarget(args.to) ??
+    normalizeMessageToolTarget(args.channelId) ??
+    normalizeMessageToolTarget(currentChannelId)
+  );
 }
 
 type ExtractMessagingToolSendOptions = {
@@ -402,7 +399,9 @@ export function extractMessagingToolSends(
   const threadIdRaw =
     typeof args.threadId === "string" || typeof args.threadId === "number"
       ? String(args.threadId).trim()
-      : undefined;
+      : typeof args.messageThreadId === "string" || typeof args.messageThreadId === "number"
+        ? String(args.messageThreadId).trim()
+        : undefined;
   const threadId = threadIdRaw ? threadIdRaw : undefined;
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
@@ -413,33 +412,34 @@ export function extractMessagingToolSends(
     const providerHint = providerRaw || channelRaw || options?.currentChannelProvider;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
-    const toRaw = resolveMessageToolTargets(args, options?.currentChannelId);
-    if (toRaw.length === 0) {
+    const resolvedTarget = resolveMessageToolTarget(args, options?.currentChannelId);
+    if (!resolvedTarget) {
       return [];
     }
     const normalizedCurrentTarget = provider
       ? normalizeTargetForProvider(provider, options?.currentChannelId)
       : options?.currentChannelId;
     const implicitThreadId = options?.currentThreadTs?.trim();
-    return toRaw
-      .map((target) => (provider ? normalizeTargetForProvider(provider, target) : target))
-      .filter((to): to is string => Boolean(to))
-      .map((to) => {
-        const shouldUseImplicitThreadId =
-          !threadId &&
-          provider === "telegram" &&
-          Boolean(implicitThreadId) &&
-          Boolean(normalizedCurrentTarget) &&
-          to === normalizedCurrentTarget;
-        return {
-          tool: toolName,
-          ...(provider ? { provider } : {}),
-          ...(accountId ? { accountId } : {}),
-          ...(threadId ? { threadId } : {}),
-          ...(!threadId && shouldUseImplicitThreadId ? { threadId: implicitThreadId } : {}),
-          to,
-        };
-      });
+    const to = provider ? normalizeTargetForProvider(provider, resolvedTarget) : resolvedTarget;
+    if (!to) {
+      return [];
+    }
+    const shouldUseImplicitThreadId =
+      !threadId &&
+      provider === "telegram" &&
+      Boolean(implicitThreadId) &&
+      Boolean(normalizedCurrentTarget) &&
+      to === normalizedCurrentTarget;
+    return [
+      {
+        tool: toolName,
+        ...(provider ? { provider } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(!threadId && shouldUseImplicitThreadId ? { threadId: implicitThreadId } : {}),
+        to,
+      },
+    ];
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
