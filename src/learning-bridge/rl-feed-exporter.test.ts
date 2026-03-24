@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResearchEventV1 } from "../research/events/types.js";
+import * as utils from "../utils.js";
 import { exportLearningBridgeRun } from "./index.js";
 import { classifyResearchEvents } from "./reward-classifier.js";
 import { resolveRlFeedRoot, writeRlFeedPackage } from "./rl-feed-exporter.js";
@@ -12,12 +13,12 @@ let tmpRoot = "";
 
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lb-"));
-  process.env.OPENCLAW_STATE_DIR = tmpRoot;
+  vi.spyOn(utils, "resolveConfigDir").mockReturnValue(tmpRoot);
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(tmpRoot, { recursive: true, force: true });
-  delete process.env.OPENCLAW_STATE_DIR;
 });
 
 function baseEvent(

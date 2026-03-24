@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as utils from "../../utils.js";
 import { redactEvent } from "./redaction.js";
 import { ResearchEventV1Schema } from "./types.js";
 
@@ -10,14 +11,14 @@ let tmpRoot = "";
 describe("research events", () => {
   beforeEach(async () => {
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-events-"));
-    process.env.OPENCLAW_STATE_DIR = tmpRoot;
+    vi.spyOn(utils, "resolveConfigDir").mockReturnValue(tmpRoot);
     delete process.env.OPENCLAW_RESEARCH_MAX_BYTES;
     delete process.env.OPENCLAW_RESEARCH_TTL_DAYS;
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpRoot, { recursive: true, force: true });
-    delete process.env.OPENCLAW_STATE_DIR;
   });
 
   it("validates event variants", () => {

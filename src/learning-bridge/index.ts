@@ -3,11 +3,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResearchEventV1 } from "../research/events/types.js";
 import { isLearningBridgeEnabled } from "../research/events/writer.js";
-
-const log = createSubsystemLogger("learning-bridge");
 import { classifyResearchEvents } from "./reward-classifier.js";
 import { writeRlFeedPackage } from "./rl-feed-exporter.js";
 import { buildTrajectoryPackage } from "./trajectory-packager.js";
+
+const log = createSubsystemLogger("learning-bridge");
 
 /**
  * End-of-run export: classifies buffered research events and writes `rl-feed/` artifacts.
