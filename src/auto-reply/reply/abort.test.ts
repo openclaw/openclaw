@@ -692,4 +692,72 @@ describe("abort detection", () => {
       expect.objectContaining({ runId: "run-2", childSessionKey: depth2Key }),
     );
   });
+
+  it("cascade stop still traverses an ended current parent when a stale older active row exists", async () => {
+    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
+    subagentRegistryMocks.markSubagentRunTerminated.mockClear();
+    const sessionKey = "telegram:parent";
+    const depth1Key = "agent:main:subagent:child-ended-stale";
+    const depth2Key = "agent:main:subagent:child-ended-stale:subagent:grandchild-active";
+    const now = Date.now();
+    const { cfg } = await createAbortConfig({
+      nowMs: now,
+      sessionIdsByKey: {
+        [sessionKey]: "session-parent",
+        [depth1Key]: "session-child-ended-stale",
+        [depth2Key]: "session-grandchild-active",
+      },
+    });
+
+    subagentRegistryMocks.listSubagentRunsForRequester
+      .mockReturnValueOnce([
+        {
+          runId: "run-stale-parent",
+          childSessionKey: depth1Key,
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: "telegram:parent",
+          task: "stale orchestrator",
+          cleanup: "keep",
+          createdAt: now - 2_000,
+          startedAt: now - 1_900,
+        },
+        {
+          runId: "run-current-parent",
+          childSessionKey: depth1Key,
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: "telegram:parent",
+          task: "current orchestrator",
+          cleanup: "keep",
+          createdAt: now - 1_000,
+          startedAt: now - 900,
+          endedAt: now - 500,
+          outcome: { status: "ok" },
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          runId: "run-active-child",
+          childSessionKey: depth2Key,
+          requesterSessionKey: depth1Key,
+          requesterDisplayKey: depth1Key,
+          task: "leaf worker",
+          cleanup: "keep",
+          createdAt: now - 400,
+        },
+      ])
+      .mockReturnValueOnce([]);
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:parent",
+      to: "telegram:parent",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expectSessionLaneCleared(depth2Key);
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-active-child", childSessionKey: depth2Key }),
+    );
+  });
 });
