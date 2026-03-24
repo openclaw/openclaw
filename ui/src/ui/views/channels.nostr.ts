@@ -128,7 +128,7 @@ export function renderNostrCard(params: {
             summaryConfigured
               ? html`
                 <button
-                  class="btn btn-sm"
+                  class="btn btn--sm"
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >
