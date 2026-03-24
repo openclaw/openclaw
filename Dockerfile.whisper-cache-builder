@@ -3,7 +3,7 @@
 ARG OPENCLAW_DEBIAN_SLIM_IMAGE="debian:12-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a"
 ARG OPENCLAW_DEBIAN_SLIM_DIGEST="sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a"
 ARG WHISPER_CPP_VERSION="v1.8.3"
-ARG WHISPER_MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+ARG WHISPER_MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
 ARG FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
 ARG MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
 
@@ -16,7 +16,7 @@ ARG MC_URL
 
 LABEL org.opencontainers.image.source="https://github.com/mctlhq/openclaw" \
   org.opencontainers.image.title="OpenClaw Whisper Cache Builder" \
-  org.opencontainers.image.description="Prebuilt ffmpeg + whisper-cli + ggml-small.bin + mc for OpenClaw init fallback" \
+  org.opencontainers.image.description="Prebuilt ffmpeg + whisper-cli + ggml-base.bin + mc for OpenClaw init fallback" \
   org.opencontainers.image.base.name="docker.io/library/debian:12-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_DEBIAN_SLIM_DIGEST}"
 
@@ -38,7 +38,7 @@ RUN set -eux; \
     tar -xJf /tmp/ffmpeg.tar.xz -C "${WHISPER_ASSETS_DIR}" --strip-components=1 --wildcards "*/ffmpeg"; \
     chmod +x "${WHISPER_ASSETS_DIR}/ffmpeg"; \
     rm -f /tmp/ffmpeg.tar.xz; \
-    wget -q "${WHISPER_MODEL_URL}" -O "${WHISPER_ASSETS_DIR}/ggml-small.bin"; \
+    wget -q "${WHISPER_MODEL_URL}" -O "${WHISPER_ASSETS_DIR}/ggml-base.bin"; \
     git clone --depth 1 --branch "${WHISPER_CPP_VERSION}" https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc; \
     cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
       -DCMAKE_BUILD_TYPE=Release \
@@ -74,7 +74,7 @@ RUN set -eux; \
       'export LD_LIBRARY_PATH=/opt/whisper-assets${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}' \
       'TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)' \
       '/opt/whisper-assets/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null' \
-      '/opt/whisper-assets/whisper-cli -m /opt/whisper-assets/ggml-small.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null' \
+      '/opt/whisper-assets/whisper-cli -m /opt/whisper-assets/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null' \
       'EC=$?' \
       'rm -f "$TMP_WAV"' \
       'exit $EC' > "${WHISPER_ASSETS_DIR}/run-whisper.sh"; \
