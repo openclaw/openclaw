@@ -510,6 +510,16 @@ export async function killControlledSubagentRun(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done" as const,
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      label: resolveSubagentLabel(params.entry),
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
+    };
+  }
   const killCache = new Map<string, Record<string, SessionEntry>>();
   const stopResult = await killSubagentRun({
     cfg: params.cfg,
