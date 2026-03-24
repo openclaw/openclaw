@@ -126,4 +126,82 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
     expect(reply?.text).not.toContain("· 1 done");
   });
+
+  it("does not count a child session that moved to a newer parent in the old parent's status", async () => {
+    const oldParentKey = "agent:main:subagent:status-old-parent";
+    const newParentKey = "agent:main:subagent:status-new-parent";
+    const childSessionKey = "agent:main:subagent:status-shared-child";
+    addSubagentRunForTests({
+      runId: "run-status-old-parent",
+      childSessionKey: oldParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-new-parent",
+      childSessionKey: newParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent",
+      cleanup: "keep",
+      createdAt: Date.now() - 90_000,
+      startedAt: Date.now() - 90_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-child-stale-old-parent",
+      childSessionKey,
+      requesterSessionKey: oldParentKey,
+      requesterDisplayKey: oldParentKey,
+      controllerSessionKey: oldParentKey,
+      task: "stale old parent child",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-child-current-new-parent",
+      childSessionKey,
+      requesterSessionKey: newParentKey,
+      requesterDisplayKey: newParentKey,
+      controllerSessionKey: newParentKey,
+      task: "current new parent child",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const params = buildCommandTestParams("/status", cfg);
+    const reply = await buildStatusReply({
+      cfg,
+      command: params.command,
+      sessionEntry: params.sessionEntry,
+      sessionKey: oldParentKey,
+      parentSessionKey: oldParentKey,
+      sessionScope: params.sessionScope,
+      storePath: params.storePath,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 0,
+      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "on",
+      resolvedReasoningLevel: params.resolvedReasoningLevel,
+      resolvedElevatedLevel: params.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
+      isGroup: params.isGroup,
+      defaultGroupActivation: params.defaultGroupActivation,
+    });
+
+    expect(reply?.text).not.toContain("🤖 Subagents: 1 active");
+    expect(reply?.text).not.toContain("stale old parent child");
+  });
 });
