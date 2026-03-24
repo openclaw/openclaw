@@ -23,7 +23,7 @@ import { isVoiceCompatibleAudio } from "../media/audio.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
-} from "../providers/openai-defaults.js";
+} from "../plugins/provider-model-defaults.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
