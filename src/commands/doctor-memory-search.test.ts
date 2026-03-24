@@ -89,6 +89,22 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("node-llama-cpp not installed");
   });
 
+  it("explains GGUF/node-llama-cpp guidance when explicit local model path is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "/tmp/definitely-missing.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('configured local model file was not found');
+    expect(message).toContain('node-llama-cpp` + GGUF');
+    expect(message).toContain('Remove the custom local.modelPath');
+    expect(message).toContain('pnpm approve-builds -g');
+  });
+
   it("does not warn when local provider with default model and gateway probe is ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

@@ -1187,7 +1187,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     `memorySearch.provider = "ollama"`.
 
     If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
-    `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
+    `memorySearch.fallback = "none"`). Local embeddings use **`node-llama-cpp` + GGUF**
+    models rather than torch/sentence-transformers. If you want Gemini embeddings, set
     `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
     `memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, Ollama, or local** embedding
     models - see [Memory](/concepts/memory) for the setup details.
