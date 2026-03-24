@@ -10,13 +10,13 @@ Uses the same TCP server as LLM debugging — no separate setup needed.
 
 ## Supported Models
 
-| Model | Params | Fine-tune Time (CPU) | Saved Size |
-|-------|--------|----------------------|------------|
-| `distilgpt2` | 82M | ~60s | ~315 MB |
-| `gpt2` | 124M | ~90s | ~500 MB |
-| `gpt2-medium` | 345M | ~5 min | ~1.4 GB |
-| `gpt2-large` | 774M | ~15 min | ~3 GB |
-| `gpt2-xl` | 1.5B | ~30 min | ~6 GB |
+| Model         | Params | Fine-tune Time (CPU) | Saved Size |
+| ------------- | ------ | -------------------- | ---------- |
+| `distilgpt2`  | 82M    | ~60s                 | ~315 MB    |
+| `gpt2`        | 124M   | ~90s                 | ~500 MB    |
+| `gpt2-medium` | 345M   | ~5 min               | ~1.4 GB    |
+| `gpt2-large`  | 774M   | ~15 min              | ~3 GB      |
+| `gpt2-xl`     | 1.5B   | ~30 min              | ~6 GB      |
 
 ## Config File Format
 
@@ -41,35 +41,35 @@ Uses the same TCP server as LLM debugging — no separate setup needed.
 
 ### Config Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `num_steps` | 100 | Training steps |
-| `lora_r` | 8 | LoRA rank (higher = more capacity) |
-| `lora_alpha` | 16 | LoRA scaling factor (usually 2× `lora_r`) |
-| `lora_dropout` | 0.05 | Dropout on LoRA layers |
-| `learning_rate` | 1e-4 | Optimizer learning rate |
-| `num_paraphrases` | 8 | Paraphrase variants per fact |
-| `auto_save` | true | Save merged model to disk |
+| Parameter         | Default | Description                               |
+| ----------------- | ------- | ----------------------------------------- |
+| `num_steps`       | 100     | Training steps                            |
+| `lora_r`          | 8       | LoRA rank (higher = more capacity)        |
+| `lora_alpha`      | 16      | LoRA scaling factor (usually 2× `lora_r`) |
+| `lora_dropout`    | 0.05    | Dropout on LoRA layers                    |
+| `learning_rate`   | 1e-4    | Optimizer learning rate                   |
+| `num_paraphrases` | 8       | Paraphrase variants per fact              |
+| `auto_save`       | true    | Save merged model to disk                 |
 
 ### Recommended Settings by Model
 
-| Model | `lora_r` | `lora_alpha` | `num_steps` | `learning_rate` |
-|-------|----------|-------------|-------------|-----------------|
-| distilgpt2 | 8 | 16 | 100 | 1e-4 |
-| gpt2 | 8 | 16 | 100 | 1e-4 |
-| gpt2-medium | 16 | 32 | 150 | 2e-4 |
-| gpt2-large | 16 | 32 | 150 | 2e-4 |
-| gpt2-xl | 16 | 32 | 200 | 2e-4 |
+| Model       | `lora_r` | `lora_alpha` | `num_steps` | `learning_rate` |
+| ----------- | -------- | ------------ | ----------- | --------------- |
+| distilgpt2  | 8        | 16           | 100         | 1e-4            |
+| gpt2        | 8        | 16           | 100         | 1e-4            |
+| gpt2-medium | 16       | 32           | 150         | 2e-4            |
+| gpt2-large  | 16       | 32           | 150         | 2e-4            |
+| gpt2-xl     | 16       | 32           | 200         | 2e-4            |
 
 ## Commands
 
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `finetune <config.json>` | `ft` | Run LoRA fine-tuning from config file |
-| `finetune "<fact>" --verify "<prompt>" --expect "<token>"` | `ft` | Inline fine-tuning |
-| `generate [n]` | `gen` | Generate tokens to verify |
-| `start <prompt>` | `s` | Set prompt for verification |
-| `diagnose <test.json>` | `diag` | Run diagnosis before fine-tuning |
+| Command                                                    | Alias  | Description                           |
+| ---------------------------------------------------------- | ------ | ------------------------------------- |
+| `finetune <config.json>`                                   | `ft`   | Run LoRA fine-tuning from config file |
+| `finetune "<fact>" --verify "<prompt>" --expect "<token>"` | `ft`   | Inline fine-tuning                    |
+| `generate [n]`                                             | `gen`  | Generate tokens to verify             |
+| `start <prompt>`                                           | `s`    | Set prompt for verification           |
+| `diagnose <test.json>`                                     | `diag` | Run diagnosis before fine-tuning      |
 
 ## Typical Workflow
 
@@ -126,12 +126,15 @@ This prevents overfitting to a single phrasing.
 ## Model Persistence
 
 ### Auto-Save Location
+
 ```
 ~/.cache/huggingface/hub/NeuralDebug-finetuned/<model-name>/
 ```
 
 ### Auto-Load on Restart
+
 The server automatically loads fine-tuned weights if they exist:
+
 ```
 $ python llm_debug_session.py serve -m gpt2-medium -p 5680
 Found fine-tuned weights for 'gpt2-medium'
@@ -139,7 +142,9 @@ Found fine-tuned weights for 'gpt2-medium'
 ```
 
 ### Reset to Base Model
+
 Delete the fine-tuned directory:
+
 ```bash
 rm -rf ~/.cache/huggingface/hub/NeuralDebug-finetuned/gpt2-medium
 ```
@@ -172,9 +177,9 @@ rm -rf ~/.cache/huggingface/hub/NeuralDebug-finetuned/gpt2-medium
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Loss doesn't decrease | Increase `learning_rate` (try 2e-4) or `lora_r` (try 16+) |
-| Model generates EOS after fine-tuning | Use declarative prompts, not questions |
-| Timeout on large models | Use `-t 600` for gpt2-medium, `-t 1800` for gpt2-xl |
-| `peft` import error | Install exact version: `pip install peft==0.7.1` |
+| Problem                               | Solution                                                  |
+| ------------------------------------- | --------------------------------------------------------- |
+| Loss doesn't decrease                 | Increase `learning_rate` (try 2e-4) or `lora_r` (try 16+) |
+| Model generates EOS after fine-tuning | Use declarative prompts, not questions                    |
+| Timeout on large models               | Use `-t 600` for gpt2-medium, `-t 1800` for gpt2-xl       |
+| `peft` import error                   | Install exact version: `pip install peft==0.7.1`          |
