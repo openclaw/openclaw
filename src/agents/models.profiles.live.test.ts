@@ -8,7 +8,7 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isModernModelRef } from "./live-model-filter.js";
+import { isHighSignalLiveModelRef } from "./live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
@@ -388,7 +388,7 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
-          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
         }
@@ -417,7 +417,7 @@ describeLive("live models (profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,
