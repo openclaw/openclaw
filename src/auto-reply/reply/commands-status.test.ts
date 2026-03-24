@@ -70,4 +70,60 @@ describe("buildStatusReply subagent summary", () => {
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
+
+  it("dedupes stale rows in the verbose subagent status summary", async () => {
+    const childSessionKey = "agent:main:subagent:status-dedupe-worker";
+    addSubagentRunForTests({
+      runId: "run-status-current",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current status worker",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-stale",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale status worker",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+      endedAt: Date.now() - 90_000,
+      outcome: { status: "ok" },
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const params = buildCommandTestParams("/status", cfg);
+    const reply = await buildStatusReply({
+      cfg,
+      command: params.command,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.sessionKey,
+      sessionScope: params.sessionScope,
+      storePath: params.storePath,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 0,
+      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "on",
+      resolvedReasoningLevel: params.resolvedReasoningLevel,
+      resolvedElevatedLevel: params.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
+      isGroup: params.isGroup,
+      defaultGroupActivation: params.defaultGroupActivation,
+    });
+
+    expect(reply?.text).toContain("🤖 Subagents: 1 active");
+    expect(reply?.text).not.toContain("· 1 done");
+  });
 });
