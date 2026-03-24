@@ -1,3 +1,4 @@
+import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
@@ -45,12 +46,22 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     return resolved;
   };
 
-  const visibleRuns = sortSubagentRuns(runs).filter((entry) => {
-    if (!entry.endedAt) {
-      return true;
+  const visibleRuns: typeof runs = [];
+  const seenChildSessionKeys = new Set<string>();
+  for (const entry of sortSubagentRuns(runs)) {
+    if (seenChildSessionKeys.has(entry.childSessionKey)) {
+      continue;
     }
-    return resolveSessionBindings(entry.childSessionKey).length > 0;
-  });
+    const visible =
+      !entry.endedAt ||
+      countPendingDescendantRuns(entry.childSessionKey) > 0 ||
+      resolveSessionBindings(entry.childSessionKey).length > 0;
+    if (!visible) {
+      continue;
+    }
+    seenChildSessionKeys.add(entry.childSessionKey);
+    visibleRuns.push(entry);
+  }
 
   const lines = ["agents:", "-----"];
   if (visibleRuns.length === 0) {
