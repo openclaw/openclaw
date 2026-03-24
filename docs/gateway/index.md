@@ -70,10 +70,34 @@ Default mode is `gateway.reload.mode="hybrid"`.
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs (OpenAI-compatible, Responses, tools invoke)
+  - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
   - Control UI and hooks
 - Default bind mode: `loopback`.
 - Auth is required by default (`gateway.auth.token` / `gateway.auth.password`, or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
+
+## OpenAI-compatible endpoints
+
+OpenClaw’s highest-leverage compatibility surface is now:
+
+- `GET /v1/models`
+- `GET /v1/models/{id}`
+- `POST /v1/embeddings`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+
+Why this set matters:
+
+- Most Open WebUI, LobeChat, and LibreChat integrations probe `/v1/models` first.
+- Many RAG and memory pipelines expect `/v1/embeddings`.
+- Agent-native clients increasingly prefer `/v1/responses`.
+
+Planning note:
+
+- Keep `/v1/models` as a flat `provider/model` list for client compatibility.
+- Treat agent and sub-agent selection as separate OpenClaw routing concerns, not pseudo-model entries.
+- When you need agent-scoped filtering, pass `x-openclaw-agent-id` on both model-list and request calls.
+
+All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
 
 ### Port and bind precedence
 
