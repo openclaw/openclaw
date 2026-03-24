@@ -18,6 +18,8 @@ export type GenerateImageParams = {
   modelOverride?: string;
   count?: number;
   size?: string;
+  resolution?: import("./types.js").ImageGenerationResolution;
+  inputImages?: import("./types.js").ImageGenerationSourceImage[];
 };
 
 export type GenerateImageRuntimeResult = {

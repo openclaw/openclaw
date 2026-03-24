@@ -304,12 +304,12 @@ export function createImageGenerateTool(options?: {
           ...(provider.label ? { label: provider.label } : {}),
           ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
           models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-          ...(provider.supportedSizes ? { supportedSizes: [...provider.supportedSizes] } : {}),
-          ...(provider.supportedResolutions
-            ? { supportedResolutions: [...provider.supportedResolutions] }
+          ...(provider.capabilities?.geometry?.sizes ? { supportedSizes: [...provider.capabilities.geometry.sizes] } : {}),
+          ...(provider.capabilities?.geometry?.resolutions
+            ? { supportedResolutions: [...provider.capabilities.geometry.resolutions] }
             : {}),
-          ...(typeof provider.supportsImageEditing === "boolean"
-            ? { supportsImageEditing: provider.supportsImageEditing }
+          ...(typeof provider.capabilities?.edit?.enabled === "boolean"
+            ? { supportsImageEditing: provider.capabilities.edit.enabled }
             : {}),
         }));
         const lines = providers.flatMap((provider) => {
