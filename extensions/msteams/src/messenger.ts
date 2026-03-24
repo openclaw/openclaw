@@ -38,6 +38,8 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type SendContext = {
   sendActivity: (textOrActivity: string | object) => Promise<unknown>;
+  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
+  deleteActivity: (activityId: string) => Promise<void>;
 };
 
 export type MSTeamsConversationReference = {
