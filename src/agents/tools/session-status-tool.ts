@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
-import { buildStatusMessage } from "../../auto-reply/status.js";
+import { resolveQueueArbitratorProvider } from "../../auto-reply/reply/queue/model-arbitrator.js";
+import { buildQueueStatus, buildStatusMessage } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -500,14 +501,15 @@ export function createSessionStatusTool(opts?: {
         }),
         usageLine,
         timeLine,
-        queue: {
+        queue: buildQueueStatus({
           mode: queueSettings.mode,
           depth: queueDepth,
           debounceMs: queueSettings.debounceMs,
           cap: queueSettings.cap,
           dropPolicy: queueSettings.dropPolicy,
+          arbitratorProvider: resolveQueueArbitratorProvider(cfg),
           showDetails: queueOverrides,
-        },
+        }),
         includeTranscriptUsage: true,
       });
 

@@ -1,6 +1,15 @@
 import { Type } from "@sinclair/typebox";
+import { isAcpEnabledByPolicy } from "../../acp/policy.js";
+import { loadConfig } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
+import {
+  ACP_SPAWN_MODES,
+  ACP_SPAWN_STREAM_TARGETS,
+  spawnAcpDirect,
+  type SpawnAcpMode,
+  type SpawnAcpResult,
+} from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
@@ -19,6 +28,11 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+const ACP_HARNESS_AGENT_IDS = new Set(
+  ["codex", "claude", "claude-code", "gemini", "opencode", "pi"].map((value) =>
+    normalizeAgentId(value),
+  ),
+);
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -77,14 +91,33 @@ export function createSessionsSpawnTool(
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  function annotateAcpSpawnFailure(result: {
+    status: SpawnAcpResult["status"];
+    error?: string;
+    childSessionKey?: string;
+    runId?: string;
+    mode?: SpawnAcpMode;
+    streamLogPath?: string;
+    note?: string;
+  }) {
+    const failureMessage = result.error?.trim() || "ACP harness session failed to start.";
+    return {
+      ...result,
+      error: `${failureMessage} Requested ACP harness could not be started; report the failure and ask the user before using another backend or ordinary tools instead.`,
+      backendIntent: "acp_harness",
+      fallbackRequiresUserConfirmation: true,
+    };
+  }
+
   return {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). ACP harness ids like `codex`/`claude`/`gemini` are targeted here, not via `agents_list`. mode="run" is one-shot and mode="session" is persistent/thread-bound. ACP one-shot runs default to parent-session progress relay when spawned from another session. Subagents inherit the parent workspace directory automatically.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const cfg = loadConfig();
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),
       );
@@ -95,9 +128,26 @@ export function createSessionsSpawnTool(
       }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
-      const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
+      const normalizedRequestedAgentId = requestedAgentId
+        ? normalizeAgentId(requestedAgentId)
+        : undefined;
+      const hasConfiguredSubagent =
+        normalizedRequestedAgentId != null &&
+        Array.isArray(cfg.agents?.list) &&
+        cfg.agents.list.some((entry) => normalizeAgentId(entry.id) === normalizedRequestedAgentId);
+      const runtime =
+        params.runtime === "acp"
+          ? "acp"
+          : params.runtime === "subagent"
+            ? "subagent"
+            : normalizedRequestedAgentId &&
+                ACP_HARNESS_AGENT_IDS.has(normalizedRequestedAgentId) &&
+                !hasConfiguredSubagent &&
+                isAcpEnabledByPolicy(cfg)
+              ? "acp"
+              : "subagent";
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
@@ -170,6 +220,9 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
           },
         );
+        if (result.status !== "accepted") {
+          return jsonResult(annotateAcpSpawnFailure(result));
+        }
         return jsonResult(result);
       }
 
