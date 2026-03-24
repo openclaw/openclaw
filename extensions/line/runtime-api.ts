@@ -8,7 +8,6 @@ export type {
   PluginRuntime,
 } from "openclaw/plugin-sdk/core";
 export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
 export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
@@ -17,6 +16,7 @@ export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "openclaw/plugin-sdk/status-helpers";
+export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,

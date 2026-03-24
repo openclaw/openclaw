@@ -1064,6 +1064,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/tinyfish",
                   {
                     "group": "Building Plugins",
                     "pages": [
