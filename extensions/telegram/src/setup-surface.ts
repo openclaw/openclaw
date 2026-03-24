@@ -274,9 +274,8 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     parseId: parseTelegramAllowFromId,
     resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
-        credentialValue,
+        credentialValue: credentialValues?.token,
         entries,
-        apiRoot: resolveTelegramAccount({ cfg, accountId }).config.apiRoot,
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
