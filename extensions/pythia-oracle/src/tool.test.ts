@@ -19,10 +19,13 @@ describe("pythia-oracle helpers", () => {
   it("builds a stable grant key from payment requirements", () => {
     expect(
       __testing.buildGrantKey({
+        scheme: "exact",
         network: "eip155:8453",
         asset: "USDC",
         amount: "25000",
         payTo: "0xABC",
+        maxTimeoutSeconds: 300,
+        extra: {},
       }),
     ).toBe("eip155:8453|usdc|0xabc");
   });
@@ -40,10 +43,13 @@ describe("pythia-oracle helpers", () => {
         allowAlwaysCache: true,
       },
       req: {
+        scheme: "exact",
         network: "eip155:8453",
         asset: "USDC",
         amount: "25000",
         payTo: "0xabc",
+        maxTimeoutSeconds: 300,
+        extra: {},
       },
       agentId: "projectmanager",
       expiresAtMs: Date.now() + 60_000,
@@ -51,7 +57,40 @@ describe("pythia-oracle helpers", () => {
 
     expect(text).toContain("Service: Pythia Oracle");
     expect(text).toContain("ID: approval-1");
+    expect(text).toContain("Price: 0.025 USDC on eip155:8453");
     expect(text).toContain("/approve <id> allow-once|allow-always|deny");
+  });
+
+  it("normalizes x402 atomic amounts into human-readable USDC", () => {
+    expect(
+      __testing.formatHumanPaymentAmount({
+        req: {
+          scheme: "exact",
+          network: "eip155:8453",
+          asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          amount: "25000",
+          payTo: "0xabc",
+          maxTimeoutSeconds: 300,
+          extra: {},
+        },
+      }),
+    ).toBe("0.025 USDC");
+  });
+
+  it("describes payment requirements with normalized amounts", () => {
+    expect(
+      __testing.describePaymentRequirement({
+        req: {
+          scheme: "exact",
+          network: "eip155:8453",
+          asset: "USDC",
+          amount: "25000",
+          payTo: "0xabc",
+          maxTimeoutSeconds: 300,
+          extra: {},
+        },
+      }),
+    ).toBe("0.025 USDC on eip155:8453");
   });
 
   it("records paid responses into the per-agent payment state", async () => {
@@ -62,10 +101,13 @@ describe("pythia-oracle helpers", () => {
     await __testing.maybeRecordPaidResponse({
       statePath,
       req: {
+        scheme: "exact",
         network: "eip155:8453",
         asset: "USDC",
         amount: "25000",
         payTo: "0xabc",
+        maxTimeoutSeconds: 300,
+        extra: {},
       },
       expectedPriceUsd: 0.025,
       response: new Response(JSON.stringify({ ok: true }), {
@@ -125,10 +167,14 @@ describe("pythia-oracle helpers", () => {
           asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
           amount: "25000",
           payTo: "0xabc",
+          maxTimeoutSeconds: 300,
+          extra: {},
         },
       ],
       error: "Payment required",
-      resource: undefined,
+      resource: {
+        url: "mcp://tool/consult_oracle",
+      },
     });
   });
 

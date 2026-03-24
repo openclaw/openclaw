@@ -24,6 +24,7 @@ const DEFAULT_EXPECTED_PRICE_USD = 0.025;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const DEFAULT_WALLET_ENV_VAR = "PYTHIA_BASE_PRIVATE_KEY";
+const BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
 type PythiaPluginConfig = {
   url: string;
@@ -53,19 +54,21 @@ type PythiaPaymentState = {
 };
 
 type PaymentRequirementLike = {
-  scheme?: string;
-  network: string;
+  scheme: string;
+  network: `${string}:${string}`;
   asset: string;
   amount: string;
   payTo: string;
+  maxTimeoutSeconds: number;
+  extra: Record<string, unknown>;
 };
 
 type X402PaymentRequired = {
   x402Version: number;
   accepts: PaymentRequirementLike[];
   error?: string;
-  resource?: {
-    url?: string;
+  resource: {
+    url: string;
     description?: string;
     mimeType?: string;
   };
@@ -233,6 +236,68 @@ function buildPaymentCommandLabel(config: PythiaPluginConfig): string {
   return `x402 payment for ${config.serviceName} (${formatUsd(config.expectedPriceUsd)})`;
 }
 
+function inferAssetSymbol(asset: string): string {
+  const trimmed = asset.trim();
+  if (!trimmed) {
+    return "token";
+  }
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "usdc" || normalized === BASE_USDC_ADDRESS) {
+    return "USDC";
+  }
+  return trimmed.startsWith("0x") ? trimmed : trimmed.toUpperCase();
+}
+
+function inferAssetDecimals(req: PaymentRequirementLike): number | undefined {
+  const normalized = req.asset.trim().toLowerCase();
+  if (normalized === "usdc" || normalized === BASE_USDC_ADDRESS) {
+    return 6;
+  }
+  return undefined;
+}
+
+function formatAtomicAmount(amount: string, decimals: number): string | undefined {
+  if (!/^\d+$/.test(amount)) {
+    return undefined;
+  }
+  const raw = BigInt(amount);
+  const scale = 10n ** BigInt(decimals);
+  const whole = raw / scale;
+  const fraction = raw % scale;
+  if (fraction === 0n) {
+    return whole.toString();
+  }
+  const paddedFraction = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${whole.toString()}.${paddedFraction}`;
+}
+
+// x402 prices are returned in token base units. Normalize them before surfacing
+// them to the model so future payment-capability work does not leak raw onchain
+// amounts like "25000 USDC" to users.
+function formatHumanPaymentAmount(params: {
+  req: PaymentRequirementLike;
+  fallbackUsd?: number;
+}): string {
+  const symbol = inferAssetSymbol(params.req.asset);
+  const decimals = inferAssetDecimals(params.req);
+  const normalized =
+    decimals !== undefined ? formatAtomicAmount(params.req.amount.trim(), decimals) : undefined;
+  if (normalized) {
+    return `${normalized} ${symbol}`;
+  }
+  if (params.fallbackUsd !== undefined) {
+    return `${formatUsd(params.fallbackUsd)} ${symbol}`;
+  }
+  return `${params.req.amount} base units of ${symbol}`;
+}
+
+function describePaymentRequirement(params: {
+  req: PaymentRequirementLike;
+  fallbackUsd?: number;
+}): string {
+  return `${formatHumanPaymentAmount(params)} on ${params.req.network}`;
+}
+
 function buildApprovalPrompt(params: {
   id: string;
   config: PythiaPluginConfig;
@@ -248,7 +313,7 @@ function buildApprovalPrompt(params: {
     "Payment approval required",
     `ID: ${params.id}`,
     `Service: ${params.config.serviceName}`,
-    `Price: about ${formatUsd(params.config.expectedPriceUsd)} on ${params.req.network}`,
+    `Price: ${describePaymentRequirement({ req: params.req, fallbackUsd: params.config.expectedPriceUsd })}`,
     `Asset: ${params.req.asset}`,
     `Pay to: ${params.req.payTo}`,
     params.agentId ? `Agent: ${params.agentId}` : undefined,
@@ -586,6 +651,7 @@ function parseX402PaymentRequired(text: string | undefined): X402PaymentRequired
         typeof entry === "object" &&
         entry !== null &&
         typeof entry.network === "string" &&
+        entry.network.includes(":") &&
         typeof entry.asset === "string" &&
         typeof entry.amount === "string" &&
         typeof entry.payTo === "string",
@@ -593,11 +659,32 @@ function parseX402PaymentRequired(text: string | undefined): X402PaymentRequired
     if (accepts.length === 0) {
       return undefined;
     }
+    const resource =
+      parsed.resource &&
+      typeof parsed.resource === "object" &&
+      typeof parsed.resource.url === "string" &&
+      parsed.resource.url.trim()
+        ? {
+            url: parsed.resource.url,
+            description:
+              typeof parsed.resource.description === "string"
+                ? parsed.resource.description
+                : undefined,
+            mimeType:
+              typeof parsed.resource.mimeType === "string" ? parsed.resource.mimeType : undefined,
+          }
+        : { url: "mcp://tool/consult_oracle" };
     return {
       x402Version: parsed.x402Version,
-      accepts,
+      accepts: accepts.map((entry) => ({
+        ...entry,
+        scheme: typeof entry.scheme === "string" && entry.scheme.trim() ? entry.scheme : "exact",
+        maxTimeoutSeconds:
+          typeof entry.maxTimeoutSeconds === "number" ? entry.maxTimeoutSeconds : 300,
+        extra: entry.extra && typeof entry.extra === "object" ? entry.extra : {},
+      })),
       error: typeof parsed.error === "string" ? parsed.error : undefined,
-      resource: parsed.resource,
+      resource,
     };
   } catch {
     return undefined;
@@ -743,6 +830,8 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
         asset: "USDC",
         amount: "unknown",
         payTo: "unknown",
+        maxTimeoutSeconds: 300,
+        extra: {},
       };
 
       const paymentClient =
@@ -765,6 +854,8 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
                   asset: selectedRequirements.asset,
                   amount: selectedRequirements.amount,
                   payTo: selectedRequirements.payTo,
+                  maxTimeoutSeconds: selectedRequirements.maxTimeoutSeconds,
+                  extra: selectedRequirements.extra,
                 });
                 return approval;
               });
@@ -808,7 +899,7 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
       if (paymentRequired) {
         if (!paymentClient || !paymentHttpClient) {
           throw new Error(
-            `${config.serviceName} requires x402 payment, but ${config.walletPrivateKeyEnvVar} is not configured.`,
+            `${config.serviceName} requires x402 payment of ${describePaymentRequirement({ req: paymentRequired.accepts[0]!, fallbackUsd: config.expectedPriceUsd })}, but ${config.walletPrivateKeyEnvVar} is not configured.`,
           );
         }
         const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
@@ -837,11 +928,22 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
             asset: paymentRequired.accepts[0]?.asset ?? paymentReq.asset,
             amount: paymentRequired.accepts[0]?.amount ?? paymentReq.amount,
             payTo: paymentRequired.accepts[0]?.payTo ?? paymentReq.payTo,
+            maxTimeoutSeconds:
+              paymentRequired.accepts[0]?.maxTimeoutSeconds ?? paymentReq.maxTimeoutSeconds,
+            extra: paymentRequired.accepts[0]?.extra ?? paymentReq.extra,
           },
           expectedPriceUsd: config.expectedPriceUsd,
           response: paidToolResponse,
         });
         responseBody = await readMcpJsonResponse<ToolCallResponse>(paidToolResponse);
+        const paymentRequiredAfterRetry = parseX402PaymentRequired(
+          extractToolErrorText(responseBody),
+        );
+        if (paymentRequiredAfterRetry) {
+          throw new Error(
+            `${config.serviceName} still requires x402 payment of ${describePaymentRequirement({ req: paymentRequiredAfterRetry.accepts[0]!, fallbackUsd: config.expectedPriceUsd })} after an automatic payment attempt.`,
+          );
+        }
       }
       return jsonResult(extractOraclePayload(responseBody));
     },
@@ -853,6 +955,8 @@ export const __testing = {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   buildGrantKey,
   buildApprovalPrompt,
+  describePaymentRequirement,
+  formatHumanPaymentAmount,
   resolvePluginConfig,
   loadPaymentState,
   savePaymentState,
