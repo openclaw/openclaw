@@ -4,9 +4,9 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
-    "@microsoft/agents-hosting": "^1.4.1",
-    "express": "^5.2.1",
-    "uuid": "^13.0.0"
+    "@microsoft/teams.api": "2.0.5",
+    "@microsoft/teams.apps": "2.0.5",
+    "express": "^5.2.1"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
@@ -27,10 +27,10 @@
     "channel": {
       "id": "msteams",
       "label": "Microsoft Teams",
-      "selectionLabel": "Microsoft Teams (Bot Framework)",
+      "selectionLabel": "Microsoft Teams (Teams SDK)",
       "docsPath": "/channels/msteams",
       "docsLabel": "msteams",
-      "blurb": "Bot Framework; enterprise support.",
+      "blurb": "Teams SDK; enterprise support.",
       "aliases": [
         "teams"
       ],

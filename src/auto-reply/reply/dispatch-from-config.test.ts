@@ -2628,6 +2628,58 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("passes configOverride to replyResolver when provided", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
+
+    const overrideCfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      configOverride: overrideCfg,
+    });
+
+    expect(receivedCfg).toBe(overrideCfg);
+  });
+
+  it("passes base cfg to replyResolver when configOverride is not provided", async () => {
+    setNoAbort();
+    const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(receivedCfg).toBe(cfg);
+  });
+
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

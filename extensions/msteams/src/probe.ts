@@ -4,7 +4,7 @@ import {
   type MSTeamsConfig,
 } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -64,9 +64,13 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   }
 
   try {
-    const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-    const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-    await tokenProvider.getAccessToken("https://api.botframework.com");
+    const { app } = await loadMSTeamsSdkWithAuth(creds);
+    const tokenProvider = createMSTeamsTokenProvider(app);
+    const botTokenValue = await tokenProvider.getAccessToken("https://api.botframework.com");
+    if (!botTokenValue) {
+      throw new Error("Failed to acquire bot token");
+    }
+
     let graph:
       | {
           ok: boolean;
@@ -76,8 +80,8 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         }
       | undefined;
     try {
-      const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
-      const accessToken = readAccessToken(graphToken);
+      const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+      const accessToken = readAccessToken(graphTokenValue);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {
         ok: true,
