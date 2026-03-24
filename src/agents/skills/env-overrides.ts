@@ -87,7 +87,7 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
   return patterns.some((pattern) => pattern.test(value));
 }
 
-function isAlwaysBlockedSkillEnvKey(key: string): boolean {
+export function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   return (
     isDangerousHostEnvVarName(key) || matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
   );

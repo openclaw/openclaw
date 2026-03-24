@@ -123,4 +123,29 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       OPENAI_API_KEY: "sk-test",
     });
   });
+
+  it("does not sync always-blocked skill env keys into sandbox exec env", () => {
+    const sandbox = {
+      docker: { env: { LANG: "C.UTF-8" } },
+      backend: { env: { LANG: "C.UTF-8" } },
+    };
+
+    syncCurrentSkillEnvToSandbox({
+      sandbox,
+      envKeys: new Set(["OPENAI_API_KEY", "OPENCLAW_GATEWAY_TOKEN"]),
+      env: {
+        OPENAI_API_KEY: "sk-test",
+        OPENCLAW_GATEWAY_TOKEN: "gw-token",
+      },
+    });
+
+    expect(sandbox.docker.env).toEqual({
+      LANG: "C.UTF-8",
+      OPENAI_API_KEY: "sk-test",
+    });
+    expect(sandbox.backend.env).toEqual({
+      LANG: "C.UTF-8",
+      OPENAI_API_KEY: "sk-test",
+    });
+  });
 });

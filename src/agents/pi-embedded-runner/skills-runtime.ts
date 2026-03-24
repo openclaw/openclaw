@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
+import { isAlwaysBlockedSkillEnvKey } from "../skills/env-overrides.js";
 import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 
 export type SandboxSkillEnvTarget = {
@@ -37,6 +38,9 @@ export function syncCurrentSkillEnvToSandbox(params: {
   const envSource = params.env ?? process.env;
   const skillEnv: Record<string, string> = {};
   for (const key of params.envKeys) {
+    if (isAlwaysBlockedSkillEnvKey(key)) {
+      continue;
+    }
     const value = envSource[key];
     if (typeof value === "string") {
       skillEnv[key] = value;
