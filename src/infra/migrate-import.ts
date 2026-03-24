@@ -623,14 +623,20 @@ export async function importMigrateArchive(
         );
       }
 
-      // Config and credentials assets must be regular files (or directories
-      // for credentials), not the other way around. Reject config payloads
-      // that are directories — they would corrupt the config file path.
+      // Validate payload type matches what the write pass expects for each kind.
+      // config → must be a file (written to a file path)
+      // credentials, agents, workspace, state → must be a directory (copied recursively)
+      const payloadStat = await fs.lstat(realExtracted);
       if (importAsset.kind === "config") {
-        const stat = await fs.lstat(realExtracted);
-        if (!stat.isFile()) {
+        if (!payloadStat.isFile()) {
           throw new Error(
             `Import aborted: config asset is not a regular file: ${manifestAsset.archivePath}`,
+          );
+        }
+      } else {
+        if (!payloadStat.isDirectory() && !payloadStat.isFile()) {
+          throw new Error(
+            `Import aborted: ${importAsset.kind} asset is not a file or directory: ${manifestAsset.archivePath}`,
           );
         }
       }
