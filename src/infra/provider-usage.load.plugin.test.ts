@@ -3,14 +3,19 @@ import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js"
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, loadConfig: () => ({}) };
+});
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
-    resolveProviderUsageSnapshotWithPluginMock(...args),
-}));
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
+      resolveProviderUsageSnapshotWithPluginMock(...args),
+  };
+});
 
 let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
 
