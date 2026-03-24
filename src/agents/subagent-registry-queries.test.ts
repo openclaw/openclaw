@@ -175,6 +175,37 @@ describe("subagent registry query regressions", () => {
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
   });
 
+  it("dedupes stale and current rows for the same child session when counting active runs", () => {
+    const childSessionKey = "agent:main:subagent:orch-restarted";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-old",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 100,
+        startedAt: 100,
+        endedAt: 150,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-current",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 200,
+        startedAt: 200,
+      }),
+      makeRun({
+        runId: "run-descendant-active",
+        childSessionKey: `${childSessionKey}:subagent:child`,
+        requesterSessionKey: childSessionKey,
+        createdAt: 210,
+        startedAt: 210,
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+  });
+
   it("scopes direct child listings to the requester run window when requesterRunId is provided", () => {
     const requesterSessionKey = "agent:main:subagent:orchestrator";
     const runs = toRunMap([

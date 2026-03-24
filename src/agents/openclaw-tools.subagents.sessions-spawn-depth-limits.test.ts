@@ -227,6 +227,62 @@ describe("sessions_spawn depth + child limits", () => {
     });
   });
 
+  it("does not double-count restarted child sessions toward maxChildrenPerAgent", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig({ store: storeTemplatePath }),
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    };
+
+    const childSessionKey = "agent:main:subagent:restarted-child";
+    addSubagentRunForTests({
+      runId: "existing-old-run",
+      childSessionKey,
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "agent:main:subagent:parent",
+      task: "old orchestration run",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+      endedAt: Date.now() - 20_000,
+      cleanupCompletedAt: undefined,
+    });
+    addSubagentRunForTests({
+      runId: "existing-current-run",
+      childSessionKey,
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "agent:main:subagent:parent",
+      task: "current orchestration run",
+      cleanup: "keep",
+      createdAt: Date.now() - 10_000,
+      startedAt: Date.now() - 10_000,
+    });
+    addSubagentRunForTests({
+      runId: "existing-descendant-run",
+      childSessionKey: `${childSessionKey}:subagent:leaf`,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "descendant still running",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 5_000,
+    });
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const result = await tool.execute("call-max-children-dedupe", { task: "hello" });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-depth",
+    });
+  });
+
   it("does not use subagent maxConcurrent as a per-parent spawn gate", async () => {
     configOverride = {
       session: createPerSenderSessionConfig({ store: storeTemplatePath }),
