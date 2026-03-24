@@ -637,19 +637,24 @@ export class AcpGatewayAgent implements Agent {
 
     if (phase === "start") {
       if (!pending.toolCalls) {
-        pending.toolCalls = new Set();
+        pending.toolCalls = new Map();
       }
       if (pending.toolCalls.has(toolCallId)) {
         return;
       }
-      pending.toolCalls.add(toolCallId);
       const args = data.args as Record<string, unknown> | undefined;
+      const toolTitle = formatToolTitle(name, args);
+      pending.toolCalls.set(toolCallId, {
+        kind: inferToolKind(name),
+        rawInput: args,
+        title: toolTitle,
+      });
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
         update: {
           sessionUpdate: "tool_call",
           toolCallId,
-          title: formatToolTitle(name, args),
+          title: toolTitle,
           status: "in_progress",
           rawInput: args,
           kind: inferToolKind(name),

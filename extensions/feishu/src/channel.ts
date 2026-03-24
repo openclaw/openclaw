@@ -3,7 +3,7 @@ import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import {
   adaptScopedAccountAccessor,
-  createHybridChannelConfigAdapter,
+  createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
@@ -159,7 +159,7 @@ function setFeishuNamedAccountEnabled(
   };
 }
 
-const feishuConfigAdapter = createHybridChannelConfigAdapter<
+const feishuConfigAdapter = createScopedChannelConfigBase<
   ResolvedFeishuAccount,
   ResolvedFeishuAccount,
   ClawdbotConfig
