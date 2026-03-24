@@ -231,7 +231,7 @@ export function normalizeFreshness(
   }
 
   const lower = trimmed.toLowerCase();
-  
+
   if (provider === "bocha") {
     // Exact match for bocha enum values (case-sensitive as per bocha doc, but let's be flexible if they pass exact match)
     if (BOCHA_FRESHNESS_VALUES.has(trimmed)) {

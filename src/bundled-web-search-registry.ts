@@ -1,5 +1,5 @@
-import bravePlugin from "../extensions/brave/index.js";
 import bochaPlugin from "../extensions/bocha/index.js";
+import bravePlugin from "../extensions/brave/index.js";
 import duckduckgoPlugin from "../extensions/duckduckgo/index.js";
 import exaPlugin from "../extensions/exa/index.js";
 import firecrawlPlugin from "../extensions/firecrawl/index.js";

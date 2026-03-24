@@ -54,9 +54,7 @@ type BochaSearchResponse = {
 
 function resolveBochaConfig(searchConfig?: SearchConfigRecord): BochaConfig {
   const bocha = searchConfig?.bocha;
-  return bocha && typeof bocha === "object" && !Array.isArray(bocha)
-    ? (bocha as BochaConfig)
-    : {};
+  return bocha && typeof bocha === "object" && !Array.isArray(bocha) ? (bocha as BochaConfig) : {};
 }
 
 function resolveBochaApiKey(bocha?: BochaConfig): string | undefined {
@@ -263,5 +261,5 @@ export const __testing = {
   resolveBochaConfig,
   resolveBochaApiKey,
   resolveBochaBaseUrl,
-  normalizeFreshness
+  normalizeFreshness,
 } as const;

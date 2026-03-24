@@ -247,6 +247,63 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "bocha",
+    idHint: "plugin-bocha",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/plugin-bocha",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Bocha plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "bocha",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              summary: {
+                type: "boolean",
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        bocha: ["BOCHA_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Bocha API Key",
+          help: "Bocha API key for web search.",
+          sensitive: true,
+          placeholder: "sk-...",
+        },
+        "webSearch.baseUrl": {
+          label: "Bocha Base URL",
+          help: "Optional Bocha chat-completions base URL override. Default is 'https://open.bocha.cn/v1'.",
+        },
+        "webSearch.content": {
+          label: "Bocha Content",
+          help: "Whether to return original web contents. Default is false.",
+        },
+      },
+    },
+  },
+  {
     dirName: "brave",
     idHint: "brave-plugin",
     source: {

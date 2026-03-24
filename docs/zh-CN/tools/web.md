@@ -35,7 +35,7 @@ OpenClaw 提供两个轻量级 Web 工具：
 
 | 提供商                | 结果形式           | 说明                                            | API 密钥                                    |
 | --------------------- | ------------------ | ----------------------------------------------- | ------------------------------------------- |
-| **Bocha Search API** | 结构化结果 + 摘要  | 高质量实时网页搜索，支持结构化结果             | `BOCHA_API_KEY`                             |
+| **Bocha Search API**  | 结构化结果 + 摘要  | 高质量实时网页搜索，支持结构化结果              | `BOCHA_API_KEY`                             |
 | **Brave Search API**  | 结构化结果 + 摘要  | 支持 Brave `llm-context` 模式                   | `BRAVE_API_KEY`                             |
 | **Firecrawl Search**  | 结构化结果 + 摘要  | Firecrawl 专用搜索控制请使用 `firecrawl_search` | `FIRECRAWL_API_KEY`                         |
 | **Gemini**            | AI 综合答案 + 引用 | 使用 Google Search grounding                    | `GEMINI_API_KEY`                            |

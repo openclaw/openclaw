@@ -58,8 +58,12 @@ describe("web_search freshness normalization", () => {
     expect(normalizeBochaFreshness("month", "bocha")).toBe("oneMonth");
     expect(normalizeBochaFreshness("py", "bocha")).toBe("oneYear");
     expect(normalizeBochaFreshness("year", "bocha")).toBe("oneYear");
-    expect(normalizeBochaFreshness("2024-01-01..2024-01-02", "bocha")).toBe("2024-01-01..2024-01-02");
-    expect(normalizeBochaFreshness("2024-01-01to2024-01-02", "bocha")).toBe("2024-01-01..2024-01-02");
+    expect(normalizeBochaFreshness("2024-01-01..2024-01-02", "bocha")).toBe(
+      "2024-01-01..2024-01-02",
+    );
+    expect(normalizeBochaFreshness("2024-01-01to2024-01-02", "bocha")).toBe(
+      "2024-01-01..2024-01-02",
+    );
     expect(normalizeBochaFreshness("2024-01-01", "bocha")).toBe("2024-01-01");
     expect(normalizeBochaFreshness("invalid", "bocha")).toBe("noLimit");
   });

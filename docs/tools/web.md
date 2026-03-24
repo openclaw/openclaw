@@ -82,7 +82,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 | Provider                               | Result style               | Filters                                          | API key                                     |
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Bocha](https://open.bochaai.com/)    | Structured snippets        | Time range                                       | `BOCHA_API_KEY`                             |
+| [Bocha](https://open.bochaai.com/)     | Structured snippets        | Time range                                       | `BOCHA_API_KEY`                             |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |

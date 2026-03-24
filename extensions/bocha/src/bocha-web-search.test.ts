@@ -8,7 +8,9 @@ describe("bocha web search provider helpers", () => {
   });
 
   it("reads bocha-specific overrides from scoped config", () => {
-    expect(__testing.resolveBochaBaseUrl({ baseUrl: "https://custom.bocha.cn/v1" })).toBe("https://custom.bocha.cn/v1");
+    expect(__testing.resolveBochaBaseUrl({ baseUrl: "https://custom.bocha.cn/v1" })).toBe(
+      "https://custom.bocha.cn/v1",
+    );
   });
 
   it("resolves empty bocha config when no scoped config is present", () => {
