@@ -3,6 +3,7 @@ import {
   isSlackStreamingEnabled,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
+  shouldInitializeSlackDraftStream,
 } from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
@@ -75,6 +76,35 @@ describe("slack preview streaming eligibility", () => {
         mode: "partial",
         isDirectMessage: true,
         threadTs: "1000.1",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("slack draft stream initialization", () => {
+  it("stays off when preview streaming is disabled", () => {
+    expect(
+      shouldInitializeSlackDraftStream({
+        previewStreamingEnabled: false,
+        useStreaming: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays off when native streaming is active", () => {
+    expect(
+      shouldInitializeSlackDraftStream({
+        previewStreamingEnabled: true,
+        useStreaming: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("turns on only for preview-only paths", () => {
+    expect(
+      shouldInitializeSlackDraftStream({
+        previewStreamingEnabled: true,
+        useStreaming: false,
       }),
     ).toBe(true);
   });
