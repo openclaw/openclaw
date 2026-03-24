@@ -14,7 +14,7 @@ Welcome to the lobster tank! 🦞
 - **Peter Steinberger** - Benevolent Dictator
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
-- **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
+- **Shadow** - Discord subsystem, Discord admin, all community moderation
   - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
 - **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
@@ -142,7 +142,7 @@ We are currently prioritizing:
 
 - **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
 - **UX**: Improving the onboarding wizard and error messages.
-- **Skills**: For skill contributions, head to [ClawHub](https://clawhub.ai/) — the community hub for OpenClaw skills.
+- **Skills**: For skill contributions, publish community skills or add workspace skills locally.
 - **Performance**: Optimizing token usage and compaction logic.
 
 Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
@@ -175,7 +175,6 @@ We take security reports seriously. Report vulnerabilities directly to the repos
 - **macOS desktop app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/macos)
 - **iOS app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/ios)
 - **Android app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/android)
-- **ClawHub** — [openclaw/clawhub](https://github.com/openclaw/clawhub)
 - **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
 
 For issues that don't fit a specific repo, or if you're unsure, email **security@openclaw.ai** and we'll route it.

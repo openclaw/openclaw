@@ -49,13 +49,6 @@ export function renderSkills(props: SkillsProps) {
       </div>
 
       <div class="filters" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px;">
-        <a
-          class="btn"
-          href="https://clawhub.com"
-          target="_blank"
-          rel="noreferrer"
-          title="Browse skills on ClawHub"
-        >Browse Skills Store</a>
         <label class="field" style="flex: 1; min-width: 180px;">
           <input
             .value=${props.filter}

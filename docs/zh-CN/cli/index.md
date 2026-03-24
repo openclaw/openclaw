@@ -442,8 +442,6 @@ openclaw status --deep
 - `--json`：输出 JSON（无样式）。
 - `-v`、`--verbose`：包含缺失需求详情。
 
-提示：使用 `npx clawhub` 搜索、安装和同步 Skills。
-
 ### `pairing`
 
 批准跨渠道的私信配对请求。

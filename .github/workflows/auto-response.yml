@@ -44,7 +44,7 @@ jobs:
                 label: "r: skill",
                 close: true,
                 message:
-                  "Thanks for the contribution! New skills should be published to [Clawhub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
+                  "Thanks for the contribution! New skills should be published as community skills (workspace or managed). We’re keeping the core lean on skills, so I’m closing this out.",
               },
               {
                 label: "r: support",

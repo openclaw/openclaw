@@ -261,12 +261,6 @@ Details: [Nodes](https://docs.openclaw.ai/nodes) · [macOS app](https://docs.ope
 
 Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool)
 
-## Skills registry (ClawHub)
-
-ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search for skills automatically and pull in new ones as needed.
-
-[ClawHub](https://clawhub.com)
-
 ## Chat commands
 
 Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group commands are owner-only):

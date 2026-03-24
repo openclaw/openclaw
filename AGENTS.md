@@ -17,7 +17,7 @@
 - Why: keeps wording consistent, preserves automation behavior (`state_reason`, locking), and keeps triage/reporting searchable by label.
 - `r:*` labels can be used on both issues and PRs.
 
-- `r: skill`: close with guidance to publish skills on Clawhub.
+- `r: skill`: close with guidance to publish skills as community skills.
 - `r: support`: close with redirect to Discord support + stuck FAQ.
 - `r: no-ci-pr`: close test-fix-only PRs for failing `main` CI and post the standard explanation.
 - `r: too-many-prs`: close when author exceeds active PR limit.

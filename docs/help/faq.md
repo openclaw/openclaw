@@ -1060,7 +1060,7 @@ Use managed overrides instead of editing the repo copy. Put your changes in `~/.
 
 ### Can I load skills from a custom folder
 
-Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills`.
+Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`.
 
 ### How can I use different models for different tasks
 
@@ -1127,18 +1127,9 @@ Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-v
 
 ### How do I install skills on Linux
 
-Use **ClawHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
-Browse skills at [https://clawhub.com](https://clawhub.com).
+Drop skills into your workspace. The macOS Skills UI is not available on Linux.
 
-Install the ClawHub CLI (pick one package manager):
-
-```bash
-npm i -g clawhub
-```
-
-```bash
-pnpm add -g clawhub
-```
+Place skills in `~/.openclaw/skills/<name>/SKILL.md` for shared access across agents, or in `<workspace>/skills/<name>/SKILL.md` for per-agent skills.
 
 ### Can OpenClaw run tasks on a schedule or continuously in the background
 
@@ -1204,14 +1195,7 @@ If you want to keep context per client (agency workflows), a simple pattern is:
 If you want a native integration, open a feature request or build a skill
 targeting those APIs.
 
-Install skills:
-
-```bash
-clawhub install <skill-slug>
-clawhub update --all
-```
-
-ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
+For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills).
 
 ### How do I install the Chrome extension for browser takeover
 
