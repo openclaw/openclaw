@@ -590,6 +590,32 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
   });
 
+  it("does not treat 'all' as a subagent wildcard", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-3", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "all good now",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "all good now",
+        deliver: false,
+      }),
+    );
+  });
+
   it("returns usage when no message is provided", async () => {
     const request = vi.fn();
 
