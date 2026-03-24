@@ -6,8 +6,9 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
   loadConfig: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
   getActivePluginRegistry: vi.fn(),
+  resolveConfiguredChannelPluginIds: vi.fn(() => []),
+  resolveChannelPluginIds: vi.fn(() => ["telegram", "slack"]),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -27,8 +28,9 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveConfiguredChannelPluginIds: mocks.resolveConfiguredChannelPluginIds,
+  resolveChannelPluginIds: mocks.resolveChannelPluginIds,
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -44,6 +46,8 @@ describe("ensurePluginRegistryLoaded", () => {
       channels: [],
       tools: [],
     });
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
+    mocks.resolveChannelPluginIds.mockReturnValue(["telegram", "slack"]);
   });
 
   it("uses the auto-enabled config snapshot for configured channel scope", async () => {
@@ -68,10 +72,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
     mocks.loadConfig.mockReturnValue(baseConfig);
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "slack", channels: ["slack"] }],
-      diagnostics: [],
-    });
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["slack"]);
 
     const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
@@ -83,10 +84,11 @@ describe("ensurePluginRegistryLoaded", () => {
     });
     expect(mocks.resolveDefaultAgentId).toHaveBeenCalledWith(autoEnabledConfig);
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(autoEnabledConfig, "main");
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+    expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
         workspaceDir: "/tmp/workspace",
+        env: process.env,
       }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
@@ -107,14 +109,8 @@ describe("ensurePluginRegistryLoaded", () => {
 
     mocks.loadConfig.mockReturnValue(config);
     mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        { id: "telegram", channels: ["telegram"] },
-        { id: "slack", channels: ["slack"] },
-        { id: "openai", channels: [] },
-      ],
-      diagnostics: [],
-    });
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
+    mocks.resolveChannelPluginIds.mockReturnValue(["telegram", "slack"]);
     mocks.getActivePluginRegistry
       .mockReturnValueOnce({
         plugins: [],
