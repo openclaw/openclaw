@@ -1003,7 +1003,7 @@ export abstract class MemoryManagerSyncOps {
       meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
-      meta.chunkHeadingAware !== this.settings.chunking.headingAware ||
+      (meta.chunkHeadingAware ?? false) !== this.settings.chunking.headingAware ||
       (vectorReady && !meta?.vectorDims);
     try {
       if (needsFullReindex) {

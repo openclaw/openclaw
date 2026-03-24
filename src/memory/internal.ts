@@ -396,12 +396,18 @@ export function chunkMarkdown(
     currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
   };
 
+  let insideFence = false;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
 
-    // Heading-aware: flush on heading (unless it's the first heading)
-    if (headingAware && isHeading(line) && current.length > 0) {
+    // Track fenced code blocks to avoid false heading detection
+    if (/^(`{3,}|~{3,})/.test(line.trim())) {
+      insideFence = !insideFence;
+    }
+
+    // Heading-aware: flush on heading (unless it's the first heading or inside a code fence)
+    if (headingAware && !insideFence && isHeading(line) && current.length > 0) {
       flush();
       carryOverlap();
     }

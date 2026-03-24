@@ -339,7 +339,7 @@ function mergeConfig(
     store,
     chunking: {
       tokens: Math.max(1, chunking.tokens),
-      overlap: chunking.overlap,
+      overlap,
       headingAware: chunking.headingAware,
     },
     sync: {
