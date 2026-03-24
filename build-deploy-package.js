@@ -2,6 +2,7 @@
 /**
  * build-deploy-package.js - OpenClaw 二次开发打包脚本（Node.js 版本）
  * 修复：将八进制 \033 替换为十六进制 \x1b，解决 TS 八进制转义报错
+ * 新增：复制根目录下的 deploy.js 文件到打包目录
  */
 
 const { execSync } = require('child_process');
@@ -14,7 +15,8 @@ const config = {
   BUILD_DIR: './dist',              // 编译产物目录
   ENTRY_FILE: './openclaw.mjs',     // 主入口文件
   PACKAGE_JSON: './package.json',   // 依赖描述文件
-  PM2_CONFIG: './ecosystem.config.js' // 本地pm2配置文件
+  PM2_CONFIG: './ecosystem.config.js', // 本地pm2配置文件
+  DEPLOY_JS: './deploy.js'          // 新增：根目录下的deploy.js文件路径
 };
 
 // ===================== 工具函数（修复颜色转义符）=====================
@@ -96,6 +98,15 @@ async function main() {
       fs.copyFileSync(config.PM2_CONFIG, path.join(config.DEPLOY_DIR, path.basename(config.PM2_CONFIG)));
     } else {
       logger.error(`未找到pm2配置文件：${config.PM2_CONFIG}，请先创建！`);
+      process.exit(1);
+    }
+
+    // 3.5 新增：复制deploy.js文件
+    if (fs.existsSync(config.DEPLOY_JS)) {
+      fs.copyFileSync(config.DEPLOY_JS, path.join(config.DEPLOY_DIR, path.basename(config.DEPLOY_JS)));
+      logger.info(`已复制 deploy.js 文件到打包目录`);
+    } else {
+      logger.error(`未找到部署脚本文件：${config.DEPLOY_JS}，请先创建！`);
       process.exit(1);
     }
 
