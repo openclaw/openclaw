@@ -12,6 +12,7 @@ import { routeReply } from "./route-reply.js";
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
+  skipTts?: boolean;
 };
 
 type ToolMessageHandle = {
@@ -132,14 +133,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
-    const ttsPayload = await maybeApplyTtsToPayload({
-      payload,
-      cfg: params.cfg,
-      channel: params.ttsChannel,
-      kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
-    });
+    const ttsPayload = meta?.skipTts
+      ? payload
+      : await maybeApplyTtsToPayload({
+          payload,
+          cfg: params.cfg,
+          channel: params.ttsChannel,
+          kind,
+          inboundAudio: params.inboundAudio,
+          ttsAuto: params.sessionTtsAuto,
+        });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
