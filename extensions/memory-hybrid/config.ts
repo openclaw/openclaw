@@ -45,7 +45,12 @@ const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
 
 /** Detect chat provider from chat model name */
 function detectChatProvider(model: string): ChatProvider {
-  if (model.startsWith("gpt") || model.startsWith("o1-") || model.startsWith("o3-")) {
+  if (
+    model.startsWith("gpt") ||
+    model.startsWith("o1-") ||
+    model.startsWith("o3-") ||
+    model === "o3"
+  ) {
     return "openai";
   }
   return "google";

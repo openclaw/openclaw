@@ -400,4 +400,18 @@ describe("Provider Switching", () => {
     });
     expect(cfg.chatModel).toBe("gpt-4o");
   });
+
+  test("should detect o3 models as OpenAI", () => {
+    const cfg = memoryConfigSchema.parse({
+      embedding: { apiKey: "key", model: "gemini-embedding-001" },
+      chatModel: "o3-mini",
+    });
+    expect(cfg.chatProvider).toBe("openai");
+
+    const cfg2 = memoryConfigSchema.parse({
+      embedding: { apiKey: "key", model: "gemini-embedding-001" },
+      chatModel: "o3",
+    });
+    expect(cfg2.chatProvider).toBe("openai");
+  });
 });
