@@ -23,7 +23,7 @@ export function createQuickActionLauncherCard(params: {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      enable_forward: true,
     },
     header: {
       title: {
