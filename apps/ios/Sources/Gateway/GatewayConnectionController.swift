@@ -490,17 +490,24 @@ final class GatewayConnectionController {
         self.autoConnectGeneration &+= 1
         let generation = self.autoConnectGeneration
 
+        // Mark explicit/manual connect intent immediately so the post-await guard can still reject
+        // a later user Disconnect without blocking a brand-new connect that starts from a
+        // disconnected state.
+        appModel.gatewayAutoReconnectEnabled = true
+
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             let connectOptions = await self.makeConnectOptions(stableID: gatewayStableID)
 
-            guard generation == self.autoConnectGeneration else { return }
+            guard generation == self.autoConnectGeneration,
+                  appModel.gatewayAutoReconnectEnabled
+            else { return }
 
             // `startAutoConnect` is also the entry point for explicit user-driven connect/switch
             // actions. Those flows must be able to replace an existing config and must work even
             // if a prior Disconnect temporarily set `gatewayAutoReconnectEnabled = false`.
-            // Generation matching is the stale-task guard; once a newer connect supersedes this
-            // attempt, older tasks are still discarded.
+            // Generation matching plus the autoReconnect flag rejects stale work after a later
+            // user Disconnect while still allowing fresh explicit reconnect/switch attempts.
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }
