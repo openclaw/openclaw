@@ -3289,13 +3289,13 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
             additionalProperties: false,
             properties: {
               apiKey: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
               connectionId: {
                 type: "string",
               },
               publicKey: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
             },
           },
@@ -3307,7 +3307,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 type: "string",
               },
               authToken: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
             },
           },
@@ -3319,7 +3319,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 type: "string",
               },
               authToken: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
             },
           },
@@ -3421,7 +3421,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 enum: ["none", "ngrok", "tailscale-serve", "tailscale-funnel"],
               },
               ngrokAuthToken: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
               ngrokDomain: {
                 type: "string",
@@ -3464,7 +3464,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 enum: ["openai-realtime", "elevenlabs-scribe"],
               },
               openaiApiKey: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
               sttModel: {
                 type: "string",
@@ -3498,7 +3498,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 minimum: 1,
               },
               elevenlabsApiKey: {
-                type: "string",
+                $ref: "#/$defs/secretInput",
               },
               elevenlabsLanguageCode: {
                 type: "string",
@@ -3580,7 +3580,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 additionalProperties: false,
                 properties: {
                   apiKey: {
-                    type: "string",
+                    $ref: "#/$defs/secretInput",
                   },
                   baseUrl: {
                     type: "string",
@@ -3639,7 +3639,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 additionalProperties: false,
                 properties: {
                   apiKey: {
-                    type: "string",
+                    $ref: "#/$defs/secretInput",
                   },
                   baseUrl: {
                     type: "string",
@@ -3744,6 +3744,67 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 enum: ["typing", "processing"],
               },
             },
+          },
+        },
+        $defs: {
+          secretInput: {
+            oneOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    const: "env",
+                  },
+                  provider: {
+                    type: "string",
+                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                  },
+                  id: {
+                    type: "string",
+                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                  },
+                },
+                required: ["source", "provider", "id"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    const: "file",
+                  },
+                  provider: {
+                    type: "string",
+                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                  },
+                  id: {
+                    type: "string",
+                  },
+                },
+                required: ["source", "provider", "id"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    const: "exec",
+                  },
+                  provider: {
+                    type: "string",
+                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                  },
+                  id: {
+                    type: "string",
+                  },
+                },
+                required: ["source", "provider", "id"],
+              },
+            ],
           },
         },
       },
