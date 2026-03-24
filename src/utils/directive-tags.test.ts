@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  parseInlineDirectives,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
@@ -55,5 +56,33 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toEqual(input);
+  });
+});
+
+describe("parseInlineDirectives", () => {
+  test("preserves multiline indentation after stripping reply tags", () => {
+    const input = "[[reply_to_current]]\nSTART\n  alpha\n    beta\n  gamma\nEND";
+    const result = parseInlineDirectives(input, {
+      currentMessageId: "msg-1",
+      stripReplyTags: true,
+    });
+
+    expect(result.text).toBe("START\n  alpha\n    beta\n  gamma\nEND");
+    expect(result.replyToId).toBe("msg-1");
+    expect(result.replyToCurrent).toBe(true);
+    expect(result.hasReplyTag).toBe(true);
+  });
+
+  test("does not add artificial leading spaces when stripping directives on later lines", () => {
+    const input = "first line\n[[reply_to_current]]second line\n[[audio_as_voice]]third line";
+    const result = parseInlineDirectives(input, {
+      currentMessageId: "msg-1",
+      stripReplyTags: true,
+      stripAudioTag: true,
+    });
+
+    expect(result.text).toBe("first line\nsecond line\nthird line");
+    expect(result.replyToId).toBe("msg-1");
+    expect(result.audioAsVoice).toBe(true);
   });
 });
