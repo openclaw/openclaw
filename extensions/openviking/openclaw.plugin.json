@@ -68,7 +68,7 @@
     "writebackDirectory": {
       "label": "Writeback Directory",
       "advanced": true,
-      "help": "Workspace-relative directory used when workspace-memory writeback is enabled."
+      "help": "Workspace-relative directory used when workspace-memory writeback is enabled. Must stay under memory/."
     },
     "writebackMaxChars": {
       "label": "Writeback Max Chars",
@@ -81,7 +81,7 @@
     "diagnosticFile": {
       "label": "Diagnostic File",
       "advanced": true,
-      "help": "Workspace-relative JSON file used to store the most recent OpenViking retrieval and writeback status."
+      "help": "Workspace-relative JSON file used to store the most recent OpenViking retrieval and writeback status. Must stay under memory/."
     }
   },
   "configSchema": {

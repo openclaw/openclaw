@@ -406,6 +406,8 @@ vi.mock("../security/audit.js", () => ({
 }));
 vi.mock("../plugins/status.js", () => ({
   buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+  buildPluginRuntimeSummaries: vi.fn(() => []),
+  buildPluginRuntimeNotices: vi.fn(() => []),
   summarizePluginCompatibility: (warnings: PluginCompatibilityNotice[]) => ({
     noticeCount: warnings.length,
     pluginCount: new Set(warnings.map((warning) => warning.pluginId)).size,
@@ -570,6 +572,7 @@ describe("statusCommand", () => {
       "macos 14.0 (arm64)",
       "Memory",
       "Plugin compatibility",
+      "Plugin runtime",
       "Channels",
       "WhatsApp",
       "bootstrap files",

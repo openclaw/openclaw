@@ -509,10 +509,19 @@ export class OpenVikingContextEngine implements ContextEngine {
     if (!workspaceDir) {
       return;
     }
-    const filePath = resolveWorkspaceChild(
-      workspaceDir,
-      this.config.diagnosticFile ?? DEFAULT_DIAGNOSTIC_FILE,
-    );
+    let filePath: string;
+    try {
+      filePath = resolveWorkspaceChild(
+        workspaceDir,
+        ensureNativeMemoryRelativePath(
+          this.config.diagnosticFile ?? DEFAULT_DIAGNOSTIC_FILE,
+          "diagnosticFile",
+        ),
+      );
+    } catch (error) {
+      this.logger?.warn?.(`openviking: diagnostic snapshot skipped: ${String(error)}`);
+      return;
+    }
     const snapshot = this.diagnosticStateBySession.get(params.sessionId);
     if (!snapshot) {
       return;
@@ -664,7 +673,7 @@ export function createWritebackDigest(query: string, answer: string): string {
 }
 
 export function buildWritebackRelativePath(directory: string, now: Date): string {
-  const normalizedDirectory = directory.replace(/^\/+/, "").replace(/\/+$/, "");
+  const normalizedDirectory = ensureNativeMemoryRelativePath(directory, "writebackDirectory");
   return `${normalizedDirectory}/${formatLocalDate(now)}.md`;
 }
 
@@ -707,6 +716,18 @@ export function buildWorkspaceWritebackBlock(params: {
 function resolveRuntimeWorkspaceDir(runtimeContext?: Record<string, unknown>): string | undefined {
   const candidate = runtimeContext?.workspaceDir;
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
+
+function ensureNativeMemoryRelativePath(value: string, label: string): string {
+  const normalized = value.replace(/^\/+/, "").replace(/\/+$/, "");
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0 || segments[0] !== "memory") {
+    throw new Error(`${label} must stay under memory/`);
+  }
+  if (segments.some((segment) => segment === ".obsidian")) {
+    throw new Error(`${label} must not target .obsidian`);
+  }
+  return segments.join("/");
 }
 
 function formatLocalDate(value: Date): string {

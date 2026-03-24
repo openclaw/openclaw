@@ -151,6 +151,15 @@ describe("writeback helpers", () => {
     );
   });
 
+  it("keeps OpenViking writebacks scoped to native memory", () => {
+    expect(() =>
+      buildWritebackRelativePath("ObsidianVault/30-Knowledge", new Date("2026-03-23T01:02:03Z")),
+    ).toThrow("writebackDirectory must stay under memory/");
+    expect(() =>
+      buildWritebackRelativePath("memory/.obsidian", new Date("2026-03-23T01:02:03Z")),
+    ).toThrow("writebackDirectory must not target .obsidian");
+  });
+
   it("formats a workspace writeback block", () => {
     const block = buildWorkspaceWritebackBlock({
       marker: "<!-- openviking-writeback:abc123 -->",
@@ -226,5 +235,33 @@ describe("OpenVikingContextEngine.afterTurn", () => {
     ) as Record<string, unknown>;
     expect(diagnostic.writebackMode).toBe("hybrid");
     expect(diagnostic.writebackDigest).toBeTypeOf("string");
+  });
+
+  it("skips diagnostic snapshots that point outside native memory", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openviking-engine-"));
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const engine = new OpenVikingContextEngine(
+      {
+        diagnosticFile: "ObsidianVault/status.json",
+      },
+      logger,
+    );
+
+    await engine.afterTurn({
+      sessionId: "session-main",
+      sessionFile: "/tmp/fake.jsonl",
+      prePromptMessageCount: 0,
+      messages: [userMessage("hello"), assistantMessage("world")],
+      runtimeContext: { workspaceDir },
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("openviking: diagnostic snapshot skipped"),
+    );
   });
 });

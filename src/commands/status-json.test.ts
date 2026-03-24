@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     channel: "stable",
     source: "config",
   })),
+  buildPluginRuntimeSummaries: vi.fn(() => []),
 }));
 
 vi.mock("./status.scan.fast-json.js", () => ({
@@ -39,6 +40,10 @@ vi.mock("./status.daemon.js", () => ({
 vi.mock("../infra/update-channels.js", () => ({
   normalizeUpdateChannel: mocks.normalizeUpdateChannel,
   resolveUpdateChannelDisplay: mocks.resolveUpdateChannelDisplay,
+}));
+
+vi.mock("../plugins/status.js", () => ({
+  buildPluginRuntimeSummaries: mocks.buildPluginRuntimeSummaries,
 }));
 
 const { statusJsonCommand } = await import("./status-json.js");
@@ -97,6 +102,9 @@ describe("statusJsonCommand", () => {
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
     expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] ?? "{}")).toMatchObject({
+      pluginRuntime: [],
+    });
     expect(JSON.parse(logs[0] ?? "{}")).not.toHaveProperty("securityAudit");
   });
 

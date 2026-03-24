@@ -4,7 +4,6 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { shortenHomePath } from "../utils.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -99,6 +98,17 @@ export type PluginInspectReport = {
   compatibility: PluginCompatibilityNotice[];
 };
 
+export type PluginRuntimeSnapshot = NonNullable<PluginInspectReport["runtimeSnapshot"]>;
+export type PluginRuntimeSummary = {
+  pluginId: string;
+  snapshot: PluginRuntimeSnapshot;
+  health: "ok" | "warn" | "error";
+};
+export type PluginRuntimeNoticeRecord = PluginRuntimeSnapshot["notices"][number] & {
+  pluginId: string;
+  source: string;
+};
+
 const OPENVIKING_RUNTIME_STATUS_PATH = "memory/openviking/_status.json";
 
 function toBoolean(value: unknown): boolean | undefined {
@@ -129,7 +139,7 @@ function buildOpenVikingRuntimeSnapshot(
     raw = JSON.parse(fs.readFileSync(source, "utf8")) as unknown;
   } catch (error) {
     return {
-      source: shortenHomePath(source),
+      source,
       summary: ["Snapshot: unreadable"],
       notices: [
         {
@@ -142,7 +152,7 @@ function buildOpenVikingRuntimeSnapshot(
   }
   if (!isPlainRecord(raw)) {
     return {
-      source: shortenHomePath(source),
+      source,
       summary: ["Snapshot: unreadable"],
       notices: [
         {
@@ -211,7 +221,7 @@ function buildOpenVikingRuntimeSnapshot(
   }
 
   return {
-    source: shortenHomePath(source),
+    source,
     summary,
     notices,
     raw,
@@ -229,6 +239,53 @@ function buildPluginRuntimeSnapshot(params: {
     return buildOpenVikingRuntimeSnapshot(params.workspaceDir);
   }
   return undefined;
+}
+
+export function buildPluginRuntimeSummaries(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  pluginIds?: string[];
+}): PluginRuntimeSummary[] {
+  const config = params?.config ?? loadConfig();
+  const workspaceDir = params?.workspaceDir
+    ? params.workspaceDir
+    : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
+      resolveDefaultAgentWorkspaceDir());
+  const pluginIds = params?.pluginIds ?? ["openviking"];
+
+  return pluginIds
+    .map((pluginId) => {
+      const snapshot = buildPluginRuntimeSnapshot({
+        plugin: {
+          id: pluginId,
+        } as PluginRegistry["plugins"][number],
+        workspaceDir,
+      });
+      if (!snapshot) {
+        return null;
+      }
+      const health = snapshot.notices.some((entry) => entry.severity === "error")
+        ? "error"
+        : snapshot.notices.some((entry) => entry.severity === "warn")
+          ? "warn"
+          : "ok";
+      return { pluginId, snapshot, health };
+    })
+    .filter((entry): entry is PluginRuntimeSummary => entry !== null);
+}
+
+export function buildPluginRuntimeNotices(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  pluginIds?: string[];
+}): PluginRuntimeNoticeRecord[] {
+  return buildPluginRuntimeSummaries(params).flatMap((entry) =>
+    entry.snapshot.notices.map((notice) => ({
+      ...notice,
+      pluginId: entry.pluginId,
+      source: entry.snapshot.source,
+    })),
+  );
 }
 
 function buildCompatibilityNoticesForInspect(

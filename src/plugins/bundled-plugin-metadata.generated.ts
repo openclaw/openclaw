@@ -2741,7 +2741,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         writebackDirectory: {
           label: "Writeback Directory",
           advanced: true,
-          help: "Workspace-relative directory used when workspace-memory writeback is enabled.",
+          help: "Workspace-relative directory used when workspace-memory writeback is enabled. Must stay under memory/.",
         },
         writebackMaxChars: {
           label: "Writeback Max Chars",
@@ -2754,7 +2754,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         diagnosticFile: {
           label: "Diagnostic File",
           advanced: true,
-          help: "Workspace-relative JSON file used to store the most recent OpenViking retrieval and writeback status.",
+          help: "Workspace-relative JSON file used to store the most recent OpenViking retrieval and writeback status. Must stay under memory/.",
         },
       },
     },

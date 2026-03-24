@@ -530,7 +530,10 @@ export function registerPluginsCli(program: Command) {
         ...formatInspectSection(
           "Runtime snapshot",
           inspect.runtimeSnapshot
-            ? [`Source: ${inspect.runtimeSnapshot.source}`, ...inspect.runtimeSnapshot.summary]
+            ? [
+                `Source: ${shortenHomePath(inspect.runtimeSnapshot.source)}`,
+                ...inspect.runtimeSnapshot.summary,
+              ]
             : [],
         ),
       );
@@ -811,7 +814,7 @@ export function registerPluginsCli(program: Command) {
               : notice.severity === "warn"
                 ? theme.warn("warn")
                 : theme.muted("info");
-          const source = notice.source ? ` (${notice.source})` : "";
+          const source = notice.source ? ` (${shortenHomePath(notice.source)})` : "";
           lines.push(`- ${notice.pluginId}: ${notice.message}${source} [${marker}]`);
         }
       }
