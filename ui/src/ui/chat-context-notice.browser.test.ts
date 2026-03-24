@@ -103,6 +103,32 @@ describe("chat context notice", () => {
     expect(notice?.textContent).toContain("Limit 1k");
   });
 
+  it("ignores stale totalTokens when deriving model-limit warnings", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.sessionsResult = {
+      count: 1,
+      defaults: { contextTokens: 272000, model: "openai/gpt-5.4" },
+      sessions: [
+        {
+          key: "main",
+          inputTokens: 1_000,
+          totalTokens: 950_000,
+          totalTokensFresh: false,
+          contextTokens: 272000,
+          reasoningLevel: "off",
+          model: "openai/gpt-5.4",
+        },
+      ],
+    } as never;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const notice = app.querySelector<HTMLElement>(".context-notice");
+    expect(notice).toBeNull();
+  });
+
   it("keeps pricing-threshold notices for legacy google-gemini-cli gemini-3-pro-preview sessions", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
