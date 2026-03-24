@@ -172,6 +172,14 @@ describe("plugin-sdk exports", () => {
     }
   });
 
+  it("keeps the root runtime surface intentionally small", () => {
+    expect(typeof sdk.emptyPluginConfigSchema).toBe("function");
+    expect(typeof sdk.delegateCompactionToRuntime).toBe("function");
+    expect(Object.prototype.hasOwnProperty.call(sdk, "resolveControlCommandGate")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(sdk, "buildAgentSessionKey")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(sdk, "isDangerousNameMatchingEnabled")).toBe(false);
+  });
+
   it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));

@@ -374,7 +374,7 @@ export function renderCron(props: CronProps) {
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const supportsAnnounce =
-    props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
+    props.form.sessionTarget !== "main" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);

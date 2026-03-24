@@ -13,6 +13,9 @@ Docs: https://docs.openclaw.ai
 - Web tools/Firecrawl: add Firecrawl as an `onboard`/configure search provider via a bundled plugin, expose explicit `firecrawl_search` and `firecrawl_scrape` tools, and align core `web_fetch` fallback behavior with Firecrawl base-URL/env fallback plus guarded endpoint fetches.
 - Plugins/bundles: add compatible Codex, Claude, and Cursor bundle discovery/install support, map bundle skills into OpenClaw skills, and apply Claude bundle `settings.json` defaults to embedded Pi with shell overrides sanitized.
 - Plugins/providers: move OpenRouter, GitHub Copilot, and OpenAI Codex provider/runtime logic into bundled plugins, including dynamic model fallback, runtime auth exchange, stream wrappers, capability hints, and cache-TTL policy.
+- Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
+- Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
+- Feishu/cards: add identity-aware structured card headers and note footers for Feishu replies and direct sends, while keeping that presentation wired through the shared outbound identity path. (#29938) Thanks @nszhsl.
 - Plugins/agent integrations: broaden the plugin surface for app-server integrations with channel-aware commands, interactive callbacks, inbound claims, and Discord/Telegram conversation binding support. (#45318) Thanks @huntharo and @vincentkoc.
 - Install/update: allow package-manager installs from GitHub `main` via `openclaw update --tag main`, installer `--version main`, or direct npm/pnpm git specs. (#47630) Thanks @vincentkoc.
 - Gateway/health monitor: add configurable stale-event thresholds and restart limits, plus per-channel and per-account `healthMonitor.enabled` overrides, while keeping the existing global disable path on `gateway.channelHealthCheckMinutes=0`. (#42107) Thanks @rstar327.
@@ -26,6 +29,14 @@ Docs: https://docs.openclaw.ai
 - Feishu/cards: add identity-aware structured card headers and note footers for Feishu replies and direct sends, while keeping that presentation wired through the shared outbound identity path. (#29938) Thanks @nszhsl.
 - Android/nodes: add `callLog.search` plus shared Call Log permission wiring so Android nodes can search recent call history through the gateway. (#44073) Thanks @lxk7280.
 - Plugins/MiniMax: merge the bundled MiniMax API and MiniMax OAuth plugin surfaces into a single default-on `minimax` plugin, while keeping legacy `minimax-portal-auth` config ids aliased for compatibility.
+- Agents/Pi compatibility: align OpenClaw's bundled MiniMax runtime behavior with the current upstream Pi 0.61.1 release so embedded runs stay in sync with the latest published Pi SDK semantics. Thanks @vincentkoc.
+- Models/MiniMax defaults: raise bundled MiniMax M2.5/M2.7 context-window, max-token, and pricing metadata to the higher defaults shipped by the current upstream Pi SDK. Thanks @vincentkoc.
+- MiniMax/fast mode: map shared `/fast` and `params.fastMode` to MiniMax `-highspeed` models for M2.1, M2.5, and M2.7 API-key and OAuth runs. Thanks @vincentkoc.
+- Models/MiniMax: add bundled `MiniMax-M2`, `MiniMax-M2.1`, and `MiniMax-M2.1-highspeed` catalog entries so OpenClaw's provider metadata and OAuth aliases stay aligned with the current upstream Pi SDK. Thanks @vincentkoc.
+- xAI/models: sync the bundled Grok catalog to current Pi-backed IDs, limits, and pricing metadata, while keeping older Grok fast and 4.20 aliases resolving cleanly at runtime. Thanks @vincentkoc.
+- Z.AI/models: sync the bundled GLM catalog to current Pi metadata, including newer 4.5/4.6 model families, updated multimodal entries, and current pricing and token limits. Thanks @vincentkoc.
+- Mistral/models: sync the bundled default Mistral metadata to current Pi pricing so the built-in default no longer advertises zero-cost usage. Thanks @vincentkoc.
+- xAI/fast mode: map shared `/fast` and `params.fastMode` to the current xAI Grok fast model family so direct Grok runs can opt into the faster Pi-backed variants. Thanks @vincentkoc.
 - Telegram/actions: add `topic-edit` for forum-topic renames and icon updates while sharing the same Telegram topic-edit transport used by the plugin runtime. (#47798) Thanks @obviyus.
 - Telegram/error replies: add a default-off `channels.telegram.silentErrorReplies` setting so bot error replies can be delivered silently across regular replies, native commands, and fallback sends. (#19776) Thanks @ImLukeF.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) Thanks @scoootscooob.
@@ -43,6 +54,26 @@ Docs: https://docs.openclaw.ai
 - Control UI/appearance: unify theme border radii across Claw, Knot, and Dash, and add a Roundness slider to the Appearance settings so users can adjust corner radius from sharp to fully rounded. Thanks @BunsDev.
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
+- Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
+- Plugins/Xiaomi: switch the bundled Xiaomi provider to the `/v1` OpenAI-compatible endpoint and add MiMo V2 Pro plus MiMo V2 Omni to the built-in catalog. (#49214) thanks @DJjjjhao.
+- Android/Talk: move Talk speech synthesis behind gateway `talk.speak`, keep Talk secrets on the gateway, and switch Android playback to final-response audio instead of device-local ElevenLabs streaming. (#50849)
+- Plugins/Matrix: add `allowBots` room policy so configured Matrix bot accounts can talk to each other, with optional mention-only gating. Thanks @gumadeiras.
+- Plugins/Matrix: add per-account `allowPrivateNetwork` opt-in for private/internal homeservers, while keeping public cleartext homeservers blocked. Thanks @gumadeiras.
+- Web tools/Tavily: add Tavily as a bundled web-search provider with dedicated `tavily_search` and `tavily_extract` tools, using canonical plugin-owned config under `plugins.entries.tavily.config.webSearch.*`. (#49200) thanks @lakshyaag-tavily.
+- Docs/plugins: add the community DingTalk plugin listing to the docs catalog. (#29913) Thanks @sliverp.
+- Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
+- Plugins/context engines: pass the embedded runner `modelId` into context-engine `assemble()` so plugins can adapt context formatting per model. (#47437) thanks @jscianna.
+- Plugins/context engines: add transcript maintenance rewrites for context engines, preserve active-branch transcript metadata during rewrites, and harden overflow-recovery truncation to rewrite sessions under the normal session write lock. (#51191) Thanks @jalehman.
+- Telegram/apiRoot: add per-account custom Bot API endpoint support across send, probe, setup, doctor repair, and inbound media download paths so proxied or self-hosted Telegram deployments work end to end. (#48842) Thanks @Cypherm.
+- Telegram/topics: auto-rename DM forum topics on first message with LLM-generated labels, with per-account and per-DM `autoTopicLabel` overrides. (#51502) Thanks @Lukavyi.
+- Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
+- Models/GitHub Copilot: allow forward-compat dynamic model ids without code updates, while preserving configured provider and per-model overrides for those synthetic models. (#51325) Thanks @fuller-stack-dev.
+- Agents/compaction: notify users when followup auto-compaction starts and finishes, keeping those notices out of TTS and preserving reply threading for the real assistant reply. (#38805) Thanks @zidongdesign.
+- Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
+- Memory/plugins: let the active memory plugin register its own system-prompt section while preserving cache-clear and snapshot-load prompt isolation. (#40126) Thanks @jarimustonen.
+- Control UI/usage: improve usage overview styling, localization, and responsive chat/context-notice presentation, including safer theme color handling and unclipped usage-header menus. (#51951) Thanks @BunsDev.
+=======
+>>>>>>> 9e8df16732 (feat(feishu): add reasoning stream support to streaming cards (openclaw#46029))
 
 ### Fixes
 
@@ -152,6 +183,25 @@ Docs: https://docs.openclaw.ai
 - Agents/session cache: opportunistically sweep expired embedded-runner session cache entries during later cache activity, so one-shot session files do not accumulate forever. (#52427) Thanks @karanuppal.
 - Signal/runtime API: re-export `SignalAccountConfig` so Signal account resolution type-checks again. (#49470) Thanks @scoootscooob.
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
+- WhatsApp: stabilize inbound monitor and setup tests (#50007) Thanks @joshavant.
+- Matrix: make onboarding status runtime-safe (#49995) Thanks @joshavant.
+- Channels: stabilize lane harness and monitor tests (#50167) Thanks @joshavant.
+- WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
+- Plugins/WhatsApp: share split-load singleton state for plugin command registration and active WhatsApp listeners so duplicate module graphs no longer lose native plugin commands or outbound listener state. (#50418) Thanks @huntharo.
+- Onboarding/custom providers: keep Azure AI Foundry `*.services.ai.azure.com` custom endpoints on the selected compatibility path instead of forcing Responses, so chat-completions Foundry models still work after setup. Fixes #50528. (#50535) Thanks @obviyus.
+- Plugins/update: let `openclaw plugins update <npm-spec>` target tracked npm installs by dist-tag or exact version, and preserve the recorded npm spec for later id-based updates. (#49998) Thanks @huntharo.
+- Tests/CLI: reduce command-secret gateway test import pressure while keeping the real protocol payload validator in place, so the isolated lane no longer carries the heavier runtime-web and message-channel graphs. (#50663) Thanks @huntharo.
+- Gateway/plugins: share plugin interactive callback routing and plugin bind approval state across duplicate module graphs so Telegram Codex picker buttons and plugin bind approvals no longer fall through to normal inbound message routing. (#50722) Thanks @huntharo.
+- Agents/compaction: add an opt-in post-compaction session JSONL truncation step that drops summarized transcript entries while preserving the retained branch tail and live session metadata. (#41021) thanks @thirumaleshp.
+- Telegram/routing: fail loud when `message send` targets an unknown non-default Telegram `accountId`, instead of silently falling back to the channel-level bot token and sending through the wrong bot. (#50853) Thanks @hclsys.
+- Web search: align onboarding, configure, and finalize with plugin-owned provider contracts, including disabled-provider recovery, config-aware credential hooks, and runtime-visible summaries. (#50935) Thanks @gumadeiras.
+- Agents/replay: sanitize malformed assistant tool-call replay blocks before provider replay so follow-up Anthropic requests do not inherit the downstream `replace` crash. (#50005) Thanks @jalehman.
+- Plugins/context engines: retry strict legacy `assemble()` calls without the new `prompt` field when older engines reject it, preserving prompt-aware retrieval compatibility for pre-prompt plugins. (#50848) thanks @danhdoan.
+- Agents/embedded transport errors: distinguish common network failures like connection refused, DNS lookup failure, and interrupted sockets from true timeouts in embedded-run user messaging and lifecycle diagnostics. (#51419) Thanks @scoootscooob.
+- Discord/startup logging: report client initialization while the gateway is still connecting instead of claiming Discord is logged in before readiness is reached. (#51425) Thanks @scoootscooob.
+- Gateway/probe: honor caller `--timeout` for active local loopback probes in `gateway status`, keep inactive remote-mode loopback probes fast, and clamp probe timers to JS-safe bounds so slow local/container gateways stop reporting false timeouts. (#47533) Thanks @MonkeyLeeT.
+- Config/startup: keep bundled web-search allowlist compatibility on a lightweight manifest path so config validation no longer pulls bundled web-search registry imports into startup, while still avoiding accidental auto-allow of config-loaded override plugins. (#51574) Thanks @RichardCao.
+- Gateway/chat.send: persist uploaded image references across reloads and compaction without delaying first-turn dispatch or double-submitting the same image to vision models. (#51324) Thanks @fuller-stack-dev.
 
 ### Breaking
 

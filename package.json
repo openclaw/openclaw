@@ -262,6 +262,126 @@
       "types": "./dist/plugin-sdk/googlechat.d.ts",
       "default": "./dist/plugin-sdk/googlechat.js"
     },
+    "./plugin-sdk/channel-config-schema": {
+      "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-actions": {
+      "types": "./dist/plugin-sdk/channel-actions.d.ts",
+      "default": "./dist/plugin-sdk/channel-actions.js"
+    },
+    "./plugin-sdk/channel-contract": {
+      "types": "./dist/plugin-sdk/channel-contract.d.ts",
+      "default": "./dist/plugin-sdk/channel-contract.js"
+    },
+    "./plugin-sdk/channel-feedback": {
+      "types": "./dist/plugin-sdk/channel-feedback.d.ts",
+      "default": "./dist/plugin-sdk/channel-feedback.js"
+    },
+    "./plugin-sdk/channel-inbound": {
+      "types": "./dist/plugin-sdk/channel-inbound.d.ts",
+      "default": "./dist/plugin-sdk/channel-inbound.js"
+    },
+    "./plugin-sdk/channel-lifecycle": {
+      "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-pairing": {
+      "types": "./dist/plugin-sdk/channel-pairing.d.ts",
+      "default": "./dist/plugin-sdk/channel-pairing.js"
+    },
+    "./plugin-sdk/channel-policy": {
+      "types": "./dist/plugin-sdk/channel-policy.d.ts",
+      "default": "./dist/plugin-sdk/channel-policy.js"
+    },
+    "./plugin-sdk/channel-send-result": {
+      "types": "./dist/plugin-sdk/channel-send-result.d.ts",
+      "default": "./dist/plugin-sdk/channel-send-result.js"
+    },
+    "./plugin-sdk/channel-targets": {
+      "types": "./dist/plugin-sdk/channel-targets.d.ts",
+      "default": "./dist/plugin-sdk/channel-targets.js"
+    },
+    "./plugin-sdk/group-access": {
+      "types": "./dist/plugin-sdk/group-access.d.ts",
+      "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/directory-runtime": {
+      "types": "./dist/plugin-sdk/directory-runtime.d.ts",
+      "default": "./dist/plugin-sdk/directory-runtime.js"
+    },
+    "./plugin-sdk/json-store": {
+      "types": "./dist/plugin-sdk/json-store.d.ts",
+      "default": "./dist/plugin-sdk/json-store.js"
+    },
+    "./plugin-sdk/keyed-async-queue": {
+      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
+      "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/llm-task": {
+      "types": "./dist/plugin-sdk/llm-task.d.ts",
+      "default": "./dist/plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/memory-core": {
+      "types": "./dist/plugin-sdk/memory-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core.js"
+    },
+    "./plugin-sdk/memory-lancedb": {
+      "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
+      "default": "./dist/plugin-sdk/memory-lancedb.js"
+    },
+    "./plugin-sdk/provider-auth": {
+      "types": "./dist/plugin-sdk/provider-auth.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-api-key": {
+      "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-api-key.js"
+    },
+    "./plugin-sdk/provider-auth-login": {
+      "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-login.js"
+    },
+    "./plugin-sdk/plugin-entry": {
+      "types": "./dist/plugin-sdk/plugin-entry.d.ts",
+      "default": "./dist/plugin-sdk/plugin-entry.js"
+    },
+    "./plugin-sdk/provider-catalog": {
+      "types": "./dist/plugin-sdk/provider-catalog.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog.js"
+    },
+    "./plugin-sdk/provider-env-vars": {
+      "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
+      "default": "./dist/plugin-sdk/provider-env-vars.js"
+    },
+    "./plugin-sdk/provider-google": {
+      "types": "./dist/plugin-sdk/provider-google.d.ts",
+      "default": "./dist/plugin-sdk/provider-google.js"
+    },
+    "./plugin-sdk/provider-models": {
+      "types": "./dist/plugin-sdk/provider-models.d.ts",
+      "default": "./dist/plugin-sdk/provider-models.js"
+    },
+    "./plugin-sdk/provider-onboard": {
+      "types": "./dist/plugin-sdk/provider-onboard.d.ts",
+      "default": "./dist/plugin-sdk/provider-onboard.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
+    },
+    "./plugin-sdk/provider-usage": {
+      "types": "./dist/plugin-sdk/provider-usage.d.ts",
+      "default": "./dist/plugin-sdk/provider-usage.js"
+    },
+    "./plugin-sdk/provider-web-search": {
+      "types": "./dist/plugin-sdk/provider-web-search.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-search.js"
+    },
+    "./plugin-sdk/provider-zai-endpoint": {
+      "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
+      "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
+    },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
@@ -278,17 +398,9 @@
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
     },
-    "./plugin-sdk/keyed-async-queue": {
-      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
-      "default": "./dist/plugin-sdk/keyed-async-queue.js"
-    },
     "./plugin-sdk/line": {
       "types": "./dist/plugin-sdk/line.d.ts",
       "default": "./dist/plugin-sdk/line.js"
-    },
-    "./plugin-sdk/llm-task": {
-      "types": "./dist/plugin-sdk/llm-task.d.ts",
-      "default": "./dist/plugin-sdk/llm-task.js"
     },
     "./plugin-sdk/lobster": {
       "types": "./dist/plugin-sdk/lobster.d.ts",
@@ -301,14 +413,6 @@
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
-    },
-    "./plugin-sdk/memory-core": {
-      "types": "./dist/plugin-sdk/memory-core.d.ts",
-      "default": "./dist/plugin-sdk/memory-core.js"
-    },
-    "./plugin-sdk/memory-lancedb": {
-      "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
-      "default": "./dist/plugin-sdk/memory-lancedb.js"
     },
     "./plugin-sdk/minimax-portal-auth": {
       "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
@@ -627,14 +731,15 @@
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@tloncorp/api",
+      "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
-      "koffi",
       "node-llama-cpp",
       "protobufjs",
       "sharp"

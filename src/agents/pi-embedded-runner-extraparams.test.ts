@@ -225,6 +225,31 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runResolvedModelIdCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"anthropic-messages">;
+    cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
+  }): string {
+    let resolvedModelId = params.model.id;
+    const baseStreamFn: StreamFn = (model) => {
+      resolvedModelId = String(model.id ?? "");
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+      params.extraParamsOverride,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return resolvedModelId;
+  }
+
   function runParallelToolCallsPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
@@ -1681,6 +1706,171 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.reasoning).toEqual({ effort: "medium" });
     expect(payload.text).toEqual({ verbosity: "high" });
     expect(payload.service_tier).toBe("default");
+  });
+
+  it("maps MiniMax /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.7",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.1",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.1",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+  });
+
+  it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax-portal",
+      applyModelId: "MiniMax-M2.7-highspeed",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7-highspeed",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps xAI /fast to the current Grok fast model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-fast");
+  });
+
+  it("keeps explicit xAI fast models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-1-fast");
+  });
+
+  it("injects service_tier=auto for Anthropic fast mode on direct API-key models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("auto");
+  });
+
+  it("injects service_tier=standard_only for Anthropic fast mode off", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("preserves caller-provided Anthropic service_tier values", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {
+        service_tier: "standard_only",
+      },
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://proxy.example.com/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
   });
 
   it("applies fast-mode defaults for openai-codex responses without service_tier", () => {

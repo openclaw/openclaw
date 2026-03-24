@@ -12,6 +12,7 @@ import {
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
 import {
   createMoonshotThinkingWrapper,
   createSiliconFlowThinkingWrapper,
@@ -21,8 +22,10 @@ import {
 import {
   createCodexDefaultTransportWrapper,
   createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import {
@@ -31,6 +34,7 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
+import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -415,6 +419,21 @@ export function applyExtraParamsToAgent(
     const kilocodeThinkingLevel =
       modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+  }
+
+  if (typeof effectiveExtraParams?.fastMode === "boolean") {
+    log.debug(
+      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+  }
+
+  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
+  if (openAIFastMode) {
+    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {

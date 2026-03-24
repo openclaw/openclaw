@@ -129,6 +129,23 @@ export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export * from "./image-generation.js";
+export type { SecretInput, SecretRef } from "../config/types.secrets.js";
+export type { RuntimeEnv } from "../runtime.js";
+export type { HookEntry } from "../hooks/types.js";
+export type { ReplyPayload } from "../auto-reply/types.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
+export type { ContextEngineFactory } from "../context-engine/registry.js";
+export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type {
+  ContextEngine,
+  ContextEngineInfo,
+  ContextEngineMaintenanceResult,
+  ContextEngineRuntimeContext,
+  TranscriptRewriteReplacement,
+  TranscriptRewriteRequest,
+  TranscriptRewriteResult,
+} from "../context-engine/types.js";
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
@@ -791,6 +808,7 @@ export type {
 } from "../context-engine/types.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 
 // Model authentication types for plugins.
 // Plugins should use runtime.modelAuth (which strips unsafe overrides like
