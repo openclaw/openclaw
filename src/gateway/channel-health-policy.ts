@@ -127,7 +127,9 @@ export function evaluateChannelHealth(
   const shouldCheckStaleSocket =
     snapshot.connected === true &&
     lastEventAt != null &&
-    (policy.channelId === "telegram" ? normalizedMode === "polling" : normalizedMode !== "webhook");
+    (policy.channelId === "telegram"
+      ? typeof snapshot.mode === "string" && normalizedMode === "polling"
+      : normalizedMode !== "webhook");
   // Telegram should only opt into stale-socket checks when the runtime
   // explicitly reports polling mode. Webhook accounts can inherit stale polling
   // timestamps during restarts, so treating "mode missing" as polling would
