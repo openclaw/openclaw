@@ -2,15 +2,25 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 
+vi.unmock("../version.js");
+
 async function withPresenceModule<T>(
   env: Record<string, string | undefined>,
   run: (module: typeof import("./system-presence.js")) => Promise<T> | T,
 ): Promise<T> {
-  return withEnvAsync(env, async () => {
-    vi.resetModules();
-    const module = await import("./system-presence.js");
-    return await run(module);
-  });
+  return withEnvAsync(
+    {
+      OPENCLAW_VERSION: undefined,
+      OPENCLAW_SERVICE_VERSION: undefined,
+      npm_package_version: undefined,
+      ...env,
+    },
+    async () => {
+      vi.resetModules();
+      const module = await import("./system-presence.js");
+      return await run(module);
+    },
+  );
 }
 
 describe("system-presence version fallback", () => {

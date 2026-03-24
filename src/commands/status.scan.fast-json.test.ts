@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
+import {
+  applyStatusScanDefaults,
+  createStatusMemorySearchConfig,
+  createStatusMemorySearchManager,
+  createStatusSummary,
+  withTemporaryEnv,
+} from "./status.scan.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-fast-json-missing-${process.pid}.json`),
@@ -25,77 +32,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalForceStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
-  mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
-  mocks.readBestEffortConfig.mockResolvedValue({
-    session: {},
-    gateway: {},
-    agents: {
-      defaults: {
-        memorySearch: {
-          provider: "local",
-          local: { modelPath: "/tmp/model.gguf" },
-          fallback: "none",
-        },
-      },
-    },
+  applyStatusScanDefaults(mocks, {
+    sourceConfig: createStatusMemorySearchConfig(),
+    resolvedConfig: createStatusMemorySearchConfig(),
+    summary: createStatusSummary({ byAgent: [] }),
+    memoryManager: createStatusMemorySearchManager(),
   });
-  mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-    resolvedConfig: {
-      session: {},
-      gateway: {},
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "local",
-            local: { modelPath: "/tmp/model.gguf" },
-            fallback: "none",
-          },
-        },
-      },
-    },
-    diagnostics: [],
-  });
-  mocks.getUpdateCheckResult.mockResolvedValue({
-    installKind: "git",
-    git: null,
-    registry: null,
-  });
-  mocks.getAgentLocalStatuses.mockResolvedValue({
-    defaultId: "main",
-    agents: [],
-  });
-  mocks.getStatusSummary.mockResolvedValue({
-    linkChannel: undefined,
-    sessions: { count: 0, paths: [], defaults: {}, recent: [], byAgent: [] },
-  });
-  mocks.buildGatewayConnectionDetails.mockReturnValue({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "default",
-  });
-  mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-    auth: {},
-    warning: undefined,
-  });
-  mocks.probeGateway.mockResolvedValue({
-    ok: false,
-    url: "ws://127.0.0.1:18789",
-    connectLatencyMs: null,
-    error: "timeout",
-    close: null,
-    health: null,
-    status: null,
-    presence: null,
-    configSnapshot: null,
-  });
+  mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
   mocks.resolveMemorySearchConfig.mockReturnValue({
     store: { path: "/tmp/main.sqlite" },
-  });
-  mocks.getMemorySearchManager.mockResolvedValue({
-    manager: {
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({ files: 0, chunks: 0, dirty: false })),
-      close: vi.fn(async () => {}),
-    },
   });
 });
 
@@ -230,31 +175,16 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("skips gateway and update probes on cold-start status --json", async () => {
-    const originalVitest = process.env.VITEST;
-    const originalVitestPoolId = process.env.VITEST_POOL_ID;
-    const originalNodeEnv = process.env.NODE_ENV;
-    delete process.env.VITEST;
-    delete process.env.VITEST_POOL_ID;
-    delete process.env.NODE_ENV;
-    try {
-      await scanStatusJsonFast({}, {} as never);
-    } finally {
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
-      }
-      if (originalVitestPoolId === undefined) {
-        delete process.env.VITEST_POOL_ID;
-      } else {
-        process.env.VITEST_POOL_ID = originalVitestPoolId;
-      }
-      if (originalNodeEnv === undefined) {
-        delete process.env.NODE_ENV;
-      } else {
-        process.env.NODE_ENV = originalNodeEnv;
-      }
-    }
+    await withTemporaryEnv(
+      {
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        NODE_ENV: undefined,
+      },
+      async () => {
+        await scanStatusJsonFast({}, {} as never);
+      },
+    );
 
     expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();

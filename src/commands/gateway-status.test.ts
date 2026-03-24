@@ -198,6 +198,17 @@ async function runGatewayStatus(
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
 
+function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
+  const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+    warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+  };
+  return parsed.warnings?.find(
+    (warning) =>
+      warning.code === "auth_secretref_unresolved" &&
+      warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+  );
+}
+
 describe("gateway-status command", () => {
   it("prints human output by default", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
@@ -321,14 +332,7 @@ describe("gateway-status command", () => {
     });
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-    };
-    const unresolvedWarning = parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-    );
+    const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
     expect(unresolvedWarning).toBeUndefined();
   });
 
@@ -353,14 +357,7 @@ describe("gateway-status command", () => {
     });
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-    };
-    const unresolvedWarning = parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-    );
+    const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
     expect(unresolvedWarning).toBeTruthy();
     expect(unresolvedWarning?.targetIds).toContain("localLoopback");
     expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");

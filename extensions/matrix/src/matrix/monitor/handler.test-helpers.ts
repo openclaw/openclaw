@@ -246,17 +246,31 @@ export function createMatrixTextMessageEvent(params: {
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
 }): MatrixRawEvent {
-  return {
-    type: EventType.RoomMessage,
-    sender: params.sender ?? "@user:example.org",
-    event_id: params.eventId,
-    origin_server_ts: params.originServerTs ?? Date.now(),
+  return createMatrixRoomMessageEvent({
+    eventId: params.eventId,
+    sender: params.sender,
+    originServerTs: params.originServerTs,
     content: {
       msgtype: "m.text",
       body: params.body,
       ...(params.relatesTo ? { "m.relates_to": params.relatesTo } : {}),
       ...(params.mentions ? { "m.mentions": params.mentions } : {}),
     },
+  });
+}
+
+export function createMatrixRoomMessageEvent(params: {
+  eventId: string;
+  sender?: string;
+  originServerTs?: number;
+  content: RoomMessageEventContent;
+}): MatrixRawEvent {
+  return {
+    type: EventType.RoomMessage,
+    sender: params.sender ?? "@user:example.org",
+    event_id: params.eventId,
+    origin_server_ts: params.originServerTs ?? Date.now(),
+    content: params.content,
   } as MatrixRawEvent;
 }
 

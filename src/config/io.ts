@@ -1304,7 +1304,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      const validated = validateConfigObjectWithPlugins(resolvedConfig, { env: deps.env });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           path: configPath,
@@ -1540,7 +1540,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // entries (for auto-migration) when they are present in the parsed source.
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
 
-      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
+      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: {
@@ -1677,7 +1677,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+    const validated = validateConfigObjectRawWithPlugins(persistCandidate, { env: deps.env });
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
