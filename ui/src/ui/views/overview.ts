@@ -329,9 +329,10 @@ export function renderOverview(props: OverviewProps) {
       </div>
 
       <div class="card">
-        <div class="card-title">Remote Desktop</div>
-        <div class="card-sub">Configure VNC connection details</div>
+        <div class="card-title">Remote Desktop & Browser</div>
+        <div class="card-sub">Configure VNC and Browser connection details</div>
         <div class="ov-access-grid" style="margin-top: 16px;">
+          <div class="ov-access-grid__full" style="font-weight: 600; font-size: 13px; color: var(--muted); margin-bottom: -8px;">VNC Configuration</div>
           <label class="field">
             <span>WebSocket URL</span>
             <input
@@ -364,6 +365,43 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({ ...props.settings, vncPassword: v });
               }}
               placeholder="VNC Password"
+            />
+          </label>
+
+          <div class="ov-access-grid__full" style="font-weight: 600; font-size: 13px; color: var(--muted); margin-top: 8px; margin-bottom: -8px; border-top: 1px solid var(--border); padding-top: 16px;">Browser Configuration</div>
+          <label class="field">
+            <span>CDP Port</span>
+            <input
+              .value=${props.settings.browserCdpPort ?? "19221"}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onSettingsChange({ ...props.settings, browserCdpPort: v });
+              }}
+              placeholder="19221"
+            />
+          </label>
+          <label class="field">
+            <span>Width</span>
+            <input
+              type="number"
+              .value=${String(props.settings.browserWidth ?? 1280)}
+              @input=${(e: Event) => {
+                const v = parseInt((e.target as HTMLInputElement).value);
+                props.onSettingsChange({ ...props.settings, browserWidth: isNaN(v) ? 1280 : v });
+              }}
+              placeholder="1280"
+            />
+          </label>
+          <label class="field">
+            <span>Height</span>
+            <input
+              type="number"
+              .value=${String(props.settings.browserHeight ?? 720)}
+              @input=${(e: Event) => {
+                const v = parseInt((e.target as HTMLInputElement).value);
+                props.onSettingsChange({ ...props.settings, browserHeight: isNaN(v) ? 720 : v });
+              }}
+              placeholder="720"
             />
           </label>
         </div>

@@ -645,20 +645,21 @@ export function renderApp(state: AppViewState) {
                 showGatewayPassword: state.overviewShowGatewayPassword,
                 vncConfigDirty: state.vncConfigDirty,
                 onSettingsChange: (next) => {
-                  // Only mark dirty if VNC fields changed
-                  const vncChanged =
+                  // Only mark dirty if VNC or Browser fields changed
+                  const configChanged =
                     next.vncWsUrl !== state.settings.vncWsUrl ||
                     next.vncPassword !== state.settings.vncPassword ||
-                    next.vncTarget !== state.settings.vncTarget;
+                    next.vncTarget !== state.settings.vncTarget ||
+                    next.browserCdpPort !== state.settings.browserCdpPort ||
+                    next.browserWidth !== state.settings.browserWidth ||
+                    next.browserHeight !== state.settings.browserHeight;
 
-                  if (vncChanged) {
+                  if (configChanged) {
                     state.vncConfigDirty = true;
                   }
 
-                  // For VNC fields, we update local state but don't persist immediately
-                  // This allows the Save button to be the trigger for persistence
-                  // For other fields, we persist immediately as before
-                  if (vncChanged) {
+                  // For VNC/Browser fields, we update local state but don't persist immediately
+                  if (configChanged) {
                     state.settings = next;
                   } else {
                     state.applySettings(next);
@@ -1550,6 +1551,9 @@ export function renderApp(state: AppViewState) {
                         .enabled=${state.showClawComputer}
                         .activeTool=${state.activeClawTool}
                         .gatewayUrl=${state.settings.gatewayUrl}
+                        .browserPort=${state.settings.browserCdpPort ?? "19221"}
+                        .browserWidth=${state.settings.browserWidth ?? 1280}
+                        .browserHeight=${state.settings.browserHeight ?? 720}
                         @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
                         @close=${() => state.toggleClawComputer()}
                         @float=${() => state.setClawComputerWidth(0)}

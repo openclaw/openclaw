@@ -90,11 +90,13 @@ export class ClawBrowserPanel extends LitElement {
   @property({ type: String }) activeTool = "browser";
   @property({ type: String }) gatewayUrl = "";
   @property({ type: Boolean }) enabled = false;
+  @property({ type: String }) browserPort = "19221";
+  @property({ type: Number }) browserWidth = 1280;
+  @property({ type: Number }) browserHeight = 720;
 
   @state() status = "等待连接...";
   @state() wsConnected = false;
   @state() currentUrl = "https://www.google.com";
-  @state() browserPort = "18800";
   @state() tabs: TabInfo[] = [];
 
   @state() private isFloating = false;
@@ -172,9 +174,21 @@ export class ClawBrowserPanel extends LitElement {
 
   protected updated(changedProperties: PropertyValues) {
     super.updated(changedProperties);
-    if (changedProperties.has("enabled")) {
+    const connectionDepsChanged =
+      changedProperties.has("enabled") ||
+      changedProperties.has("browserPort") ||
+      changedProperties.has("gatewayUrl");
+
+    if (connectionDepsChanged) {
       if (this.enabled) {
-        if (!this.wsConnected) {
+        // If port or url changed while connected, reconnect
+        if (
+          this.wsConnected &&
+          (changedProperties.has("browserPort") || changedProperties.has("gatewayUrl"))
+        ) {
+          this.disconnect();
+          setTimeout(() => void this.connect(), 100);
+        } else if (!this.wsConnected) {
           setTimeout(() => void this.connect(), 100);
         }
       } else {
@@ -475,18 +489,9 @@ export class ClawBrowserPanel extends LitElement {
       <div class="container" tabindex="0">
         <div class="browser-controls">
           <div class="control-row">
-            <label>端口:</label>
-            <input 
-              class="port-input" 
-              .value=${this.browserPort} 
-              @input=${(e: Event) => {
-                this.browserPort = (e.target as HTMLInputElement).value;
-              }}
-              ?disabled=${this.wsConnected}
-            />
             <button @click=${() => void this.connect()} ?disabled=${this.wsConnected}>连接</button>
             <button @click=${() => this.disconnect()} ?disabled=${!this.wsConnected}>断开</button>
-            <span class="status-text">${this.status}</span>
+            <span class="status-text">${this.status} (端口: ${this.browserPort})</span>
           </div>
           <div class="control-row">
             <input 
@@ -559,7 +564,7 @@ export class ClawBrowserPanel extends LitElement {
               @mousedown=${this.handleMouseDown}
               @mouseup=${this.handleMouseUp}
               @mousemove=${this.handleMouseMove}
-              @wheel=${this.handleWheel}
+              @wheel=${{ handleEvent: this.handleWheel, passive: false }}
               @click=${() => this.getImeInput()?.focus()}
             ></canvas>
             <textarea
@@ -637,19 +642,26 @@ export class ClawBrowserPanel extends LitElement {
       }
 
       const url = `${wsBase}/api/debug-browser-${this.browserPort}`;
+      console.log(`[CDP] Connecting to: ${url}`);
       if (this.cdp) {
         this.cdp.close();
       }
       this.cdp = new CDPClient(url);
 
-      this.cdp.ws.addEventListener("open", () => {
+      const currentCdp = this.cdp;
+
+      currentCdp.ws.addEventListener("open", () => {
         void (async () => {
+          // 确保仍然是当前活跃的连接
+          if (this.cdp !== currentCdp) {
+            return;
+          }
           this.wsConnected = true;
           this.status = "已连接 ✓";
 
           try {
-            await this.cdp!.send("Target.setDiscoverTargets", { discover: true });
-            const res = (await this.cdp!.send("Target.getTargets")) as {
+            await currentCdp.send("Target.setDiscoverTargets", { discover: true });
+            const res = (await currentCdp.send("Target.getTargets")) as {
               targetInfos: { type: string; url: string; targetId: string; title?: string }[];
             };
             const pages = res.targetInfos.filter((t) => t.type === "page");
@@ -664,18 +676,18 @@ export class ClawBrowserPanel extends LitElement {
               );
               targetId = preferred ? preferred.targetId : pages[pages.length - 1].targetId;
             } else {
-              const newTarget = (await this.cdp!.send("Target.createTarget", {
+              const newTarget = (await currentCdp.send("Target.createTarget", {
                 url: "about:blank",
               })) as { targetId: string };
               targetId = newTarget.targetId;
             }
 
-            await this.cdp!.send("Target.setAutoAttach", {
+            await currentCdp.send("Target.setAutoAttach", {
               autoAttach: true,
               waitForDebuggerOnStart: false,
               flatten: true,
             });
-            const attach = (await this.cdp!.send("Target.attachToTarget", {
+            const attach = (await currentCdp.send("Target.attachToTarget", {
               targetId,
               flatten: true,
             })) as { sessionId: string };
@@ -690,13 +702,16 @@ export class ClawBrowserPanel extends LitElement {
             await this.setupPageSession(this.currentSessionId);
             this.status = "✅ 运行中 (准备接收画面)";
 
-            this.cdp!.on(
+            currentCdp.on(
               "Target.attachedToTarget",
               (params: {
                 sessionId: string;
                 targetInfo: { type: string; url: string; targetId: string; title?: string };
               }) => {
                 void (async () => {
+                  if (this.cdp !== currentCdp) {
+                    return;
+                  }
                   const { sessionId, targetInfo } = params;
                   if (targetInfo.type === "page" && sessionId !== this.currentSessionId) {
                     const existing = this.tabs.find((t) => t.targetId === targetInfo.targetId);
@@ -721,11 +736,14 @@ export class ClawBrowserPanel extends LitElement {
               },
             );
 
-            this.cdp!.on(
+            currentCdp.on(
               "Target.targetInfoChanged",
               (params: {
                 targetInfo: { type: string; url: string; targetId: string; title?: string };
               }) => {
+                if (this.cdp !== currentCdp) {
+                  return;
+                }
                 const { targetInfo } = params;
                 const tab = this.tabs.find((t) => t.targetId === targetInfo.targetId);
                 if (tab) {
@@ -736,7 +754,10 @@ export class ClawBrowserPanel extends LitElement {
               },
             );
 
-            this.cdp!.on("Target.detachedFromTarget", (params: { sessionId: string }) => {
+            currentCdp.on("Target.detachedFromTarget", (params: { sessionId: string }) => {
+              if (this.cdp !== currentCdp) {
+                return;
+              }
               this.tabs = this.tabs.filter((t) => t.sessionId !== params.sessionId);
               if (this.currentSessionId === params.sessionId) {
                 const next = this.tabs[this.tabs.length - 1];
@@ -750,7 +771,7 @@ export class ClawBrowserPanel extends LitElement {
               this.requestUpdate();
             });
 
-            this.cdp!.on(
+            currentCdp.on(
               "Page.screencastFrame",
               (params: {
                 sessionId: number;
@@ -758,6 +779,9 @@ export class ClawBrowserPanel extends LitElement {
                 data: string;
                 metadata: unknown;
               }) => {
+                if (this.cdp !== currentCdp) {
+                  return;
+                }
                 const { sessionId: frameSessionId, targetSessionId, data } = params;
                 const eventSessionId = targetSessionId;
 
@@ -766,14 +790,17 @@ export class ClawBrowserPanel extends LitElement {
                   eventSessionId &&
                   eventSessionId !== this.currentSessionId
                 ) {
-                  void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
+                  void currentCdp
+                    .send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                   return;
                 }
 
                 const img = new Image();
                 img.addEventListener("load", () => {
+                  if (this.cdp !== currentCdp) {
+                    return;
+                  }
                   const canvas = this.getCanvas();
                   if (canvas) {
                     if (canvas.width !== img.width || canvas.height !== img.height) {
@@ -790,30 +817,32 @@ export class ClawBrowserPanel extends LitElement {
                       }
                     }
                   }
-                  void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
+                  void currentCdp
+                    .send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                 });
                 img.addEventListener("error", () => {
-                  void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
+                  void currentCdp
+                    .send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                 });
                 img.src = `data:image/jpeg;base64,${data}`;
               },
             );
           } catch (e) {
-            this.status = `❌ 初始化失败: ${e instanceof Error ? e.message : String(e)}`;
+            this.status = `❌ 初始化失败: ${e instanceof Error ? e.message : String(e)} (端口: ${this.browserPort})`;
           }
         })();
       });
 
-      this.cdp.ws.addEventListener("close", () => {
-        this.wsConnected = false;
-        this.currentSessionId = null;
-        this.status = "连接中断";
-        this.cdp = null;
-        this.clearCanvas();
+      currentCdp.ws.addEventListener("close", () => {
+        if (this.cdp === currentCdp) {
+          this.wsConnected = false;
+          this.currentSessionId = null;
+          this.status = "连接中断";
+          this.cdp = null;
+          this.clearCanvas();
+        }
       });
     } catch {
       this.status = "连接失败";
@@ -827,12 +856,12 @@ export class ClawBrowserPanel extends LitElement {
       await this.cdp!.send(
         "Emulation.setDeviceMetricsOverride",
         {
-          width: 1280,
-          height: 720,
+          width: this.browserWidth,
+          height: this.browserHeight,
           deviceScaleFactor: 1,
           mobile: false,
-          screenWidth: 1280,
-          screenHeight: 720,
+          screenWidth: this.browserWidth,
+          screenHeight: this.browserHeight,
           positionX: 0,
           positionY: 0,
           dontSetVisibleSize: false,
@@ -853,8 +882,8 @@ export class ClawBrowserPanel extends LitElement {
           format: "jpeg",
           quality: 80,
           everyNthFrame: 1,
-          maxWidth: 1280,
-          maxHeight: 720,
+          maxWidth: this.browserWidth,
+          maxHeight: this.browserHeight,
         },
         sessionId,
       );
@@ -1011,6 +1040,10 @@ export class ClawBrowserPanel extends LitElement {
     if (!pos) {
       return;
     }
+    // 阻止事件冒泡和默认行为，防止触发全局页面的滚动
+    e.preventDefault();
+    e.stopPropagation();
+
     if (this.cdp && this.currentSessionId) {
       void this.cdp
         .send(
@@ -1036,19 +1069,28 @@ export class ClawBrowserPanel extends LitElement {
   };
 
   private handleImeInput = (e: Event) => {
+    if (this.isComposing || !this.cdp || !this.wsConnected || !this.currentSessionId) {
+      return;
+    }
     const target = e.target as HTMLTextAreaElement;
-    if (!this.isComposing && target.value.length > 1 && this.cdp && this.currentSessionId) {
-      void this.cdp
-        .send("Input.insertText", { text: target.value }, this.currentSessionId)
-        .catch(() => {});
+    const val = target.value;
+    // 对于非输入法产生的 input（例如粘贴），如果是多字符，也用 insertText
+    if (val.length > 1) {
+      void this.cdp.send("Input.insertText", { text: val }, this.currentSessionId).catch(() => {});
       target.value = "";
     }
   };
 
   private handleImeKeyDown = (e: KeyboardEvent) => {
-    if (!this.cdp || !this.currentSessionId || this.isComposing) {
+    if (!this.cdp || !this.currentSessionId || this.isComposing || e.keyCode === 229) {
       return;
     }
+
+    // 阻止某些键的默认行为
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].includes(e.code)) {
+      e.preventDefault();
+    }
+
     const text = e.key.length === 1 ? e.key : undefined;
     void this.cdp
       .send(
@@ -1065,11 +1107,26 @@ export class ClawBrowserPanel extends LitElement {
         this.currentSessionId,
       )
       .catch(() => {});
+
+    // 如果是单字符输入，清空 textarea 防止堆积导致重复发送
+    if (text) {
+      setTimeout(() => {
+        if (!this.isComposing) {
+          const ime = this.getImeInput();
+          if (ime) {
+            ime.value = "";
+          }
+        }
+      }, 0);
+    }
   };
 
   private handleImeKeyUp = (e: KeyboardEvent) => {
-    if (!this.cdp || !this.currentSessionId || this.isComposing) {
+    if (!this.cdp || !this.currentSessionId || this.isComposing || e.keyCode === 229) {
       return;
+    }
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].includes(e.code)) {
+      e.preventDefault();
     }
     void this.cdp
       .send(

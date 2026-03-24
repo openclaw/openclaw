@@ -44,6 +44,9 @@ export type UiSettings = {
   vncWsUrl?: string;
   vncPassword?: string;
   vncTarget?: string;
+  browserCdpPort?: string;
+  browserWidth?: number;
+  browserHeight?: number;
 };
 
 function isViteDevPage(): boolean {
@@ -196,6 +199,9 @@ export function loadSettings(): UiSettings {
     navGroupsCollapsed: {},
     vncWsUrl: `${defaultUrl.replace(/\/$/, "")}/api/debug-vnc`,
     vncTarget: "localhost:5900",
+    browserCdpPort: "19221",
+    browserWidth: 1280,
+    browserHeight: 720,
     borderRadius: 50,
   };
 
@@ -264,6 +270,12 @@ export function loadSettings(): UiSettings {
       vncWsUrl: typeof parsed.vncWsUrl === "string" ? parsed.vncWsUrl : defaults.vncWsUrl,
       vncPassword: typeof parsed.vncPassword === "string" ? parsed.vncPassword : undefined,
       vncTarget: typeof parsed.vncTarget === "string" ? parsed.vncTarget : defaults.vncTarget,
+      browserCdpPort:
+        typeof parsed.browserCdpPort === "string" ? parsed.browserCdpPort : defaults.browserCdpPort,
+      browserWidth:
+        typeof parsed.browserWidth === "number" ? parsed.browserWidth : defaults.browserWidth,
+      browserHeight:
+        typeof parsed.browserHeight === "number" ? parsed.browserHeight : defaults.browserHeight,
     };
     if ("token" in parsed) {
       persistSettings(settings);
@@ -328,6 +340,9 @@ function persistSettings(next: UiSettings) {
     vncWsUrl: next.vncWsUrl,
     vncPassword: next.vncPassword,
     vncTarget: next.vncTarget,
+    browserCdpPort: next.browserCdpPort,
+    browserWidth: next.browserWidth,
+    browserHeight: next.browserHeight,
   };
   const serialized = JSON.stringify(persisted);
   try {
