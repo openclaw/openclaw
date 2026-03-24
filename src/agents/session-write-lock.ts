@@ -178,6 +178,11 @@ async function releaseHeldLock(
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
     try {
+      fsSync.closeSync(held.handle.fd);
+    } catch {
+      // Ignore errors during cleanup - best effort
+    }
+    try {
       fsSync.rmSync(held.lockPath, { force: true });
     } catch {
       // Ignore errors during cleanup - best effort
