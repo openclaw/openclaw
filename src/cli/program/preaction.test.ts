@@ -130,6 +130,12 @@ describe("registerPreActionHooks", () => {
     const channels = program.command("channels");
     channels.command("add").action(() => {});
     program
+      .command("plugins")
+      .command("install")
+      .argument("<spec>")
+      .option("--marketplace <marketplace>")
+      .action(() => {});
+    program
       .command("update")
       .command("status")
       .option("--json")
@@ -227,6 +233,61 @@ describe("registerPreActionHooks", () => {
       commandPath: ["channels", "add"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows invalid config for explicit Matrix reinstall requests", async () => {
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "alpha"],
+      processArgv: ["node", "openclaw", "plugins", "install", "alpha"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "./extensions/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "./extensions/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix", "--marketplace", "local/repo"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "plugins",
+        "install",
+        "@openclaw/matrix",
+        "--marketplace",
+        "local/repo",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
