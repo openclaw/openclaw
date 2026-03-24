@@ -28,11 +28,11 @@ const state: RegistryState = (() => {
   // initialized by an older or differently-bundled chunk that omitted them.
   // This fixes #49803 where a bundle split causes the gateway HTTP handler
   // and the LINE/Google Chat plugin to reference different registry objects.
-  const existing = globalState[REGISTRY_STATE]!;
-  if (!("httpRouteRegistry" in existing)) {
+  const existing = globalState[REGISTRY_STATE];
+  if (existing && !("httpRouteRegistry" in existing)) {
     existing.httpRouteRegistry = null;
   }
-  if (!("httpRouteRegistryPinned" in existing)) {
+  if (existing && !("httpRouteRegistryPinned" in existing)) {
     existing.httpRouteRegistryPinned = false;
   }
   return existing as RegistryState;
