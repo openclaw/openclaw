@@ -31,6 +31,26 @@ describe("getMessageMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
+  it("strips conversation: prefix from target", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      from: undefined,
+      createdDateTime: "2026-03-23T10:00:00Z",
+    });
+
+    await getMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: `conversation:${CHAT_ID}`,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1`,
+    });
+  });
+
   it("reads a message from a chat conversation", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",
@@ -137,7 +157,7 @@ describe("unpinMessageMSTeams", () => {
     const result = await unpinMessageMSTeams({
       cfg: {} as OpenClawConfig,
       to: CHAT_ID,
-      messageId: "pinned-1",
+      pinnedMessageId: "pinned-1",
     });
 
     expect(result).toEqual({ ok: true });
@@ -153,7 +173,7 @@ describe("unpinMessageMSTeams", () => {
     const result = await unpinMessageMSTeams({
       cfg: {} as OpenClawConfig,
       to: CHANNEL_TO,
-      messageId: "pinned-2",
+      pinnedMessageId: "pinned-2",
     });
 
     expect(result).toEqual({ ok: true });

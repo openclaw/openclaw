@@ -93,6 +93,10 @@ export async function postGraphJson<T>(params: {
     const text = await res.text().catch(() => "");
     throw new Error(`Graph POST ${params.path} failed (${res.status}): ${text || "unknown error"}`);
   }
+  // Some Graph mutation endpoints return 204 No Content
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
   return (await res.json()) as T;
 }
 

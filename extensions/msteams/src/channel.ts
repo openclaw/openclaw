@@ -576,19 +576,27 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 : typeof ctx.params.target === "string"
                   ? ctx.params.target.trim()
                   : (ctx.toolContext?.currentChannelId?.trim() ?? "");
-            const messageId =
-              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
-            if (!to || !messageId) {
+            // Accept pinnedMessageId (preferred) or messageId as fallback
+            const pinnedMessageId =
+              typeof ctx.params.pinnedMessageId === "string"
+                ? ctx.params.pinnedMessageId.trim()
+                : typeof ctx.params.messageId === "string"
+                  ? ctx.params.messageId.trim()
+                  : "";
+            if (!to || !pinnedMessageId) {
               return {
                 isError: true,
                 content: [
-                  { type: "text" as const, text: "Unpin requires a target (to) and messageId." },
+                  {
+                    type: "text" as const,
+                    text: "Unpin requires a target (to) and pinnedMessageId.",
+                  },
                 ],
-                details: { error: "Unpin requires a target (to) and messageId." },
+                details: { error: "Unpin requires a target (to) and pinnedMessageId." },
               };
             }
             const { unpinMessageMSTeams } = await loadMSTeamsChannelRuntime();
-            const result = await unpinMessageMSTeams({ cfg: ctx.cfg, to, messageId });
+            const result = await unpinMessageMSTeams({ cfg: ctx.cfg, to, pinnedMessageId });
             return jsonActionResult({ channel: "msteams", action: "unpin", ...result });
           }
 

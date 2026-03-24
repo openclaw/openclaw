@@ -32,6 +32,21 @@ type GraphPinnedMessagesResponse = {
  * If `to` contains "/" it's a `teamId/channelId` (channel path),
  * otherwise it's a chat ID.
  */
+/**
+ * Strip common target prefixes (`conversation:`, `user:`) so raw
+ * conversation IDs can be used directly in Graph paths.
+ */
+function stripTargetPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  if (/^conversation:/i.test(trimmed)) {
+    return trimmed.slice("conversation:".length).trim();
+  }
+  if (/^user:/i.test(trimmed)) {
+    return trimmed.slice("user:".length).trim();
+  }
+  return trimmed;
+}
+
 function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
@@ -39,9 +54,9 @@ function resolveConversationPath(to: string): {
   teamId?: string;
   channelId?: string;
 } {
-  const trimmed = to.trim();
-  if (trimmed.includes("/")) {
-    const [teamId, channelId] = trimmed.split("/", 2);
+  const cleaned = stripTargetPrefix(to);
+  if (cleaned.includes("/")) {
+    const [teamId, channelId] = cleaned.split("/", 2);
     return {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`,
@@ -51,8 +66,8 @@ function resolveConversationPath(to: string): {
   }
   return {
     kind: "chat",
-    basePath: `/chats/${encodeURIComponent(trimmed)}`,
-    chatId: trimmed,
+    basePath: `/chats/${encodeURIComponent(cleaned)}`,
+    chatId: cleaned,
   };
 }
 
@@ -104,9 +119,6 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(params.to);
 
   if (conv.kind === "channel") {
-    // Channel pin: POST .../messages/{messageId}/setReaction is not available;
-    // use beta endpoint for channel pin
-    const path = `${conv.basePath}/messages/${encodeURIComponent(params.messageId)}`;
     // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
     // For channels, attempt POST to pinnedMessages (same shape, may require beta)
     await postGraphJson<unknown>({
@@ -128,19 +140,21 @@ export async function pinMessageMSTeams(
 export type UnpinMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
-  messageId: string;
+  /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
+  pinnedMessageId: string;
 };
 
 /**
  * Unpin a message in a chat conversation via Graph API.
- * The `messageId` here is the pinned-message resource ID (from pin or list-pins).
+ * `pinnedMessageId` is the pinned-message resource ID (from pin or list-pins),
+ * not the underlying chat message ID.
  */
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const token = await resolveGraphToken(params.cfg);
   const conv = resolveConversationPath(params.to);
-  const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.messageId)}`;
+  const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
