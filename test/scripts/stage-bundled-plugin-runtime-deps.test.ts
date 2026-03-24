@@ -3,6 +3,23 @@ import { describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
 
 describe("resolveNpmRunner", () => {
+  it("uses npm_execpath when it already points to npm", () => {
+    expect(
+      resolveNpmRunner({
+        env: {
+          npm_execpath: "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+        },
+        execPath: "/usr/local/bin/node",
+        existsSync: () => false,
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/usr/local/bin/node",
+      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js"],
+      shell: false,
+    });
+  });
+
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
     const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
     const expectedNpmCliPath = path.resolve(
@@ -23,10 +40,13 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("falls back to bare npm when npm-cli.js is unavailable", () => {
+  it("prefixes PATH with the active node dir when falling back to bare npm", () => {
     expect(
       resolveNpmRunner({
         execPath: "/tmp/node",
+        env: {
+          PATH: "/usr/bin:/bin",
+        },
         existsSync: () => false,
         platform: "linux",
       }),
@@ -34,6 +54,9 @@ describe("resolveNpmRunner", () => {
       command: "npm",
       args: [],
       shell: false,
+      env: {
+        PATH: `/tmp${path.delimiter}/usr/bin:/bin`,
+      },
     });
   });
 
@@ -41,6 +64,9 @@ describe("resolveNpmRunner", () => {
     expect(
       resolveNpmRunner({
         execPath: "C:\\node\\node.exe",
+        env: {
+          Path: "C:\\Windows\\System32",
+        },
         existsSync: () => false,
         platform: "win32",
       }),
@@ -48,6 +74,9 @@ describe("resolveNpmRunner", () => {
       command: "npm",
       args: [],
       shell: true,
+      env: {
+        Path: "C:\\node;C:\\Windows\\System32",
+      },
     });
   });
 });
