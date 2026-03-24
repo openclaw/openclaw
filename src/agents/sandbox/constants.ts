@@ -18,6 +18,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "image",
+  "cron",
   "sessions_list",
   "sessions_history",
   "sessions_send",
@@ -28,14 +29,9 @@ export const DEFAULT_TOOL_ALLOW = [
 ] as const;
 
 // Provider docking: keep sandbox policy aligned with provider tool names.
-export const DEFAULT_TOOL_DENY = [
-  "browser",
-  "canvas",
-  "nodes",
-  "cron",
-  "gateway",
-  ...CHANNEL_IDS,
-] as const;
+// Note: cron is intentionally NOT denied — it uses callGatewayTool (WebSocket RPC)
+// and never executes inside the Docker sandbox container.
+export const DEFAULT_TOOL_DENY = ["browser", "canvas", "nodes", "gateway", ...CHANNEL_IDS] as const;
 
 export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-slim";
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";

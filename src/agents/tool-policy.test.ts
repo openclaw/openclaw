@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./sandbox/constants.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
@@ -244,5 +245,25 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
     expect(resolved.deny).toEqual(["image"]);
+  });
+
+  it("default sandbox policy allows cron (gateway-routed, not containerized)", () => {
+    const resolved = resolveSandboxToolPolicyForAgent(undefined, undefined);
+    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
+    expect(isToolAllowed(policy, "cron")).toBe(true);
+    expect(DEFAULT_TOOL_ALLOW).toContain("cron");
+    expect(DEFAULT_TOOL_DENY).not.toContain("cron");
+  });
+
+  it("default sandbox policy exposes cron but still strips browser (#50303)", () => {
+    const resolved = resolveSandboxToolPolicyForAgent(undefined, undefined);
+    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
+
+    // cron is gateway-routed via WebSocket RPC — should be allowed in sandbox
+    expect(isToolAllowed(policy, "cron")).toBe(true);
+    // browser requires container execution — should remain denied
+    expect(isToolAllowed(policy, "browser")).toBe(false);
+    // gateway exposes admin actions — should remain denied
+    expect(isToolAllowed(policy, "gateway")).toBe(false);
   });
 });
