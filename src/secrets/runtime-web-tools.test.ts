@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -27,9 +27,14 @@ vi.mock("../plugins/web-search-providers.js", () => ({
   resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
+vi.mock("../plugins/web-search-providers.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/web-search-providers.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -195,13 +200,17 @@ function expectInactiveFirecrawlSecretRef(params: {
 }
 
 describe("runtime web tools resolution", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
     runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
     secretResolve = await import("./resolve.js");
     ({ createResolverContext } = await import("./runtime-shared.js"));
     ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+  });
+
+  beforeEach(() => {
+    runtimeWebSearchProviders.__testing.resetWebSearchProviderSnapshotCacheForTests();
     vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
     vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
   });
@@ -214,7 +223,6 @@ describe("runtime web tools resolution", () => {
     for (const id of mockedModuleIds) {
       vi.doUnmock(id);
     }
-    vi.resetModules();
   });
 
   it("skips loading web search providers when search config is absent", async () => {
