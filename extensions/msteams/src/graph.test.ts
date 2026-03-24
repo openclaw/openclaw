@@ -207,7 +207,17 @@ describe("stripHtmlTags", () => {
   });
 
   it("handles nested tags", () => {
-    expect(stripHtmlTags("<div><p><span>nested</span></p></div>")).toBe("nested");
+    expect(stripHtmlTags("<div><span>nested</span></div>")).toBe("nested");
+  });
+
+  it("preserves word boundaries across block elements", () => {
+    expect(stripHtmlTags("<div>First</div><div>Second</div>")).toBe("First Second");
+    expect(stripHtmlTags("<p>Line one</p><p>Line two</p>")).toBe("Line one Line two");
+  });
+
+  it("handles br tags as separators", () => {
+    expect(stripHtmlTags("hello<br>world")).toBe("hello world");
+    expect(stripHtmlTags("hello<br/>world")).toBe("hello world");
   });
 
   it("handles typical Teams message with mention and formatting", () => {

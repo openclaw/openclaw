@@ -225,6 +225,8 @@ export async function fetchThreadReplies(params: {
 export function stripHtmlTags(html: string): string {
   return html
     .replace(/<at[^>]*>(.*?)<\/at>/gi, "$1")
+    .replace(/<\/(?:div|p|br|li|tr)>/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")

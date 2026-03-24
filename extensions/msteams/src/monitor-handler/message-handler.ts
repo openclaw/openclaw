@@ -535,6 +535,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         for (const reply of replies) {
           if (reply.id === currentActivityId) continue;
           if (currentTimestamp && reply.createdDateTime === currentTimestamp) continue;
+          // Skip replies newer than the triggering activity to avoid injecting future context
+          if (currentTimestamp && reply.createdDateTime && reply.createdDateTime > currentTimestamp)
+            continue;
           const sender = reply.from?.user?.displayName ?? "Unknown";
           const content = reply.body?.content ? stripHtmlTags(reply.body.content) : "";
           if (content) {
