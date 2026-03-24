@@ -27,6 +27,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { captureLongTermMemory } from "../../memory/mem0/poc.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -82,6 +83,24 @@ function loadTtsRuntime() {
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const MAX_TOOL_SUMMARY_ITEMS = 3;
+const MAX_TOOL_SUMMARY_CHARS = 200;
+
+function summarizeToolText(text: string): string | undefined {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.length <= MAX_TOOL_SUMMARY_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_TOOL_SUMMARY_CHARS)}...`;
+}
+
+function resolveInboundUserMessage(ctx: FinalizedMsgContext): string {
+  const message = ctx.RawBody ?? ctx.CommandBody ?? ctx.BodyForCommands ?? ctx.Body ?? "";
+  return message.trim();
+}
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -538,6 +557,7 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
+    const toolSummaryParts: string[] = [];
     const { maybeApplyTtsToPayload } = await loadTtsRuntime();
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
@@ -588,6 +608,11 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            const summary =
+              typeof payload.text === "string" ? summarizeToolText(payload.text) : undefined;
+            if (summary && toolSummaryParts.length < MAX_TOOL_SUMMARY_ITEMS) {
+              toolSummaryParts.push(summary);
+            }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
@@ -779,6 +804,23 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    const finalReplyText = replies
+      .filter((reply) => reply.isReasoning !== true)
+      .map((reply) => (typeof reply.text === "string" ? reply.text.trim() : ""))
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    const assistantTextForCapture = finalReplyText || accumulatedBlockText.trim();
+    if (assistantTextForCapture) {
+      void captureLongTermMemory({
+        userMessage: resolveInboundUserMessage(ctx),
+        assistantMessage: assistantTextForCapture,
+        toolSummary: toolSummaryParts.length > 0 ? toolSummaryParts.join(" | ") : undefined,
+        userId: ctx.SenderId?.trim() || undefined,
+        agentId: resolveSessionAgentId({ sessionKey: ctx.SessionKey, config: cfg }),
+        runId: params.replyOptions?.runId ?? undefined,
+      });
+    }
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,

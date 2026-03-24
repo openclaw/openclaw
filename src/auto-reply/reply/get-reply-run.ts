@@ -11,6 +11,7 @@ import {
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { recallAndBuildInjectText } from "../../memory/mem0/poc.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -422,6 +423,18 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
+  const mem0Query = rawBodyTrimmed || baseBodyTrimmedRaw || prefixedCommandBody.trim();
+  if (mem0Query) {
+    const mem0Recall = await recallAndBuildInjectText({
+      query: mem0Query,
+      userId: sessionCtx.SenderId?.trim() || ctx.SenderId?.trim() || undefined,
+      agentId,
+      runId: opts?.runId ?? sessionKey ?? undefined,
+    });
+    if (mem0Recall?.injectedText) {
+      prefixedCommandBody = `${prefixedCommandBody}\n\n${mem0Recall.injectedText}`;
+    }
+  }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
