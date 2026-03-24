@@ -462,7 +462,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     const tsQuery = query
       .split(/\s+/)
       .filter(Boolean)
-      .map((w) => w.replace(/[^a-zA-Z0-9]/g, ""))
+      .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
       .filter(Boolean)
       .join(" & ");
 
@@ -605,7 +605,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     try {
       const entries = await fs.readdir(memoryDir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.isFile() && entry.name.endsWith(".md")) {
+        if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
           filesToSync.push({
             fullPath: path.join(memoryDir, entry.name),
             relPath: `memory/${entry.name}`,
@@ -637,7 +637,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
 
     for (const file of filesToSync) {
       try {
-        await this.syncFile(file.fullPath, file.relPath, file.source);
+        await this.syncFile(file.fullPath, file.relPath, file.source, params?.force);
       } catch (err) {
         log.warn(
           `Failed to sync ${file.relPath}: ${err instanceof Error ? err.message : String(err)}`,
@@ -662,21 +662,35 @@ export class PostgresMemoryManager implements MemorySearchManager {
     log.info(`Memory sync complete: ${this.fileCount} files, ${this.chunkCount} chunks`);
   }
 
-  private async syncFile(fullPath: string, relPath: string, source: MemorySource): Promise<void> {
+  private async syncFile(
+    fullPath: string,
+    relPath: string,
+    source: MemorySource,
+    force?: boolean,
+  ): Promise<void> {
+    // Skip symlinks to match builtin backend behavior (security: prevents traversal outside workspace)
+    const lstat = await fs.lstat(fullPath);
+    if (lstat.isSymbolicLink()) {
+      log.warn(`Skipping symlinked file: ${relPath}`);
+      return;
+    }
+
     const stat = await fs.stat(fullPath);
     const content = await fs.readFile(fullPath, "utf-8");
     const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
 
     const client = await this.pool.connect();
     try {
-      // Check if file changed
-      const existing = await client.query<HashRow>(
-        "SELECT hash FROM memory_files WHERE path = $1 AND agent_id = $2",
-        [relPath, this.agentId],
-      );
+      // Check if file changed (skip when force reindex is requested)
+      if (!force) {
+        const existing = await client.query<HashRow>(
+          "SELECT hash FROM memory_files WHERE path = $1 AND agent_id = $2",
+          [relPath, this.agentId],
+        );
 
-      if (existing.rows.length > 0 && existing.rows[0].hash === hash) {
-        return; // File unchanged
+        if (existing.rows.length > 0 && existing.rows[0].hash === hash) {
+          return; // File unchanged
+        }
       }
 
       // Use transaction for atomicity
