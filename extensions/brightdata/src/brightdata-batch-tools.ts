@@ -6,9 +6,21 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { optionalStringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { runBrightDataScrape, runBrightDataSearch } from "./brightdata-client.js";
+
+function optionalStringEnum<const T extends readonly string[]>(
+  values: T,
+  options: { description?: string } = {},
+) {
+  return Type.Optional(
+    Type.Unsafe<T[number]>({
+      type: "string",
+      enum: [...values],
+      ...options,
+    }),
+  );
+}
 
 const MAX_BATCH_ITEMS = 5;
 

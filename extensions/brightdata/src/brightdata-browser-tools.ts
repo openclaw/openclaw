@@ -5,7 +5,6 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { stringEnum } from "openclaw/plugin-sdk/core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
@@ -23,6 +22,17 @@ import {
   resolveBrightDataBrowserZone,
   resolveBrightDataBrowserTimeoutSeconds,
 } from "./config.js";
+
+function stringEnum<const T extends readonly string[]>(
+  values: T,
+  options: { description?: string } = {},
+) {
+  return Type.Unsafe<T[number]>({
+    type: "string",
+    enum: [...values],
+    ...options,
+  });
+}
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 120_000;
 const DEFAULT_WAIT_FOR_TIMEOUT_MS = 30_000;
