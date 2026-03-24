@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/openstream",
+  "version": "2026.3.24",
+  "private": true,
+  "description": "OpenClaw Ollama companion plugin with diagnostics, prompt guidance, and heuristic recommendations.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -143,3 +143,4 @@ Low-effort wrappers, unclear ownership, or unmaintained packages may be declined
 - [Install and Configure Plugins](/tools/plugin) — how to install any plugin
 - [Building Plugins](/plugins/building-plugins) — create your own
 - [Plugin Manifest](/plugins/manifest) — manifest schema
+- [OpenStream](/plugins/openstream) — example bundled Ollama companion plugin

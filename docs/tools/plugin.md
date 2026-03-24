@@ -105,6 +105,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
 
   <Accordion title="Other">
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+    - `openstream` — bundled Ollama companion plugin for diagnostics, prompt guidance, and long-context heuristics (disabled by default). Docs: [OpenStream](/plugins/openstream)
   </Accordion>
 </AccordionGroup>
 
