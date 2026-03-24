@@ -85,7 +85,9 @@ describe("createBlueBubblesDebounceRegistry", () => {
     });
 
     expect(keyA).toBe("bluebubbles:default:dm:+15551234567");
-    expect(keyB).toBe(keyA);
+    // updated-message events use a separate fallback bucket so guid-less
+    // edits do not merge with or reset the timer of the original new-message.
+    expect(keyB).toBe("bluebubbles:default:dm:+15551234567:edit");
   });
 
   it("reuses the wrapped debouncer for later updated-message webhooks", async () => {

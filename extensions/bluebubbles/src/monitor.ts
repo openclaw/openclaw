@@ -391,10 +391,21 @@ function hasRecentInboundWebhookReplay(scopeKey: string, replayKey: string): boo
 }
 
 function hasCurrentInboundWebhookReplay(scopeKey: string, replayKey: string): boolean {
-  return (
-    pendingInboundWebhookReplayScopes.get(scopeKey) === replayKey ||
-    hasRecentInboundWebhookReplay(scopeKey, replayKey)
-  );
+  // When a different variant is currently pending for this scope (the
+  // message has been edited and the new version is still processing),
+  // the recent-cache entries for older variants are stale.  Skip the
+  // dedup check so that text reversions (editing back to the original
+  // body) are not falsely blocked by the earlier delivery's cache entry.
+  const pendingScopeKey = pendingInboundWebhookReplayScopes.get(scopeKey);
+  if (pendingScopeKey && pendingScopeKey !== replayKey) {
+    return false;
+  }
+  // Only check the recent cache here — pending keys are handled separately
+  // by the deferred-retry path which stores the entry for re-enqueue after
+  // the in-flight flush settles (success or failure).  Checking pending
+  // scopes here would cause same-key messages to be permanently dropped
+  // instead of being deferred and retried.
+  return hasRecentInboundWebhookReplay(scopeKey, replayKey);
 }
 
 export async function handleBlueBubblesWebhookRequest(

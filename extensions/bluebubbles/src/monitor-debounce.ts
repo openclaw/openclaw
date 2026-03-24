@@ -214,7 +214,11 @@ export function createBlueBubblesDebounceRegistry(params: {
           if (messageId) {
             return `bluebubbles:${account.accountId}:msg:${messageId}`;
           }
-          return resolveBlueBubblesFallbackDebounceKey(account.accountId, msg);
+          const fallbackKey = resolveBlueBubblesFallbackDebounceKey(account.accountId, msg);
+          // Separate updated-message events from new-message events in the
+          // fallback bucket so guid-less edits don't merge with or reset the
+          // timer of the original new-message debounce entry.
+          return entry.eventType === "updated-message" ? `${fallbackKey}:edit` : fallbackKey;
         },
         shouldDebounce: (entry) => {
           const msg = entry.message;
@@ -303,12 +307,6 @@ export function createBlueBubblesDebounceRegistry(params: {
                 await debouncer.flushKey(
                   `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`,
                 );
-              } else if (messageId) {
-                // When the edit carries its own messageId, flush any pending
-                // balloon bucket keyed by the same GUID to prevent stale
-                // pre-edit body from firing after the edit.
-                await debouncer.flushKey(`bluebubbles:${account.accountId}:balloon:${messageId}`);
-                await debouncer.flushKey(`bluebubbles:${account.accountId}:msg:${messageId}`);
               }
             }
             await debouncer.enqueue(entry);
