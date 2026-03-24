@@ -100,6 +100,8 @@ export function createTypingSignaler(params: {
       hasRenderableText = true;
     } else if (text?.trim()) {
       return;
+    } else {
+      return;
     }
     if (shouldStartOnText) {
       await typing.startTypingOnText(text);
