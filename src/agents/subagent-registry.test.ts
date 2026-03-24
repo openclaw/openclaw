@@ -288,4 +288,62 @@ describe("subagent registry seam flow", () => {
         .find((entry) => entry.runId === "run-resume-delete"),
     ).toBeUndefined();
   });
+
+  it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:parent": {
+        sessionId: "sess-parent",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-parent-expired",
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "expired parent cleanup",
+      cleanup: "delete",
+      createdAt: Date.parse("2026-03-24T11:50:00Z"),
+      startedAt: Date.parse("2026-03-24T11:50:30Z"),
+      endedAt: Date.parse("2026-03-24T11:51:00Z"),
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-child-finished",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "parent",
+      task: "descendant settles",
+      cleanup: "keep",
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        mod
+          .listSubagentRunsForRequester("agent:main:main")
+          .find((entry) => entry.runId === "run-parent-expired"),
+      ).toBeUndefined();
+    });
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-child-finished",
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:parent",
+        reason: "deleted",
+        workspaceDir: undefined,
+      });
+    });
+  });
 });
