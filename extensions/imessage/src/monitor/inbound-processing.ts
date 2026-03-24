@@ -104,7 +104,13 @@ export function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  echoCache?: {
+    has: (
+      scope: string,
+      lookup: { text?: string; messageId?: string },
+      skipIdShortCircuit?: boolean,
+    ) => boolean;
+  };
   selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
@@ -148,9 +154,72 @@ export function resolveIMessageInboundDecision(params: {
     text: params.bodyText,
     createdAt,
   };
+  // Self-chat detection: in self-chat, sender == chat_identifier (both are the
+  // user's own handle). When is_from_me=true in self-chat, the message could be
+  // either: (a) a real user message typed by the user, or (b) an agent reply
+  // echo reflected back by iMessage. We must distinguish them.
+  const isSelfChat =
+    !isGroup &&
+    chatIdentifier != null &&
+    normalizeIMessageHandle(sender) === normalizeIMessageHandle(chatIdentifier);
+  console.error(
+    `[IMSG-DEBUG] inbound-decision: sender="${sender}" senderNormalized="${senderNormalized}" is_from_me=${params.message.is_from_me} is_group=${params.message.is_group} treatAsGroupByConfig=${treatAsGroupByConfig} isGroup=${isGroup} chatId=${chatId} isSelfChat=${isSelfChat} chatIdentifier=${chatIdentifier}`,
+  );
+  // Track whether we already processed the is_from_me=true self-chat path.
+  // When true, the selfChatCache.has() check below must be skipped — we just
+  // called remember() and would immediately match our own entry.
+  let skipSelfChatHasCheck = false;
+
   if (params.message.is_from_me) {
+    // Always cache in selfChatCache so the upcoming is_from_me=false reflection
+    // (which arrives 2-3s later) is correctly identified and dropped.
     params.selfChatCache?.remember(selfChatLookup);
-    return { kind: "drop", reason: "from me" };
+
+    if (isSelfChat) {
+      // In self-chat, is_from_me=true could be a real user message OR an agent
+      // reply echo. Use the echo cache with skipIdShortCircuit=true to check
+      // whether this text matches a recently-sent agent reply.
+      const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+      const echoScope = buildIMessageEchoScope({
+        accountId: params.accountId,
+        isGroup,
+        chatId,
+        sender,
+      });
+      const messageText = params.messageText;
+      console.error(
+        `[IMSG-DEBUG] is_from_me=true + isSelfChat → checking echoCache with skipIdShortCircuit=true. echoScope="${echoScope}" text="${(messageText ?? "").slice(0, 80)}" id=${inboundMessageId}`,
+      );
+      if (
+        params.echoCache &&
+        (messageText || inboundMessageId) &&
+        params.echoCache.has(
+          echoScope,
+          { text: messageText || undefined, messageId: inboundMessageId },
+          true, // skipIdShortCircuit
+        )
+      ) {
+        console.error(
+          `[IMSG-DEBUG] is_from_me=true + isSelfChat + echoCache HIT → dropping as agent echo in self-chat`,
+        );
+        return { kind: "drop", reason: "agent echo in self-chat" };
+      }
+      // Echo cache missed → this is a real user message in self-chat. Process it.
+      // Skip the selfChatCache.has() check below — we just remember()d ourselves
+      // and would immediately match our own entry.
+      console.error(
+        `[IMSG-DEBUG] is_from_me=true + isSelfChat + echoCache MISS → processing as real user message`,
+      );
+      skipSelfChatHasCheck = true;
+      // Fall through to rest of decision logic (access control, etc.)
+    } else {
+      // Normal DM or group: is_from_me=true means this is an outbound message
+      // notification that we sent. Drop it.
+      console.error(
+        `[IMSG-DEBUG] is_from_me=true (non-self-chat) → dropping with reason "from me"`,
+      );
+      return { kind: "drop", reason: "from me" };
+    }
   }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
@@ -228,13 +297,19 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
-  if (
-    params.selfChatCache?.has({
-      ...selfChatLookup,
-      text: bodyText,
-    })
-  ) {
+  console.error(
+    `[IMSG-DEBUG] checking selfChatCache.has() for bodyText="${bodyText.slice(0, 80)}" createdAt=${createdAt} skipSelfChatHasCheck=${skipSelfChatHasCheck}`,
+  );
+  const selfChatHit = skipSelfChatHasCheck
+    ? false
+    : params.selfChatCache?.has({
+        ...selfChatLookup,
+        text: bodyText,
+      });
+  console.error(`[IMSG-DEBUG] selfChatCache.has() = ${selfChatHit}`);
+  if (selfChatHit) {
     const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
+    console.error(`[IMSG-DEBUG] self-chat echo detected, dropping: "${preview}"`);
     params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
     return { kind: "drop", reason: "self-chat echo" };
   }
@@ -242,6 +317,9 @@ export function resolveIMessageInboundDecision(params: {
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+  console.error(
+    `[IMSG-DEBUG] echo cache check: echoCache=${!!params.echoCache} messageText="${(messageText ?? "").slice(0, 80)}" inboundMessageId=${inboundMessageId}`,
+  );
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
@@ -249,17 +327,22 @@ export function resolveIMessageInboundDecision(params: {
       chatId,
       sender,
     });
+    console.error(
+      `[IMSG-DEBUG] echoCache.has(scope="${echoScope}", text="${(messageText ?? "").slice(0, 40)}", messageId=${inboundMessageId})`,
+    );
     if (
       params.echoCache.has(echoScope, {
         text: messageText || undefined,
         messageId: inboundMessageId,
       })
     ) {
+      console.error(`[IMSG-DEBUG] echoCache HIT — dropping as echo`);
       params.logVerbose?.(
         describeIMessageEchoDropLog({ messageText, messageId: inboundMessageId }),
       );
       return { kind: "drop", reason: "echo" };
     }
+    console.error(`[IMSG-DEBUG] echoCache MISS — not an echo`);
   }
 
   // Reflection guard: drop inbound messages that contain assistant-internal

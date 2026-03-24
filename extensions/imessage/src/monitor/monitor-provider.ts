@@ -205,6 +205,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
 
   async function handleMessageNow(message: IMessagePayload) {
+    console.error(
+      `[IMSG-DEBUG] handleMessageNow entered: id=${message.id} sender=${message.sender} is_from_me=${message.is_from_me} chat_id=${message.chat_id} text="${(message.text ?? "").slice(0, 80)}"`,
+    );
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
@@ -239,6 +242,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
+    console.error(
+      `[IMSG-DEBUG] calling resolveIMessageInboundDecision: accountId=${accountInfo.accountId} dmPolicy=${dmPolicy} groupPolicy=${groupPolicy} allowFrom=[${allowFrom.join(",")}] bodyText="${bodyText.slice(0, 80)}"`,
+    );
     const decision = resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -257,6 +263,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       selfChatCache,
       logVerbose,
     });
+    console.error(
+      `[IMSG-DEBUG] decision result: kind=${decision.kind}${decision.kind === "drop" ? ` reason="${decision.reason}"` : ""}${decision.kind === "dispatch" ? ` isGroup=${decision.isGroup} sender=${decision.sender}` : ""}`,
+    );
 
     // Build conversation key for rate limiting (used by both drop and dispatch paths).
     const chatId = message.chat_id ?? undefined;
@@ -459,11 +468,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   const handleMessage = async (raw: unknown) => {
+    console.error(
+      `[IMSG-DEBUG] handleMessage called, raw type=${typeof raw}, keys=${raw && typeof raw === "object" ? Object.keys(raw as Record<string, unknown>).join(",") : "N/A"}`,
+    );
+    try {
+      console.error(`[IMSG-DEBUG] handleMessage raw payload: ${JSON.stringify(raw).slice(0, 500)}`);
+    } catch {}
     const message = parseIMessageNotification(raw);
     if (!message) {
+      console.error(`[IMSG-DEBUG] parseIMessageNotification returned null — dropping`);
       logVerbose("imessage: dropping malformed RPC message payload");
       return;
     }
+    console.error(
+      `[IMSG-DEBUG] parsed message: id=${message.id} sender=${message.sender} is_from_me=${message.is_from_me} is_group=${message.is_group} chat_id=${message.chat_id} text="${(message.text ?? "").slice(0, 80)}"`,
+    );
     await inboundDebouncer.enqueue({ message });
   };
 
@@ -496,12 +515,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     dbPath,
     runtime,
     onNotification: (msg) => {
+      console.error(
+        `[IMSG-DEBUG] RPC notification received: method="${msg.method}" params_type=${typeof msg.params}`,
+      );
       if (msg.method === "message") {
         void handleMessage(msg.params).catch((err) => {
           runtime.error?.(`imessage: handler failed: ${String(err)}`);
         });
       } else if (msg.method === "error") {
         runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
+      } else {
+        console.error(
+          `[IMSG-DEBUG] RPC notification with unknown method="${msg.method}" — ignored`,
+        );
       }
     },
   });
@@ -515,10 +541,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
 
   try {
+    console.error(`[IMSG-DEBUG] calling watch.subscribe with attachments=${includeAttachments}`);
     const result = await client.request<{ subscription?: number }>("watch.subscribe", {
       attachments: includeAttachments,
     });
     subscriptionId = result?.subscription ?? null;
+    console.error(`[IMSG-DEBUG] watch.subscribe result: subscriptionId=${subscriptionId}`);
     await client.waitForClose();
   } catch (err) {
     if (abort?.aborted) {

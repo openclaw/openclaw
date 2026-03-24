@@ -5,12 +5,21 @@ export type SentMessageLookup = {
 
 export type SentMessageCache = {
   remember: (scope: string, lookup: SentMessageLookup) => void;
-  has: (scope: string, lookup: SentMessageLookup) => boolean;
+  /**
+   * Check whether an inbound message matches a recently-sent outbound message.
+   *
+   * @param skipIdShortCircuit - When true, skip the early return on message-ID
+   *   mismatch and fall through to text-based matching. Use this for self-chat
+   *   `is_from_me=true` messages where the inbound ID is a numeric SQLite row ID
+   *   that will never match the GUID outbound IDs, but text matching is still
+   *   the right way to identify agent reply echoes.
+   */
+  has: (scope: string, lookup: SentMessageLookup, skipIdShortCircuit?: boolean) => boolean;
 };
 
 // Keep the text fallback short so repeated user replies like "ok" are not
 // suppressed for long; delayed reflections should match the stronger message-id key.
-const SENT_MESSAGE_TEXT_TTL_MS = 5_000;
+const SENT_MESSAGE_TEXT_TTL_MS = 3_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
@@ -48,13 +57,27 @@ class DefaultSentMessageCache implements SentMessageCache {
     this.cleanup();
   }
 
-  has(scope: string, lookup: SentMessageLookup): boolean {
+  has(scope: string, lookup: SentMessageLookup, skipIdShortCircuit = false): boolean {
     this.cleanup();
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
       if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
         return true;
+      }
+      // If the inbound message has a valid message id that doesn't match any
+      // cached id, skip the text fallback — the message is not an echo.
+      //
+      // In practice, inbound message.id is a numeric SQLite row ID (e.g. "200")
+      // while outbound sent.messageId is a GUID string (e.g. "p:0/abc-def-...").
+      // These formats never collide, so this early return effectively disables
+      // text-based echo matching for all messages that arrive with a DB row ID.
+      //
+      // Exception: when skipIdShortCircuit=true (self-chat is_from_me=true
+      // messages), we skip this early return so text matching can still identify
+      // agent reply echoes even though IDs never match in this scenario.
+      if (!skipIdShortCircuit) {
+        return false;
       }
     }
     const textKey = normalizeEchoTextKey(lookup.text);

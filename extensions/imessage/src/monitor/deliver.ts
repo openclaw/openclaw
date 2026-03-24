@@ -38,9 +38,6 @@ export async function deliverReplies(params: {
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
     });
-    if (!reply.hasMedia && reply.hasText) {
-      sentMessageCache?.remember(scope, { text: reply.text });
-    }
     const delivered = await deliverTextOrMediaReply({
       payload,
       text: reply.text,

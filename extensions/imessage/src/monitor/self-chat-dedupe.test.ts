@@ -1,0 +1,425 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { createSentMessageCache } from "./echo-cache.js";
+import { resolveIMessageInboundDecision } from "./inbound-processing.js";
+import { createSelfChatCache } from "./self-chat-cache.js";
+
+/**
+ * Self-chat dedupe regression tests for #47830.
+ *
+ * PR #38440 introduced a SentMessageCache to suppress echo messages when the
+ * agent replies in iMessage. In self-chat (user messaging themselves), the
+ * sender == target so the echo scope collides, causing legitimate user
+ * messages to be silently dropped when text happens to match recent agent
+ * output.
+ *
+ * These tests verify:
+ *  1. User messages in self-chat are NOT dropped (even if text matches agent output)
+ *  2. Genuine agent echo reflections ARE still dropped
+ *  3. Different-text messages pass through unaffected
+ *  4. Chunked replies don't cause false drops of user messages matching a chunk
+ */
+
+type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
+
+const cfg = {} as OpenClawConfig;
+
+function createParams(
+  overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+    message?: Partial<InboundDecisionParams["message"]>;
+  } = {},
+): InboundDecisionParams {
+  const { message: msgOverrides, ...restOverrides } = overrides;
+  const message = {
+    id: 100,
+    sender: "+14155480405",
+    text: "Hello",
+    is_from_me: false,
+    is_group: false,
+    ...msgOverrides,
+  };
+  const messageText = restOverrides.messageText ?? message.text ?? "";
+  const bodyText = restOverrides.bodyText ?? messageText;
+  return {
+    cfg,
+    accountId: "default",
+    opts: undefined,
+    allowFrom: [],
+    groupAllowFrom: [],
+    groupPolicy: "open",
+    dmPolicy: "open",
+    storeAllowFrom: [],
+    historyLimit: 0,
+    groupHistories: new Map(),
+    echoCache: undefined,
+    selfChatCache: undefined,
+    logVerbose: undefined,
+    ...restOverrides,
+    message,
+    messageText,
+    bodyText,
+  };
+}
+
+describe("self-chat dedupe — #47830", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does NOT drop a user message that matches recently-sent agent text (self-chat scope collision)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    // Agent sends "Hello" to self-chat target +14155480405
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
+
+    // 2 seconds later, user sends "Hello" to themselves (different message id)
+    vi.advanceTimersByTime(2000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 200,
+          sender: "+14155480405",
+          text: "Hello",
+          is_from_me: false,
+        },
+        messageText: "Hello",
+        bodyText: "Hello",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    // BUG: Before fix, this was "drop" reason "echo" — user message silently lost.
+    // After fix: message-id mismatch means this is NOT an echo.
+    // The echo cache should only match when message IDs match OR when text
+    // matches and no message ID is available on inbound.
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("DOES drop genuine agent echo (same message id reflected back)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+
+    // Agent sends "Hello" to target
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
+
+    // 1 second later, iMessage reflects it back with same message id
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: "agent-msg-1" as unknown as number,
+          sender: "+14155480405",
+          text: "Hello",
+          is_from_me: false,
+        },
+        messageText: "Hello",
+        bodyText: "Hello",
+        echoCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+
+  it("does NOT drop different-text messages even within TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+
+    // Agent sends "Hello"
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
+
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 201,
+          sender: "+14155480405",
+          text: "Goodbye",
+          is_from_me: false,
+        },
+        messageText: "Goodbye",
+        bodyText: "Goodbye",
+        echoCache,
+      }),
+    );
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does NOT drop user messages that match a chunk of a multi-chunk agent reply", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+14155480405";
+
+    // Agent sends a multi-chunk reply: "Part one", "Part two", "Part three"
+    echoCache.remember(scope, { text: "Part one", messageId: "agent-chunk-1" });
+    echoCache.remember(scope, { text: "Part two", messageId: "agent-chunk-2" });
+    echoCache.remember(scope, { text: "Part three", messageId: "agent-chunk-3" });
+
+    vi.advanceTimersByTime(2000);
+
+    // User sends "Part two" (matches chunk 2 text, but different message id)
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 300,
+          sender: "+14155480405",
+          text: "Part two",
+          is_from_me: false,
+        },
+        messageText: "Part two",
+        bodyText: "Part two",
+        echoCache,
+      }),
+    );
+
+    // Should NOT be dropped — different message id means not an echo
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops echo after text TTL reduction (within 3s, not 5s)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    // Agent sends text (no message id available)
+    echoCache.remember(scope, { text: "Hello there" });
+
+    // After 4 seconds — should NOT match if TTL reduced to 3s
+    vi.advanceTimersByTime(4000);
+
+    const result = echoCache.has(scope, { text: "Hello there" });
+    expect(result).toBe(false);
+  });
+
+  it("still drops text echo within reduced 3s TTL window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "Hello there" });
+
+    // After 2 seconds — should still match
+    vi.advanceTimersByTime(2000);
+
+    const result = echoCache.has(scope, { text: "Hello there" });
+    expect(result).toBe(true);
+  });
+});
+
+describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("processes real user self-chat message (is_from_me=true, no echo cache match)", () => {
+    // User sends "Hello" to themselves — is_from_me=true, sender==chat_identifier
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123703,
+          sender: "+14155480405",
+          chat_identifier: "+14155480405",
+          text: "Hello this is a test message",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hello this is a test message",
+        bodyText: "Hello this is a test message",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    // Real user message — should be dispatched, not dropped
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops agent reply echo in self-chat (is_from_me=true, echo cache text match)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    // Agent sends "Hi there!" to self-chat
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Hi there!", messageId: "p:0/GUID-abc-def" });
+
+    // 1 second later, iMessage delivers the agent reply as is_from_me=true
+    // with a SQLite row ID (never matches the GUID)
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123706,
+          sender: "+14155480405",
+          chat_identifier: "+14155480405",
+          text: "Hi there!",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hi there!",
+        bodyText: "Hi there!",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    // Agent echo — should be dropped
+    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
+  it("drops is_from_me=false reflection via selfChatCache (existing behavior preserved)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+    const createdAt = "2026-03-24T12:00:00.000Z";
+
+    // Step 1: is_from_me=true copy arrives (real user message) → processed, selfChatCache populated
+    const first = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123703,
+          sender: "+14155480405",
+          chat_identifier: "+14155480405",
+          text: "Hello",
+          created_at: createdAt,
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hello",
+        bodyText: "Hello",
+        selfChatCache,
+      }),
+    );
+    expect(first.kind).toBe("dispatch");
+
+    // Step 2: is_from_me=false reflection arrives 2s later with same text+createdAt
+    vi.advanceTimersByTime(2200);
+    const second = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123704,
+          sender: "+14155480405",
+          chat_identifier: "+14155480405",
+          text: "Hello",
+          created_at: createdAt,
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "Hello",
+        bodyText: "Hello",
+        selfChatCache,
+      }),
+    );
+    // Reflection correctly dropped
+    expect(second).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
+  it("normal DM is_from_me=true is still dropped (regression test)", () => {
+    const selfChatCache = createSelfChatCache();
+
+    // Normal DM with is_from_me=true: in iMessage, sender is the local user's
+    // handle and chat_identifier is the OTHER person's handle. They differ,
+    // so this is NOT self-chat.
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 9999,
+          sender: "+14155480405", // local user sent this
+          chat_identifier: "+15555550123", // sent TO this other person
+          text: "Hello",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hello",
+        bodyText: "Hello",
+        selfChatCache,
+      }),
+    );
+
+    // sender != chat_identifier → not self-chat → dropped as "from me"
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
+  });
+
+  it("echo cache text matching works with skipIdShortCircuit=true", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Cached reply", messageId: "p:0/some-guid" });
+
+    vi.advanceTimersByTime(1000);
+
+    // Text matches but ID is a SQLite row (format mismatch). With skipIdShortCircuit=true,
+    // text matching should still fire.
+    expect(echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, true)).toBe(true);
+
+    // With skipIdShortCircuit=false (default), ID mismatch causes early return false.
+    expect(echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, false)).toBe(false);
+  });
+});
+
+describe("echo cache — text fallback for null-id inbound messages", () => {
+  it("still identifies echo via text when inbound message has id: null", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    // Agent sends "Sounds good" — no messageId available (edge case)
+    const scope = "default:imessage:+14155480405";
+    echoCache.remember(scope, { text: "Sounds good" });
+
+    // 1 second later, inbound reflection arrives with id: null
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: null as unknown as number,
+          sender: "+14155480405",
+          text: "Sounds good",
+          is_from_me: false,
+        },
+        messageText: "Sounds good",
+        bodyText: "Sounds good",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    // With id: null, the text-based fallback path is still active and should
+    // correctly identify this as an echo.
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+});

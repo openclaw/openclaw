@@ -135,7 +135,10 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("records outbound text and message ids in sent-message cache", async () => {
+  it("records outbound text and message ids in sent-message cache (post-send only)", async () => {
+    // Fix for #47830: remember() is called ONLY after each chunk is sent,
+    // never with the full un-chunked text before sending begins.
+    // Pre-send population widened the false-positive window in self-chat.
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
@@ -150,7 +153,8 @@ describe("deliverReplies", () => {
       sentMessageCache: { remember },
     });
 
-    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", { text: "first|second" });
+    // Only the two per-chunk post-send calls — no pre-send full-text call.
+    expect(remember).toHaveBeenCalledTimes(2);
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "first",
       messageId: "imsg-1",
