@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { Mem0Client } from "../../memory/mem0-client.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveSessionAgentId, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -30,6 +34,10 @@ const MemoryGetSchema = Type.Object({
   path: Type.String(),
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
+});
+
+const MemoryAddSchema = Type.Object({
+  content: Type.String(),
 });
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
@@ -87,7 +95,7 @@ function createMemoryTool(params: {
   label: string;
   name: string;
   description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema | typeof MemoryAddSchema;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
@@ -136,13 +144,44 @@ export function createMemorySearchTool(options: {
             minScore,
             sessionKey: options.agentSessionKey,
           });
+
+          let mem0Results: MemorySearchResult[] = [];
+          const mem0Config = cfg.memory?.mem0;
+          if (mem0Config?.enabled && mem0Config.apiKey) {
+            try {
+              const apiKey = normalizeResolvedSecretInputString({
+                value: mem0Config.apiKey,
+                path: "memory.mem0.apiKey",
+              });
+              if (apiKey) {
+                const mem0 = new Mem0Client(apiKey, mem0Config.baseUrl);
+                const userId = options.agentSessionKey || "default_user";
+                const mem0Promise = mem0.searchMemories(query, userId, agentId).catch((err) => {
+                  console.warn("[Mem0] Federated search failed:", err);
+                  return [];
+                });
+                const timeoutPromise = new Promise<MemorySearchResult[]>((resolve) =>
+                  setTimeout(() => {
+                    console.warn("[Mem0] Federated search timed out");
+                    resolve([]);
+                  }, mem0Config.fallbackTimeoutMs || 3000),
+                );
+                mem0Results = await Promise.race([mem0Promise, timeoutPromise]);
+              }
+            } catch (err) {
+              console.warn("[Mem0] Unexpected initialization error:", err);
+            }
+          }
+
           const status = memory.manager.status();
           const decorated = decorateCitations(rawResults, includeCitations);
           const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-          const results =
+          const lanceResults =
             status.backend === "qmd"
               ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
               : decorated;
+
+          const results = [...lanceResults, ...mem0Results];
           const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
           return jsonResult({
             results,
@@ -317,4 +356,71 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+export function createMemoryAddTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
+    label: "Memory Add",
+    name: "memory_add",
+    description:
+      "Write important facts or preferences into long-term memory. Use this whenever the user expresses a preference, mentions a fact about themselves, or explicitely asks to remember something. The memory is written durably to local storage, and optionally synchronized to a semantic backend.",
+    parameters: MemoryAddSchema,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const content = readStringParam(params, "content", { required: true });
+
+        // 1. Dual-Write: Mem0 Client
+        const mem0Config = cfg.memory?.mem0;
+        let mem0Fired = false;
+        if (mem0Config?.enabled && mem0Config.apiKey) {
+          try {
+            const apiKey =
+              typeof mem0Config.apiKey === "string" && mem0Config.apiKey
+                ? mem0Config.apiKey
+                : normalizeResolvedSecretInputString({
+                    value: mem0Config.apiKey,
+                    path: "memory.mem0.apiKey",
+                  });
+            if (apiKey) {
+              const mem0 = new Mem0Client(apiKey, mem0Config.baseUrl);
+              const userId = options.agentSessionKey || "default_user";
+              // Fire and forget
+              mem0.addMemory(content, userId, agentId).catch((err) => {
+                console.warn("[Mem0] Federated add failed:", err);
+              });
+              mem0Fired = true;
+            }
+          } catch (err) {
+            console.warn("[Mem0] Federated add exception:", err);
+          }
+        }
+
+        // 2. Local-Write: Markdown Durable Appendix
+        try {
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const memoryDir = path.join(workspaceDir, "memory");
+          await fs.mkdir(memoryDir, { recursive: true });
+
+          const today = new Date().toISOString().split("T")[0];
+          const localFilePath = path.join(memoryDir, `${today}.md`);
+
+          const logEntry = `\n- [${new Date().toISOString()}] ${content.trim()}\n`;
+          await fs.appendFile(localFilePath, logEntry, "utf-8");
+
+          return jsonResult({
+            success: true,
+            localPath: `memory/${today}.md`,
+            federated: mem0Fired,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({ success: false, error: "Failed to write local memory: " + message });
+        }
+      },
+  });
 }

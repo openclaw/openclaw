@@ -111,10 +111,20 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryMem0Schema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    baseUrl: z.string().optional(),
+    fallbackTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    mem0: MemoryMem0Schema.optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()

@@ -1,4 +1,5 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
@@ -7,7 +8,15 @@ export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  mem0?: MemoryMem0Config;
   qmd?: MemoryQmdConfig;
+};
+
+export type MemoryMem0Config = {
+  enabled?: boolean;
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  fallbackTimeoutMs?: number;
 };
 
 export type MemoryQmdConfig = {

@@ -10953,6 +10953,89 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
             ],
           },
+          mem0: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              apiKey: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              fallbackTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
           qmd: {
             type: "object",
             properties: {
@@ -16280,6 +16363,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "channels.msteams.appPassword": {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
+    },
+    "memory.mem0.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "storage"],
     },
     "skills.entries.*.apiKey": {
       sensitive: true,
