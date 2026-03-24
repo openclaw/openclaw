@@ -13,7 +13,7 @@ const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
 const MAX_SCAN_BYTES = 2 * 1024 * 1024;
 const compareStrings = (left, right) => left.localeCompare(right);
-const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
+export const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
 
 Audit repo seam inventory and emit JSON to stdout.
 
@@ -22,7 +22,10 @@ Sections:
   overlapFiles                 Production files that touch multiple seam families
   optionalClusterStaticLeaks   Optional extension/plugin clusters referenced from the static graph
   missingPackages              Workspace packages whose deps are not mirrored at the root
-  seamTestInventory            High-signal seam candidates with nearby-test gap signals
+  seamTestInventory            High-signal seam candidates with nearby-test gap signals,
+                               including cron orchestration seams for agent handoff,
+                               outbound/media delivery, heartbeat/followup handoff,
+                               and scheduler state crossings
 
 Notes:
   - Output is JSON only.
