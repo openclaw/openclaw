@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
@@ -77,6 +77,10 @@ afterEach(() => {
 
 beforeEach(async () => {
   vi.useRealTimers();
+  installDiscordRuntime({});
+});
+
+beforeAll(async () => {
   vi.resetModules();
   ({ discordPlugin } = await import("./channel.js"));
   ({ setDiscordRuntime } = await import("./runtime.js"));
