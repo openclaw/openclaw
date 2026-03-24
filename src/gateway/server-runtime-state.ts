@@ -6,9 +6,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
-  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
@@ -100,7 +98,6 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
-  pinActivePluginChannelRegistry(params.pluginRegistry);
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   try {
     let canvasHost: CanvasHostHandler | null = null;
@@ -234,7 +231,6 @@ export async function createGatewayRuntimeState(params: {
     return {
       canvasHost,
       releasePluginRouteRegistry: () => {
-        releasePinnedPluginChannelRegistry(params.pluginRegistry);
         releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
       },
       httpServer,
@@ -256,7 +252,6 @@ export async function createGatewayRuntimeState(params: {
       toolEventRecipients,
     };
   } catch (err) {
-    releasePinnedPluginChannelRegistry(params.pluginRegistry);
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
     throw err;
   }
