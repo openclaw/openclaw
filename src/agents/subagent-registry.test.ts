@@ -248,25 +248,26 @@ describe("subagent registry seam flow", () => {
       runSubagentEnded: mocks.runSubagentEnded,
     };
     mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(
-      ((params: { runs: Map<string, unknown>; mergeOnly?: boolean }) => {
-        params.runs.set("run-resume-delete", {
-          runId: "run-resume-delete",
-          childSessionKey: "agent:main:subagent:child",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "resume delete retry budget",
-          cleanup: "delete",
-          createdAt: Date.parse("2026-03-24T11:58:00Z"),
-          startedAt: Date.parse("2026-03-24T11:59:00Z"),
-          endedAt: Date.parse("2026-03-24T11:59:30Z"),
-          expectsCompletionMessage: true,
-          announceRetryCount: 3,
-          lastAnnounceRetryAt: Date.parse("2026-03-24T11:59:40Z"),
-        });
-        return 1;
-      }) as never,
-    );
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set("run-resume-delete", {
+        runId: "run-resume-delete",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "resume delete retry budget",
+        cleanup: "delete",
+        createdAt: Date.parse("2026-03-24T11:58:00Z"),
+        startedAt: Date.parse("2026-03-24T11:59:00Z"),
+        endedAt: Date.parse("2026-03-24T11:59:30Z"),
+        expectsCompletionMessage: true,
+        announceRetryCount: 3,
+        lastAnnounceRetryAt: Date.parse("2026-03-24T11:59:40Z"),
+      });
+      return 1;
+    }) as never);
 
     mod.initSubagentRegistry();
     await Promise.resolve();
