@@ -53,13 +53,7 @@ On every heartbeat, check if the gateway restarted recently:
 
 Every 3rd heartbeat, consolidate memory:
 
-1. **Capture this session:** Look at what happened since the last heartbeat — tasks delegated, decisions made, results received, user requests. Write a meaningful entry to `memory/YYYY-MM-DD.md`:
-   ```
-   ## [HH:MM] Heartbeat Summary
-   - Delegated email check to Neo — 3 new emails, none urgent
-   - User asked about project status — reported 2 active, 1 blocked
-   - Decision: moved workspaces to repo root
-   ```
+1. **Capture this session:** Write a `## [HH:MM] Heartbeat Summary` entry to `memory/YYYY-MM-DD.md` covering tasks delegated, decisions made, and results received.
 2. **Consolidate daily notes:** Review `memory/*.md` from the last 3 days. Move important decisions, lessons, and project status changes into `MEMORY.md`.
 3. **Prune:** Remove outdated entries from `MEMORY.md`. Keep it under 150 lines.
 4. **Skip if nothing happened:** If no tasks were completed and no decisions were made since the last heartbeat, do not write an empty entry.
