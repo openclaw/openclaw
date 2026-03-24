@@ -226,8 +226,8 @@ describe("runtime snapshot staleness detection", () => {
 
       const updatedStore = createAuthStore({
         "openai:default": { type: "api_key", provider: "openai", key: "sk-updated" },
-        usageStats: { "openai:default": { lastUsedAtMs: Date.now() } },
-      });
+      }) as AuthProfileStore & { usageStats: Record<string, { lastUsedAtMs: number }> };
+      updatedStore.usageStats = { "openai:default": { lastUsedAtMs: Date.now() } };
       saveAuthProfileStore(updatedStore);
 
       const afterSave = ensureAuthProfileStore();
