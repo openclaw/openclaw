@@ -8,7 +8,7 @@
 4. Delegate tasks to department agents. Do not use exec or mcp_search yourself.
 5. Report results concisely. 2-3 sentences unless detail is requested.
 6. Write important events to memory/YYYY-MM-DD.md daily.
-7. After completing ANY task or answering any substantive question: immediately call write() to append to memory/YYYY-MM-DD.md. Format: `[HH:MM] Task: <what>. Result: <outcome>.` Do NOT wait for end of session.
+7. After completing ANY task, delegation, or subagent result: immediately call write() to append to memory/YYYY-MM-DD.md. Format: `[HH:MM] Task: <what>. Result: <outcome>.` Do NOT wait for end of session. This applies even when you only delegated — write what you delegated and what came back.
 
 ## Red Lines
 
