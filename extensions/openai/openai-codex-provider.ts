@@ -242,6 +242,9 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   const resolvedEmail =
     normalizeNonEmptyString(payload?.["https://api.openai.com/profile"]?.email) ??
     normalizeNonEmptyString(creds.email);
+  const stableSubject = resolveCodexStableSubject(payload);
+  const resolvedEmailOrFallback =
+    resolvedEmail ?? (stableSubject ? `id-${Buffer.from(stableSubject).toString("base64url")}` : undefined);
 
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
@@ -249,14 +252,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
-    email:
-      resolvedEmail ??
-      (() => {
-        const stableSubject = resolveCodexStableSubject(payload);
-        return stableSubject
-          ? `id-${Buffer.from(stableSubject).toString("base64url")}`
-          : undefined;
-      })(),
+    email: resolvedEmailOrFallback,
   });
 }
 
