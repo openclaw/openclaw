@@ -688,13 +688,13 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      // Only classify as rate-limit when we have concrete evidence: either
-      // the error message itself is a rate-limit string, or the fallback
-      // chain exhaustion is purely transient (`rate_limit` / `overloaded`).
-      // Mixed-cause failures (for example `rate_limit` + `billing`) should
-      // keep the generic failure text instead of showing a misleading retry
-      // countdown sourced from an unrelated cooldown window.
-      const isRateLimit = isRateLimitErrorMessage(message) || isPureTransientRateLimitSummary(err);
+      // Only classify as rate-limit when we have concrete evidence from the
+      // underlying error. FallbackSummaryError messages embed per-attempt
+      // reason labels like `(rate_limit)`, so string-matching the summary text
+      // would misclassify mixed-cause exhaustion as a pure transient cooldown.
+      const isRateLimit = isFallbackSummaryError(err)
+        ? isPureTransientRateLimitSummary(err)
+        : isRateLimitErrorMessage(message);
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;

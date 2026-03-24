@@ -9,6 +9,7 @@ import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  loadAuthProfileStoreForRuntime,
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -233,6 +234,37 @@ function throwFallbackFailureSummary(params: {
     params.soonestCooldownExpiry ?? null,
     params.lastError instanceof Error ? params.lastError : undefined,
   );
+}
+
+function resolveFallbackSoonestCooldownExpiry(params: {
+  authStore: ReturnType<typeof ensureAuthProfileStore> | null;
+  agentDir?: string;
+  cfg: OpenClawConfig | undefined;
+  candidates: ModelCandidate[];
+}): number | null {
+  if (!params.authStore) {
+    return null;
+  }
+
+  // Refresh from persisted state because embedded attempts can update auth
+  // cooldowns through a separate store instance while the fallback loop runs.
+  const refreshedStore = loadAuthProfileStoreForRuntime(params.agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
+  const allProfileIds = new Set<string>();
+  for (const candidate of params.candidates) {
+    const ids = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: refreshedStore,
+      provider: candidate.provider,
+    });
+    for (const id of ids) {
+      allProfileIds.add(id);
+    }
+  }
+
+  return getSoonestCooldownExpiry(refreshedStore, [...allProfileIds]);
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -791,23 +823,12 @@ export async function runWithModelFallback<T>(params: {
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
-    soonestCooldownExpiry: (() => {
-      if (!authStore) {
-        return null;
-      }
-      const allProfileIds = new Set<string>();
-      for (const c of candidates) {
-        const ids = resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store: authStore,
-          provider: c.provider,
-        });
-        for (const id of ids) {
-          allProfileIds.add(id);
-        }
-      }
-      return getSoonestCooldownExpiry(authStore, [...allProfileIds]);
-    })(),
+    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+      authStore,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+      candidates,
+    }),
   });
 }
 

@@ -223,14 +223,19 @@ describe("runAgentTurnWithFallback", () => {
 
   it("does not show a rate-limit countdown for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error("All models failed"), {
-        name: "FallbackSummaryError",
-        attempts: [
-          { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
-          { provider: "openai", model: "gpt-5.2", error: "402", reason: "billing" },
-        ],
-        soonestCooldownExpiry: Date.now() + 60_000,
-      }),
+      Object.assign(
+        new Error(
+          "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.2: 402 (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
+            { provider: "openai", model: "gpt-5.2", error: "402", reason: "billing" },
+          ],
+          soonestCooldownExpiry: Date.now() + 60_000,
+        },
+      ),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
