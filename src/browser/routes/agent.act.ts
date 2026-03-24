@@ -78,6 +78,7 @@ function buildExistingSessionWaitPredicate(params: {
 
 async function waitForExistingSessionCondition(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   timeMs?: number;
   text?: string;
@@ -103,6 +104,7 @@ async function waitForExistingSessionCondition(params: {
       ready = Boolean(
         await evaluateChromeMcpScript({
           profileName: params.profileName,
+          userDataDir: params.userDataDir,
           targetId: params.targetId,
           fn: `async () => ${predicate}`,
         }),
@@ -111,6 +113,7 @@ async function waitForExistingSessionCondition(params: {
     if (ready && params.url) {
       const currentUrl = await evaluateChromeMcpScript({
         profileName: params.profileName,
+        userDataDir: params.userDataDir,
         targetId: params.targetId,
         fn: "() => window.location.href",
       });
@@ -517,6 +520,7 @@ export function registerBrowserAgentActRoutes(
                 // so we can keep moving instead of hard-failing on selector-only actions.
                 await evaluateChromeMcpScript({
                   profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
                   fn: `(selector) => {
                     const el = document.querySelector(selector);
@@ -541,6 +545,7 @@ export function registerBrowserAgentActRoutes(
               }
               await clickChromeMcpElement({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 uid: ref!,
                 doubleClick,
@@ -608,6 +613,7 @@ export function registerBrowserAgentActRoutes(
               }
               await fillChromeMcpElement({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: text,
@@ -616,6 +622,7 @@ export function registerBrowserAgentActRoutes(
               if (submit) {
                 await pressChromeMcpKey({
                   profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
                   key: "Enter",
                   timeoutMs: timeoutMs ?? undefined,
@@ -659,6 +666,7 @@ export function registerBrowserAgentActRoutes(
               }
               await pressChromeMcpKey({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 key,
                 timeoutMs: timeoutMs ?? undefined,
@@ -694,6 +702,7 @@ export function registerBrowserAgentActRoutes(
               }
               await hoverChromeMcpElement({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 uid: ref!,
                 timeoutMs: timeoutMs ?? undefined,
@@ -737,6 +746,7 @@ export function registerBrowserAgentActRoutes(
               }
               await evaluateChromeMcpScript({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
@@ -785,6 +795,7 @@ export function registerBrowserAgentActRoutes(
               }
               await dragChromeMcpElement({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fromUid: startRef!,
                 toUid: endRef!,
@@ -832,6 +843,7 @@ export function registerBrowserAgentActRoutes(
               }
               await fillChromeMcpElement({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: values[0] ?? "",
@@ -879,6 +891,7 @@ export function registerBrowserAgentActRoutes(
               if (refFields.length) {
                 await fillChromeMcpForm({
                   profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
                   elements: refFields.map((field) => ({
                     uid: field.ref,
@@ -893,6 +906,7 @@ export function registerBrowserAgentActRoutes(
                 // valid form action.
                 await evaluateChromeMcpScript({
                   profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
                   fn: `(selector, rawValue) => {
                     const el = document.querySelector(selector);
@@ -942,6 +956,7 @@ export function registerBrowserAgentActRoutes(
             if (isExistingSession) {
               await resizeChromeMcpPage({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 width,
                 height,
@@ -1003,6 +1018,7 @@ export function registerBrowserAgentActRoutes(
               }
               await waitForExistingSessionCondition({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 timeMs,
                 text,
@@ -1046,6 +1062,7 @@ export function registerBrowserAgentActRoutes(
             if (isExistingSession) {
               const result = await evaluateChromeMcpScript({
                 profileName,
+                userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fn,
                 args: ref ? [ref] : undefined,
@@ -1082,7 +1099,7 @@ export function registerBrowserAgentActRoutes(
           }
           case "close": {
             if (isExistingSession) {
-              await closeChromeMcpTab(profileName, tab.targetId);
+              await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile.userDataDir);
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -1197,6 +1214,7 @@ export function registerBrowserAgentActRoutes(
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             args: [ref],
             fn: `(el) => {

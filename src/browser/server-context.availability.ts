@@ -1,10 +1,16 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import {
+  CHROME_MCP_ATTACH_READY_POLL_MS,
+  CHROME_MCP_ATTACH_READY_WINDOW_MS,
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
-import { closeChromeMcpSession, ensureChromeMcpAvailable } from "./chrome-mcp.js";
+import {
+  closeChromeMcpSession,
+  ensureChromeMcpAvailable,
+  listChromeMcpTabs,
+} from "./chrome-mcp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -86,7 +92,7 @@ export function createProfileAvailability({
       );
       // Chrome MCP startup/attach often takes longer than CDP ping windows.
       // Clamp to a sane minimum so status/list checks avoid false negatives.
-      await ensureChromeMcpAvailable(profile.name, {
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
         timeoutMs: readyTimeoutMs,
       });
       traceAvailabilityStage(
@@ -178,14 +184,44 @@ export function createProfileAvailability({
     );
   };
 
+  const waitForChromeMcpReadyAfterAttach = async (timeoutMs?: number): Promise<void> => {
+    const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(timeoutMs);
+    const deadlineMs = Date.now() + Math.max(readyTimeoutMs, CHROME_MCP_ATTACH_READY_WINDOW_MS);
+    let lastError: unknown;
+    while (Date.now() < deadlineMs) {
+      try {
+        await listChromeMcpTabs(profile.name, profile.userDataDir, {
+          timeoutMs: readyTimeoutMs,
+        });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+    }
+    const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach for profile "${profile.name}" timed out waiting for tabs to become available.` +
+        ` Approve the browser attach prompt, keep the browser open, and retry.${detail}`,
+    );
+  };
+
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(undefined);
+      if (profile.userDataDir && !existsSync(profile.userDataDir)) {
+        throw new BrowserProfileUnavailableError(
+          `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
+        );
+      }
       traceAvailabilityStage(
         `browser-availability-ensure profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
       );
-      await ensureChromeMcpAvailable(profile.name, { timeoutMs: readyTimeoutMs });
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
+        timeoutMs: readyTimeoutMs,
+      });
+      await waitForChromeMcpReadyAfterAttach(readyTimeoutMs);
       traceAvailabilityStage(
         `browser-availability-ensure-ok profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
       );

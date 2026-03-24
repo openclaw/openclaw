@@ -203,8 +203,10 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 
-WORKTREE_PATH="${REPO_ROOT}/.claude/worktrees/${FEATURE_NAME}"
-BRANCH_NAME="claude/${FEATURE_NAME}"
+# Keep helper-generated worktrees aligned with the Codex workspace layout so
+# follow-up sessions and local tooling land in the same predictable tree.
+WORKTREE_PATH="${REPO_ROOT}/.codex/worktrees/${FEATURE_NAME}"
+BRANCH_NAME="codex/${FEATURE_NAME}"
 
 if [[ -e "$WORKTREE_PATH" ]]; then
   echo "Error: worktree path already exists: $WORKTREE_PATH" >&2

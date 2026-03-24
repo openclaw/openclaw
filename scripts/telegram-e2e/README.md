@@ -122,7 +122,7 @@ What it does:
    - `origin/codex/consumer-openclaw-project` when the current branch or upstream is the consumer branch
    - otherwise `origin/main`
    - `--base <branch>` still overrides the default explicitly
-3. Creates `.claude/worktrees/my-feature` on `claude/my-feature` from that base.
+3. Creates `.codex/worktrees/my-feature` on `codex/my-feature` from that base.
 4. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
 5. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.
 6. Writes `.dev-launch.env` with a deterministic `OPENCLAW_STATE_DIR` and `OPENCLAW_GATEWAY_PORT`.
