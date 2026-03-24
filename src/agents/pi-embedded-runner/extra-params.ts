@@ -325,8 +325,9 @@ export function applyExtraParamsToAgent(
   const isFirstPartyOpenAI = provider === "openai" || provider === "openai-codex";
   const isResponsesApi = api === "openai-responses" || api === "openai-codex-responses";
 
-  // Transport wrapper: all providers using openai-responses need this for SSE streaming.
-  if (isFirstPartyOpenAI || isResponsesApi) {
+  // Transport wrapper: first-party openai (original scope) + any provider using a
+  // responses API (new custom-provider path).
+  if (provider === "openai" || isResponsesApi) {
     agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
   }
   // Attribution headers: first-party OpenAI only.
