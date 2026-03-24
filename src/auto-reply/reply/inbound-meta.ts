@@ -163,6 +163,9 @@ export function buildInboundUserContextPrefix(
   }
 
   if (ctx.ReplyToBody) {
+    const replyMediaNote = ctx.ReplyToMediaPath?.trim()
+      ? `[media attached: ${ctx.ReplyToMediaPath.trim()}${ctx.ReplyToMediaType?.trim() ? ` (${ctx.ReplyToMediaType.trim()})` : ""}]`
+      : undefined;
     blocks.push(
       [
         "Replied message (untrusted, for context):",
@@ -172,6 +175,7 @@ export function buildInboundUserContextPrefix(
             sender_label: safeTrim(ctx.ReplyToSender),
             is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
             body: ctx.ReplyToBody,
+            media: replyMediaNote,
           },
           null,
           2,

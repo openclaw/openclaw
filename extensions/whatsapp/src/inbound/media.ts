@@ -39,6 +39,75 @@ function resolveMediaMimetype(message: proto.IMessage): string | undefined {
   return undefined;
 }
 
+/**
+ * Download media from a quoted (reply-target) message.
+ *
+ * Quoted messages are embedded as `proto.IMessage` inside `contextInfo` —
+ * they don't carry the full `WAMessage` envelope.  We wrap them into one
+ * so Baileys' `downloadMediaMessage` can resolve the media URL.
+ *
+ * If the full download fails (e.g. media key expired), we fall back to the
+ * low-resolution `jpegThumbnail` that WhatsApp always embeds in the quote.
+ */
+export async function downloadQuotedMedia(
+  quotedMessage: proto.IMessage,
+  sock: Awaited<ReturnType<typeof createWaSocket>>,
+): Promise<{ buffer: Buffer; mimetype?: string; fileName?: string } | undefined> {
+  const message = unwrapMessage(quotedMessage);
+  if (!message) {
+    return undefined;
+  }
+  const mimetype = resolveMediaMimetype(message);
+  const fileName = message.documentMessage?.fileName ?? undefined;
+  if (
+    !message.imageMessage &&
+    !message.videoMessage &&
+    !message.documentMessage &&
+    !message.audioMessage &&
+    !message.stickerMessage
+  ) {
+    return undefined;
+  }
+
+  // Wrap into a WAMessage envelope so downloadMediaMessage can work
+  const syntheticMsg: proto.IWebMessageInfo = {
+    key: { remoteJid: "", fromMe: false, id: "" },
+    message: quotedMessage,
+  };
+
+  try {
+    const buffer = await downloadMediaMessage(
+      syntheticMsg as WAMessage,
+      "buffer",
+      {},
+      {
+        reuploadRequest: sock.updateMediaMessage,
+        logger: sock.logger,
+      },
+    );
+    return { buffer, mimetype, fileName };
+  } catch (err) {
+    logVerbose(`downloadMediaMessage (quoted) failed: ${String(err)}, trying thumbnail fallback`);
+  }
+
+  // Fallback: use the embedded jpegThumbnail if available
+  const thumbnail =
+    message.imageMessage?.jpegThumbnail ??
+    message.videoMessage?.jpegThumbnail ??
+    message.stickerMessage?.pngThumbnail ??
+    message.documentMessage?.jpegThumbnail;
+  if (thumbnail && thumbnail.length > 0) {
+    logVerbose(`Using thumbnail fallback for quoted media (${thumbnail.length} bytes)`);
+    return {
+      buffer: Buffer.from(thumbnail),
+      mimetype: mimetype ?? "image/jpeg",
+      fileName,
+    };
+  }
+
+  return undefined;
+}
+
 export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,

@@ -26,6 +26,8 @@ export type WebInboundMessage = {
   replyToSender?: string;
   replyToSenderJid?: string;
   replyToSenderE164?: string;
+  replyToMediaPath?: string;
+  replyToMediaType?: string;
   groupSubject?: string;
   groupParticipants?: string[];
   mentionedJids?: string[];

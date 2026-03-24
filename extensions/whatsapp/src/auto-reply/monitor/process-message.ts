@@ -313,6 +313,8 @@ export async function processMessage(params: {
     ReplyToId: params.msg.replyToId,
     ReplyToBody: params.msg.replyToBody,
     ReplyToSender: params.msg.replyToSender,
+    ReplyToMediaPath: params.msg.replyToMediaPath,
+    ReplyToMediaType: params.msg.replyToMediaType,
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,

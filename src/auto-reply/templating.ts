@@ -65,6 +65,9 @@ export type MsgContext = {
   ReplyToBody?: string;
   ReplyToSender?: string;
   ReplyToIsQuote?: boolean;
+  /** Local file path of the reply-target media attachment, if any. */
+  ReplyToMediaPath?: string;
+  ReplyToMediaType?: string;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
   ReplyToForwardedFromType?: string;

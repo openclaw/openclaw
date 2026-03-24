@@ -22,7 +22,7 @@ import {
   extractText,
 } from "./extract.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
-import { downloadInboundMedia } from "./media.js";
+import { downloadInboundMedia, downloadQuotedMedia } from "./media.js";
 import { extractOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
@@ -329,6 +329,8 @@ export async function monitorWebInbox(options: {
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
+    replyToMediaPath?: string;
+    replyToMediaType?: string;
   };
 
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
@@ -372,6 +374,33 @@ export async function monitorWebInbox(options: {
       logVerbose(`Inbound media download failed: ${String(err)}`);
     }
 
+    // Download media from the quoted (reply-target) message, if any
+    let replyToMediaPath: string | undefined;
+    let replyToMediaType: string | undefined;
+    if (replyContext?.quotedMediaMessage) {
+      try {
+        const quotedMedia = await downloadQuotedMedia(replyContext.quotedMediaMessage, sock);
+        if (quotedMedia) {
+          const maxMb =
+            typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
+              ? options.mediaMaxMb
+              : 50;
+          const maxBytes = maxMb * 1024 * 1024;
+          const saved = await saveMediaBuffer(
+            quotedMedia.buffer,
+            quotedMedia.mimetype,
+            "inbound",
+            maxBytes,
+            quotedMedia.fileName,
+          );
+          replyToMediaPath = saved.path;
+          replyToMediaType = quotedMedia.mimetype;
+        }
+      } catch (err) {
+        logVerbose(`Quoted media download failed: ${String(err)}`);
+      }
+    }
+
     return {
       body,
       location: location ?? undefined,
@@ -379,6 +408,8 @@ export async function monitorWebInbox(options: {
       mediaPath,
       mediaType,
       mediaFileName,
+      replyToMediaPath,
+      replyToMediaType,
     };
   };
 
@@ -451,6 +482,8 @@ export async function monitorWebInbox(options: {
       replyToSender: enriched.replyContext?.sender,
       replyToSenderJid: enriched.replyContext?.senderJid,
       replyToSenderE164: enriched.replyContext?.senderE164,
+      replyToMediaPath: enriched.replyToMediaPath,
+      replyToMediaType: enriched.replyToMediaType,
       groupSubject: inbound.groupSubject,
       groupParticipants: inbound.groupParticipants,
       mentionedJids: mentionedJids ?? undefined,

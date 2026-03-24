@@ -392,6 +392,8 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   sender: string;
   senderJid?: string;
   senderE164?: string;
+  /** The raw quoted message, if it contains downloadable media. */
+  quotedMediaMessage?: proto.IMessage;
 } | null {
   const message = unwrapMessage(rawMessage);
   if (!message) {
@@ -419,11 +421,20 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   const senderJid = contextInfo?.participant ?? undefined;
   const senderE164 = senderJid ? (jidToE164(senderJid) ?? senderJid) : undefined;
   const sender = senderE164 ?? "unknown sender";
+  // Expose the raw quoted message when it has downloadable media so the
+  // caller can attempt to download/save the media attachment.
+  const hasMedia =
+    quoted.imageMessage ??
+    quoted.videoMessage ??
+    quoted.audioMessage ??
+    quoted.documentMessage ??
+    quoted.stickerMessage;
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
     body,
     sender,
     senderJid,
     senderE164,
+    quotedMediaMessage: hasMedia ? quoted : undefined,
   };
 }
