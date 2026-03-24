@@ -25,7 +25,7 @@ function formatSummary(summary: AgentSummary) {
   const disabledTag = !summary.enabled ? " [disabled]" : "";
   const header =
     summary.name && summary.name !== summary.id
-      ? `${summary.id}${defaultTag}${disabledTag} (${summary.name})`
+      ? `${summary.id}${defaultTag} (${summary.name})${disabledTag}`
       : `${summary.id}${defaultTag}${disabledTag}`;
 
   const identityParts = [];

@@ -43,14 +43,14 @@ export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number
 }
 
 function resolveAgentName(cfg: OpenClawConfig, agentId: string) {
-  const entry = listAgentEntries(cfg).find(
+  const entry = listAllAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
   return entry?.name?.trim() || undefined;
 }
 
 function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
-  const entry = listAgentEntries(cfg).find(
+  const entry = listAllAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
   if (entry?.model) {
@@ -140,7 +140,7 @@ export function applyAgentConfig(
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
   const name = params.name?.trim();
-  const list = listAgentEntries(cfg);
+  const list = listAllAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
   const nextEntry: AgentEntry = {
@@ -177,7 +177,7 @@ export function pruneAgentConfig(
   removedAllow: number;
 } {
   const id = normalizeAgentId(agentId);
-  const agents = listAgentEntries(cfg);
+  const agents = listAllAgentEntries(cfg);
   const nextAgentsList = agents.filter((entry) => normalizeAgentId(entry.id) !== id);
   const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
 

@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (list/add/delete/disable/enable/bindings/bind/unbind/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 title: "agents"
@@ -24,8 +24,25 @@ openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
+openclaw agents disable work
+openclaw agents enable work
 openclaw agents delete work
 ```
+
+## Disable / Enable
+
+Temporarily suspend an agent without deleting it. Disabled agents skip routing, cron, heartbeat, and channel polling while preserving their config, workspace, sessions, and auth.
+
+```bash
+openclaw agents disable <id>
+openclaw agents enable <id>
+```
+
+The `enabled` field is stored in `agents.list[].enabled`. Omitting the field or setting it to `true` keeps the agent active. Set it to `false` to suspend the agent.
+
+`openclaw agents list` shows `[disabled]` next to suspended agents.
+
+Restart the gateway for changes to take effect.
 
 ## Routing bindings
 

@@ -4112,6 +4112,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.fastModeDefault",
       "kind": "core",
       "type": "boolean",

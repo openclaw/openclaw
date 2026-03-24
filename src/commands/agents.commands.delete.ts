@@ -7,7 +7,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
-import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
+import { findAgentEntryIndex, listAllAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
 
 type AgentsDeleteOptions = {
@@ -42,7 +42,7 @@ export async function agentsDeleteCommand(
     return;
   }
 
-  if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
+  if (findAgentEntryIndex(listAllAgentEntries(cfg), agentId) < 0) {
     runtime.error(`Agent "${agentId}" not found.`);
     runtime.exit(1);
     return;

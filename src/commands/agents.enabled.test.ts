@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { listAgentEntries, listAllAgentEntries } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildAgentSummaries, findAgentEntryIndex } from "./agents.config.js";
+import {
+  applyAgentConfig,
+  buildAgentSummaries,
+  findAgentEntryIndex,
+  pruneAgentConfig,
+} from "./agents.config.js";
 
 describe("agents.list[].enabled field", () => {
   const baseCfg: OpenClawConfig = {
@@ -93,6 +98,63 @@ describe("agents.list[].enabled field", () => {
       const summaries = buildAgentSummaries(baseCfg);
       const main = summaries.find((s) => s.id === "main");
       expect(main?.enabled).toBe(true);
+    });
+
+    it("shows name and model for disabled agents", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude" } },
+          list: [
+            { id: "main" },
+            { id: "suspended", enabled: false, name: "Suspended Bot", model: "openai/gpt-4.1" },
+          ],
+        },
+      };
+      const summaries = buildAgentSummaries(cfg);
+      const suspended = summaries.find((s) => s.id === "suspended");
+      expect(suspended?.name).toBe("Suspended Bot");
+      expect(suspended?.model).toBe("openai/gpt-4.1");
+    });
+  });
+
+  describe("applyAgentConfig preserves disabled agents", () => {
+    it("does not drop disabled agents when adding a new agent", () => {
+      const result = applyAgentConfig(baseCfg, {
+        agentId: "new-bot",
+        workspace: "/new-ws",
+      });
+      const ids = result.agents?.list?.map((a) => a.id) ?? [];
+      expect(ids).toContain("suspended");
+      expect(ids).toContain("new-bot");
+      expect(ids).toContain("main");
+    });
+
+    it("does not drop disabled agents when updating an existing agent", () => {
+      const result = applyAgentConfig(baseCfg, {
+        agentId: "worker",
+        name: "Updated Worker",
+      });
+      const ids = result.agents?.list?.map((a) => a.id) ?? [];
+      expect(ids).toContain("suspended");
+      const suspended = result.agents?.list?.find((a) => a.id === "suspended");
+      expect(suspended?.enabled).toBe(false);
+    });
+  });
+
+  describe("pruneAgentConfig preserves disabled agents", () => {
+    it("keeps disabled agents when deleting an enabled agent", () => {
+      const result = pruneAgentConfig(baseCfg, "worker");
+      const ids = result.config.agents?.list?.map((a) => a.id) ?? [];
+      expect(ids).toContain("suspended");
+      expect(ids).not.toContain("worker");
+    });
+
+    it("can delete a disabled agent", () => {
+      const result = pruneAgentConfig(baseCfg, "suspended");
+      const ids = result.config.agents?.list?.map((a) => a.id) ?? [];
+      expect(ids).not.toContain("suspended");
+      expect(ids).toContain("main");
+      expect(ids).toContain("worker");
     });
   });
 });
