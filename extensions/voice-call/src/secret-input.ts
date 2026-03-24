@@ -74,7 +74,7 @@ export function hasVoiceCallSecretInput(params: {
   );
 }
 
-export async function resolveVoiceCallRuntimeSecrets(params: {
+export async function resolveVoiceCallStartupSecrets(params: {
   config: VoiceCallConfig;
   coreConfig: CoreConfig;
 }): Promise<VoiceCallConfig> {
@@ -86,49 +86,51 @@ export async function resolveVoiceCallRuntimeSecrets(params: {
     plivo: config.plivo ? { ...config.plivo } : config.plivo,
     tunnel: config.tunnel ? { ...config.tunnel } : config.tunnel,
     streaming: config.streaming ? { ...config.streaming } : config.streaming,
-    tts: config.tts
-      ? {
-          ...config.tts,
-          openai: config.tts.openai ? { ...config.tts.openai } : config.tts.openai,
-          elevenlabs: config.tts.elevenlabs ? { ...config.tts.elevenlabs } : config.tts.elevenlabs,
-        }
-      : config.tts,
+    tts: config.tts,
   };
 
-  if (resolved.telnyx) {
-    resolved.telnyx.apiKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.telnyx.apiKey,
-      envVar: "TELNYX_API_KEY",
-      path: "plugins.entries.voice-call.config.telnyx.apiKey",
-    });
-    resolved.telnyx.publicKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.telnyx.publicKey,
-      envVar: "TELNYX_PUBLIC_KEY",
-      path: "plugins.entries.voice-call.config.telnyx.publicKey",
-    });
+  switch (resolved.provider) {
+    case "telnyx":
+      if (resolved.telnyx) {
+        resolved.telnyx.apiKey = await resolveVoiceCallSecretInputString({
+          coreConfig,
+          value: resolved.telnyx.apiKey,
+          envVar: "TELNYX_API_KEY",
+          path: "plugins.entries.voice-call.config.telnyx.apiKey",
+        });
+        resolved.telnyx.publicKey = await resolveVoiceCallSecretInputString({
+          coreConfig,
+          value: resolved.telnyx.publicKey,
+          envVar: "TELNYX_PUBLIC_KEY",
+          path: "plugins.entries.voice-call.config.telnyx.publicKey",
+        });
+      }
+      break;
+    case "twilio":
+      if (resolved.twilio) {
+        resolved.twilio.authToken = await resolveVoiceCallSecretInputString({
+          coreConfig,
+          value: resolved.twilio.authToken,
+          envVar: "TWILIO_AUTH_TOKEN",
+          path: "plugins.entries.voice-call.config.twilio.authToken",
+        });
+      }
+      break;
+    case "plivo":
+      if (resolved.plivo) {
+        resolved.plivo.authToken = await resolveVoiceCallSecretInputString({
+          coreConfig,
+          value: resolved.plivo.authToken,
+          envVar: "PLIVO_AUTH_TOKEN",
+          path: "plugins.entries.voice-call.config.plivo.authToken",
+        });
+      }
+      break;
+    case "mock":
+      break;
   }
 
-  if (resolved.twilio) {
-    resolved.twilio.authToken = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.twilio.authToken,
-      envVar: "TWILIO_AUTH_TOKEN",
-      path: "plugins.entries.voice-call.config.twilio.authToken",
-    });
-  }
-
-  if (resolved.plivo) {
-    resolved.plivo.authToken = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.plivo.authToken,
-      envVar: "PLIVO_AUTH_TOKEN",
-      path: "plugins.entries.voice-call.config.plivo.authToken",
-    });
-  }
-
-  if (resolved.tunnel) {
+  if (resolved.tunnel?.provider === "ngrok") {
     resolved.tunnel.ngrokAuthToken = await resolveVoiceCallSecretInputString({
       coreConfig,
       value: resolved.tunnel.ngrokAuthToken,
@@ -137,7 +139,7 @@ export async function resolveVoiceCallRuntimeSecrets(params: {
     });
   }
 
-  if (resolved.streaming) {
+  if (resolved.streaming?.enabled) {
     resolved.streaming.openaiApiKey = await resolveVoiceCallSecretInputString({
       coreConfig,
       value: resolved.streaming.openaiApiKey,
@@ -149,24 +151,6 @@ export async function resolveVoiceCallRuntimeSecrets(params: {
       value: resolved.streaming.elevenlabsApiKey,
       envVar: "ELEVENLABS_API_KEY",
       path: "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
-    });
-  }
-
-  if (resolved.tts?.openai) {
-    resolved.tts.openai.apiKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.tts.openai.apiKey,
-      envVar: "OPENAI_API_KEY",
-      path: "plugins.entries.voice-call.config.tts.openai.apiKey",
-    });
-  }
-
-  if (resolved.tts?.elevenlabs) {
-    resolved.tts.elevenlabs.apiKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.tts.elevenlabs.apiKey,
-      envVar: "ELEVENLABS_API_KEY",
-      path: "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
     });
   }
 

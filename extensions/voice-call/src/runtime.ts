@@ -9,7 +9,7 @@ import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import {
   normalizeResolvedVoiceCallSecretString,
-  resolveVoiceCallRuntimeSecrets,
+  resolveVoiceCallStartupSecrets,
 } from "./secret-input.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
@@ -170,7 +170,7 @@ export async function createVoiceCallRuntime(params: {
     debug: console.debug,
   };
 
-  const config = await resolveVoiceCallRuntimeSecrets({
+  const config = await resolveVoiceCallStartupSecrets({
     config: resolveVoiceCallConfig(rawConfig),
     coreConfig,
   });
