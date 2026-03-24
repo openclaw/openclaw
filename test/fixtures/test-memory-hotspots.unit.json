@@ -1,20 +1,32 @@
 {
   "config": "vitest.unit.config.ts",
-  "generatedAt": "2026-03-23T05:18:04.876Z",
+  "generatedAt": "2026-03-24T17:41:36.385Z",
   "defaultMinDeltaKb": 262144,
   "lane": "unit-fast, unit-*",
   "files": {
     "src/infra/outbound/targets.channel-resolution.test.ts": {
       "deltaKb": 1111491,
-      "sources": ["openclaw-test-memory-trace:unit-heavy-2"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-heavy-2"
+      ]
     },
     "src/media/fetch.telegram-network.test.ts": {
       "deltaKb": 1101005,
-      "sources": ["openclaw-test-memory-trace:unit-heavy-1"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-heavy-1"
+      ]
     },
     "src/cron/isolated-agent/run.skill-filter.test.ts": {
       "deltaKb": 1069548,
-      "sources": ["openclaw-test-memory-trace:unit-run.skill-filter-memory-isolated"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-run.skill-filter-memory-isolated"
+      ]
+    },
+    "src/infra/outbound/deliver.test.ts": {
+      "deltaKb": 1059062,
+      "sources": [
+        "openclaw-deliver-mem:unit"
+      ]
     },
     "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts": {
       "deltaKb": 1048576,
@@ -30,15 +42,27 @@
     },
     "src/cron/isolated-agent/run.cron-model-override.test.ts": {
       "deltaKb": 946790,
-      "sources": ["openclaw-test-memory-trace:unit-run.cron-model-override-memory-isolated"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-run.cron-model-override-memory-isolated"
+      ]
+    },
+    "src/plugins/manifest-registry.test.ts": {
+      "deltaKb": 684749,
+      "sources": [
+        "openclaw-manifest-registry-mem:unit"
+      ]
     },
     "src/plugins/install.test.ts": {
       "deltaKb": 510874,
-      "sources": ["openclaw-test-memory-trace:unit-install-memory-isolated"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-install-memory-isolated"
+      ]
     },
     "ui/src/ui/views/chat.test.ts": {
       "deltaKb": 509338,
-      "sources": ["openclaw-test-memory-trace:unit-chat-memory-isolated"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-chat-memory-isolated"
+      ]
     },
     "src/infra/provider-usage.auth.normalizes-keys.test.ts": {
       "deltaKb": 494080,
@@ -48,7 +72,9 @@
     },
     "src/plugins/conversation-binding.test.ts": {
       "deltaKb": 485786,
-      "sources": ["openclaw-test-memory-trace:unit-conversation-binding-memory-isolated"]
+      "sources": [
+        "openclaw-test-memory-trace:unit-conversation-binding-memory-isolated"
+      ]
     }
   }
 }
