@@ -24,7 +24,7 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
-import { resolveAgentDir } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -472,6 +472,7 @@ export function createSessionStatusTool(opts?: {
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
+      const agentEntry = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
       const defaultLabel = `${configured.provider}/${configured.model}`;
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
@@ -482,6 +483,9 @@ export function createSessionStatusTool(opts?: {
         agent: {
           ...agentDefaults,
           model: agentModel,
+          thinkingDefault: agentEntry?.thinkingDefault ?? agentDefaults.thinkingDefault,
+          verboseDefault: agentEntry?.verboseDefault ?? agentDefaults.verboseDefault,
+          elevatedDefault: agentEntry?.elevatedDefault ?? agentDefaults.elevatedDefault,
         },
         agentId,
         explicitConfiguredContextTokens:
