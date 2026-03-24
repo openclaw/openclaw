@@ -1062,9 +1062,9 @@ export async function startGatewayServer(
         return;
       }
       if (configOverride) {
-        await runWithSecretsActivationLock(async () => {
-          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
-        });
+        // activateRuntimeSecrets already acquires the secrets activation lock
+        // internally — wrapping it again would self-deadlock on the promise chain.
+        await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
         return;
       }
       const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
@@ -1081,17 +1081,13 @@ export async function startGatewayServer(
         // The disk read is only used to detect that we should refresh.
         const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
         if (runtimeSourceConfig) {
-          await runWithSecretsActivationLock(async () => {
-            await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
-          });
+          await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
           return;
         }
       }
       const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
       if (runtimeSourceConfig) {
-        await runWithSecretsActivationLock(async () => {
-          await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
-        });
+        await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
       }
     };
 
