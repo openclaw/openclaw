@@ -132,6 +132,38 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "agentId must match canonical session agent: kimi");
   });
 
+  test("rejects clearing agentId after it has already been set", async () => {
+    const result = await runPatch({
+      storeKey: KIMI_SUBAGENT_KEY,
+      store: {
+        [KIMI_SUBAGENT_KEY]: {
+          sessionId: "sess-kimi",
+          updatedAt: 1,
+          agentId: "kimi",
+        } as SessionEntry,
+      },
+      patch: { key: KIMI_SUBAGENT_KEY, agentId: null },
+    });
+    expectPatchError(result, "agentId cannot be cleared once set");
+  });
+
+  test("backfills canonical agentId when patch omits agentId", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: KIMI_SUBAGENT_KEY,
+        store: {
+          [KIMI_SUBAGENT_KEY]: {
+            sessionId: "sess-kimi",
+            updatedAt: 1,
+          } as SessionEntry,
+        },
+        patch: { key: KIMI_SUBAGENT_KEY, label: "named child" },
+      }),
+    );
+    expect(entry.agentId).toBe("kimi");
+    expect(entry.label).toBe("named child");
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

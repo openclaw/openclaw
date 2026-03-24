@@ -21,6 +21,7 @@ import {
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -262,11 +263,30 @@ function resolveCanonicalAgentIdForSession(params: {
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
-    if (entry?.sessionId) {
-      storeBySessionId.set(entry.sessionId, { key, entry });
+    if (!entry?.sessionId) {
+      continue;
     }
+    const matches = matchesBySessionId.get(entry.sessionId);
+    if (matches) {
+      matches.push([key, entry]);
+    } else {
+      matchesBySessionId.set(entry.sessionId, [[key, entry]]);
+    }
+  }
+
+  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [sessionId, matches] of matchesBySessionId) {
+    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
+    if (!preferredKey) {
+      continue;
+    }
+    const preferredEntry = matches.find(([key]) => key === preferredKey)?.[1];
+    if (!preferredEntry) {
+      continue;
+    }
+    storeBySessionId.set(sessionId, { key: preferredKey, entry: preferredEntry });
   }
   return storeBySessionId;
 }

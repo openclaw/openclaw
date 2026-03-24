@@ -130,6 +130,8 @@ export async function applySessionsPatchToStore(params: {
   }
 
   if (!next.agentId) {
+    // Intentionally backfill the canonical agentId for both new entries and older store rows
+    // that predate agentId persistence, even when the incoming patch omits agentId.
     next.agentId = sessionAgentId;
   }
 

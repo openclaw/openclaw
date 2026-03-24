@@ -173,6 +173,38 @@ describe("sessions.usage", () => {
     );
   });
 
+  it("uses a deterministic preferred store key when multiple store entries share a sessionId", async () => {
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:main:slack:dm:u123": {
+          sessionId: "s-main",
+          label: "older alias",
+          updatedAt: 100,
+        },
+        "agent:opus:subagent:child": {
+          sessionId: "s-main",
+          label: "newer alias",
+          updatedAt: 777,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "agent:opus:subagent:child", agentId: "opus" }),
+      ]),
+    );
+    expect(sessions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "agent:main:slack:dm:u123", agentId: "main" }),
+      ]),
+    );
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
