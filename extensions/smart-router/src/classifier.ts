@@ -221,7 +221,7 @@ function tierFromScore(score: number): PromptTier {
 }
 
 /** Distance from the nearest tier boundary, normalised to [0, 1]. */
-function computeConfidence(score: number, tier: PromptTier): number {
+function computeConfidence(score: number): number {
   const boundaries = [TIER_SIMPLE_MAX, TIER_MEDIUM_MAX, TIER_COMPLEX_MAX];
   let minDist = Infinity;
   for (const b of boundaries) {
@@ -242,15 +242,14 @@ export function classifyPrompt(prompt: string): ClassificationResult {
   const scores = computeScores(text);
   const weightedScore = computeWeightedScore(scores);
 
-  // Force REASONING if 2+ reasoning keyword matches
-  const reasoningMatches = countKeywordMatches(text, REASONING_KEYWORDS);
-  if (reasoningMatches >= 2) {
-    const conf = Math.max(computeConfidence(weightedScore, "reasoning"), 0.85);
+  // Force REASONING if 2+ reasoning keyword matches (scores.reasoningMarkers === 1.0 means ≥2)
+  if (scores.reasoningMarkers >= 1.0) {
+    const conf = Math.max(computeConfidence(weightedScore), 0.85);
     return { tier: "reasoning", confidence: conf, weightedScore, scores };
   }
 
   const tier = tierFromScore(weightedScore);
-  const confidence = computeConfidence(weightedScore, tier);
+  const confidence = computeConfidence(weightedScore);
 
   return { tier, confidence, weightedScore, scores };
 }
