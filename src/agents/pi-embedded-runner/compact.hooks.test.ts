@@ -107,6 +107,32 @@ beforeEach(() => {
   resetCompactHooksHarnessMocks();
 });
 
+describe("compaction heartbeat prompt policy", () => {
+  it("suppresses heartbeat prompt rebuilds for cron-origin compaction", () => {
+    expect(
+      compactTesting.shouldInjectHeartbeatPromptDuringCompaction({
+        isDefaultAgent: true,
+        sourceTrigger: "cron",
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves heartbeat prompt rebuilds for non-cron compaction", () => {
+    expect(
+      compactTesting.shouldInjectHeartbeatPromptDuringCompaction({
+        isDefaultAgent: true,
+        sourceTrigger: "memory",
+      }),
+    ).toBe(true);
+    expect(
+      compactTesting.shouldInjectHeartbeatPromptDuringCompaction({
+        isDefaultAgent: false,
+        sourceTrigger: "cron",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("compactEmbeddedPiSessionDirect hooks", () => {
   beforeEach(() => {
     ensureRuntimePluginsLoaded.mockReset();
