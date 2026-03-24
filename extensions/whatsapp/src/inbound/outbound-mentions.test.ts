@@ -98,11 +98,20 @@ describe("extractOutboundMentions", () => {
     ]);
   });
 
+  it("ignores dotted suffixes like filenames and domains", () => {
+    expect(extractOutboundMentions("@1234567.json")).toEqual([]);
+    expect(extractOutboundMentions("@1234567.com")).toEqual([]);
+    expect(extractOutboundMentions("@1234567.89")).toEqual([]);
+  });
+
+  it("still matches mention followed by sentence-ending period", () => {
+    expect(extractOutboundMentions("ask @+1234567890.")).toEqual(["1234567890@s.whatsapp.net"]);
+  });
+
   it("matches mention followed by punctuation", () => {
     expect(extractOutboundMentions("hey @+1234567890, what's up?")).toEqual([
       "1234567890@s.whatsapp.net",
     ]);
-    expect(extractOutboundMentions("ask @+1234567890.")).toEqual(["1234567890@s.whatsapp.net"]);
     expect(extractOutboundMentions("(@+1234567890)")).toEqual(["1234567890@s.whatsapp.net"]);
   });
 
