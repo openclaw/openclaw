@@ -349,14 +349,31 @@ function collectExtensionFiles(extensionId: string): string[] {
   return files;
 }
 
+function collectModuleSpecifiers(text: string): string[] {
+  const patterns = [
+    /\bimport\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+    /\bimport\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+  ] as const;
+  const specifiers = new Set<string>();
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1]?.trim();
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    }
+  }
+  return [...specifiers];
+}
+
 function collectExtensionImports(text: string): string[] {
-  return [...text.matchAll(/["']([^"']*extensions\/[^"']+\.(?:[cm]?[jt]sx?))["']/g)].map(
-    (match) => match[1] ?? "",
-  );
+  return collectModuleSpecifiers(text).filter((specifier) => specifier.includes("extensions/"));
 }
 
 function collectImportSpecifiers(text: string): string[] {
-  return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
+  return collectModuleSpecifiers(text);
 }
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
