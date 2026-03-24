@@ -756,6 +756,17 @@ export class ClawBrowserPanel extends LitElement {
               url: p.url,
               title: p.title || p.url,
             }));
+
+            // 确保 targetId 也存在于 tabs 中 (如果是新创建的 about:blank)
+            if (!this.tabs.find((t) => t.targetId === targetId)) {
+              this.tabs.push({
+                targetId,
+                sessionId: attach.sessionId,
+                url: "about:blank",
+                title: "New Tab",
+              });
+            }
+
             await this.setupPageSession(this.currentSessionId);
             this.status = "✅ 运行中 (准备接收画面)";
 
@@ -1005,42 +1016,72 @@ export class ClawBrowserPanel extends LitElement {
   }
 
   private async switchTab(tab: TabInfo) {
-    if (tab.sessionId === this.currentSessionId) {
+    if (tab.sessionId === this.currentSessionId && this.currentSessionId) {
       return;
     }
-    if (!tab.sessionId) {
-      const res = (await this.cdp!.send("Target.attachToTarget", {
-        targetId: tab.targetId,
-        flatten: true,
-      })) as { sessionId: string };
-      tab.sessionId = res.sessionId;
+    if (!this.cdp || !this.wsConnected) {
+      return;
     }
-    this.currentSessionId = tab.sessionId;
-    await this.setupPageSession(this.currentSessionId);
-    this.requestUpdate();
+    try {
+      if (!tab.sessionId) {
+        const res = (await this.cdp.send("Target.attachToTarget", {
+          targetId: tab.targetId,
+          flatten: true,
+        })) as { sessionId: string };
+        tab.sessionId = res.sessionId;
+      }
+      this.currentSessionId = tab.sessionId;
+      await this.setupPageSession(this.currentSessionId);
+      this.requestUpdate();
+    } catch (e) {
+      console.error("[CDP] Switch tab failed:", e);
+    }
   }
 
   private async handleCloseTab(e: Event, tab: TabInfo) {
     e.stopPropagation();
-    await this.cdp!.send("Target.closeTarget", { targetId: tab.targetId });
+    if (!this.cdp || !this.wsConnected) {
+      return;
+    }
+    try {
+      await this.cdp.send("Target.closeTarget", { targetId: tab.targetId });
+    } catch (e) {
+      console.error("[CDP] Close tab failed:", e);
+    }
   }
 
   private async handleNavigate() {
-    if (!this.cdp || !this.currentSessionId) {
+    if (!this.cdp || !this.wsConnected || !this.currentSessionId) {
       return;
     }
     let url = this.currentUrl.trim();
-    if (url && !url.startsWith("http")) {
+    if (!url) {
+      return;
+    }
+    if (
+      url &&
+      !url.startsWith("http") &&
+      !url.startsWith("chrome://") &&
+      !url.startsWith("about:")
+    ) {
       url = "https://" + url;
     }
-    await this.cdp.send("Page.navigate", { url }, this.currentSessionId).catch(() => {});
+    try {
+      await this.cdp.send("Page.navigate", { url }, this.currentSessionId);
+    } catch (e) {
+      console.error("[CDP] Navigate failed:", e);
+    }
   }
 
   private async handleNewTab() {
-    if (!this.cdp) {
+    if (!this.cdp || !this.wsConnected) {
       return;
     }
-    await this.cdp.send("Target.createTarget", { url: "about:blank" });
+    try {
+      await this.cdp.send("Target.createTarget", { url: "about:blank" });
+    } catch (e) {
+      console.error("[CDP] Create tab failed:", e);
+    }
   }
 
   private sendMouseEvent(
