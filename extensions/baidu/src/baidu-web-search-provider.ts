@@ -194,6 +194,8 @@ function createBaiduToolDefinition(
         "baidu",
         query,
         resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        dateAfter,
+        dateBefore,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
       if (cached) {
