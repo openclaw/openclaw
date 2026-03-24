@@ -233,21 +233,23 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   });
 
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {
-    hoisted.callGatewayMock.mockImplementation(async (request: {
-      method?: string;
-      params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
-    }) => {
-      if (request.method === "sessions.patch") {
-        return { ok: true };
-      }
-      if (request.method === "agent") {
-        throw new Error("spawn startup failed");
-      }
-      if (request.method === "sessions.delete") {
-        return { ok: true };
-      }
-      return {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: {
+        method?: string;
+        params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
+      }) => {
+        if (request.method === "sessions.patch") {
+          return { ok: true };
+        }
+        if (request.method === "agent") {
+          throw new Error("spawn startup failed");
+        }
+        if (request.method === "sessions.delete") {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
 
     const result = await spawnSubagentDirect(
       {
