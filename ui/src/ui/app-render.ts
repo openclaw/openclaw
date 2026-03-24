@@ -1263,17 +1263,23 @@ export function renderApp(state: AppViewState) {
                     if (!configValue) {
                       return;
                     }
-                    const list = (
-                      getCurrentConfigValue() as { agents?: { list?: Dict<unknown>[] } } | null
+                    const currentList = (
+                      getCurrentConfigValue() as {
+                        agents?: { list?: Record<string, unknown>[] };
+                      } | null
                     )?.agents?.list;
-                    if (!Array.isArray(list)) {
+                    if (!Array.isArray(currentList)) {
                       return;
                     }
-                    const defaultIndex:number = list.findIndex((item: unknown) => (item as { default?: unknown }).default === true);
+                    // Work on a deep clone to avoid mutating live state
+                    const list = currentList.map((item) => ({
+                      ...item,
+                    }));
+                    const defaultIndex = list.findIndex((item) => item.default === true);
                     if (defaultIndex >= 0) {
                       delete list[defaultIndex].default;
                     }
-                    const index = list.findIndex((item: unknown) => (item as { id?: unknown }).id === agentId)
+                    const index = list.findIndex((item) => item.id === agentId);
                     if (index < 0) {
                       return;
                     }
