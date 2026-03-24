@@ -1,8 +1,8 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
-  postJsonRequest,
   normalizeBaseUrl,
+  postJsonRequest,
 } from "openclaw/plugin-sdk/media-understanding";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeGoogleModelId, parseGeminiAuth } from "./runtime-api.js";
@@ -131,7 +131,6 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const baseUrl = normalizeBaseUrl(resolveGoogleBaseUrl(req.cfg), DEFAULT_GOOGLE_IMAGE_BASE_URL);
       const baseUrl = normalizeBaseUrl(
         resolveGoogleBaseUrl(req.cfg),
         DEFAULT_GOOGLE_IMAGE_BASE_URL,
