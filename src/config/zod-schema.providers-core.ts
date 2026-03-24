@@ -550,6 +550,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    useComponentsV2: z.boolean().optional(),
     ui: DiscordUiSchema,
     slashCommand: z
       .object({
