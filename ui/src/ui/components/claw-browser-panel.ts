@@ -48,9 +48,11 @@ class CDPClient {
       } else if (msg.method) {
         const handlers = this.eventHandlers.get(msg.method);
         if (handlers) {
+          msg.params = msg.params || {};
+          // 为了不覆盖原本 params 里的属性（例如 screencast 的 integer sessionId）
+          // 我们将外层的 target Session ID 存为 targetSessionId
           if (msg.sessionId) {
-            msg.params = msg.params || {};
-            msg.params.sessionId = msg.sessionId;
+            msg.params.targetSessionId = msg.sessionId;
           }
           handlers.forEach((fn) => fn(msg.params));
         }
@@ -331,6 +333,9 @@ export class ClawBrowserPanel extends LitElement {
     .screen.dragging > *:not(.drag-handle):not(.window-controls):not(.resize-handle) {
       pointer-events: none !important;
     }
+    .screen.dragging canvas {
+      pointer-events: none !important;
+    }
     .screen canvas {
       max-width: 100% !important;
       max-height: 100% !important;
@@ -340,7 +345,11 @@ export class ClawBrowserPanel extends LitElement {
       display: block;
       margin: auto !important;
       background: #000;
+      border-radius: 0;
+      box-shadow: none;
       pointer-events: auto !important;
+      cursor: crosshair;
+      z-index: 10;
     }
     .window-controls {
       position: absolute;
@@ -435,6 +444,7 @@ export class ClawBrowserPanel extends LitElement {
       cursor: grab;
       z-index: 20;
       pointer-events: auto;
+      background: transparent;
     }
     .drag-handle:active {
       cursor: grabbing;
@@ -742,11 +752,22 @@ export class ClawBrowserPanel extends LitElement {
 
             this.cdp!.on(
               "Page.screencastFrame",
-              (params: { sessionId: string; data: string; metadata: unknown }) => {
-                const { sessionId, data } = params;
-                if (this.currentSessionId && sessionId !== this.currentSessionId) {
+              (params: {
+                sessionId: number;
+                targetSessionId?: string;
+                data: string;
+                metadata: unknown;
+              }) => {
+                const { sessionId: frameSessionId, targetSessionId, data } = params;
+                const eventSessionId = targetSessionId;
+
+                if (
+                  this.currentSessionId &&
+                  eventSessionId &&
+                  eventSessionId !== this.currentSessionId
+                ) {
                   void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                   return;
                 }
@@ -770,12 +791,12 @@ export class ClawBrowserPanel extends LitElement {
                     }
                   }
                   void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                 });
                 img.addEventListener("error", () => {
                   void this.cdp
-                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    ?.send("Page.screencastFrameAck", { sessionId: frameSessionId }, eventSessionId)
                     .catch(() => {});
                 });
                 img.src = `data:image/jpeg;base64,${data}`;
@@ -941,19 +962,16 @@ export class ClawBrowserPanel extends LitElement {
     x: number,
     y: number,
     button: string = "left",
-    clickCount: number = 1,
-    buttons?: string,
+    clickCount?: number,
   ) {
     if (!this.cdp || !this.currentSessionId) {
       return;
     }
-    void this.cdp
-      .send(
-        "Input.dispatchMouseEvent",
-        { type, x, y, button, clickCount, buttons },
-        this.currentSessionId,
-      )
-      .catch(() => {});
+    const params: Record<string, unknown> = { type, x, y, button };
+    if (clickCount !== undefined) {
+      params.clickCount = clickCount;
+    }
+    void this.cdp.send("Input.dispatchMouseEvent", params, this.currentSessionId).catch(() => {});
   }
 
   private handleMouseDown = (e: MouseEvent) => {
@@ -963,7 +981,7 @@ export class ClawBrowserPanel extends LitElement {
     }
     this.isMouseDown = true;
     this.getImeInput()?.focus();
-    this.sendMouseEvent("mousePressed", pos.x, pos.y, "left", 1, "left");
+    this.sendMouseEvent("mousePressed", pos.x, pos.y, "left", 1);
   };
 
   private handleMouseUp = (e: MouseEvent) => {
@@ -972,7 +990,7 @@ export class ClawBrowserPanel extends LitElement {
       return;
     }
     this.isMouseDown = false;
-    this.sendMouseEvent("mouseReleased", pos.x, pos.y, "left", 1, "none");
+    this.sendMouseEvent("mouseReleased", pos.x, pos.y, "left", 1);
   };
 
   private handleMouseMove = (e: MouseEvent) => {
@@ -985,7 +1003,7 @@ export class ClawBrowserPanel extends LitElement {
       return;
     }
     this.lastMouseMoveTime = now;
-    this.sendMouseEvent("mouseMoved", pos.x, pos.y, "none", 0, this.isMouseDown ? "left" : "none");
+    this.sendMouseEvent("mouseMoved", pos.x, pos.y, this.isMouseDown ? "left" : "none");
   };
 
   private handleWheel = (e: WheelEvent) => {
@@ -1095,8 +1113,8 @@ export class ClawBrowserPanel extends LitElement {
         containerWidth: this.offsetWidth,
       };
     }
-    window.addEventListener("mousemove", this.handleDragMove);
-    window.addEventListener("mouseup", this.handleDragEnd);
+    window.addEventListener("mousemove", this.handleDragMove, { capture: true, passive: false });
+    window.addEventListener("mouseup", this.handleDragEnd, { capture: true });
   };
 
   private handleDragMove = (e: MouseEvent) => {
@@ -1134,8 +1152,8 @@ export class ClawBrowserPanel extends LitElement {
     this.isDragging = false;
     this.isFloating = this.tempIsFloating;
     this.shadowRoot?.querySelector(".screen")?.classList.remove("dragging");
-    window.removeEventListener("mousemove", this.handleDragMove);
-    window.removeEventListener("mouseup", this.handleDragEnd);
+    window.removeEventListener("mousemove", this.handleDragMove, { capture: true });
+    window.removeEventListener("mouseup", this.handleDragEnd, { capture: true });
   };
 
   private handleResizeStart = (e: MouseEvent, edge: string) => {
