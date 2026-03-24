@@ -1876,6 +1876,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.llm",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.llm.idleTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.maxConcurrent",
       "kind": "core",
       "type": "integer",
@@ -2454,7 +2474,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Remote Embedding Base URL",
       "help": "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
@@ -4925,7 +4946,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -6715,6 +6739,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -40944,7 +40969,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "network"
+        "network",
+        "url-secret"
       ],
       "label": "Gateway APNs Relay Base URL",
       "help": "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
@@ -42861,13 +42887,42 @@
       "hasChildren": false
     },
     {
+      "path": "mcp.servers.*.headers",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.headers.*",
+      "kind": "core",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -43298,6 +43353,20 @@
       ],
       "label": "QMD Search Mode",
       "help": "Selects the QMD retrieval path: \"query\" uses standard query flow, \"search\" uses search-oriented retrieval, and \"vsearch\" emphasizes vector retrieval. Keep default unless tuning relevance quality.",
+      "hasChildren": false
+    },
+    {
+      "path": "memory.qmd.searchTool",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "QMD Search Tool Override",
+      "help": "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
       "hasChildren": false
     },
     {
@@ -44611,7 +44680,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -44707,7 +44777,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "models"
+        "models",
+        "url-secret"
       ],
       "label": "Model Provider Base URL",
       "help": "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
@@ -44824,7 +44895,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -45628,6 +45700,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.acpx.config.pluginToolsMcpBridge",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into ACPX sessions so ACP agents can call plugin-registered tools.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx.config.queueOwnerTtlSeconds",
       "kind": "plugin",
       "type": "number",
@@ -45898,6 +45984,127 @@
       "label": "@openclaw/anthropic-provider",
       "help": "OpenClaw Anthropic provider plugin (plugin: anthropic)",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider",
+      "help": "OpenClaw Anthropic Vertex provider plugin (plugin: anthropic-vertex)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider Config",
+      "help": "Plugin-defined config payload for anthropic-vertex.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/anthropic-vertex-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.anthropic.config",
@@ -47494,7 +47701,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 960,
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -47530,7 +47736,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 2,
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -48716,7 +48921,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Firecrawl Search Base URL",
       "help": "Firecrawl Search base URL override.",
@@ -50984,7 +51190,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "storage"
+        "storage",
+        "url-secret"
       ],
       "label": "Base URL",
       "help": "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
@@ -51782,7 +51989,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Kimi Search Base URL",
       "help": "Kimi base URL override.",
@@ -53475,7 +53683,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Perplexity Base URL",
       "help": "Optional Perplexity/OpenRouter chat-completions base URL override.",
@@ -54620,7 +54829,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Tavily Base URL",
       "help": "Tavily API base URL override.",
@@ -56576,7 +56786,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "media"
+        "media",
+        "url-secret"
       ],
       "label": "ElevenLabs Base URL",
       "hasChildren": false
@@ -56847,7 +57058,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -58263,7 +58477,7 @@
         "storage"
       ],
       "label": "Plugin Install Path",
-      "help": "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      "help": "Resolved install directory for the installed plugin bundle.",
       "hasChildren": false
     },
     {
@@ -60761,6 +60975,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -60770,8 +60985,8 @@
       "tags": [
         "tools"
       ],
-      "label": "Exec Host",
-      "help": "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      "label": "Exec Target",
+      "help": "Selects execution target strategy for shell commands. Use \"auto\" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.",
       "hasChildren": false
     },
     {
@@ -61480,7 +61695,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -61688,7 +61907,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62163,7 +62386,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62356,7 +62583,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62806,7 +63037,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -63095,7 +63330,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -63288,7 +63527,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64241,7 +64484,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "tools"
+        "tools",
+        "url-secret"
       ],
       "label": "Firecrawl Base URL",
       "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
@@ -64530,7 +64774,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64647,7 +64894,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64724,7 +64974,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64801,7 +65054,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64888,7 +65144,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64980,7 +65239,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
