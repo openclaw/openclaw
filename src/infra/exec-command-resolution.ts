@@ -13,13 +13,20 @@ export type ExecutableResolution = {
   executableName: string;
 };
 
-export type CommandResolution = ExecutableResolution & {
+export type CommandResolution = {
+  execution: ExecutableResolution;
+  policy: ExecutableResolution;
   effectiveArgv?: string[];
   wrapperChain?: string[];
   policyBlocked?: boolean;
   blockedWrapper?: string;
-  policyResolution?: ExecutableResolution;
 };
+
+function isCommandResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): resolution is CommandResolution {
+  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
+}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -80,19 +87,36 @@ function buildCommandResolution(params: {
   policyBlocked: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const resolution = buildExecutableResolution(params.rawExecutable, params);
-  const policyResolution =
-    params.policyRawExecutable && params.policyRawExecutable !== params.rawExecutable
-      ? buildExecutableResolution(params.policyRawExecutable, params)
-      : undefined;
-  return {
-    ...resolution,
+  const execution = buildExecutableResolution(params.rawExecutable, params);
+  const policy = params.policyRawExecutable
+    ? buildExecutableResolution(params.policyRawExecutable, params)
+    : execution;
+  const resolution: CommandResolution = {
+    execution,
+    policy,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
-    policyResolution,
   };
+  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
+  return Object.defineProperties(resolution, {
+    rawExecutable: {
+      get: () => execution.rawExecutable,
+    },
+    resolvedPath: {
+      get: () => execution.resolvedPath,
+    },
+    resolvedRealPath: {
+      get: () => execution.resolvedRealPath,
+    },
+    executableName: {
+      get: () => execution.executableName,
+    },
+    policyResolution: {
+      get: () => (policy === execution ? undefined : policy),
+    },
+  });
 }
 
 export function resolveCommandResolution(
@@ -137,13 +161,6 @@ export function resolveCommandResolutionFromArgv(
   });
 }
 
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolveExecutableCandidatePathFromResolution(resolution, cwd);
-}
-
 function resolveExecutableCandidatePathFromResolution(
   resolution: ExecutableResolution | null | undefined,
   cwd?: string,
@@ -169,14 +186,64 @@ function resolveExecutableCandidatePathFromResolution(
   return path.resolve(base, expanded);
 }
 
-export function resolvePolicyAllowlistCandidatePath(
-  resolution: CommandResolution | null,
+export function resolveExecutionTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
+  }
+  return isCommandResolution(resolution) ? resolution.execution : resolution;
+}
+
+export function resolvePolicyTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
+  }
+  return isCommandResolution(resolution) ? resolution.policy : resolution;
+}
+
+export function resolveExecutionTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.policyResolution ?? resolution,
+    isCommandResolution(resolution) ? resolution.execution : resolution,
     cwd,
   );
+}
+
+export function resolvePolicyTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
+export function resolveApprovalAuditCandidatePath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+// Legacy alias kept while callers migrate to explicit target naming.
+export function resolveAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutionTargetCandidatePath(resolution, cwd);
+}
+
+export function resolvePolicyAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
 export function matchAllowlist(

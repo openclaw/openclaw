@@ -158,14 +158,16 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleChosen > 1) {
             throw new Error("Choose at most one schedule change");
           }
-          if (
-            (requestedStaggerMs !== undefined || typeof opts.tz === "string") &&
-            (opts.at || opts.every)
-          ) {
-            throw new Error("--stagger/--exact/--tz are only valid for cron schedules");
+          if (typeof opts.tz === "string" && opts.every) {
+            throw new Error("--tz is only valid with --cron or offset-less --at");
+          }
+          if (requestedStaggerMs !== undefined && (opts.at || opts.every)) {
+            throw new Error("--stagger/--exact are only valid for cron schedules");
           }
           if (opts.at) {
-            const atIso = parseAt(String(opts.at));
+            const tzRaw =
+              typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined;
+            const atIso = parseAt(String(opts.at), tzRaw);
             if (!atIso) {
               throw new Error("Invalid --at");
             }
