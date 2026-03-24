@@ -14,6 +14,7 @@ import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
+  normalizeBlueBubblesServerUrl,
   type BlueBubblesSendTarget,
 } from "./types.js";
 
@@ -485,7 +486,10 @@ export async function sendMessageBlueBubbles(
   // by accountId, so refreshing with ad-hoc or overridden credentials would poison the
   // account-scoped cache entry for subsequent sends.
   const accountServerUrl = normalizeSecretInputString(account.config.serverUrl);
-  const credentialsAreAccountBound = accountServerUrl != null && baseUrl === accountServerUrl;
+  const accountPassword = normalizeSecretInputString(account.config.password);
+  const credentialsAreAccountBound =
+    (!opts.serverUrl || normalizeBlueBubblesServerUrl(baseUrl) === (accountServerUrl ? normalizeBlueBubblesServerUrl(accountServerUrl) : "")) &&
+    (!opts.password || password === accountPassword);
   if (
     privateApiStatus === null &&
     (wantsReplyThread || wantsEffect) &&

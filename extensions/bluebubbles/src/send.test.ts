@@ -1049,6 +1049,162 @@ describe("send", () => {
       expect(typeof body.tempGuid).toBe("string");
       expect(body.tempGuid.length).toBeGreaterThan(0);
     });
+
+    describe("lazy-refresh Private API status", () => {
+      beforeEach(() => {
+        fetchServerInfoMock.mockClear();
+      });
+
+      it("refreshes when status is unknown and reply is requested with account-bound credentials", async () => {
+        // Start with unknown status, then after refresh return enabled
+        privateApiStatusMock
+          .mockReturnValueOnce(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown)
+          .mockReturnValueOnce(BLUE_BUBBLES_PRIVATE_API_STATUS.enabled);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: true });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-refreshed" } });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Reply with refresh", {
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://localhost:1234",
+                password: "test",
+              },
+            },
+          },
+          replyToMessageGuid: "reply-guid-456",
+        });
+
+        expect(result.messageId).toBe("msg-refreshed");
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+        expect(fetchServerInfoMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            baseUrl: "http://localhost:1234",
+            password: "test",
+            accountId: "default",
+          }),
+        );
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.selectedMessageGuid).toBe("reply-guid-456");
+      });
+
+      it("skips refresh when no reply or effect is requested (plain send)", async () => {
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-plain" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Plain message", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      });
+
+      it("skips refresh when status is already known (enabled)", async () => {
+        mockBlueBubblesPrivateApiStatusOnce(
+          privateApiStatusMock,
+          BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+        );
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-known" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-789",
+        });
+
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      });
+
+      it("skips refresh when status is already known (disabled)", async () => {
+        mockBlueBubblesPrivateApiStatusOnce(
+          privateApiStatusMock,
+          BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+        );
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-disabled" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-789",
+        });
+
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      });
+
+      it("skips refresh when credentials are overridden (different serverUrl)", async () => {
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-override" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply", {
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://account-server:1234",
+                password: "test",
+              },
+            },
+          },
+          serverUrl: "http://different-server:5678",
+          password: "test",
+          replyToMessageGuid: "reply-guid-override",
+        });
+
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      });
+
+      it("skips refresh when credentials are overridden (different password)", async () => {
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-override-pw" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply", {
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://localhost:1234",
+                password: "account-password",
+              },
+            },
+          },
+          serverUrl: "http://localhost:1234",
+          password: "different-password",
+          replyToMessageGuid: "reply-guid-pw",
+        });
+
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      });
+
+      it("honors caller-provided timeoutMs for the refresh probe", async () => {
+        privateApiStatusMock
+          .mockReturnValueOnce(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown)
+          .mockReturnValueOnce(BLUE_BUBBLES_PRIVATE_API_STATUS.enabled);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: true });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-timeout" } });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply", {
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://localhost:1234",
+                password: "test",
+              },
+            },
+          },
+          timeoutMs: 15000,
+          replyToMessageGuid: "reply-guid-timeout",
+        });
+
+        expect(fetchServerInfoMock).toHaveBeenCalledWith(
+          expect.objectContaining({ timeoutMs: 15000 }),
+        );
+      });
+    });
   });
 
   describe("createChatForHandle", () => {

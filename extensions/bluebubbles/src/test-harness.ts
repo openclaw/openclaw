@@ -54,7 +54,7 @@ type BlueBubblesProbeMockModule = {
       timeoutMs?: number;
     }) => Promise<Record<string, unknown> | null>
   >;
-  getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
+  getCachedBlueBubblesPrivateApiStatus: Mock<(accountId?: string) => boolean | null>;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
 
