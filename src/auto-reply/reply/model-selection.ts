@@ -156,12 +156,26 @@ function isImageModel(provider: string, model: string, imageModelKeys: Set<strin
   }
 
   // 4. Compare stored model's pure name against all entries' pure names
-  // This handles provider-qualified imageModel entries matching providerless stored models
+  // This handles provider-qualified imageModel entries matching providerless stored models.
+  // IMPORTANT: When the imageModel entry is provider-qualified (e.g., "provider-a/model-x"),
+  // it must match by provider-qualified key - the effectiveProvider must align with the entry's
+  // provider. This prevents incorrectly matching "provider-b/model-x" when only "provider-a/model-x"
+  // is configured as an image model.
   for (const entry of imageModelKeys) {
     const slash = entry.indexOf("/");
     const entryPureModel = slash > 0 ? entry.slice(slash + 1) : entry;
     if (entryPureModel === pureModel) {
-      return true;
+      if (slash > 0) {
+        // Entry has provider prefix - require provider alignment
+        const entryProvider = entry.slice(0, slash);
+        if (effectiveProvider === entryProvider) {
+          return true;
+        }
+        // Provider mismatch - continue checking other entries
+      } else {
+        // Entry is providerless - matches any provider
+        return true;
+      }
     }
   }
 
