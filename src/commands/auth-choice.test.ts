@@ -311,7 +311,7 @@ describe("applyAuthChoice", () => {
     });
   });
 
-  it("stores GigaChat Basic credentials as an env ref when secret-input-mode is ref", async () => {
+  it("stores an explicit combined GigaChat Basic credential ref in secret-input-mode ref", async () => {
     await setupTempState();
 
     process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret

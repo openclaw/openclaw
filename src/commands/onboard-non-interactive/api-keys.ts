@@ -3,6 +3,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveGigachatAuthMode } from "../../agents/gigachat-auth.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -42,6 +43,17 @@ async function resolveApiKeyFromProfiles(params: {
       agentDir: params.agentDir,
     });
     if (resolved?.apiKey) {
+      if (
+        params.provider === "gigachat" &&
+        (resolveGigachatAuthMode({
+          metadata: cred.metadata,
+          apiKey: resolved.apiKey,
+          authProfileId: profileId,
+        }) === "basic" ||
+          (cred.metadata?.scope !== undefined && cred.metadata.scope !== "GIGACHAT_API_PERS"))
+      ) {
+        continue;
+      }
       return {
         key: resolved.apiKey,
         profileId,

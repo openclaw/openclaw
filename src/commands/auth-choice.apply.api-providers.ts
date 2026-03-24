@@ -289,10 +289,14 @@ export async function applyAuthChoiceApiProviders(
       configuredCredentialSummary.push(`Username: ${username}`);
     }
 
+    // Preserve explicit combined refs as-is in ref mode instead of asking the
+    // storage helper to synthesize the provider default env ref again.
     await setGigachatApiKey(
       basicCredential,
       params.agentDir,
-      requestedSecretInputMode ? { secretInputMode: requestedSecretInputMode } : undefined,
+      typeof basicCredential === "string" && requestedSecretInputMode
+        ? { secretInputMode: requestedSecretInputMode }
+        : undefined,
       basicMetadata,
     );
 

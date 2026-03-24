@@ -59,7 +59,7 @@ describe("onboard auth provider config merges", () => {
     expect(next.agents?.defaults?.models).toEqual(agentModels);
   });
 
-  it("appends missing catalog models even when the default model already exists", () => {
+  it("keeps curated provider model lists intact when the default model already exists", () => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
@@ -84,7 +84,34 @@ describe("onboard auth provider config merges", () => {
     expect(next.models?.providers?.qianfan?.models?.map((m) => m.id)).toEqual([
       "deepseek-v3.2",
       "legacy-only",
-      "ernie-5.0-thinking-preview",
+    ]);
+  });
+
+  it("adds only the missing default model instead of repopulating the full stock list", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          modelstudio: {
+            api: "openai-completions",
+            baseUrl: "https://modelstudio.example.com/v1",
+            models: [makeModel("custom-curated")],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderConfigWithDefaultModels(cfg, {
+      agentModels,
+      providerId: "modelstudio",
+      api: "openai-completions",
+      baseUrl: "https://modelstudio.example.com/v1",
+      defaultModels: [makeModel("qwen3.5-plus"), makeModel("glm-5"), makeModel("kimi-k2.5")],
+      defaultModelId: "qwen3.5-plus",
+    });
+
+    expect(next.models?.providers?.modelstudio?.models?.map((m) => m.id)).toEqual([
+      "custom-curated",
+      "qwen3.5-plus",
     ]);
   });
 

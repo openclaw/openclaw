@@ -107,9 +107,18 @@ export function applyProviderConfigWithDefaultModels(
   },
 ): OpenClawConfig {
   const providerState = resolveProviderModelMergeState(cfg, params.providerId);
+  const defaultModelId = params.defaultModelId ?? params.defaultModels[0]?.id;
+  const hasDefaultModel = defaultModelId
+    ? providerState.existingModels.some((model) => model.id === defaultModelId)
+    : true;
+  const missingDefaultModel = defaultModelId
+    ? params.defaultModels.find((model) => model.id === defaultModelId)
+    : undefined;
   const mergedModels =
     providerState.existingModels.length > 0
-      ? mergeMissingModelsById(providerState.existingModels, params.defaultModels)
+      ? hasDefaultModel || !missingDefaultModel
+        ? providerState.existingModels
+        : [...providerState.existingModels, missingDefaultModel]
       : params.defaultModels;
   return applyProviderConfigWithMergedModels(cfg, {
     agentModels: params.agentModels,
@@ -340,22 +349,6 @@ type ProviderModelMergeState = {
   existingProvider?: ModelProviderConfig;
   existingModels: ModelDefinitionConfig[];
 };
-
-function mergeMissingModelsById(
-  existingModels: ModelDefinitionConfig[],
-  incomingModels: ModelDefinitionConfig[],
-): ModelDefinitionConfig[] {
-  if (incomingModels.length === 0) {
-    return existingModels;
-  }
-
-  return [
-    ...existingModels,
-    ...incomingModels.filter(
-      (model) => !existingModels.some((existing) => existing.id === model.id),
-    ),
-  ];
-}
 
 function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
