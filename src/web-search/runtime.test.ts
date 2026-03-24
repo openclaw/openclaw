@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { runWebSearch } from "./runtime.js";
 
 type TestPluginWebSearchConfig = {
@@ -13,6 +14,7 @@ type TestPluginWebSearchConfig = {
 describe("web search runtime", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+    clearSecretsRuntimeSnapshot();
   });
 
   it("executes searches through the active plugin registry", async () => {
@@ -157,6 +159,94 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "duckduckgo",
       result: { query: "fallback", provider: "duckduckgo" },
+    });
+  });
+
+  it("prefers the active runtime-selected provider when callers omit runtime metadata", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "alpha-search",
+      pluginName: "Alpha Search",
+      provider: {
+        id: "alpha",
+        label: "Alpha Search",
+        hint: "Alpha runtime provider",
+        envVars: ["ALPHA_SEARCH_API_KEY"],
+        placeholder: "alpha-...",
+        signupUrl: "https://example.com/alpha",
+        credentialPath: "tools.web.search.alpha.apiKey",
+        autoDetectOrder: 1,
+        getCredentialValue: () => "alpha-configured",
+        setCredentialValue: () => {},
+        createTool: ({ runtimeMetadata }) => ({
+          description: "alpha",
+          parameters: {},
+          execute: async (args) => ({
+            ...args,
+            provider: "alpha",
+            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          }),
+        }),
+      },
+      source: "test",
+    });
+    registry.webSearchProviders.push({
+      pluginId: "beta-search",
+      pluginName: "Beta Search",
+      provider: {
+        id: "beta",
+        label: "Beta Search",
+        hint: "Beta runtime provider",
+        envVars: ["BETA_SEARCH_API_KEY"],
+        placeholder: "beta-...",
+        signupUrl: "https://example.com/beta",
+        credentialPath: "tools.web.search.beta.apiKey",
+        autoDetectOrder: 2,
+        getCredentialValue: () => "beta-configured",
+        setCredentialValue: () => {},
+        createTool: ({ runtimeMetadata }) => ({
+          description: "beta",
+          parameters: {},
+          execute: async (args) => ({
+            ...args,
+            provider: "beta",
+            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          }),
+        }),
+      },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    activateSecretsRuntimeSnapshot({
+      sourceConfig: {},
+      config: {},
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "auto-detect",
+          selectedProvider: "beta",
+          diagnostics: [],
+        },
+        fetch: {
+          firecrawl: {
+            active: false,
+            apiKeySource: "missing",
+            diagnostics: [],
+          },
+        },
+        diagnostics: [],
+      },
+    });
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "runtime" },
+      }),
+    ).resolves.toEqual({
+      provider: "beta",
+      result: { query: "runtime", provider: "beta", runtimeSelectedProvider: "beta" },
     });
   });
 });
