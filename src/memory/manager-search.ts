@@ -73,24 +73,38 @@ export async function searchVector(params: {
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
   });
-  const scored = candidates
-    .map((chunk) => ({
-      chunk,
-      score: cosineSimilarity(params.queryVec, chunk.embedding),
-    }))
-    .filter((entry) => Number.isFinite(entry.score));
-  return scored
-    .toSorted((a, b) => b.score - a.score)
-    .slice(0, params.limit)
-    .map((entry) => ({
-      id: entry.chunk.id,
-      path: entry.chunk.path,
-      startLine: entry.chunk.startLine,
-      endLine: entry.chunk.endLine,
-      score: entry.score,
-      snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
-      source: entry.chunk.source,
-    }));
+  const top: Array<{
+    chunk: (typeof candidates)[number];
+    score: number;
+  }> = [];
+
+  for (const chunk of candidates) {
+    const score = cosineSimilarity(params.queryVec, chunk.embedding);
+    if (!Number.isFinite(score)) {
+      continue;
+    }
+    if (top.length < params.limit) {
+      top.push({ chunk, score });
+      top.sort((a, b) => b.score - a.score);
+      continue;
+    }
+    const weakest = top[top.length - 1];
+    if (!weakest || score <= weakest.score) {
+      continue;
+    }
+    top[top.length - 1] = { chunk, score };
+    top.sort((a, b) => b.score - a.score);
+  }
+
+  return top.map((entry) => ({
+    id: entry.chunk.id,
+    path: entry.chunk.path,
+    startLine: entry.chunk.startLine,
+    endLine: entry.chunk.endLine,
+    score: entry.score,
+    snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
+    source: entry.chunk.source,
+  }));
 }
 
 export function listChunks(params: {
