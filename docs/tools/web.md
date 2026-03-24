@@ -1,5 +1,5 @@
 ---
-summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- search the web with Bocha, Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
@@ -46,6 +46,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Bocha Search" icon="magnifying-glass" href="https://open.bochaai.com/">
+    High quality Web search with structured results. Best for Chinese content.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -79,6 +82,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 | Provider                               | Result style               | Filters                                          | API key                                     |
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Bocha](https://open.bochaai.com/)    | Structured snippets        | Time range                                       | `BOCHA_API_KEY`                             |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |

@@ -1,5 +1,6 @@
 const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = {
   brave: "brave",
+  bocha: "bocha",
   exa: "exa",
   firecrawl: "firecrawl",
   gemini: "google",

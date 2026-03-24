@@ -490,6 +490,8 @@ export type ToolsConfig = {
       grok?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Kimi scoped config. */
       kimi?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Bocha scoped config. */
+      bocha?: WebSearchLegacyProviderConfig & { summary?: boolean };
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
     } & Record<string, unknown>;

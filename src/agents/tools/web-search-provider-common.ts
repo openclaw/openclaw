@@ -151,6 +151,7 @@ export function resolveSiteName(url: string | undefined): string | undefined {
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
+const BOCHA_FRESHNESS_VALUES = new Set(["noLimit", "oneDay", "oneWeek", "oneMonth", "oneYear"]);
 
 export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pd: "day",
@@ -164,9 +165,20 @@ export const RECENCY_TO_FRESHNESS: Record<string, string> = {
   month: "pm",
   year: "py",
 };
+export const FRESHNESS_TO_BOCHA: Record<string, string> = {
+  pd: "oneDay",
+  pw: "oneWeek",
+  pm: "oneMonth",
+  py: "oneYear",
+  day: "oneDay",
+  week: "oneWeek",
+  month: "oneMonth",
+  year: "oneYear",
+};
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+const BOCHA_DATE_RANGE_PATTERN = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/;
 
 function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -208,7 +220,7 @@ export function normalizeToIsoDate(value: string): string | undefined {
 
 export function normalizeFreshness(
   value: string | undefined,
-  provider: "brave" | "perplexity",
+  provider: "brave" | "perplexity" | "bocha",
 ): string | undefined {
   if (!value) {
     return undefined;
@@ -219,6 +231,39 @@ export function normalizeFreshness(
   }
 
   const lower = trimmed.toLowerCase();
+  
+  if (provider === "bocha") {
+    // Exact match for bocha enum values (case-sensitive as per bocha doc, but let's be flexible if they pass exact match)
+    if (BOCHA_FRESHNESS_VALUES.has(trimmed)) {
+      return trimmed;
+    }
+    // Map from brave/perplexity shortcuts
+    if (FRESHNESS_TO_BOCHA[lower]) {
+      return FRESHNESS_TO_BOCHA[lower];
+    }
+    // Single date
+    if (isValidIsoDate(trimmed)) {
+      return trimmed;
+    }
+    // Date range
+    const rangeMatch = trimmed.match(BOCHA_DATE_RANGE_PATTERN);
+    if (rangeMatch) {
+      const [, start, end] = rangeMatch;
+      if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
+        return trimmed;
+      }
+    }
+    // brave range format to bocha range format
+    const braveRangeMatch = trimmed.match(BRAVE_FRESHNESS_RANGE);
+    if (braveRangeMatch) {
+      const [, start, end] = braveRangeMatch;
+      if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
+        return `${start}..${end}`;
+      }
+    }
+    return "noLimit"; // Fallback for bocha
+  }
+
   if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
     return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
   }
@@ -229,6 +274,14 @@ export function normalizeFreshness(
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
+      if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
+        return `${start}to${end}`;
+      }
+    }
+    // try to convert bocha range to brave range
+    const bochaMatch = trimmed.match(BOCHA_DATE_RANGE_PATTERN);
+    if (bochaMatch) {
+      const [, start, end] = bochaMatch;
       if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
         return `${start}to${end}`;
       }

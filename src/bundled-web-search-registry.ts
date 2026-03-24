@@ -1,4 +1,5 @@
 import bravePlugin from "../extensions/brave/index.js";
+import bochaPlugin from "../extensions/bocha/index.js";
 import duckduckgoPlugin from "../extensions/duckduckgo/index.js";
 import exaPlugin from "../extensions/exa/index.js";
 import firecrawlPlugin from "../extensions/firecrawl/index.js";
@@ -23,6 +24,12 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
       return bravePlugin;
     },
     credentialValue: "BSA-test",
+  },
+  {
+    get plugin() {
+      return bochaPlugin;
+    },
+    credentialValue: "sk-bocha-test",
   },
   {
     get plugin() {
