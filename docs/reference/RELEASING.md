@@ -18,11 +18,14 @@ OpenClaw has three public release lanes:
 
 - Stable release version: `YYYY.M.D`
   - Git tag: `vYYYY.M.D`
+- Stable correction release version: `YYYY.M.D-N`
+  - Git tag: `vYYYY.M.D-N`
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current stable npm release
 - `beta` means the current prerelease npm release
+- Stable correction releases also publish to npm `latest`
 - Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
