@@ -9,7 +9,11 @@ import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
-import { isRecentInboundMessage } from "./dedupe.js";
+import {
+  isRecentInboundMessage,
+  isRecentOutboundMessage,
+  rememberRecentOutboundMessage,
+} from "./dedupe.js";
 import {
   describeReplyContext,
   extractLocationData,
@@ -128,6 +132,27 @@ export async function monitorWebInbox(options: {
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
 
+  const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
+    const messageId =
+      typeof result === "object" && result && "key" in result
+        ? String((result as { key?: { id?: string } }).key?.id ?? "")
+        : "";
+    if (!messageId) {
+      return;
+    }
+    rememberRecentOutboundMessage({
+      accountId: options.accountId,
+      remoteJid,
+      messageId,
+    });
+  };
+
+  const sendTrackedMessage = async (jid: string, content: AnyMessageContent) => {
+    const result = await sock.sendMessage(jid, content);
+    rememberOutboundMessage(jid, result);
+    return result;
+  };
+
   const getGroupMeta = async (jid: string) => {
     const cached = groupMetaCache.get(jid);
     if (cached && cached.expires > Date.now()) {
@@ -183,6 +208,19 @@ export async function monitorWebInbox(options: {
     }
 
     const group = isGroupJid(remoteJid);
+    if (
+      group &&
+      Boolean(msg.key?.fromMe) &&
+      id &&
+      isRecentOutboundMessage({
+        accountId: options.accountId,
+        remoteJid,
+        messageId: id,
+      })
+    ) {
+      logVerbose(`Skipping recent outbound WhatsApp group echo ${id} for ${remoteJid}`);
+      return null;
+    }
     if (id) {
       const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
       if (isRecentInboundMessage(dedupeKey)) {
@@ -221,7 +259,7 @@ export async function monitorWebInbox(options: {
       isFromMe: Boolean(msg.key?.fromMe),
       messageTimestampMs,
       connectedAtMs,
-      sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
+      sock: { sendMessage: (jid, content) => sendTrackedMessage(jid, content) },
       remoteJid,
     });
     if (!access.allowed) {
@@ -334,10 +372,10 @@ export async function monitorWebInbox(options: {
       }
     };
     const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+      await sendTrackedMessage(chatJid, { text });
     };
     const sendMedia = async (payload: AnyMessageContent) => {
-      await sock.sendMessage(chatJid, payload);
+      await sendTrackedMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
@@ -474,7 +512,7 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
