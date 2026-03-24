@@ -504,9 +504,9 @@ function renderAvatar(
     />`;
   }
 
-  /* Assistant with no custom avatar: always use logo */
-  if (normalized === "assistant") {
-    const logoUrl = agentLogoUrl(basePath ?? "");
+  /* Assistant with no custom avatar: use logo only when basePath is available */
+  if (normalized === "assistant" && basePath) {
+    const logoUrl = agentLogoUrl(basePath);
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
       src="${logoUrl}"

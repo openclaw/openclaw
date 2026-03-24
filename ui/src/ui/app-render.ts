@@ -584,7 +584,7 @@ export function renderApp(state: AppViewState) {
                     <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
                   </div>
                   <p class="update-modal__title">New version available</p>
-                  <p class="update-modal__meta">v${state.updateAvailable.latestVersion} → v${state.updateAvailable.currentVersion}</p>
+                  <p class="update-modal__meta">v${state.updateAvailable.currentVersion} → v${state.updateAvailable.latestVersion}</p>
                   <span class="update-modal__tag">Ready to install</span>
                   <div class="update-modal__actions">
                     <button

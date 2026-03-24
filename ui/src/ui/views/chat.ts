@@ -1235,38 +1235,38 @@ export function renderChat(props: ChatProps) {
                 ${icons.plus}
               </button>
               <div class="agent-chat__actions-popup">
-                <button class="agent-chat__actions-item" @click=${() => {
-                  document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-                  document
-                    .querySelector(".agent-chat__actions-popup")
+                <button class="agent-chat__actions-item" @click=${(e: Event) => {
+                  (e.target as HTMLElement)
+                    .closest(".agent-chat__actions-popup")
                     ?.classList.remove("agent-chat__actions-popup--open");
+                  document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
                 }}>
                   <span class="agent-chat__actions-item-icon">${icons.paperclip}</span>
-                  <span class="agent-chat__actions-item-label">Joindre un fichier</span>
+                  <span class="agent-chat__actions-item-label">Attach file</span>
                 </button>
                 ${
                   canAbort
                     ? nothing
                     : html`
-                  <button class="agent-chat__actions-item" @click=${() => {
-                    props.onNewSession();
-                    document
-                      .querySelector(".agent-chat__actions-popup")
+                  <button class="agent-chat__actions-item" @click=${(e: Event) => {
+                    (e.target as HTMLElement)
+                      .closest(".agent-chat__actions-popup")
                       ?.classList.remove("agent-chat__actions-popup--open");
+                    props.onNewSession();
                   }}>
                     <span class="agent-chat__actions-item-icon">${icons.plus}</span>
-                    <span class="agent-chat__actions-item-label">Nouvelle session</span>
+                    <span class="agent-chat__actions-item-label">New session</span>
                   </button>
                 `
                 }
-                <button class="agent-chat__actions-item" @click=${() => {
-                  exportMarkdown(props);
-                  document
-                    .querySelector(".agent-chat__actions-popup")
+                <button class="agent-chat__actions-item" @click=${(e: Event) => {
+                  (e.target as HTMLElement)
+                    .closest(".agent-chat__actions-popup")
                     ?.classList.remove("agent-chat__actions-popup--open");
+                  exportMarkdown(props);
                 }} ?disabled=${props.messages.length === 0}>
                   <span class="agent-chat__actions-item-icon">${icons.download}</span>
-                  <span class="agent-chat__actions-item-label">Exporter la conversation</span>
+                  <span class="agent-chat__actions-item-label">Export conversation</span>
                 </button>
               </div>
             </div>
