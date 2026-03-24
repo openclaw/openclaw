@@ -2799,6 +2799,10 @@
   background: var(--secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  max-width: 100%;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
