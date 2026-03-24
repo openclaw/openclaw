@@ -21,6 +21,57 @@ export function createStatusScanSharedMocks(configPathLabel: string) {
 
 export type StatusScanSharedMocks = ReturnType<typeof createStatusScanSharedMocks>;
 
+export function createStatusOsSummaryModuleMock() {
+  return {
+    resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
+  };
+}
+
+export function createStatusScanDepsRuntimeModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
+) {
+  return {
+    getTailnetHostname: vi.fn(),
+    getMemorySearchManager: mocks.getMemorySearchManager,
+  };
+}
+
+export function createStatusGatewayProbeModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
+) {
+  return {
+    pickGatewaySelfPresence: vi.fn(() => null),
+    resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
+  };
+}
+
+export function createStatusGatewayCallModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "buildGatewayConnectionDetails"> & {
+    callGateway?: unknown;
+  },
+) {
+  return {
+    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+    ...(mocks.callGateway ? { callGateway: mocks.callGateway } : {}),
+  };
+}
+
+export function createStatusPluginRegistryModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "ensurePluginRegistryLoaded">,
+) {
+  return {
+    ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+  };
+}
+
+export function createStatusPluginStatusModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
+) {
+  return {
+    buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+  };
+}
+
 export function createStatusScanConfig<T extends object = OpenClawConfig>(
   overrides: T = {} as T,
 ): OpenClawConfig & T {
