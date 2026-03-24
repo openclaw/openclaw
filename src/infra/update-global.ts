@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathExists } from "../utils.js";
+import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -15,6 +16,14 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
+  "dist/extensions/whatsapp/light-runtime-api.js",
+  "dist/extensions/whatsapp/runtime-api.js",
+  "dist/extensions/matrix/helper-api.js",
+  "dist/extensions/matrix/runtime-api.js",
+  "dist/extensions/matrix/thread-bindings-runtime.js",
+  "dist/extensions/msteams/runtime-api.js",
+] as const;
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
@@ -39,6 +48,47 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
   );
+}
+
+export function resolveExpectedInstalledVersionFromSpec(
+  packageName: string,
+  spec: string,
+): string | null {
+  const normalizedPackageName = packageName.trim();
+  const normalizedSpec = normalizePackageTarget(spec);
+  if (!normalizedPackageName || !normalizedSpec.startsWith(`${normalizedPackageName}@`)) {
+    return null;
+  }
+  const rawVersion = normalizedSpec.slice(normalizedPackageName.length + 1).trim();
+  if (
+    !rawVersion ||
+    rawVersion.includes("/") ||
+    rawVersion.includes(":") ||
+    rawVersion.includes("#") ||
+    /^(latest|beta|next|main)$/i.test(rawVersion)
+  ) {
+    return null;
+  }
+  return rawVersion;
+}
+
+export async function collectInstalledGlobalPackageErrors(params: {
+  packageRoot: string;
+  expectedVersion?: string | null;
+}): Promise<string[]> {
+  const errors: string[] = [];
+  const installedVersion = await readPackageVersion(params.packageRoot);
+  if (params.expectedVersion && installedVersion !== params.expectedVersion) {
+    errors.push(
+      `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
+    );
+  }
+  for (const relativePath of REQUIRED_BUNDLED_RUNTIME_SIDECARS) {
+    if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
+      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+    }
+  }
+  return errors;
 }
 
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {

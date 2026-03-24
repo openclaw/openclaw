@@ -1,12 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./tavily-client.js", () => ({
+const { runTavilyExtract } = vi.hoisted(() => ({
   runTavilyExtract: vi.fn(async (params: unknown) => ({ ok: true, params })),
 }));
 
-import { runTavilyExtract } from "./tavily-client.js";
-import { createTavilyExtractTool } from "./tavily-extract-tool.js";
+vi.mock("./tavily-client.js", () => ({
+  runTavilyExtract,
+}));
+
+let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
 
 function fakeApi(): OpenClawPluginApi {
   return {
@@ -15,8 +18,11 @@ function fakeApi(): OpenClawPluginApi {
 }
 
 describe("tavily_extract", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    vi.resetModules();
+    runTavilyExtract.mockReset();
+    runTavilyExtract.mockImplementation(async (params: unknown) => ({ ok: true, params }));
+    ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
   });
 
   it("rejects chunks_per_source without query", async () => {

@@ -321,7 +321,7 @@ export async function maybeRepairGatewayServiceConfig(
         message: "Overwrite gateway service config with current defaults now?",
         initialValue: Boolean(prompter.shouldForce),
       })
-    : await prompter.confirmRepair({
+    : await prompter.confirmSkipInNonInteractive({
         message: "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });

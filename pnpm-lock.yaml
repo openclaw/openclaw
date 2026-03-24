@@ -271,6 +271,8 @@ importers:
 
   extensions/deepgram: {}
 
+  extensions/deepseek: {}
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
@@ -448,6 +450,9 @@ importers:
 
   extensions/mattermost:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
       ws:
         specifier: ^8.20.0
         version: 8.20.0

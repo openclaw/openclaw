@@ -27,7 +27,7 @@ const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
 const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 const MISTRAL_DEFAULT_CONTEXT_WINDOW = 262144;
-const MISTRAL_DEFAULT_MAX_TOKENS = 262144;
+const MISTRAL_DEFAULT_MAX_TOKENS = 16384;
 const MISTRAL_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
