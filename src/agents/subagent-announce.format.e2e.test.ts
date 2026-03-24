@@ -2245,6 +2245,82 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("placeholder waiting text that should be ignored");
   });
 
+  it("dedupes stale direct-child rows before building child completion findings", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-dedupe") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-stale",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-current",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 11,
+            endedAt: 22,
+            cleanupCompletedAt: 23,
+            frozenResultText: "current result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-b",
+            childSessionKey: "agent:main:subagent:parent:subagent:b",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task b",
+            label: "child-b",
+            cleanup: "keep",
+            createdAt: 12,
+            endedAt: 24,
+            cleanupCompletedAt: 25,
+            frozenResultText: "result from child b",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-dedupe",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "placeholder waiting text that should be ignored",
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("current result from child a");
+    expect(msg).toContain("result from child b");
+    expect(msg).not.toContain("stale result from child a");
+    expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+  });
+
   it("wakes an ended orchestrator run with settled child results before any upward announce", async () => {
     sessionStore = {
       "agent:main:subagent:parent": {
