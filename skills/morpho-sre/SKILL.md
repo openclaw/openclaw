@@ -66,8 +66,7 @@ Every text output you produce becomes a visible message to the user. Intermediat
   4. Only if all three fail: report blocked with exact error from each attempt
   - Never declare "GitHub is blocked" after trying only `gh auth login` or a single empty env var check.
   - For repo materialization: if mapped path has no `.git`, call `repo-clone.sh --image <workload>` to create a proper clone before attempting commits.
-- For any PR work requested by a human or triggered by autofix confidence gate, use `autofix-pr.sh` which handles: repo cloning, GitHub App auth, branch creation, verified `createCommitOnBranch` commit creation, PR creation, and Linear linking. Do not attempt manual `git clone` + `git push` + `gh pr create` — the `autofix-pr.sh` pipeline handles all auth and repo bootstrap.
-- Bot PR writes are GitHub App only. `GH_TOKEN` / `GITHUB_TOKEN` may still help with read-only probes, but they are not sufficient for bot commit creation; if App creds are missing, fail closed and report the exact blocker.
+- For any PR work requested by a human or triggered by autofix confidence gate, use `autofix-pr.sh` which handles: repo cloning, GitHub App auth, branch creation, commit, PR creation, and Linear linking. Do not attempt manual `git clone` + `git push` + `gh pr create` — the `autofix-pr.sh` pipeline handles all auth and repo bootstrap.
 - No root-cause ranking before one successful live check. Access/runtime failures alone are not enough evidence for hypotheses.
 - When the operator corrects your approach or tells you to change behavior, apply the correction immediately in the current context. Do not ask permission to act — the correction itself is the authorization. Investigate, act, and report findings.
 - If a human explicitly says stop, ignore this thread, or don't answer this thread, abort immediately, clear queued follow-ups, and do not send a substantive reply.

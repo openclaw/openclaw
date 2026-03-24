@@ -49,6 +49,36 @@ async function ensureStoreDir(rootDir: string): Promise<void> {
   await fs.mkdir(rootDir, { recursive: true });
 }
 
+/**
+ * Write content to a temp file in the same directory, then atomically rename
+ * to the target path. This prevents partial/truncated files surviving OOM or
+ * crash events.
+ */
+async function atomicWriteFile(filePath: string, data: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  const tmpPath = path.join(dir, `.tmp.${path.basename(filePath)}.${process.pid}.${Date.now()}`);
+  try {
+    await fs.writeFile(tmpPath, data, "utf8");
+    await fs.rename(tmpPath, filePath);
+  } catch (error) {
+    // Best-effort cleanup of temp file on failure
+    await fs.unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Move a corrupt file to a quarantine path so it does not re-trigger error
+ * loops on subsequent reads. Returns the quarantine path for logging.
+ */
+async function quarantineCorruptFile(filePath: string): Promise<string> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const quarantinePath = path.join(dir, `.quarantine.${base}.${Date.now()}`);
+  await fs.rename(filePath, quarantinePath);
+  return quarantinePath;
+}
+
 function runSerializedByKey<T>(
   queues: Map<string, Promise<void>>,
   key: string,
@@ -78,9 +108,22 @@ async function readLatestSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
-    // Recover from corrupt/truncated JSON — snapshot will be rebuilt from next update
+    // Quarantine corrupt/truncated JSON so it does not re-trigger on every write
     if (error instanceof SyntaxError) {
       logSreMetric("relationship_index_snapshot_corrupt", { path: filePath, error: error.message });
+      try {
+        const quarantinePath = await quarantineCorruptFile(filePath);
+        logSreMetric("relationship_index_snapshot_quarantined", {
+          path: filePath,
+          quarantinePath,
+        });
+      } catch (quarantineError) {
+        logSreMetric("relationship_index_snapshot_quarantine_failed", {
+          path: filePath,
+          error:
+            quarantineError instanceof Error ? quarantineError.message : String(quarantineError),
+        });
+      }
       return undefined;
     }
     throw error;
@@ -101,6 +144,8 @@ async function readJsonLines<T extends Record<string, unknown>>(
     }
     throw error;
   }
+  let corruptLineCount = 0;
+  let validLineCount = 0;
   for (const line of content.split("\n")) {
     if (!line.trim()) {
       continue;
@@ -109,6 +154,7 @@ async function readJsonLines<T extends Record<string, unknown>>(
     try {
       parsed = JSON.parse(line) as T;
     } catch (error) {
+      corruptLineCount++;
       logSreMetric("relationship_index_ndjson_corrupt_line", {
         path: filePath,
         error: error instanceof Error ? error.message : String(error),
@@ -118,7 +164,28 @@ async function readJsonLines<T extends Record<string, unknown>>(
     }
     const key = parsed[keyField];
     if (typeof key === "string" && key) {
+      validLineCount++;
       index.set(key, parsed);
+    }
+  }
+  // If more than half the lines are corrupt, quarantine the file so it
+  // does not keep triggering the error log on every compaction cycle.
+  const totalNonEmpty = validLineCount + corruptLineCount;
+  if (corruptLineCount > 0 && totalNonEmpty > 0 && corruptLineCount > totalNonEmpty / 2) {
+    logSreMetric("relationship_index_ndjson_majority_corrupt", {
+      path: filePath,
+      corruptLines: corruptLineCount,
+      validLines: validLineCount,
+    });
+    try {
+      const quarantinePath = await quarantineCorruptFile(filePath);
+      logSreMetric("relationship_index_ndjson_quarantined", {
+        path: filePath,
+        quarantinePath,
+      });
+      // Return only valid entries — caller will rewrite the file via compaction
+    } catch {
+      // File may already be gone or locked; continue with partial data
     }
   }
   return index;
@@ -142,8 +209,8 @@ async function maybeCompactRelationshipIndex(
     readJsonLines<RelationshipEdge>(paths.edgesPath, "edgeId"),
   ]);
   await Promise.all([
-    fs.writeFile(paths.nodesPath, toNdjson([...nodes.values()]), "utf8"),
-    fs.writeFile(paths.edgesPath, toNdjson([...edges.values()]), "utf8"),
+    atomicWriteFile(paths.nodesPath, toNdjson([...nodes.values()])),
+    atomicWriteFile(paths.edgesPath, toNdjson([...edges.values()])),
   ]);
 }
 
@@ -188,7 +255,7 @@ export async function appendRelationshipIndexUpdate(
         ...Object.fromEntries(update.nodes.map((node) => [node.entityId, node])),
       },
     };
-    writes.push(fs.writeFile(paths.latestByEntityPath, JSON.stringify(latest), "utf8"));
+    writes.push(atomicWriteFile(paths.latestByEntityPath, JSON.stringify(latest)));
     await Promise.all(writes);
     logSreMetric("relationship_index_write", {
       nodes: update.nodes.length,
