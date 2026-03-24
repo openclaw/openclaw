@@ -1036,12 +1036,14 @@ describe("sessions tools", () => {
     const result = await tool.execute("call-subagents-list-dedupe", { action: "list" });
     const details = result.details as {
       status?: string;
+      total?: number;
       active?: Array<{ runId?: string }>;
       recent?: Array<{ runId?: string }>;
       text?: string;
     };
 
     expect(details.status).toBe("ok");
+    expect(details.total).toBe(1);
     expect(details.active).toEqual([
       expect.objectContaining({
         runId: "run-list-current",
