@@ -1,0 +1,50 @@
+# EVOX.sh Full-Featured Image
+# Extends base with PDF, image, and document tools
+# Build: docker build -f Dockerfile.full -t evox:full .
+
+ARG BASE_IMAGE=evox:local
+FROM ${BASE_IMAGE}
+
+USER root
+
+# PDF & Document generation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc \
+    wkhtmltopdf \
+    weasyprint \
+    fonts-liberation \
+    fonts-liberation2 \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+# Image & Video processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    imagemagick \
+    graphicsmagick \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fix ImageMagick policy for PDF generation
+RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
+      sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml; \
+    fi
+
+# Python for scripting (optional but useful)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Common Python packages
+RUN pip3 install --break-system-packages --no-cache-dir \
+    requests \
+    beautifulsoup4 \
+    markdown \
+    pdfkit \
+    Pillow
+
+USER node
+
+# Verify tools installed
+RUN which pandoc && which wkhtmltopdf && which ffmpeg && echo "✅ All tools installed"

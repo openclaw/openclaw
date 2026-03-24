@@ -83,13 +83,14 @@ export function resolveGatewayServiceDescription(params: {
   environment?: Record<string, string | undefined>;
   description?: string;
 }): string {
-  return (
-    params.description ??
-    formatGatewayServiceDescription({
-      profile: params.env.OPENCLAW_PROFILE,
-      version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
-    })
-  );
+  // Support both EVOX_* (new) and OPENCLAW_* (legacy)
+  const profile = params.env.EVOX_PROFILE ?? params.env.OPENCLAW_PROFILE;
+  const version =
+    params.environment?.EVOX_SERVICE_VERSION ??
+    params.environment?.OPENCLAW_SERVICE_VERSION ??
+    params.env.EVOX_SERVICE_VERSION ??
+    params.env.OPENCLAW_SERVICE_VERSION;
+  return params.description ?? formatGatewayServiceDescription({ profile, version });
 }
 
 export function resolveNodeLaunchAgentLabel(): string {
