@@ -1,10 +1,6 @@
 import path from "node:path";
-import { createJiti } from "jiti";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkScopedAliasMap,
-} from "../../src/plugins/sdk-alias.ts";
+import { loadRuntimeApiExportTypesViaJiti } from "../../test/helpers/extensions/jiti-runtime-api.ts";
 
 const setMatrixRuntimeMock = vi.hoisted(() => vi.fn());
 const registerChannelMock = vi.hoisted(() => vi.fn());
@@ -22,16 +18,17 @@ describe("matrix plugin registration", () => {
 
   it("loads the matrix runtime api through Jiti", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
-    const jiti = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(
-        resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath }),
-      ),
-      tryNative: false,
-    });
-
-    expect(jiti(runtimeApiPath)).toMatchObject({
-      requiresExplicitMatrixDefaultAccount: expect.any(Function),
-      resolveMatrixDefaultOrOnlyAccountId: expect.any(Function),
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: [
+          "requiresExplicitMatrixDefaultAccount",
+          "resolveMatrixDefaultOrOnlyAccountId",
+        ],
+      }),
+    ).toEqual({
+      requiresExplicitMatrixDefaultAccount: "function",
+      resolveMatrixDefaultOrOnlyAccountId: "function",
     });
   }, 240_000);
 
@@ -43,15 +40,13 @@ describe("matrix plugin registration", () => {
       "src",
       "runtime-api.ts",
     );
-    const jiti = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(
-        resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath }),
-      ),
-      tryNative: false,
-    });
-
-    expect(jiti(runtimeApiPath)).toMatchObject({
-      resolveMatrixAccountStringValues: expect.any(Function),
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: ["resolveMatrixAccountStringValues"],
+      }),
+    ).toEqual({
+      resolveMatrixAccountStringValues: "function",
     });
   }, 240_000);
 
