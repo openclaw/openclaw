@@ -442,6 +442,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
     const modelLabel = status.model ?? status.provider;
+    const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+    const providerUnavailableReason = (
+      status.custom as { providerUnavailableReason?: string } | undefined
+    )?.providerUnavailableReason;
     const storePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
     const workspacePath = status.workspaceDir ? shortenHomePath(status.workspaceDir) : "<unknown>";
     const sourceList = status.sources?.length ? status.sources.join(", ") : null;
@@ -452,6 +456,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
       `${label("Model")} ${info(modelLabel)}`,
+      searchMode ? `${label("Mode")} ${info(searchMode)}` : null,
       sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
       extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
@@ -466,6 +471,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
+    }
+    if (status.fallback) {
+      lines.push(`${label("Fallback")} ${warn(`${status.fallback.from} — ${status.fallback.reason}`)}`);
+    }
+    if (providerUnavailableReason) {
+      lines.push(`${label("Provider issue")} ${warn(providerUnavailableReason)}`);
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
