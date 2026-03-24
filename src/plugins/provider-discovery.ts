@@ -14,6 +14,7 @@ export function resolvePluginDiscoveryProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): ProviderPlugin[] {
   return resolvePluginProviders({
     ...params,
