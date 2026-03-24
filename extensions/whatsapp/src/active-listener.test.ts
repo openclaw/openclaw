@@ -74,21 +74,34 @@ describe("active WhatsApp listener singleton", () => {
 
   it("single-arg overload still works when default account is 'default'", async () => {
     // Backward-compat: configs that rely on the "default" account name must
-    // continue to work after the fix.
-    const mod = await importActiveListenerModule(`default-account-${Date.now()}`);
-    const listener = makeListener();
+    // continue to work after the fix. Use single-arg overload with a temporary
+    // spy that returns "default" as the configured default account.
+    const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
+    const spy = vi.spyOn(configRuntime, "loadConfig").mockReturnValue({
+      channels: {
+        whatsapp: { accounts: { default: { enabled: true } }, defaultAccount: "default" },
+      },
+    } as ReturnType<typeof configRuntime.loadConfig>);
 
-    mod.setActiveWebListener("default", listener);
+    try {
+      const mod = await importActiveListenerModule(`default-account-${Date.now()}`);
+      const listener = makeListener();
 
-    expect(mod.requireActiveWebListener("default")).toEqual({
-      accountId: "default",
-      listener,
-    });
-    // The legacy no-arg lookup (undefined → "default") must also work
-    expect(mod.requireActiveWebListener()).toEqual({
-      accountId: "default",
-      listener,
-    });
+      // Single-arg call — should resolve to "default" via the spy
+      mod.setActiveWebListener(listener);
+
+      expect(mod.requireActiveWebListener("default")).toEqual({
+        accountId: "default",
+        listener,
+      });
+      // The legacy no-arg lookup (undefined → "default") must also work
+      expect(mod.requireActiveWebListener()).toEqual({
+        accountId: "default",
+        listener,
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("requireActiveWebListener throws a clear error when listener is missing", async () => {

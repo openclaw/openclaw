@@ -55,7 +55,7 @@ function setCurrentListener(listener: ActiveWebListener | null): void {
 }
 
 export function resolveWebAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
+  return (accountId ?? "").trim() || resolveDefaultWhatsAppAccountId(loadConfig());
 }
 
 export function requireActiveWebListener(accountId?: string | null): {
