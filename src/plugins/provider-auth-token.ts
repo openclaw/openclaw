@@ -24,7 +24,7 @@ export function buildTokenProfileId(params: { provider: string; name: string }):
 }
 
 export function validateAnthropicSetupToken(raw: string): string | undefined {
-  const trimmed = raw.trim();
+  const trimmed = raw.replace(/\s+/g, "");
   if (!trimmed) {
     return "Required";
   }

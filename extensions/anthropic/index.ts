@@ -207,14 +207,14 @@ async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<Provide
         envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
       },
     });
-    token = resolved.resolvedValue.trim();
+    token = resolved.resolvedValue.replace(/\s+/g, "");
     tokenRef = resolved.ref;
   } else {
     const tokenRaw = await ctx.prompter.text({
       message: "Paste Anthropic setup-token",
       validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
     });
-    token = String(tokenRaw ?? "").trim();
+    token = String(tokenRaw ?? "").replace(/\s+/g, "");
   }
   const tokenError = validateAnthropicSetupToken(token);
   if (tokenError) {
