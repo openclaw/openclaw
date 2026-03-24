@@ -253,6 +253,10 @@ describe("createTelegramDraftStream", () => {
       await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
 
       stream.update("Hello again");
+      let flushResolved = false;
+      const flushPromise = stream.flush().then(() => {
+        flushResolved = true;
+      });
       rejectDraftSend?.(
         new Error(
           "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
@@ -264,14 +268,16 @@ describe("createTelegramDraftStream", () => {
       expect(stream.previewMode?.()).toBe("message");
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
       expect(api.editMessageText).not.toHaveBeenCalled();
+      expect(flushResolved).toBe(false);
 
       await vi.advanceTimersByTimeAsync(999);
       expect(api.editMessageText).not.toHaveBeenCalled();
+      expect(flushResolved).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(() =>
-        expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again"),
-      );
+      await flushPromise;
+      expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+      expect(flushResolved).toBe(true);
     } finally {
       vi.useRealTimers();
     }

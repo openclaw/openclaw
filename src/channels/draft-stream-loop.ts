@@ -8,6 +8,7 @@ export type DraftStreamLoop = {
 };
 
 type DraftStreamSendResult = boolean | "reschedule";
+type DraftStreamRunResult = "idle" | "blocked" | "rescheduled";
 
 export function createDraftStreamLoop(params: {
   throttleMs: number;
@@ -17,13 +18,23 @@ export function createDraftStreamLoop(params: {
   let lastSentAt = 0;
   let pendingText = "";
   let inFlightPromise: Promise<void | DraftStreamSendResult> | undefined;
-  let flushPromise: Promise<void> | undefined;
+  let runPromise: Promise<DraftStreamRunResult> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timerWaiters: Array<() => void> = [];
+
+  const resolveTimerWaiters = () => {
+    const waiters = timerWaiters;
+    timerWaiters = [];
+    for (const resolve of waiters) {
+      resolve();
+    }
+  };
 
   const runFlush = async () => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
+      resolveTimerWaiters();
     }
     while (!params.isStopped()) {
       if (inFlightPromise) {
@@ -33,7 +44,7 @@ export function createDraftStreamLoop(params: {
       const text = pendingText;
       if (!text.trim()) {
         pendingText = "";
-        return;
+        return "idle";
       }
       pendingText = "";
       const current = params.sendOrEditStreamMessage(text).finally(() => {
@@ -45,36 +56,61 @@ export function createDraftStreamLoop(params: {
       const sent = await current;
       if (sent === false) {
         pendingText = text;
-        return;
+        return "blocked";
       }
       lastSentAt = Date.now();
       if (sent === "reschedule") {
         if (timer) {
           clearTimeout(timer);
           timer = undefined;
+          resolveTimerWaiters();
         }
         if (pendingText) {
           schedule();
         }
-        return;
+        return "rescheduled";
       }
       if (!pendingText) {
-        return;
+        return "idle";
       }
     }
+    return "idle";
   };
 
-  const flush = () => {
-    if (flushPromise) {
-      return flushPromise;
+  const ensureRun = () => {
+    if (runPromise) {
+      return runPromise;
     }
     const current = runFlush().finally(() => {
-      if (flushPromise === current) {
-        flushPromise = undefined;
+      if (runPromise === current) {
+        runPromise = undefined;
       }
     });
-    flushPromise = current;
+    runPromise = current;
     return current;
+  };
+
+  const waitForScheduledRun = () => {
+    if (!timer) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      timerWaiters.push(resolve);
+    });
+  };
+
+  const flush = async () => {
+    while (!params.isStopped()) {
+      const result = await ensureRun();
+      if (result !== "rescheduled") {
+        return;
+      }
+      if (!pendingText.trim()) {
+        pendingText = "";
+        return;
+      }
+      await waitForScheduledRun();
+    }
   };
 
   const schedule = () => {
@@ -83,7 +119,9 @@ export function createDraftStreamLoop(params: {
     }
     const delay = Math.max(0, params.throttleMs - (Date.now() - lastSentAt));
     timer = setTimeout(() => {
-      void flush();
+      timer = undefined;
+      resolveTimerWaiters();
+      void ensureRun();
     }, delay);
   };
 
@@ -98,7 +136,7 @@ export function createDraftStreamLoop(params: {
         return;
       }
       if (!timer && Date.now() - lastSentAt >= params.throttleMs) {
-        void flush();
+        void ensureRun();
         return;
       }
       schedule();
@@ -109,6 +147,7 @@ export function createDraftStreamLoop(params: {
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
+        resolveTimerWaiters();
       }
     },
     resetPending: () => {
@@ -119,6 +158,7 @@ export function createDraftStreamLoop(params: {
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
+        resolveTimerWaiters();
       }
     },
     waitForInFlight: async () => {
