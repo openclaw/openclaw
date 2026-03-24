@@ -1,3 +1,4 @@
+import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
@@ -47,6 +48,9 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
 
   const visibleRuns = sortSubagentRuns(runs).filter((entry) => {
     if (!entry.endedAt) {
+      return true;
+    }
+    if (countPendingDescendantRuns(entry.childSessionKey) > 0) {
       return true;
     }
     return resolveSessionBindings(entry.childSessionKey).length > 0;
