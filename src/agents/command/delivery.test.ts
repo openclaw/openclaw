@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackOutbound } from "../../../test/channel-outbounds.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { normalizeAgentCommandReplyPayloads } from "./delivery.js";
+import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
@@ -108,5 +109,35 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         text: "[openai-codex/gpt-5.4] Ready.",
       },
     ]);
+  });
+
+  it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        channels: {
+          slack: {
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "slack",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Options: on, off." }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
+    expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
   });
 });

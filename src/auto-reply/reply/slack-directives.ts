@@ -161,7 +161,6 @@ function hasSlackBlocks(payload: ReplyPayload): boolean {
 
 function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
   const entries = raw
-    .replace(/\.\s*$/, "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
