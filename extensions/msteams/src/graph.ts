@@ -76,6 +76,41 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   return res.value ?? [];
 }
 
+export async function postGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json",
+    },
+    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Graph POST ${params.path} failed (${res.status}): ${text || "unknown error"}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
+  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Graph DELETE ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
+  }
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
