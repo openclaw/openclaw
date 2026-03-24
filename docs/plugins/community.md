@@ -84,6 +84,19 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
+### Team Ops
+
+Turns chat transcripts into decisions, action items, blockers, and ready-to-send
+status updates for teams and executives. Great for standups, planning notes,
+incident rooms, and cross-functional launch threads.
+
+- **npm:** `team-ops`
+- **repo:** [github.com/JimmyWangJimmy/openclaw-team-ops-plugin](https://github.com/JimmyWangJimmy/openclaw-team-ops-plugin)
+
+```bash
+openclaw plugins install team-ops
+```
+
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
