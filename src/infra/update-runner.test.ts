@@ -11,17 +11,20 @@ import { runGatewayUpdate } from "./update-runner.js";
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
 
+function toCommandResult(response?: CommandResponse): CommandResult {
+  return {
+    stdout: response?.stdout ?? "",
+    stderr: response?.stderr ?? "",
+    code: response?.code ?? 0,
+  };
+}
+
 function createRunner(responses: Record<string, CommandResponse>) {
   const calls: string[] = [];
   const runner = async (argv: string[]) => {
     const key = argv.join(" ");
     calls.push(key);
-    const res = responses[key] ?? {};
-    return {
-      stdout: res.stdout ?? "",
-      stderr: res.stderr ?? "",
-      code: res.code ?? 0,
-    };
+    return toCommandResult(responses[key]);
   };
   return { runner, calls };
 }
@@ -126,6 +129,11 @@ describe("runGatewayUpdate", () => {
     return uiIndexPath;
   }
 
+  async function setupGitPackageManagerFixture(packageManager = "pnpm@8.0.0") {
+    await setupGitCheckout({ packageManager });
+    return await setupUiIndex();
+  }
+
   function buildStableTagResponses(
     stableTag: string,
     options?: { additionalTags?: string[] },
@@ -150,6 +158,36 @@ describe("runGatewayUpdate", () => {
         stdout: options?.status ?? "",
       },
     } satisfies Record<string, CommandResponse>;
+  }
+
+  function createGitInstallRunner(params: {
+    stableTag: string;
+    installCommand: string;
+    buildCommand: string;
+    uiBuildCommand: string;
+    doctorCommand: string;
+    onCommand?: (key: string) => Promise<CommandResponse | undefined> | CommandResponse | undefined;
+  }) {
+    const calls: string[] = [];
+    const responses = {
+      ...buildStableTagResponses(params.stableTag),
+      [params.installCommand]: { stdout: "" },
+      [params.buildCommand]: { stdout: "" },
+      [params.uiBuildCommand]: { stdout: "" },
+      [params.doctorCommand]: { stdout: "" },
+    } satisfies Record<string, CommandResponse>;
+
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      const override = await params.onCommand?.(key);
+      if (override) {
+        return toCommandResult(override);
+      }
+      return toCommandResult(responses[key]);
+    };
+
+    return { calls, runCommand };
   }
 
   async function removeControlUiAssets() {
@@ -337,61 +375,24 @@ describe("runGatewayUpdate", () => {
   });
 
   it("falls back to npm when pnpm is unavailable for git installs", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
-
+    await setupGitPackageManagerFixture();
     const stableTag = "v1.0.1-1";
-    const calls: string[] = [];
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === "pnpm --version") {
-        throw new Error("spawn pnpm ENOENT");
-      }
-      if (key === "npm --version") {
-        return { stdout: "10.0.0", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-        return { stdout: tempDir, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse HEAD`) {
-        return { stdout: "abc123", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "npm install --no-package-lock --legacy-peer-deps") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "npm run build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "npm run ui:build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (
-        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
-      ) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+    const { calls, runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "npm install --no-package-lock --legacy-peer-deps",
+      buildCommand: "npm run build",
+      uiBuildCommand: "npm run ui:build",
+      doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
+      onCommand: (key) => {
+        if (key === "pnpm --version") {
+          throw new Error("spawn pnpm ENOENT");
+        }
+        if (key === "npm --version") {
+          return { stdout: "10.0.0" };
+        }
+        return undefined;
+      },
+    });
 
     const result = await runGatewayUpdate({
       cwd: tempDir,
@@ -409,69 +410,32 @@ describe("runGatewayUpdate", () => {
   });
 
   it("bootstraps pnpm via corepack when pnpm is missing", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
-
+    await setupGitPackageManagerFixture();
     const stableTag = "v1.0.1-1";
-    const calls: string[] = [];
     let pnpmVersionChecks = 0;
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === "pnpm --version") {
-        pnpmVersionChecks += 1;
-        if (pnpmVersionChecks === 1) {
-          throw new Error("spawn pnpm ENOENT");
+    const { calls, runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
+      doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
+      onCommand: (key) => {
+        if (key === "pnpm --version") {
+          pnpmVersionChecks += 1;
+          if (pnpmVersionChecks === 1) {
+            throw new Error("spawn pnpm ENOENT");
+          }
+          return { stdout: "10.0.0" };
         }
-        return { stdout: "10.0.0", stderr: "", code: 0 };
-      }
-      if (key === "corepack --version") {
-        return { stdout: "0.30.0", stderr: "", code: 0 };
-      }
-      if (key === "corepack enable") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-        return { stdout: tempDir, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse HEAD`) {
-        return { stdout: "abc123", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm install") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm ui:build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (
-        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
-      ) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+        if (key === "corepack --version") {
+          return { stdout: "0.30.0" };
+        }
+        if (key === "corepack enable") {
+          return { stdout: "" };
+        }
+        return undefined;
+      },
+    });
 
     const result = await runGatewayUpdate({
       cwd: tempDir,
