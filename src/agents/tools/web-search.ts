@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -17,6 +18,8 @@ import {
   withTimeout,
   writeCache,
 } from "./web-shared.js";
+
+const log = createSubsystemLogger("web-search");
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
@@ -671,6 +674,8 @@ export function createWebSearchTool(options?: {
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
 
+  log.debug(`web_search tool created: provider=${provider}`);
+
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
@@ -694,6 +699,22 @@ export function createWebSearchTool(options?: {
             : resolveSearchApiKey(search);
 
       if (!apiKey) {
+        const envKeyName =
+          provider === "perplexity"
+            ? "PERPLEXITY_API_KEY"
+            : provider === "grok"
+              ? "XAI_API_KEY"
+              : "BRAVE_API_KEY";
+        const envPresent = !!process.env[envKeyName];
+        const envLength = process.env[envKeyName]?.length ?? 0;
+        log.warn(
+          `web_search (${provider}): API key not resolved. ` +
+            `env ${envKeyName} present=${envPresent} len=${envLength}, ` +
+            `config apiKey present=${!!(search && "apiKey" in search && search.apiKey)}` +
+            (provider === "perplexity"
+              ? `, perplexity config apiKey present=${!!perplexityConfig?.apiKey}, source=${perplexityAuth?.source ?? "n/a"}`
+              : ""),
+        );
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
