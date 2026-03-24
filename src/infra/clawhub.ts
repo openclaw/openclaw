@@ -725,6 +725,11 @@ export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkill
   return Boolean(detail.skill);
 }
 
+function stripCorrectionBuild(version: string): string {
+  const match = /^(\d+\.\d+\.\d+)-\d+$/.exec(version);
+  return match ? match[1] : version;
+}
+
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,
   pluginApiRange?: string | null,
@@ -732,7 +737,8 @@ export function satisfiesPluginApiRange(
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
+  const normalized = stripCorrectionBuild(pluginApiVersion);
+  return satisfiesSemverRange(normalized, pluginApiRange);
 }
 
 export function satisfiesGatewayMinimum(
