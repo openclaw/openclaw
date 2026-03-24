@@ -46,6 +46,18 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### LobsterMail
+
+Email for AI agents. Create real `@lobstermail.ai` inboxes, receive email in
+real-time, and send email — no API keys, no human signup, no configuration.
+
+- **npm:** `@lobsterkit/openclaw-lobstermail`
+- **repo:** [github.com/lobster-kit/openclaw-lobstermail](https://github.com/lobster-kit/openclaw-lobstermail)
+
+```bash
+openclaw plugins install @lobsterkit/openclaw-lobstermail
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
@@ -57,18 +69,6 @@ while reducing token usage.
 
 ```bash
 openclaw plugins install @martian-engineering/lossless-claw
-```
-
-### LobsterMail
-
-Email for AI agents. Create real `@lobstermail.ai` inboxes, receive email in
-real-time, and send email — no API keys, no human signup, no configuration.
-
-- **npm:** `@lobsterkit/openclaw-lobstermail`
-- **repo:** [github.com/lobster-kit/openclaw-lobstermail](https://github.com/lobster-kit/openclaw-lobstermail)
-
-```bash
-openclaw plugins install @lobsterkit/openclaw-lobstermail
 ```
 
 ### Opik
