@@ -2659,7 +2659,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedCfg).toBe(overrideCfg);
   });
 
-  it("passes base cfg to replyResolver when configOverride is not provided", async () => {
+  it("does not pass cfg as implicit configOverride when configOverride is not provided", async () => {
     setNoAbort();
     const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -2677,7 +2677,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(receivedCfg).toBe(cfg);
+    expect(receivedCfg).toBeUndefined();
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
