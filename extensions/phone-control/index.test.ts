@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
-} from "openclaw/plugin-sdk/phone-control";
-import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../test-utils/plugin-api.js";
-import registerPhoneControl from "./index.js";
+} from "./runtime-api.js";
 
 function createApi(params: {
   stateDir: string;
@@ -42,6 +42,12 @@ function createCommandContext(args: string): PluginCommandContext {
     commandBody: `/phone ${args}`,
     args,
     config: {},
+    requestConversationBinding: async () => ({
+      status: "error",
+      message: "unsupported",
+    }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
   };
 }
 
@@ -62,7 +68,7 @@ describe("phone-control plugin", () => {
       });
 
       let command: OpenClawPluginCommandDefinition | undefined;
-      registerPhoneControl(
+      registerPhoneControl.register(
         createApi({
           stateDir,
           getConfig: () => config,
@@ -73,23 +79,117 @@ describe("phone-control plugin", () => {
         }),
       );
 
-      expect(command?.name).toBe("phone");
+      if (!command) {
+        throw new Error("phone-control plugin did not register its command");
+      }
+      expect(command.name).toBe("phone");
 
-      const res = await command?.handler(createCommandContext("arm writes 30s"));
+      const res = await command.handler(createCommandContext("arm writes 30s"));
       const text = String(res?.text ?? "");
       const nodes = (
         config.gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
       ).nodes;
+      if (!nodes) {
+        throw new Error("phone-control command did not persist gateway node config");
+      }
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      expect(nodes?.allowCommands).toEqual([
+      expect(nodes.allowCommands).toEqual([
         "calendar.add",
         "contacts.add",
         "reminders.add",
         "sms.send",
       ]);
-      expect(nodes?.denyCommands).toEqual([]);
+      expect(nodes.denyCommands).toEqual([]);
       expect(text).toContain("sms.send");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks internal operator.write callers from mutating phone control", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-test-"));
+    try {
+      let config: Record<string, unknown> = {
+        gateway: {
+          nodes: {
+            allowCommands: [],
+            denyCommands: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
+          },
+        },
+      };
+      const writeConfigFile = vi.fn(async (next: Record<string, unknown>) => {
+        config = next;
+      });
+
+      let command: OpenClawPluginCommandDefinition | undefined;
+      registerPhoneControl.register(
+        createApi({
+          stateDir,
+          getConfig: () => config,
+          writeConfig: writeConfigFile,
+          registerCommand: (nextCommand) => {
+            command = nextCommand;
+          },
+        }),
+      );
+
+      if (!command) {
+        throw new Error("phone-control plugin did not register its command");
+      }
+
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.write"],
+      });
+
+      expect(String(res?.text ?? "")).toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows internal operator.admin callers to mutate phone control", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-test-"));
+    try {
+      let config: Record<string, unknown> = {
+        gateway: {
+          nodes: {
+            allowCommands: [],
+            denyCommands: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
+          },
+        },
+      };
+      const writeConfigFile = vi.fn(async (next: Record<string, unknown>) => {
+        config = next;
+      });
+
+      let command: OpenClawPluginCommandDefinition | undefined;
+      registerPhoneControl.register(
+        createApi({
+          stateDir,
+          getConfig: () => config,
+          writeConfig: writeConfigFile,
+          registerCommand: (nextCommand) => {
+            command = nextCommand;
+          },
+        }),
+      );
+
+      if (!command) {
+        throw new Error("phone-control plugin did not register its command");
+      }
+
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(String(res?.text ?? "")).toContain("sms.send");
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

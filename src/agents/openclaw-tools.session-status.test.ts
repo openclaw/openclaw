@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -9,7 +9,7 @@ const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-5" },
+      model: { primary: "openai/gpt-5.4" },
       models: {},
     },
   },
@@ -64,15 +64,15 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: async () => [
     {
       provider: "anthropic",
-      id: "claude-opus-4-5",
-      name: "Opus",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
       contextWindow: 200000,
     },
     {
-      provider: "anthropic",
-      id: "claude-sonnet-4-5",
-      name: "Sonnet",
-      contextWindow: 200000,
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      contextWindow: 400000,
     },
   ],
 }));
@@ -98,8 +98,92 @@ vi.mock("../infra/provider-usage.js", () => ({
   formatUsageSummaryLine: () => null,
 }));
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
+
+async function loadFreshOpenClawToolsForSessionStatusTest() {
+  vi.resetModules();
+  vi.doMock("../config/sessions.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/sessions.js")>();
+    return {
+      ...actual,
+      loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+      updateSessionStore: async (
+        storePath: string,
+        mutator: (store: Record<string, unknown>) => Promise<void> | void,
+      ) => {
+        const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
+        await mutator(store);
+        updateSessionStoreMock(storePath, store);
+        return store;
+      },
+      resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
+        opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
+    };
+  });
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../gateway/session-utils.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+    return {
+      ...actual,
+      loadCombinedSessionStoreForGateway: (cfg: unknown) =>
+        loadCombinedSessionStoreForGatewayMock(cfg),
+    };
+  });
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => mockConfig,
+    };
+  });
+  vi.doMock("../agents/model-catalog.js", () => ({
+    loadModelCatalog: async () => [
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        contextWindow: 200000,
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        contextWindow: 400000,
+      },
+    ],
+  }));
+  vi.doMock("../agents/auth-profiles.js", () => ({
+    ensureAuthProfileStore: () => ({ profiles: {} }),
+    resolveAuthProfileDisplayLabel: () => undefined,
+    resolveAuthProfileOrder: () => [],
+  }));
+  vi.doMock("../agents/model-auth.js", () => ({
+    resolveEnvApiKey: () => null,
+    resolveUsableCustomProviderApiKey: () => null,
+    resolveModelAuthMode: () => "api-key",
+  }));
+  vi.doMock("../infra/provider-usage.js", () => ({
+    resolveUsageProviderId: () => undefined,
+    loadProviderUsageSummary: async () => ({
+      updatedAt: Date.now(),
+      providers: [],
+    }),
+    formatUsageSummaryLine: () => null,
+  }));
+  vi.doMock("../auto-reply/group-activation.js", () => ({
+    normalizeGroupActivation: (value: unknown) => value ?? "always",
+  }));
+  vi.doMock("../auto-reply/reply/queue.js", () => ({
+    getFollowupQueueDepth: () => 0,
+    resolveQueueSettings: () => ({ mode: "interrupt" }),
+  }));
+  vi.doMock("../auto-reply/status.js", () => ({
+    buildStatusMessage: () => "OpenClaw\n🧠 Model: GPT-5.4",
+  }));
+  ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
+}
 
 function resetSessionStore(store: Record<string, unknown>) {
   loadSessionStoreMock.mockClear();
@@ -124,7 +208,7 @@ function installSandboxedSessionStatusConfig() {
     },
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "openai/gpt-5.4" },
         models: {},
         sandbox: { sessionToolsVisibility: "spawned" },
       },
@@ -160,18 +244,20 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
 }
 
 function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
-  const tool = createOpenClawTools({
+  const tool = createSessionStatusTool({
     agentSessionKey,
     sandboxed: options?.sandboxed,
-  }).find((candidate) => candidate.name === "session_status");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing session_status tool");
-  }
+    config: mockConfig as never,
+  });
+  expect(tool.name).toBe("session_status");
   return tool;
 }
 
 describe("session_status tool", () => {
+  beforeEach(async () => {
+    await loadFreshOpenClawToolsForSessionStatusTest();
+  });
+
   it("returns a status card for the current session", async () => {
     resetSessionStore({
       main: {
@@ -201,6 +287,131 @@ describe("session_status tool", () => {
       "Unknown sessionId",
     );
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves sessionKey=current to the requester session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("main");
+  });
+
+  it("resolves sessionKey=current to the requester agent session", async () => {
+    loadSessionStoreMock.mockClear();
+    updateSessionStoreMock.mockClear();
+    callGatewayMock.mockClear();
+    loadCombinedSessionStoreForGatewayMock.mockClear();
+    const stores = new Map<string, Record<string, unknown>>([
+      [
+        "/tmp/main/sessions.json",
+        {
+          "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+        },
+      ],
+      [
+        "/tmp/support/sessions.json",
+        {
+          main: { sessionId: "s-support", updatedAt: 20 },
+        },
+      ],
+    ]);
+    loadSessionStoreMock.mockImplementation((storePath: string) => {
+      return stores.get(storePath) ?? {};
+    });
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: Object.fromEntries([...stores.values()].flatMap((s) => Object.entries(s))),
+    });
+
+    const tool = getSessionStatusTool("agent:support:main");
+
+    // "current" resolves to the support agent's own session via the "main" alias.
+    const result = await tool.execute("call-current-child", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("main");
+  });
+
+  it("prefers a literal current session key in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current-literal-key", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:current");
+  });
+
+  it("resolves a literal current sessionId in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:other": {
+        sessionId: "current",
+        updatedAt: 20,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current-literal-id", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:other");
+  });
+
+  it("keeps sessionKey=current bound to the requester subagent session", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    const result = await tool.execute("call-current-subagent", {
+      sessionKey: "current",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:subagent:child");
+    expect(updateSessionStoreMock).toHaveBeenCalledWith(
+      "/tmp/main/sessions.json",
+      expect.objectContaining({
+        "agent:main:subagent:child": expect.objectContaining({
+          modelOverride: "claude-sonnet-4-6",
+        }),
+      }),
+    );
   });
 
   it("resolves sessionId inputs", async () => {
@@ -297,7 +508,7 @@ describe("session_status tool", () => {
     await expect(
       tool.execute("call6", {
         sessionKey: "agent:main:main",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       }),
     ).rejects.toThrow(expectedError);
 
@@ -390,7 +601,7 @@ describe("session_status tool", () => {
         sessionId: "s1",
         updatedAt: 10,
         providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-5",
+        modelOverride: "claude-sonnet-4-6",
         authProfileOverride: "p1",
       },
     });

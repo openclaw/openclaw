@@ -1,9 +1,9 @@
-import { resolveMessagePrefix } from "../../../../../src/agents/identity.js";
+import { resolveMessagePrefix } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
-} from "../../../../../src/auto-reply/envelope.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { WebInboundMsg } from "../types.js";
 
 export function formatReplyContext(msg: WebInboundMsg) {

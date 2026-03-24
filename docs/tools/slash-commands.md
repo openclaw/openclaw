@@ -36,6 +36,8 @@ They run immediately, are stripped before the model sees the message, and the re
     bash: false,
     bashForegroundMs: 2000,
     config: false,
+    mcp: false,
+    plugins: false,
     debug: false,
     restart: false,
     allowFrom: {
@@ -48,7 +50,7 @@ They run immediately, are stripped before the model sees the message, and the re
 ```
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
-  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/MS Teams), text commands still work even if you set this to `false`.
+  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/Microsoft Teams), text commands still work even if you set this to `false`.
 - `commands.native` (default `"auto"`) registers native commands.
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
@@ -59,6 +61,8 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
+- `commands.mcp` (default `false`) enables `/mcp` (reads/writes OpenClaw-managed MCP config under `mcp.servers`).
+- `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus install + enable/disable controls).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
   only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
@@ -90,9 +94,14 @@ Text + native (when enabled):
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
+- `/mcp show|get|set|unset` (manage OpenClaw MCP server config, owner-only; requires `commands.mcp: true`)
+- `/plugins list|show|get|install|enable|disable` (inspect discovered plugins, install new ones, and toggle enablement; owner-only for writes; requires `commands.plugins: true`)
+  - `/plugin` is an alias for `/plugins`.
+  - `/plugin install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
+  - Enable/disable writes still reply with a restart hint. On a watched foreground gateway, OpenClaw may perform that restart automatically right after the write.
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
-- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tts))
+- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tools/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
 - `/stop`
 - `/restart`
@@ -213,6 +222,44 @@ Notes:
 
 - Config is validated before write; invalid changes are rejected.
 - `/config` updates persist across restarts.
+
+## MCP updates
+
+`/mcp` writes OpenClaw-managed MCP server definitions under `mcp.servers`. Owner-only. Disabled by default; enable with `commands.mcp: true`.
+
+Examples:
+
+```text
+/mcp show
+/mcp show context7
+/mcp set context7={"command":"uvx","args":["context7-mcp"]}
+/mcp unset context7
+```
+
+Notes:
+
+- `/mcp` stores config in OpenClaw config, not Pi-owned project settings.
+- Runtime adapters decide which transports are actually executable.
+
+## Plugin updates
+
+`/plugins` lets operators inspect discovered plugins and toggle enablement in config. Read-only flows can use `/plugin` as an alias. Disabled by default; enable with `commands.plugins: true`.
+
+Examples:
+
+```text
+/plugins
+/plugins list
+/plugin show context7
+/plugins enable context7
+/plugins disable context7
+```
+
+Notes:
+
+- `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
+- `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
+- After enable/disable changes, restart the gateway to apply them.
 
 ## Surface notes
 

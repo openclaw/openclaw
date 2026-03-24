@@ -11,39 +11,39 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
-import { getAcpSessionManager } from "../../../../src/acp/control-plane/manager.js";
-import { isAcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
-import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import { listNativeCommandSpecsForConfig } from "../../../../src/auto-reply/commands-registry.js";
-import type { HistoryEntry } from "../../../../src/auto-reply/reply/history.js";
-import { listSkillCommandsForAgents } from "../../../../src/auto-reply/skill-commands.js";
 import {
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingsEnabled,
-} from "../../../../src/channels/thread-bindings-policy.js";
+  listNativeCommandSpecsForConfig,
+  listSkillCommandsForAgents,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/command-auth";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
-} from "../../../../src/config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../../../../src/config/config.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../../src/config/runtime-group-policy.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
-import { summarizeStringEntries } from "../../../../src/shared/string-sample.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  danger,
+  isVerbose,
+  logVerbose,
+  shouldLogVerbose,
+  warn,
+} from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -73,7 +73,6 @@ import {
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
-import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -84,12 +83,8 @@ import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-import {
-  createNoopThreadBindingManager,
-  createThreadBindingManager,
-  reconcileAcpThreadBindingsOnStartup,
-} from "./thread-bindings.js";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
 
 export type MonitorDiscordOpts = {
@@ -107,12 +102,37 @@ export type MonitorDiscordOpts = {
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
+type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
 
 let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
+let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
 
 async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
   discordVoiceRuntimePromise ??= import("../voice/manager.runtime.js");
   return await discordVoiceRuntimePromise;
+}
+
+async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessionRuntimeModule> {
+  discordProviderSessionRuntimePromise ??= import("./provider-session.runtime.js");
+  return await discordProviderSessionRuntimePromise;
+}
+
+function normalizeBooleanForTesting(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return undefined;
+}
+
+function resolveThreadBindingsEnabledForTesting(params: {
+  channelEnabledRaw: unknown;
+  sessionEnabledRaw: unknown;
+}): boolean {
+  return (
+    normalizeBooleanForTesting(params.channelEnabledRaw) ??
+    normalizeBooleanForTesting(params.sessionEnabledRaw) ??
+    true
+  );
 }
 
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
@@ -161,11 +181,15 @@ function isLegacyMissingSessionError(message: string): boolean {
   );
 }
 
-function classifyAcpStatusProbeError(params: { error: unknown; isStaleRunning: boolean }): {
+function classifyAcpStatusProbeError(params: {
+  error: unknown;
+  isStaleRunning: boolean;
+  isAcpRuntimeError: DiscordProviderSessionRuntimeModule["isAcpRuntimeError"];
+}): {
   status: "stale" | "uncertain";
   reason: string;
 } {
-  if (isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
+  if (params.isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
     return { status: "stale", reason: "session-init-failed" };
   }
 
@@ -185,6 +209,7 @@ async function probeDiscordAcpBindingHealth(params: {
   storedState?: "idle" | "running" | "error";
   lastActivityAt?: number;
 }): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {
+  const { getAcpSessionManager, isAcpRuntimeError } = await loadDiscordProviderSessionRuntime();
   const manager = getAcpSessionManager();
   const statusProbeAbortController = new AbortController();
   const statusPromise = manager
@@ -227,6 +252,7 @@ async function probeDiscordAcpBindingHealth(params: {
     return classifyAcpStatusProbeError({
       error: result.error,
       isStaleRunning,
+      isAcpRuntimeError,
     });
   }
   if (result.status.state === "error") {
@@ -273,14 +299,18 @@ async function deployDiscordCommands(params: {
       body === undefined
         ? undefined
         : Buffer.byteLength(typeof body === "string" ? body : JSON.stringify(body), "utf8");
-    params.runtime.log?.(
-      `discord startup [${accountId}] deploy-rest:put:start ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
-    );
+    if (shouldLogVerbose()) {
+      params.runtime.log?.(
+        `discord startup [${accountId}] deploy-rest:put:start ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
+      );
+    }
     try {
       const result = await originalPut(path, data, query);
-      params.runtime.log?.(
-        `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
-      );
+      if (shouldLogVerbose()) {
+        params.runtime.log?.(
+          `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
+        );
+      }
       return result;
     } catch (err) {
       params.runtime.error?.(
@@ -296,6 +326,7 @@ async function deployDiscordCommands(params: {
       // errors like Discord 30034 fail fast and don't wedge the provider.
       restClient.options.queueRequests = false;
     }
+    params.runtime.log?.("discord: native commands using Carbon reconcile path");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
@@ -359,6 +390,9 @@ function logDiscordStartupPhase(params: {
   gateway?: GatewayPlugin;
   details?: string;
 }) {
+  if (!isVerbose()) {
+    return;
+  }
   const elapsedMs = Math.max(0, Date.now() - params.startAt);
   const suffix = [params.details, formatDiscordStartupGatewayState(params.gateway)]
     .filter((value): value is string => Boolean(value))
@@ -367,7 +401,6 @@ function logDiscordStartupPhase(params: {
     `discord startup [${params.accountId}] ${params.phase} ${elapsedMs}ms${suffix ? ` ${suffix}` : ""}`,
   );
 }
-
 function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -461,17 +494,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
-  const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
-    channelIdleHoursRaw:
-      discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
-    sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
-  });
-  const threadBindingMaxAgeMs = resolveThreadBindingMaxAgeMs({
+  const discordProviderSessionRuntime = await loadDiscordProviderSessionRuntime();
+  const threadBindingIdleTimeoutMs =
+    discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
+      channelIdleHoursRaw:
+        discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
+      sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
+    });
+  const threadBindingMaxAgeMs = discordProviderSessionRuntime.resolveThreadBindingMaxAgeMs({
     channelMaxAgeHoursRaw:
       discordAccountThreadBindings?.maxAgeHours ?? discordRootThreadBindings?.maxAgeHours,
     sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
   });
-  const threadBindingsEnabled = resolveThreadBindingsEnabled({
+  const threadBindingsEnabled = discordProviderSessionRuntime.resolveThreadBindingsEnabled({
     channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
     sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
@@ -575,17 +610,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled
-    ? createThreadBindingManager({
+    ? discordProviderSessionRuntime.createThreadBindingManager({
         accountId: account.accountId,
         token,
         cfg,
         idleTimeoutMs: threadBindingIdleTimeoutMs,
         maxAgeMs: threadBindingMaxAgeMs,
       })
-    : createNoopThreadBindingManager(account.accountId);
+    : discordProviderSessionRuntime.createNoopThreadBindingManager(account.accountId);
   if (threadBindingsEnabled) {
     const uncertainProbeKeys = new Set<string>();
-    const reconciliation = await reconcileAcpThreadBindingsOnStartup({
+    const reconciliation = await discordProviderSessionRuntime.reconcileAcpThreadBindingsOnStartup({
       cfg,
       accountId: account.accountId,
       sendFarewell: false,
@@ -769,6 +804,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = getDiscordGatewayEmitter(lifecycleGateway);
     onEarlyGatewayDebug = (msg: unknown) => {
+      if (!isVerbose()) {
+        return;
+      }
       runtime.log?.(
         `discord startup [${account.accountId}] gateway-debug ${Math.max(0, Date.now() - startupStartedAt)}ms ${String(msg)}`,
       );
@@ -790,7 +828,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
     await deployDiscordCommands({
       client,
@@ -808,7 +846,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
 
     const logger = createSubsystemLogger("discord/monitor");
-    const guildHistories = new Map<string, HistoryEntry[]>();
+    const guildHistories = new Map<
+      string,
+      import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
+    >();
     let botUserId: string | undefined;
     let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
@@ -880,7 +921,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
     }
 
-    const messageHandler = createDiscordMessageHandler({
+    const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -954,7 +995,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
-    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    runtime.log?.(
+      formatDiscordStartupStatusMessage({
+        gatewayReady: lifecycleGateway?.isConnected === true,
+        botIdentity: botIdentity || undefined,
+      }),
+    );
     if (lifecycleGateway?.isConnected) {
       opts.setStatus?.(createConnectedChannelStatusPatch());
     }
@@ -1010,5 +1056,5 @@ export const __testing = {
   resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,
-  resolveThreadBindingsEnabled,
+  resolveThreadBindingsEnabled: resolveThreadBindingsEnabledForTesting,
 };

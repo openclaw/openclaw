@@ -1,10 +1,9 @@
 import { isTruthyEnvValue } from "../infra/env.js";
+import { loggingState } from "../logging/state.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv.js";
 import { emitCliBanner } from "./banner.js";
-import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
-import { ensureConfigReady } from "./program/config-guard.js";
 import { findRoutedCommand } from "./program/routes.js";
 
 async function prepareRoutedCommand(params: {
@@ -14,6 +13,7 @@ async function prepareRoutedCommand(params: {
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
   emitCliBanner(VERSION, { argv: params.argv });
+  const { ensureConfigReady } = await import("./program/config-guard.js");
   await ensureConfigReady({
     runtime: defaultRuntime,
     commandPath: params.commandPath,
@@ -22,7 +22,21 @@ async function prepareRoutedCommand(params: {
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   if (shouldLoadPlugins) {
-    ensurePluginRegistryLoaded();
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+    const prev = loggingState.forceConsoleToStderr;
+    if (suppressDoctorStdout) {
+      loggingState.forceConsoleToStderr = true;
+    }
+    try {
+      ensurePluginRegistryLoaded({
+        scope:
+          params.commandPath[0] === "status" || params.commandPath[0] === "health"
+            ? "channels"
+            : "all",
+      });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
 }
 

@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
 
@@ -35,12 +38,20 @@ function createPluginCandidate(params: {
   rootDir: string;
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
+  format?: "openclaw" | "bundle";
+  bundleFormat?: "codex" | "claude" | "cursor";
+  packageManifest?: OpenClawPackageManifest;
+  packageDir?: string;
 }): PluginCandidate {
   return {
     idHint: params.idHint,
     source: path.join(params.rootDir, params.sourceName ?? "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin,
+    format: params.format,
+    bundleFormat: params.bundleFormat,
+    packageManifest: params.packageManifest,
+    packageDir: params.packageDir,
   };
 }
 
@@ -49,6 +60,16 @@ function loadRegistry(candidates: PluginCandidate[]) {
     candidates,
     cache: false,
   });
+}
+
+function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_VERSION: undefined,
+    VITEST: "true",
+    ...overrides,
+  };
 }
 
 function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
@@ -127,6 +148,7 @@ function expectUnsafeWorkspaceManifestRejected(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -193,6 +215,139 @@ describe("loadPluginManifestRegistry", () => {
         diag.message.includes("bundled plugin will be overridden by global plugin"),
       ),
     ).toBe(true);
+  });
+
+  it("preserves provider auth env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      enabledByDefault: true,
+      providers: ["openai", "openai-codex"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "openai",
+          method: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+    expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "openai",
+        method: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+  });
+
+  it("skips plugins whose minHostVersion is newer than the current host", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      env: { OPENCLAW_VERSION: "2026.3.21" },
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: ">=2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects invalid minHostVersion metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: "2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("plugin manifest invalid | openclaw.install.minHostVersion must use"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns distinctly when host version cannot be determined", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      env: { OPENCLAW_VERSION: "unknown" },
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: ">=2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("host version could not be determined"),
+      ),
+    ).toBe(true);
+    expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
   });
 
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
@@ -310,6 +465,237 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
+  it("accepts provider-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openai-provider",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts plugin-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "brave", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave-plugin",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts sandbox-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openshell", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openshell-sandbox",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts media-understanding-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "groq", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "groq-media-understanding",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("still warns for unrelated id hint mismatches", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "totally-different",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes(
+          'plugin id mismatch (manifest uses "openai", entry hints "totally-different")',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("loads Codex bundle manifests into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".codex-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Sample Bundle",
+        description: "Bundle fixture",
+        skills: "skills",
+        hooks: "hooks",
+      }),
+      "utf-8",
+    );
+    mkdirSafe(path.join(bundleDir, "hooks"));
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "sample-bundle",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "codex",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "sample-bundle",
+      format: "bundle",
+      bundleFormat: "codex",
+      hooks: ["hooks"],
+      skills: ["skills"],
+      bundleCapabilities: expect.arrayContaining(["hooks", "skills"]),
+    });
+  });
+
+  it("loads Claude bundle manifests with command roots and settings files", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".claude-plugin"));
+    mkdirSafe(path.join(bundleDir, "skill-packs", "starter"));
+    mkdirSafe(path.join(bundleDir, "commands-pack"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+    fs.writeFileSync(
+      path.join(bundleDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Sample",
+        skills: ["skill-packs/starter"],
+        commands: "commands-pack",
+      }),
+      "utf-8",
+    );
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "claude-sample",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "claude",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "claude-sample",
+      format: "bundle",
+      bundleFormat: "claude",
+      skills: ["skill-packs/starter", "commands-pack"],
+      settingsFiles: ["settings.json"],
+      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+    });
+  });
+
+  it("loads manifestless Claude bundles into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, "commands"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "manifestless-claude",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "claude",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      format: "bundle",
+      bundleFormat: "claude",
+      skills: ["commands"],
+      settingsFiles: ["settings.json"],
+      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+    });
+  });
+
+  it("loads Cursor bundle manifests into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".cursor-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "commands"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "rules"));
+    fs.writeFileSync(path.join(bundleDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
+    fs.writeFileSync(
+      path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Cursor Sample",
+        mcpServers: "./.mcp.json",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(bundleDir, ".mcp.json"), '{"servers":{}}', "utf-8");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "cursor-sample",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "cursor",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "cursor-sample",
+      format: "bundle",
+      bundleFormat: "cursor",
+      skills: ["skills", ".cursor/commands"],
+      bundleCapabilities: expect.arrayContaining([
+        "skills",
+        "commands",
+        "rules",
+        "hooks",
+        "mcpServers",
+      ]),
+    });
+  });
+
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
     mkdirSafe(path.join(dir, "sub"));
@@ -389,17 +775,15 @@ describe("loadPluginManifestRegistry", () => {
 
     const first = loadPluginManifestRegistry({
       cache: true,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
-      },
+      }),
     });
     const second = loadPluginManifestRegistry({
       cache: true,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
-      },
+      }),
     });
 
     expect(
@@ -441,22 +825,20 @@ describe("loadPluginManifestRegistry", () => {
     const first = loadPluginManifestRegistry({
       cache: true,
       config,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         HOME: homeA,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
-      },
+      }),
     });
     const second = loadPluginManifestRegistry({
       cache: true,
       config,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         HOME: homeB,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
-      },
+      }),
     });
 
     expect(
@@ -465,5 +847,49 @@ describe("loadPluginManifestRegistry", () => {
     expect(
       fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
     ).toBe(fs.realpathSync(demoB));
+  });
+
+  it("does not reuse cached manifests across host version changes", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+    fs.writeFileSync(path.join(dir, "index.ts"), "export default {}", "utf-8");
+    const candidates = [
+      createPluginCandidate({
+        idHint: "synology-chat",
+        rootDir: dir,
+        packageDir: dir,
+        origin: "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+            minHostVersion: ">=2026.3.22",
+          },
+        },
+      }),
+    ];
+
+    const olderHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: hermeticEnv({
+        OPENCLAW_VERSION: "2026.3.21",
+      }),
+    });
+    const newerHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: hermeticEnv({
+        OPENCLAW_VERSION: "2026.3.22",
+      }),
+    });
+
+    expect(olderHost.plugins).toEqual([]);
+    expect(
+      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
+    ).toBe(true);
+    expect(newerHost.plugins.some((plugin) => plugin.id === "synology-chat")).toBe(true);
+    expect(
+      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
+    ).toBe(false);
   });
 });

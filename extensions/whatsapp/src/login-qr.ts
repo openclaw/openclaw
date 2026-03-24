@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { DisconnectReason } from "@whiskeysockets/baileys";
-import { loadConfig } from "../../../src/config/config.js";
-import { danger, info, success } from "../../../src/globals.js";
-import { logInfo } from "../../../src/logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../../../src/runtime.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { renderQrPngBase64 } from "./qr-image.js";
 import {
@@ -16,6 +16,8 @@ import {
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
+
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
@@ -261,7 +263,7 @@ export async function waitForWebLogin(
     }
 
     if (login.error) {
-      if (login.errorStatus === DisconnectReason.loggedOut) {
+      if (login.errorStatus === LOGGED_OUT_STATUS) {
         await logoutWeb({
           authDir: login.authDir,
           isLegacyAuthDir: login.isLegacyAuthDir,

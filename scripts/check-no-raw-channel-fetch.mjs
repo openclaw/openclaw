@@ -2,7 +2,11 @@
 
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  collectCallExpressionLines,
+  runAsScript,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 
@@ -14,11 +18,6 @@ const allowedRawFetchCallsites = new Set([
   "extensions/feishu/src/streaming-card.ts:101",
   "extensions/feishu/src/streaming-card.ts:143",
   "extensions/feishu/src/streaming-card.ts:199",
-  "extensions/google-gemini-cli-auth/oauth.ts:372",
-  "extensions/google-gemini-cli-auth/oauth.ts:408",
-  "extensions/google-gemini-cli-auth/oauth.ts:447",
-  "extensions/google-gemini-cli-auth/oauth.ts:507",
-  "extensions/google-gemini-cli-auth/oauth.ts:575",
   "extensions/googlechat/src/api.ts:22",
   "extensions/googlechat/src/api.ts:43",
   "extensions/googlechat/src/api.ts:63",
@@ -29,8 +28,8 @@ const allowedRawFetchCallsites = new Set([
   "extensions/mattermost/src/mattermost/client.ts:211",
   "extensions/mattermost/src/mattermost/monitor.ts:230",
   "extensions/mattermost/src/mattermost/probe.ts:27",
-  "extensions/minimax-portal-auth/oauth.ts:71",
-  "extensions/minimax-portal-auth/oauth.ts:112",
+  "extensions/minimax/oauth.ts:62",
+  "extensions/minimax/oauth.ts:93",
   "extensions/msteams/src/graph.ts:39",
   "extensions/nextcloud-talk/src/room-info.ts:92",
   "extensions/nextcloud-talk/src/send.ts:107",
@@ -70,15 +69,9 @@ function isRawFetchCall(expression) {
 
 export function findRawFetchCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const lines = [];
-  const visit = (node) => {
-    if (ts.isCallExpression(node) && isRawFetchCall(node.expression)) {
-      lines.push(toLine(sourceFile, node.expression));
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return lines;
+  return collectCallExpressionLines(ts, sourceFile, (node) =>
+    isRawFetchCall(node.expression) ? node.expression : null,
+  );
 }
 
 export async function main() {

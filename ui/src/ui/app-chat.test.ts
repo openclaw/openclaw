@@ -1,7 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleSendChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatHost } from "./app-chat.ts";
+
+const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
+  setLastActiveSessionKeyMock: vi.fn(),
+}));
+
+vi.mock("./app-settings.ts", () => ({
+  setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
+}));
+
+let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
+
+async function loadChatHelpers(): Promise<void> {
+  vi.resetModules();
+  ({ handleSendChat, refreshChatAvatar } = await import("./app-chat.ts"));
+}
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   return {
@@ -29,6 +45,10 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
 }
 
 describe("refreshChatAvatar", () => {
+  beforeEach(async () => {
+    await loadChatHelpers();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -69,6 +89,11 @@ describe("refreshChatAvatar", () => {
 });
 
 describe("handleSendChat", () => {
+  beforeEach(async () => {
+    setLastActiveSessionKeyMock.mockReset();
+    await loadChatHelpers();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -83,7 +108,14 @@ describe("handleSendChat", () => {
     );
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.patch") {
-        return { ok: true, key: "main" };
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openai",
+            model: "gpt-5-mini",
+          },
+        };
       }
       if (method === "chat.history") {
         return { messages: [], thinkingLevel: null };
@@ -93,7 +125,7 @@ describe("handleSendChat", () => {
           ts: 0,
           path: "",
           count: 0,
-          defaults: { model: "gpt-5", contextTokens: null },
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
           sessions: [],
         };
       }
@@ -116,6 +148,14 @@ describe("handleSendChat", () => {
       key: "main",
       model: "gpt-5-mini",
     });
-    expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+    expect(host.chatModelOverrides.main).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
   });
+});
+
+afterAll(() => {
+  vi.doUnmock("./app-settings.ts");
+  vi.resetModules();
 });

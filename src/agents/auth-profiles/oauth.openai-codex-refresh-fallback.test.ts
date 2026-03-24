@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
@@ -17,13 +18,49 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
-  getOAuthProviders: () => [
-    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
-  ],
+const {
+  refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPluginMock,
+  buildProviderAuthDoctorHintWithPluginMock,
+} = vi.hoisted(() => ({
+  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
+    async (_params?: { context?: unknown }) => undefined,
+  ),
+  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
+  buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
 }));
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readQwenCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthProviders: () => [
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    ],
+  };
+});
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPlugin: formatProviderAuthProfileApiKeyWithPluginMock,
+  buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
+}));
+
+async function loadFreshOAuthModuleForTest() {
+  vi.resetModules();
+  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+}
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -54,7 +91,14 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   let agentDir = "";
 
   beforeEach(async () => {
+    resetFileLockStateForTest();
     getOAuthApiKeyMock.mockClear();
+    refreshProviderOAuthCredentialWithPluginMock.mockReset();
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
+    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    buildProviderAuthDoctorHintWithPluginMock.mockReset();
+    buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -62,9 +106,11 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
+    await loadFreshOAuthModuleForTest();
   });
 
   afterEach(async () => {
+    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     envSnapshot.restore();
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -72,6 +118,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
   it("falls back to cached access token when openai-codex refresh fails on accountId extraction", async () => {
     const profileId = "openai-codex:default";
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => params?.context as never,
+    );
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
@@ -91,7 +140,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
@@ -122,7 +171,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       }),
       agentDir,
     );
-    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error("invalid_grant");
     });
 

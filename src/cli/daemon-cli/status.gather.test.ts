@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
-const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
+const callGatewayStatusProbe = vi.fn<
+  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+>(async (_opts?: unknown) => ({
+  ok: true,
+  url: "ws://127.0.0.1:19001",
+  error: null,
+}));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
@@ -98,6 +104,11 @@ vi.mock("../../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: vi.fn(async () => {}),
+    install: vi.fn(async () => {}),
+    uninstall: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    restart: vi.fn(async () => ({ outcome: "completed" as const })),
     isLoaded: serviceIsLoaded,
     readCommand: serviceReadCommand,
     readRuntime: serviceReadRuntime,
@@ -207,6 +218,36 @@ describe("gatherDaemonStatus", () => {
     );
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+  });
+
+  it("uses fallback network details when interface discovery throws during status inspection", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "tailnet",
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+    resolveGatewayBindHost.mockImplementationOnce(async () => {
+      throw new Error("uv_interface_addresses failed");
+    });
+    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.gateway).toMatchObject({
+      bindMode: "tailnet",
+      bindHost: "127.0.0.1",
+      probeUrl: "wss://127.0.0.1:19001",
+    });
+    expect(status.gateway?.probeNote).toContain("interface discovery failed");
+    expect(status.gateway?.probeNote).toContain("tailnet addresses");
   });
 
   it("reuses command environment when reading runtime status", async () => {
@@ -331,6 +372,71 @@ describe("gatherDaemonStatus", () => {
         password: undefined,
       }),
     );
+  });
+
+  it("degrades safely when daemon probe auth SecretRef is unresolved", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: undefined,
+      }),
+    );
+    expect(status.rpc?.authWarning).toBeUndefined();
+  });
+
+  it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      error: "gateway closed",
+      url: "wss://127.0.0.1:19001",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.authWarning).toContain("gateway.auth.token SecretRef is unavailable");
+    expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
   it("keeps remote probe auth strict when remote token is missing", async () => {

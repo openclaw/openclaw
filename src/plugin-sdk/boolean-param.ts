@@ -1,3 +1,4 @@
+/** Read loose boolean params from tool input that may arrive as booleans or "true"/"false" strings. */
 export function readBooleanParam(
   params: Record<string, unknown>,
   key: string,
