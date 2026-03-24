@@ -260,11 +260,16 @@ const logRunner = (message, deps) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
+  // Pass --disable-warning so entry.ts sees it and skips its own respawn
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    ["--disable-warning=ExperimentalWarning", "openclaw.mjs", ...deps.args],
+    {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "inherit",
+    },
+  );
   const res = await new Promise((resolve) => {
     nodeProcess.on("exit", (exitCode, exitSignal) => {
       resolve({ exitCode, exitSignal });

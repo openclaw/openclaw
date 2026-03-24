@@ -91,7 +91,7 @@ describe("run-node script", () => {
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
         expect(nodeCalls).toEqual([
           [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"],
-          [process.execPath, "openclaw.mjs", "--version"],
+          [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "--version"],
         ]);
       });
     },
@@ -146,7 +146,7 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
         expectedBuildSpawn(),
-        [process.execPath, "openclaw.mjs", "status"],
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
       ]);
 
       await expect(
@@ -218,7 +218,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
     });
   });
 
@@ -295,7 +297,7 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
         expectedBuildSpawn(),
-        [process.execPath, "openclaw.mjs", "status"],
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
       ]);
     });
   });
@@ -364,7 +366,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
       await expect(fs.readFile(distPackagePath, "utf-8")).resolves.toContain('"./index.js"');
     });
   });
@@ -428,7 +432,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
     });
   });
 
@@ -498,7 +504,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
       await expect(
         fs.readFile(distManifestPath, "utf-8").then((raw) => JSON.parse(raw)),
       ).resolves.toMatchObject({
@@ -567,7 +575,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
       await expect(
         fs.readFile(distManifestPath, "utf-8").then((raw) => JSON.parse(raw)),
       ).resolves.toMatchObject({
@@ -642,7 +652,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
       await expect(fs.access(distManifestPath)).rejects.toThrow();
       await expect(fs.access(distPackagePath)).rejects.toThrow();
     });
@@ -701,7 +713,9 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
+      ]);
     });
   });
 
@@ -764,7 +778,7 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
         expectedBuildSpawn(),
-        [process.execPath, "openclaw.mjs", "status"],
+        [process.execPath, "--disable-warning=ExperimentalWarning", "openclaw.mjs", "status"],
       ]);
     });
   });
