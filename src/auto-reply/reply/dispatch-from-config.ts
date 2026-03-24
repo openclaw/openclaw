@@ -428,19 +428,6 @@ export async function dispatchReplyFromConfig(params: {
       )
     : undefined;
 
-  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
-      "dispatch-from-config: message_received internal hook failed",
-    );
-  }
-
   if (messageReceivedResult?.cancel) {
     if (messageReceivedResult.blockReason) {
       logVerbose(
@@ -453,6 +440,20 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("completed", { reason: "message-received-cancelled" });
     markIdle("message_received_cancelled");
     return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+  }
+
+  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
+  // Fires after blocking plugin hooks so cancelled messages don't leak downstream.
+  if (sessionKey) {
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("message", "received", sessionKey, {
+          ...toInternalMessageReceivedContext(hookContext),
+          timestamp,
+        }),
+      ),
+      "dispatch-from-config: message_received internal hook failed",
+    );
   }
 
   markProcessing();
