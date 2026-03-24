@@ -27,7 +27,10 @@ async function readGeneratedProvider(providerKey: string) {
   return parsed.providers[providerKey];
 }
 
-async function expectGeneratedProvider(providerKey: string, params: { ids: string[]; baseUrl?: string }) {
+async function expectGeneratedProvider(
+  providerKey: string,
+  params: { ids: string[]; baseUrl?: string },
+) {
   const provider = await readGeneratedProvider(providerKey);
   expect(provider?.models?.map((model) => model.id)).toEqual(params.ids);
   if (params.baseUrl !== undefined) {
