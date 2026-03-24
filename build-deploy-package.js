@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * build-deploy-package.js - OpenClaw 二次开发打包脚本（Node.js 版本）
- * 新增：pnpm检查安装、Node版本校验、自动安装生产依赖、执行pnpm build + pnpm ui:build
- * 修复：将八进制 \033 替换为十六进制 \x1b，解决 TS 八进制转义报错
- * 新增：复制根目录下的deploy.js文件到打包目录
+ * build-deploy-package.js - OpenClaw 打包脚本（ES 模块版，适配 package.json "type": "module"）
+ * 修复：CommonJS → ES 模块，解决 require is not defined 报错
+ * 功能：Node版本校验 + pnpm自动安装 + 生产依赖安装 + 双构建命令 + 文件复制
  */
 
-const { execSync, exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
+import { execSync, exec } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
+
+// 适配 ES 模块的异步exec
 const execAsync = promisify(exec);
 
 // ===================== 配置项（可根据需求修改）=====================
@@ -24,7 +25,6 @@ const config = {
 };
 
 // ===================== 工具函数（修复颜色转义符）=====================
-// 替换八进制 \033 为十六进制 \x1b，解决 TS 报错
 const logger = {
   info: (msg) => console.log(`${'\x1b[34m'}🔍 ${msg}${'\x1b[0m'}`),    // 蓝色
   success: (msg) => console.log(`${'\x1b[32m'}✅ ${msg}${'\x1b[0m'}`),  // 绿色

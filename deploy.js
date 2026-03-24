@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-const { execSync, exec, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+/**
+ * deploy.js - OpenClaw 部署脚本（ES 模块版，适配 package.json "type": "module"）
+ * 修复：CommonJS → ES 模块，解决 require is not defined 报错
+ */
+
+import { execSync, exec, spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // ===================== 配置项（可根据需求修改）=====================
 const CONFIG = {
