@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EditToolOptions } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   executeThrows: true,
@@ -32,10 +32,16 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-const { createHostWorkspaceEditTool } = await import("./pi-tools.read.js");
+let createHostWorkspaceEditTool: typeof import("./pi-tools.read.js").createHostWorkspaceEditTool;
 
 describe("createHostWorkspaceEditTool post-write recovery", () => {
   let tmpDir = "";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createHostWorkspaceEditTool } = await import("./pi-tools.read.js"));
+    mocks.executeThrows = true;
+  });
 
   afterEach(async () => {
     mocks.executeThrows = true;

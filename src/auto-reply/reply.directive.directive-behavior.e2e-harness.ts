@@ -2,15 +2,13 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import { clearSessionStoreCacheForTest, loadSessionStore } from "../config/sessions.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-
-export { loadModelCatalog } from "../agents/model-catalog.js";
-export { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import {
+  loadModelCatalogMock,
+  runEmbeddedPiAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
@@ -143,7 +141,8 @@ export function installDirectiveBehaviorE2EHooks() {
     clearSessionStoreCacheForTest();
     resetSystemEventsForTest();
     runEmbeddedPiAgentMock.mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
   });
 
   afterEach(async () => {

@@ -1,20 +1,89 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
+
+function createStubTool(name: string) {
+  return {
+    name,
+    description: name,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => ({ output: name })),
+  };
+}
+
+function mockToolFactory(name: string) {
+  return () => createStubTool(name);
+}
+
+vi.mock("./tools/agents-list-tool.js", () => ({
+  createAgentsListTool: mockToolFactory("agents_list_stub"),
+}));
+vi.mock("./tools/browser-tool.js", () => ({
+  createBrowserTool: mockToolFactory("browser_stub"),
+}));
+vi.mock("./tools/canvas-tool.js", () => ({
+  createCanvasTool: mockToolFactory("canvas_stub"),
+}));
+vi.mock("./tools/cron-tool.js", () => ({
+  createCronTool: mockToolFactory("cron_stub"),
+}));
+vi.mock("./tools/gateway-tool.js", () => ({
+  createGatewayTool: mockToolFactory("gateway_stub"),
+}));
+vi.mock("./tools/image-generate-tool.js", () => ({
+  createImageGenerateTool: mockToolFactory("image_generate_stub"),
+}));
+vi.mock("./tools/image-tool.js", () => ({
+  createImageTool: mockToolFactory("image_stub"),
+}));
+vi.mock("./tools/message-tool.js", () => ({
+  createMessageTool: mockToolFactory("message_stub"),
+}));
+vi.mock("./tools/nodes-tool.js", () => ({
+  createNodesTool: mockToolFactory("nodes_stub"),
+}));
+vi.mock("./tools/pdf-tool.js", () => ({
+  createPdfTool: mockToolFactory("pdf_stub"),
+}));
+vi.mock("./tools/session-status-tool.js", () => ({
+  createSessionStatusTool: mockToolFactory("session_status_stub"),
+}));
+vi.mock("./tools/sessions-history-tool.js", () => ({
+  createSessionsHistoryTool: mockToolFactory("sessions_history_stub"),
+}));
+vi.mock("./tools/sessions-list-tool.js", () => ({
+  createSessionsListTool: mockToolFactory("sessions_list_stub"),
+}));
+vi.mock("./tools/sessions-send-tool.js", () => ({
+  createSessionsSendTool: mockToolFactory("sessions_send_stub"),
+}));
+vi.mock("./tools/sessions-spawn-tool.js", () => ({
+  createSessionsSpawnTool: mockToolFactory("sessions_spawn_stub"),
+}));
+vi.mock("./tools/sessions-yield-tool.js", () => ({
+  createSessionsYieldTool: mockToolFactory("sessions_yield_stub"),
+}));
+vi.mock("./tools/subagents-tool.js", () => ({
+  createSubagentsTool: mockToolFactory("subagents_stub"),
+}));
+vi.mock("./tools/tts-tool.js", () => ({
+  createTtsTool: mockToolFactory("tts_stub"),
+}));
+
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
+
+let secretsRuntime: typeof import("../secrets/runtime.js");
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 function findTool(name: string, config: OpenClawConfig) {
   const allTools = createOpenClawTools({ config, sandboxed: true });
@@ -33,22 +102,28 @@ function makeHeaders(map: Record<string, string>): { get: (key: string) => strin
 }
 
 async function prepareAndActivate(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
-  const snapshot = await prepareSecretsRuntimeSnapshot({
+  const snapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
     config: params.config,
     env: params.env,
     agentDirs: ["/tmp/openclaw-agent-main"],
     loadAuthStore: () => ({ version: 1, profiles: {} }),
   });
-  activateSecretsRuntimeSnapshot(snapshot);
+  secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
   return snapshot;
 }
 
 describe("openclaw tools runtime web metadata wiring", () => {
   const priorFetch = global.fetch;
 
+  beforeEach(async () => {
+    vi.resetModules();
+    secretsRuntime = await import("../secrets/runtime.js");
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+  });
+
   afterEach(() => {
     global.fetch = priorFetch;
-    clearSecretsRuntimeSnapshot();
+    secretsRuntime.clearSecretsRuntimeSnapshot();
   });
 
   it("uses runtime-selected provider when higher-precedence provider ref is unresolved", async () => {
