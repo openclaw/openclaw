@@ -12,28 +12,29 @@ let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldA
 class TestDiscordUiContainer extends Container {}
 
 const mocks = vi.hoisted(() => ({
-  getChannelMessageAdapter: vi.fn((channel: string) =>
-    channel === "discord"
-      ? {
-          supportsComponentsV2: true,
-          buildCrossContextComponents: ({
-            originLabel,
-            message,
-          }: {
-            originLabel: string;
-            message: string;
-          }) => {
-            const trimmed = message.trim();
-            const components: Array<TextDisplay | Separator> = [];
-            if (trimmed) {
-              components.push(new TextDisplay(message));
-              components.push(new Separator({ divider: true, spacing: "small" }));
-            }
-            components.push(new TextDisplay(`*From ${originLabel}*`));
-            return [new TestDiscordUiContainer(components)];
-          },
-        }
-      : { supportsComponentsV2: false },
+  getChannelMessageAdapter: vi.fn(
+    (channel: string, _cfg?: OpenClawConfig, _accountId?: string | null) =>
+      channel === "discord"
+        ? {
+            supportsComponentsV2: true,
+            buildCrossContextComponents: ({
+              originLabel,
+              message,
+            }: {
+              originLabel: string;
+              message: string;
+            }) => {
+              const trimmed = message.trim();
+              const components: Array<TextDisplay | Separator> = [];
+              if (trimmed) {
+                components.push(new TextDisplay(message));
+                components.push(new Separator({ divider: true, spacing: "small" }));
+              }
+              components.push(new TextDisplay(`*From ${originLabel}*`));
+              return [new TestDiscordUiContainer(components)];
+            },
+          }
+        : { supportsComponentsV2: false },
   ),
   normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
     const trimmed = raw.trim();
@@ -235,4 +236,51 @@ describe("outbound policy helpers", () => {
       expect(shouldApplyCrossContextMarker(action)).toBe(expected);
     },
   );
+
+  it("falls back to text markers when useComponentsV2 is disabled via adapter", async () => {
+    // Override the mock so discord returns supportsComponentsV2: false
+    mocks.getChannelMessageAdapter.mockImplementation(() => ({
+      supportsComponentsV2: false,
+    }));
+
+    const cfg = {
+      channels: { discord: { useComponentsV2: false } },
+    } as OpenClawConfig;
+
+    const decoration = await buildCrossContextDecoration({
+      cfg,
+      channel: "discord",
+      target: "123",
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "discord" },
+    });
+
+    expect(decoration).not.toBeNull();
+    // No componentsBuilder since adapter says supportsComponentsV2: false
+    expect(decoration!.componentsBuilder).toBeUndefined();
+
+    const applied = applyCrossContextDecoration({
+      message: "hello",
+      decoration: decoration!,
+      preferComponents: true,
+    });
+    expect(applied.usedComponents).toBe(false);
+    expect(applied.message).toContain("[from ");
+    expect(applied.message).toContain("hello");
+  });
+
+  it("passes cfg and accountId to getChannelMessageAdapter", async () => {
+    const cfg = {
+      channels: { discord: {} },
+    } as OpenClawConfig;
+
+    await buildCrossContextDecoration({
+      cfg,
+      channel: "discord",
+      target: "123",
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "discord" },
+      accountId: "mybot",
+    });
+
+    expect(mocks.getChannelMessageAdapter).toHaveBeenCalledWith("discord", cfg, "mybot");
+  });
 });

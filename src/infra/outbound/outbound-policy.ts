@@ -181,7 +181,7 @@ export async function buildCrossContextDecoration(params: {
   const prefix = prefixTemplate.replaceAll("{channel}", originLabel);
   const suffix = suffixTemplate.replaceAll("{channel}", originLabel);
 
-  const adapter = getChannelMessageAdapter(params.channel);
+  const adapter = getChannelMessageAdapter(params.channel, params.cfg, params.accountId);
   const componentsBuilder = adapter.supportsComponentsV2
     ? adapter.buildCrossContextComponents
       ? (message: string) =>

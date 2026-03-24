@@ -341,6 +341,8 @@ export type DiscordAccountConfig = {
   status?: "online" | "dnd" | "idle" | "invisible";
   /** Automatic runtime/quota presence signaling (status text + status mapping). */
   autoPresence?: DiscordAutoPresenceConfig;
+  /** Use Discord components v2 containers for cross-context messages. Default: true. */
+  useComponentsV2?: boolean;
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
