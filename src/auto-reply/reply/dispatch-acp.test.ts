@@ -436,14 +436,12 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("delivers accumulated block text as fallback when TTS synthesis returns no media", async () => {
+  it("delivers final fallback text even when routed block text already existed", async () => {
     setReadyAcpResolution();
-    // Configure TTS mode as "final" but TTS synthesis returns no mediaUrl
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
-    // Mock TTS to return no mediaUrl for this test only (use Once to avoid cross-test leak)
-    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(
-      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
-    );
+    ttsMocks.maybeApplyTtsToPayload
+      .mockResolvedValueOnce({ text: "CODEX_OK" })
+      .mockResolvedValueOnce({} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
 
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
@@ -459,14 +457,11 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    // Should deliver final text as fallback when TTS produced no media.
-    // Note: ACP sends block first (during flush on done), then final fallback.
-    // So routeReply is called twice: 1 for block + 1 for final.
-    expect(result?.counts.block).toBeGreaterThanOrEqual(1);
+    expect(result?.counts.block).toBe(1);
     expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    // Verify final delivery contains the expected text
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         payload: expect.objectContaining({
           text: "CODEX_OK",
@@ -475,12 +470,15 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not duplicate delivery when blocks were already routed", async () => {
+  it("does not add text fallback when final TTS already delivered audio", async () => {
     setReadyAcpResolution();
-    // Configure TTS mode as "none" - should skip TTS for final delivery
-    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "none" });
-
-    // Simulate normal flow where projector routes blocks
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.maybeApplyTtsToPayload
+      .mockResolvedValueOnce({ text: "Task completed" })
+      .mockResolvedValueOnce({
+        mediaUrl: "https://example.com/final.mp3",
+        audioAsVoice: true,
+      } as Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>);
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "Task completed", tag: "agent_message_chunk" });
@@ -495,12 +493,18 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    // Should NOT deliver duplicate final text when blocks were already routed
-    // The block delivery should be sufficient
-    expect(result?.counts.block).toBeGreaterThanOrEqual(1);
-    expect(result?.counts.final).toBe(0);
-    // Verify routeReply was called for block, not for duplicate final
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/final.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
   });
 
   it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {
@@ -522,9 +526,31 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    // Should NOT trigger fallback for ttsMode="all" to avoid duplicate TTS
+    expect(result?.counts.block).toBe(1);
     expect(result?.counts.final).toBe(0);
-    // Note: maybeApplyTtsToPayload is called during block delivery, not in the fallback path
-    // We just verify that no final delivery occurred
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips final TTS and fallback when no block text was accumulated", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
   });
 });
