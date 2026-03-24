@@ -580,7 +580,10 @@ export async function importMigrateArchive(
         continue;
       }
 
-      const extractedPath = path.join(tempDir, manifestAsset.archivePath);
+      // Use the canonicalized tempDir for both lexical and realpath checks
+      // so symlinked TMPDIR (e.g. /tmp → /private/tmp on macOS) doesn't
+      // cause prefix mismatches that reject valid assets.
+      const extractedPath = path.join(resolvedTempDir, manifestAsset.archivePath);
 
       // Lexical check first: reject obviously bad paths before touching the filesystem.
       const resolvedExtracted = path.resolve(extractedPath);
