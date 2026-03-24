@@ -9,6 +9,10 @@ const noopLogger = {
   debug: vi.fn(),
 };
 
+type MockFetchRequest = {
+  init?: RequestInit;
+};
+
 function createApi(pluginConfig: Record<string, unknown> = {}) {
   return {
     id: "tinyfish",
@@ -73,7 +77,8 @@ describe("tinyfish automation tool", () => {
     })) as { details: Record<string, unknown> };
 
     expect(fetchWithGuard).toHaveBeenCalledTimes(1);
-    expect(fetchWithGuard.mock.calls[0]?.[0]).toMatchObject({
+    const firstRequest = fetchWithGuard.mock.calls[0]?.[0] as MockFetchRequest | undefined;
+    expect(firstRequest).toMatchObject({
       init: {
         method: "POST",
         headers: expect.objectContaining({
@@ -81,7 +86,7 @@ describe("tinyfish automation tool", () => {
         }),
       },
     });
-    expect(JSON.parse(String(fetchWithGuard.mock.calls[0]?.[0]?.init?.body))).toEqual({
+    expect(JSON.parse(String(firstRequest?.init?.body))).toEqual({
       url: "https://example.com/",
       goal: "Fill the public form",
       browser_profile: "stealth",
@@ -124,7 +129,8 @@ describe("tinyfish automation tool", () => {
       goal: "Collect the pricing table",
     });
 
-    expect(fetchWithGuard.mock.calls[0]?.[0]?.init?.headers).toMatchObject({
+    const firstRequest = fetchWithGuard.mock.calls[0]?.[0] as MockFetchRequest | undefined;
+    expect(firstRequest?.init?.headers).toMatchObject({
       "X-API-Key": "env-key",
     });
   });
