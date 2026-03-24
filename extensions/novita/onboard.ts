@@ -3,7 +3,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const NOVITA_DEFAULT_MODEL_REF = "novita/deepseek/deepseek-v3.2";
+export const NOVITA_DEFAULT_MODEL_REF = "novita/moonshotai/kimi-k2.5";
 
 export function applyNovitaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };

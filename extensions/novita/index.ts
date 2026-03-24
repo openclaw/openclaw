@@ -84,6 +84,11 @@ export default definePluginEntry({
           };
         },
       },
+      // Novita aggregates 200+ models from diverse vendors; disable strict
+      // OpenAI-compat turn validation since upstream models may diverge.
+      capabilities: {
+        openAiCompatTurnValidation: false,
+      },
       resolveDynamicModel: (ctx) => buildDynamicNovitaModel(ctx),
       prepareDynamicModel: async (ctx) => {
         // The catalog.run has already called ensureNovitaModelCache with the
