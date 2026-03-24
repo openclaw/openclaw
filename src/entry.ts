@@ -4,6 +4,7 @@ import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
@@ -99,6 +100,9 @@ if (
   }
 
   function tryHandleRootVersionFastPath(argv: string[]): boolean {
+    if (resolveCliContainerTarget(argv)) {
+      return false;
+    }
     if (!isRootVersionInvocation(argv)) {
       return false;
     }
@@ -121,10 +125,32 @@ if (
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureCliRespawnReady()) {
-    const parsed = parseCliProfileArgs(process.argv);
+    const parsedContainer = parseCliContainerArgs(process.argv);
+    if (!parsedContainer.ok) {
+      console.error(`[openclaw] ${parsedContainer.error}`);
+      process.exit(2);
+    }
+
+    const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
       // Keep it simple; Commander will handle rich help/errors after we strip flags.
       console.error(`[openclaw] ${parsed.error}`);
+      process.exit(2);
+    }
+
+    const containerTargetName = resolveCliContainerTarget(process.argv);
+    if (
+      containerTargetName &&
+      (parsed.profile ||
+        process.env.OPENCLAW_PROFILE?.trim() ||
+        process.env.OPENCLAW_GATEWAY_PORT?.trim() ||
+        process.env.OPENCLAW_GATEWAY_URL?.trim() ||
+        process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+        process.env.OPENCLAW_GATEWAY_PASSWORD?.trim())
+    ) {
+      console.error(
+        "[openclaw] --container cannot be combined with --profile/--dev or gateway override env vars",
+      );
       process.exit(2);
     }
 
@@ -145,8 +171,12 @@ export function tryHandleRootHelpFastPath(
   deps: {
     outputRootHelp?: () => void;
     onError?: (error: unknown) => void;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): boolean {
+  if (resolveCliContainerTarget(argv, deps.env)) {
+    return false;
+  }
   if (!isRootHelpInvocation(argv)) {
     return false;
   }
