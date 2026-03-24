@@ -146,17 +146,19 @@ async function waitForAgentReady(params: {
   const deadline = Date.now() + timeoutMs;
   let lastRefreshAtMs = 0;
 
+  // Check visibility first before any refresh, since writeConfigFile() already
+  // refreshed the snapshot. This avoids wasting the refresh budget on redundant
+  // work when the agent is already resolvable.
+  clearConfigCache();
+  const initialCfg = loadConfig();
+  const foundInEntries = findAgentEntryIndex(listAgentEntries(initialCfg), params.agentId) >= 0;
+  const resolvableForFiles = resolveAgentIdOrError(params.agentId, initialCfg) === params.agentId;
+  if (foundInEntries && resolvableForFiles) {
+    return { ok: true };
+  }
+
   for (;;) {
     const now = Date.now();
-    clearConfigCache();
-    // Readiness must reflect runtime visibility because follow-up RPCs resolve
-    // agent IDs from loadConfig().
-    const cfg = loadConfig();
-    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
-    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
-    if (foundInEntries && resolvableForFiles) {
-      return { ok: true };
-    }
     const remainingMsBeforeRefresh = deadline - now;
     if (remainingMsBeforeRefresh <= 0) {
       return { ok: false };
@@ -176,16 +178,35 @@ async function waitForAgentReady(params: {
         ]);
       } catch (error) {
         if (error === AGENT_READY_TIMEOUT) {
+          // Readiness timed out, but we need to wait for the in-flight refresh
+          // to settle before returning. This allows the refresh to acquire and
+          // release the secrets lock, preventing later operations from being
+          // blocked on a stale pending activation. Set a deadline so we don't
+          // wait indefinitely if the refresh hangs.
+          const settleDeadlineMs = Date.now() + Math.max(100, pollMs * 2);
           try {
-            await refreshPromise;
+            await Promise.race([
+              refreshPromise,
+              delayMs(settleDeadlineMs - Date.now()).then(() => {
+                // Best-effort: if it still hasn't settled, give up and return
+                // the timeout error. This is defensive against hung activations.
+              }),
+            ]);
           } catch {
-            // Best-effort: if the refresh itself fails, report the timeout once
-            // the in-flight activation has settled so we don't leave it queued.
+            // Best-effort: ignore any errors from the settled refresh.
           }
           return { ok: false };
         }
         // Best-effort: transient refresh failures should not prevent retries.
       }
+    }
+
+    clearConfigCache();
+    const cfg = loadConfig();
+    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
+    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
+    if (foundInEntries && resolvableForFiles) {
+      return { ok: true };
     }
 
     const remainingMs = deadline - Date.now();

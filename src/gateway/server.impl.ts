@@ -1062,21 +1062,36 @@ export async function startGatewayServer(
         return;
       }
       if (configOverride) {
-        await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+        await runWithSecretsActivationLock(async () => {
+          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+        });
         return;
       }
       const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
       if (reloadMode === "off" || reloadMode === "restart") {
         return;
       }
+      // Always read the file first to catch concurrent updates, even if source
+      // snapshot is in memory. This ensures agents.create polling sees newly
+      // written configs rather than stale in-memory state.
       const snapshot = await readConfigFileSnapshot();
       if (snapshot.exists && snapshot.valid) {
-        await activateRuntimeSecrets(snapshot.resolved, { reason: "reload", activate: true });
-        return;
+        // Use the source snapshot from memory, not the disk read, to avoid
+        // leaking env-expanded values back to disk in later mutation writes.
+        // The disk read is only used to detect that we should refresh.
+        const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+        if (runtimeSourceConfig) {
+          await runWithSecretsActivationLock(async () => {
+            await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
+          });
+          return;
+        }
       }
       const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
       if (runtimeSourceConfig) {
-        await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
+        await runWithSecretsActivationLock(async () => {
+          await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
+        });
       }
     };
 
@@ -1419,12 +1434,17 @@ export async function startGatewayServer(
                 const activeConfigKey = activeSnapshot
                   ? stableStringify(activeSnapshot.config)
                   : null;
+                // Skip rollback only if the serial advanced AND the active config
+                // is genuinely different (not just re-activated). If the active config
+                // is the same as what we prepared, we must rollback even if the serial
+                // changed, since the higher serial just indicates a re-activation of the
+                // same config, not progress to a newer state.
                 if (
                   runtimeSecretsActivationSerial !== preparedActivationSerial &&
                   activeConfigKey !== preparedConfigKey
                 ) {
                   logReload.warn(
-                    "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced",
+                    "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced to a different config",
                   );
                   return;
                 }
