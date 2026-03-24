@@ -56,6 +56,7 @@ describe("memory manager cache hydration", () => {
   });
 
   afterEach(async () => {
+    await closeAllMemoryIndexManagers();
     await closeAllMemorySearchManagers();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
