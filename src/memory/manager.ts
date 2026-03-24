@@ -694,46 +694,42 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   status(): MemoryProviderStatus {
     const sourceFilter = this.buildSourceFilter();
-    const files = this.db
-      .prepare(`SELECT COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql}`)
-      .get(...sourceFilter.params) as {
+    const aggregateRows = this.db
+      .prepare(
+        `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source\n` +
+          `UNION ALL\n` +
+          `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
+      )
+      .all(...sourceFilter.params, ...sourceFilter.params) as Array<{
+      kind: "files" | "chunks";
+      source: MemorySource;
       c: number;
-    };
-    const chunks = this.db
-      .prepare(`SELECT COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql}`)
-      .get(...sourceFilter.params) as {
-      c: number;
-    };
-    const sourceCounts = (() => {
+    }>;
+    const aggregateState = (() => {
       const sources = Array.from(this.sources);
-      if (sources.length === 0) {
-        return [];
-      }
       const bySource = new Map<MemorySource, { files: number; chunks: number }>();
       for (const source of sources) {
         bySource.set(source, { files: 0, chunks: 0 });
       }
-      const fileRows = this.db
-        .prepare(
-          `SELECT source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source`,
-        )
-        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
-      for (const row of fileRows) {
+      let files = 0;
+      let chunks = 0;
+      for (const row of aggregateRows) {
+        const count = row.c ?? 0;
         const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
-        entry.files = row.c ?? 0;
+        if (row.kind === "files") {
+          entry.files = count;
+          files += count;
+        } else {
+          entry.chunks = count;
+          chunks += count;
+        }
         bySource.set(row.source, entry);
       }
-      const chunkRows = this.db
-        .prepare(
-          `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
-        )
-        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
-      for (const row of chunkRows) {
-        const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
-        entry.chunks = row.c ?? 0;
-        bySource.set(row.source, entry);
-      }
-      return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
+      return {
+        files,
+        chunks,
+        sourceCounts: sources.map((source) => Object.assign({ source }, bySource.get(source)!)),
+      };
     })();
 
     const searchMode = this.provider || !this.providerInitialized ? "hybrid" : "fts-only";
@@ -745,8 +741,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     return {
       backend: "builtin",
-      files: files?.c ?? 0,
-      chunks: chunks?.c ?? 0,
+      files: aggregateState.files,
+      chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
@@ -755,7 +751,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
-      sourceCounts,
+      sourceCounts: aggregateState.sourceCounts,
       cache: this.cache.enabled
         ? {
             enabled: true,
