@@ -431,10 +431,58 @@ function resolveOllamaModelHeaders(model: {
   return model.headers as Record<string, string>;
 }
 
+const MAX_OLLAMA_NUM_CTX = 131_072;
+
+export function clampOllamaNumCtx(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.min(MAX_OLLAMA_NUM_CTX, Math.max(1, Math.floor(value)));
+}
+
+function clampOllamaRepeatPenalty(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.min(2, Math.max(0, value));
+}
+
+function sanitizeOllamaOptions(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+
+  const raw = input as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+
+  const numCtx = clampOllamaNumCtx(raw.num_ctx);
+  if (numCtx !== undefined) {
+    sanitized.num_ctx = numCtx;
+  }
+
+  const repeatPenalty = clampOllamaRepeatPenalty(raw.repeat_penalty);
+  if (repeatPenalty !== undefined) {
+    sanitized.repeat_penalty = repeatPenalty;
+  }
+
+  return sanitized;
+}
+
+function resolveOllamaModelOptions(model: unknown): Record<string, unknown> | undefined {
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
+    return undefined;
+  }
+  const modelOptions = (model as { options?: unknown }).options;
+  if (!modelOptions || typeof modelOptions !== "object" || Array.isArray(modelOptions)) {
+    return undefined;
+  }
+  return modelOptions as Record<string, unknown>;
+}
+
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
-  modelOptions?: Record<string, unknown>,
+  defaultModelOptions?: Record<string, unknown>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
 
@@ -452,13 +500,16 @@ export function createOllamaStreamFn(
 
         // Ollama defaults to num_ctx=4096 which is too small for large
         // system prompts + many tool definitions. Use model's contextWindow.
+        // Only forward bounded sampling controls from config. Runtime knobs
+        // like threads, GPU layers, and mmap/mlock stay blocked here.
+        const modelOptions = sanitizeOllamaOptions(
+          resolveOllamaModelOptions(model) ?? defaultModelOptions,
+        );
         const optionsNumCtx =
-          typeof modelOptions?.num_ctx === "number" && Number.isFinite(modelOptions.num_ctx)
-            ? modelOptions.num_ctx
-            : undefined;
+          typeof modelOptions.num_ctx === "number" ? modelOptions.num_ctx : undefined;
         const ollamaOptions: Record<string, unknown> = {
           ...modelOptions,
-          num_ctx: model.contextWindow ?? optionsNumCtx ?? 65536,
+          num_ctx: clampOllamaNumCtx(model.contextWindow) ?? optionsNumCtx ?? 65536,
         };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
