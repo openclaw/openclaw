@@ -7,6 +7,7 @@ import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
@@ -129,7 +130,50 @@ export async function recordInboundSessionAndDispatchReply(params: {
     channel: params.channel,
     accountId: params.accountId,
   });
-  const deliver = createNormalizedOutboundDeliverer(params.deliver);
+
+  const sessionKey = params.ctxPayload.SessionKey ?? params.routeSessionKey;
+  const channelId = params.channel;
+  const to =
+    params.ctxPayload.OriginatingTo ?? params.ctxPayload.To ?? params.ctxPayload.From ?? "";
+  const accountId = params.accountId;
+
+  // Wrap the deliver callback to emit message:sent internal hooks after each
+  // delivery attempt. Channel plugin reply paths bypass deliverOutboundPayloads
+  // (which normally emits this hook), so without this wrapper the policy feedback
+  // subsystem never sees agent_reply actions for same-channel replies.
+  const rawDeliver = createNormalizedOutboundDeliverer(params.deliver);
+  const emitSentHook = (payload: unknown, success: boolean, error?: string): void => {
+    try {
+      triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, {
+          to,
+          content: (() => {
+            if (payload && typeof payload === "object" && "text" in payload) {
+              const text = (payload as Record<string, unknown>).text;
+              return typeof text === "string" ? text : "";
+            }
+            return "";
+          })(),
+          success,
+          ...(error ? { error } : {}),
+          channelId,
+          accountId,
+          conversationId: to,
+        }),
+      ).catch(() => {});
+    } catch {
+      // Internal hooks are non-critical — never disrupt delivery
+    }
+  };
+  const deliver = async (payload: unknown): Promise<void> => {
+    try {
+      await rawDeliver(payload);
+      emitSentHook(payload, true);
+    } catch (err: unknown) {
+      emitSentHook(payload, false, String(err));
+      throw err; // Re-throw so the dispatcher's onError handler still fires
+    }
+  };
 
   await params.dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.ctxPayload,
