@@ -133,6 +133,27 @@ describe("extractMessagingToolSend", () => {
     });
   });
 
+  it("ignores numeric target aliases and falls back to the current route", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        to: 12345,
+        content: "same route",
+      },
+      {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+      },
+    );
+
+    expect(result).toEqual({
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+    });
+  });
+
   it("preserves implicit Telegram topic threading for same-chat sends", () => {
     const result = extractMessagingToolSend(
       "message",

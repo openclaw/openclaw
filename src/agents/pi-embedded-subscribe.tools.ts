@@ -359,9 +359,6 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
 }
 
 function normalizeMessageToolTarget(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
   if (typeof value !== "string") {
     return undefined;
   }
