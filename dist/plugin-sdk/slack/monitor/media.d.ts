@@ -63,4 +63,6 @@ export declare function resolveSlackThreadHistory(params: {
     client: SlackWebClient;
     currentMessageTs?: string;
     limit?: number;
+    /** Slack-format timestamp (seconds.microseconds) — fetch messages at or after this point (inclusive). */
+    oldest?: string;
 }): Promise<SlackThreadMessage[]>;

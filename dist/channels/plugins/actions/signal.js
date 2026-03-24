@@ -1,5 +1,5 @@
 import "../../../github-copilot-token-Ddz7Qicy.js";
-import { tt as signalMessageActions } from "../../../discord-0dvSTuGz.js";
+import { tt as signalMessageActions } from "../../../discord-sxjCRSnW.js";
 import "../../../accounts-dcuY07_X.js";
 import "../../../token-Diy_DXW4.js";
 import "../../../query-expansion-BGMOt54G.js";

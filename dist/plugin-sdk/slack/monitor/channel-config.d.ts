@@ -6,8 +6,10 @@ export type SlackChannelConfigResolved = {
     requireMention: boolean;
     allowImplicitMention: boolean;
     incidentRootOnly: boolean;
+    allowHumanThreadFollowups: boolean;
     incidentIgnoreResolved: boolean;
     incidentDedupeWindowSeconds: number;
+    incidentBotAllowPrefix?: string;
     allowBots?: boolean;
     users?: Array<string | number>;
     skills?: string[];
@@ -21,8 +23,10 @@ export type SlackChannelConfigEntry = {
     requireMention?: boolean;
     allowImplicitMention?: boolean;
     incidentRootOnly?: boolean;
+    allowHumanThreadFollowups?: boolean;
     incidentIgnoreResolved?: boolean;
     incidentDedupeWindowSeconds?: number;
+    incidentBotAllowPrefix?: string;
     allowBots?: boolean;
     users?: Array<string | number>;
     skills?: string[];

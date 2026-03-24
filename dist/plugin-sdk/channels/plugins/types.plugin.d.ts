@@ -1,3 +1,4 @@
+import type { QueueMode } from "../../auto-reply/reply/queue/types.js";
 import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type { ChannelAuthAdapter, ChannelCommandAdapter, ChannelConfigAdapter, ChannelDirectoryAdapter, ChannelResolverAdapter, ChannelElevatedAdapter, ChannelGatewayAdapter, ChannelGroupAdapter, ChannelHeartbeatAdapter, ChannelOutboundAdapter, ChannelPairingAdapter, ChannelSecurityAdapter, ChannelSetupAdapter, ChannelStatusAdapter } from "./types.adapters.js";
 import type { ChannelAgentTool, ChannelAgentToolFactory, ChannelCapabilities, ChannelId, ChannelAgentPromptAdapter, ChannelMentionAdapter, ChannelMessageActionAdapter, ChannelMessagingAdapter, ChannelMeta, ChannelStreamingAdapter, ChannelThreadingAdapter } from "./types.core.js";
@@ -20,6 +21,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     capabilities: ChannelCapabilities;
     defaults?: {
         queue?: {
+            mode?: QueueMode;
             debounceMs?: number;
         };
     };

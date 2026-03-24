@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isProgressOnlyMessage, shouldBlockIncidentMessage } from "./index.js";
+import {
+  isProgressOnlyMessage,
+  sanitizeIncidentMessage,
+  shouldBlockIncidentMessage,
+} from "./index.js";
 
 describe("shouldBlockIncidentMessage", () => {
   it("blocks messages without an incident header (intermediate thinking)", () => {
@@ -8,13 +12,15 @@ describe("shouldBlockIncidentMessage", () => {
     expect(shouldBlockIncidentMessage("Found it.")).toBe(true);
     expect(shouldBlockIncidentMessage("On it")).toBe(true);
     expect(shouldBlockIncidentMessage("The code looks correct here.")).toBe(true);
-    // Long thinking messages without labels are also blocked
+  });
+
+  it("allows substantive free-form summaries without incident labels", () => {
     expect(
       shouldBlockIncidentMessage(
         "Now I have the complete picture. The totalRealAssets in AdaptersProvider is computed as " +
           "x".repeat(300),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("allows messages with bold incident labels", () => {
@@ -40,10 +46,13 @@ _Evidence:_ pod restarted`;
     expect(shouldBlockIncidentMessage(longProgress)).toBe(true);
   });
 
-  it("blocks narration before the incident header", () => {
+  it("trims narration before the incident header and allows the summary", () => {
     const withLabel =
       "Now let me summarize:\n\n*Incident:* server crash\n*Evidence:* pod restarted";
-    expect(shouldBlockIncidentMessage(withLabel)).toBe(true);
+    expect(sanitizeIncidentMessage(withLabel)).toBe(
+      "*Incident:* server crash\n*Evidence:* pod restarted",
+    );
+    expect(shouldBlockIncidentMessage(withLabel)).toBe(false);
   });
 
   it("allows monitoring prefixes before the incident header", () => {
@@ -65,18 +74,21 @@ _Evidence:_ pod restarted`;
     expect(shouldBlockIncidentMessage(reply)).toBe(false);
   });
 
-  it("blocks non-mention angle-bracket tokens before the incident header", () => {
+  it("trims non-summary angle-bracket tokens before the incident header", () => {
     const reply = `<https://example.com|runbook>
 *Incident:* API latency spike
 *Customer impact:* confirmed`;
-    expect(shouldBlockIncidentMessage(reply)).toBe(true);
+    expect(sanitizeIncidentMessage(reply)).toBe(
+      "*Incident:* API latency spike\n*Customer impact:* confirmed",
+    );
+    expect(shouldBlockIncidentMessage(reply)).toBe(false);
   });
 
-  it("blocks messages that only contain later incident labels", () => {
-    expect(shouldBlockIncidentMessage("*Evidence:* one fact")).toBe(true);
-    expect(shouldBlockIncidentMessage("*Mitigation:* restart pod")).toBe(true);
-    expect(shouldBlockIncidentMessage("*Likely cause:* memory leak")).toBe(true);
-    expect(shouldBlockIncidentMessage("*Status:* resolved")).toBe(true);
+  it("allows summary labels beyond just the incident label", () => {
+    expect(shouldBlockIncidentMessage("*Evidence:* one fact")).toBe(false);
+    expect(shouldBlockIncidentMessage("*Mitigation:* restart pod")).toBe(false);
+    expect(shouldBlockIncidentMessage("*Likely cause:* memory leak")).toBe(false);
+    expect(shouldBlockIncidentMessage("*Status:* resolved")).toBe(false);
   });
 
   it("blocks empty messages", () => {
@@ -84,16 +96,16 @@ _Evidence:_ pod restarted`;
     expect(shouldBlockIncidentMessage("   ")).toBe(true);
   });
 
-  it("blocks incident replies that omit required sections", () => {
+  it("allows incident replies that omit sections as long as they are not progress-only", () => {
     const reply = `*Incident:* API latency spike
 *Customer impact:* confirmed`;
-    expect(shouldBlockIncidentMessage(reply)).toBe(true);
+    expect(shouldBlockIncidentMessage(reply)).toBe(false);
   });
 
-  it("treats missing sections separately from progress-only narration", () => {
+  it("treats partial incident summaries as non-progress replies", () => {
     const reply = `*Incident:* API latency spike
 *Customer impact:* confirmed`;
     expect(isProgressOnlyMessage(reply)).toBe(false);
-    expect(shouldBlockIncidentMessage(reply)).toBe(true);
+    expect(shouldBlockIncidentMessage(reply)).toBe(false);
   });
 });

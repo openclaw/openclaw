@@ -3747,6 +3747,7 @@ export declare const OpenClawSchema: z.ZodObject<{
                 }>>;
                 inheritParent: z.ZodOptional<z.ZodBoolean>;
                 initialHistoryLimit: z.ZodOptional<z.ZodNumber>;
+                existingSessionRefreshLimit: z.ZodOptional<z.ZodNumber>;
             }, z.core.$strict>>;
             actions: z.ZodOptional<z.ZodObject<{
                 reactions: z.ZodOptional<z.ZodBoolean>;
@@ -3791,8 +3792,10 @@ export declare const OpenClawSchema: z.ZodObject<{
                 requireMention: z.ZodOptional<z.ZodBoolean>;
                 allowImplicitMention: z.ZodOptional<z.ZodBoolean>;
                 incidentRootOnly: z.ZodOptional<z.ZodBoolean>;
+                allowHumanThreadFollowups: z.ZodOptional<z.ZodBoolean>;
                 incidentIgnoreResolved: z.ZodOptional<z.ZodBoolean>;
                 incidentDedupeWindowSeconds: z.ZodOptional<z.ZodNumber>;
+                incidentBotAllowPrefix: z.ZodOptional<z.ZodString>;
                 tools: z.ZodOptional<z.ZodObject<{
                     allow: z.ZodOptional<z.ZodArray<z.ZodString>>;
                     alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>;
@@ -3971,6 +3974,7 @@ export declare const OpenClawSchema: z.ZodObject<{
                     }>>;
                     inheritParent: z.ZodOptional<z.ZodBoolean>;
                     initialHistoryLimit: z.ZodOptional<z.ZodNumber>;
+                    existingSessionRefreshLimit: z.ZodOptional<z.ZodNumber>;
                 }, z.core.$strict>>;
                 actions: z.ZodOptional<z.ZodObject<{
                     reactions: z.ZodOptional<z.ZodBoolean>;
@@ -4015,8 +4019,10 @@ export declare const OpenClawSchema: z.ZodObject<{
                     requireMention: z.ZodOptional<z.ZodBoolean>;
                     allowImplicitMention: z.ZodOptional<z.ZodBoolean>;
                     incidentRootOnly: z.ZodOptional<z.ZodBoolean>;
+                    allowHumanThreadFollowups: z.ZodOptional<z.ZodBoolean>;
                     incidentIgnoreResolved: z.ZodOptional<z.ZodBoolean>;
                     incidentDedupeWindowSeconds: z.ZodOptional<z.ZodNumber>;
+                    incidentBotAllowPrefix: z.ZodOptional<z.ZodString>;
                     tools: z.ZodOptional<z.ZodObject<{
                         allow: z.ZodOptional<z.ZodArray<z.ZodString>>;
                         alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>;

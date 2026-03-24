@@ -27,10 +27,25 @@ export type SlackChannelConfig = {
     allowImplicitMention?: boolean;
     /** If true, only root incident posts trigger replies in this channel. */
     incidentRootOnly?: boolean;
+    /**
+     * If true, let human incident-thread follow-ups bypass root-only filtering
+     * in channels that already use `incidentRootOnly`.
+     * The bypass requires an explicit @mention of the bot in the thread reply;
+     * prior bot participation or bot-authored roots alone are not sufficient.
+     * Authorized stop/ignore-thread abort controls are the only non-mention
+     * exception for these follow-ups.
+     * Enable only in incident/bug-report style channels where this narrower
+     * control surface is acceptable.
+     * Useful for monitoring channels where operators may ask follow-ups like
+     * "is it resolved now?" by tagging the bot after the initial analysis.
+     */
+    allowHumanThreadFollowups?: boolean;
     /** If true, resolved/recovered incident updates are ignored in this channel. */
     incidentIgnoreResolved?: boolean;
     /** Cooldown window for duplicate incident ingress suppression. */
     incidentDedupeWindowSeconds?: number;
+    /** When set, bot messages whose body does not start with this exact case-sensitive prefix are dropped. Human messages are unaffected. */
+    incidentBotAllowPrefix?: string;
     /** Optional tool policy overrides for this channel. */
     tools?: GroupToolPolicyConfig;
     toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -73,6 +88,8 @@ export type SlackThreadConfig = {
     inheritParent?: boolean;
     /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
     initialHistoryLimit?: number;
+    /** Maximum number of thread messages to refresh for existing thread sessions (default: 8). Set to 0 to disable refreshes for existing sessions. Runtime clamps this to initialHistoryLimit. */
+    existingSessionRefreshLimit?: number;
 };
 export type SlackAccountConfig = {
     /** Optional display name for this account (used in CLI/UI lists). */

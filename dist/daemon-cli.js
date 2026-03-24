@@ -1,7 +1,7 @@
 import "./github-copilot-token-DIMBOSWC.js";
 import { a as resolveGatewayPort, l as resolveStateDir, o as resolveIsNixMode, r as resolveConfigPath } from "./paths-CgQ-5xPU.js";
 import { A as shortenHomePath, G as theme, U as colorize, W as isRich, et as isBunRuntime, j as sleep, l as defaultRuntime, q as getResolvedLoggerSettings, tt as isNodeRuntime } from "./logger-C9jPgLFF.js";
-import { $i as hasConfiguredSecretInput, Dn as GatewayClient, E as resolveControlUiLinks, Ei as formatPortDiagnostics, En as READ_SCOPE, Gi as readGatewayTokenEnv, Hi as resolveGatewayAuth, Ji as pickPrimaryTailnetIPv4, Ki as trimToUndefined, Ni as formatErrorMessage, On as loadGatewayTlsRuntime, Or as parseStrictInteger, Sa as formatDocsLink, Sn as killProcessTree, T as randomToken, Ti as classifyPortListener, Tn as resolveGatewayCredentialsWithSecretInputs, Ui as isGatewaySecretRefUnavailableError, Vi as hasAmbiguousGatewayAuthModeConfig, Vn as isRestartEnabled, Wi as resolveGatewayDriftCheckCredentialsFromConfig, Xi as resolveSecretRefValues, Zi as secretRefKey, _a as resolveGatewaySystemdServiceName, _n as parseCmdSetAssignment, ba as collectConfigServiceEnvVars, bn as findGatewayPidsOnPortSync, da as GATEWAY_LAUNCH_AGENT_LABEL, ea as resolveSecretInputRef, fa as GATEWAY_SERVICE_KIND, g as withProgress, ga as resolveGatewayServiceDescription, gn as assertNoCmdLineBreak, ha as resolveGatewayProfileSuffix, hn as quoteCmdScriptArg, i as readConfigFileSnapshot, kr as parseStrictPositiveInteger, la as sanitizeTerminalText, ma as resolveGatewayLaunchAgentLabel, mi as GATEWAY_CLIENT_NAMES, mn as parseCmdScriptCommandLine, pa as GATEWAY_SERVICE_MARKER, pi as GATEWAY_CLIENT_MODES, qi as resolveGatewayBindHost, r as readBestEffortConfig, s as writeConfigFile, t as createConfigIO, ua as VERSION, va as resolveGatewayWindowsTaskName, vn as renderCmdSetAssignment, wi as inspectPortUsage, wn as callGateway, xa as formatCliCommand, ya as resolveLegacyGatewayLaunchAgentLabels, yn as splitArgsPreservingQuotes } from "./config-8kxbLL5Z.js";
+import { $i as hasConfiguredSecretInput, Dn as GatewayClient, E as resolveControlUiLinks, Ei as formatPortDiagnostics, En as READ_SCOPE, Gi as readGatewayTokenEnv, Hi as resolveGatewayAuth, Ji as pickPrimaryTailnetIPv4, Ki as trimToUndefined, Ni as formatErrorMessage, On as loadGatewayTlsRuntime, Or as parseStrictInteger, Sa as formatDocsLink, Sn as killProcessTree, T as randomToken, Ti as classifyPortListener, Tn as resolveGatewayCredentialsWithSecretInputs, Ui as isGatewaySecretRefUnavailableError, Vi as hasAmbiguousGatewayAuthModeConfig, Vn as isRestartEnabled, Wi as resolveGatewayDriftCheckCredentialsFromConfig, Xi as resolveSecretRefValues, Zi as secretRefKey, _a as resolveGatewaySystemdServiceName, _n as parseCmdSetAssignment, ba as collectConfigServiceEnvVars, bn as findGatewayPidsOnPortSync, da as GATEWAY_LAUNCH_AGENT_LABEL, ea as resolveSecretInputRef, fa as GATEWAY_SERVICE_KIND, g as withProgress, ga as resolveGatewayServiceDescription, gn as assertNoCmdLineBreak, ha as resolveGatewayProfileSuffix, hn as quoteCmdScriptArg, i as readConfigFileSnapshot, kr as parseStrictPositiveInteger, la as sanitizeTerminalText, ma as resolveGatewayLaunchAgentLabel, mi as GATEWAY_CLIENT_NAMES, mn as parseCmdScriptCommandLine, pa as GATEWAY_SERVICE_MARKER, pi as GATEWAY_CLIENT_MODES, qi as resolveGatewayBindHost, r as readBestEffortConfig, s as writeConfigFile, t as createConfigIO, ua as VERSION, va as resolveGatewayWindowsTaskName, vn as renderCmdSetAssignment, wi as inspectPortUsage, wn as callGateway, xa as formatCliCommand, ya as resolveLegacyGatewayLaunchAgentLabels, yn as splitArgsPreservingQuotes } from "./config-BMm_LBPc.js";
 import { Vt as runCommandWithTimeout } from "./query-expansion-D0B6X4Uh.js";
 import { i as isWSLEnv, r as isWSL } from "./fetch-BF3I-vXt.js";
 import fsSync from "node:fs";
@@ -3943,16 +3943,6 @@ async function resolveGatewayProbeAuthWithSecretInputs(params) {
 		modeOverride: policy.modeOverride,
 		includeLegacyEnv: policy.includeLegacyEnv,
 		remoteTokenFallback: policy.remoteTokenFallback
-	});
-}
-async function resolveGatewayProbeAuthWithSecretInputs(params) {
-	return await resolveGatewayCredentialsWithSecretInputs({
-		config: params.cfg,
-		env: params.env,
-		explicitAuth: params.explicitAuth,
-		modeOverride: params.mode,
-		includeLegacyEnv: false,
-		remoteTokenFallback: "remote-only"
 	});
 }
 //#endregion

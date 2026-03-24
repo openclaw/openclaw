@@ -1,7 +1,7 @@
 import "./github-copilot-token-2dC_MzAJ.js";
 import { O as createSubsystemLogger, Z as resolvePreferredOpenClawTmpDir } from "./logger-DFfVVvF3.js";
 import "./paths-DinMprTu.js";
-import { $ as resolvePairingPaths, Ai as QIANFAN_DEFAULT_MODEL_ID, Cr as tryReadSecretFileSync, Fi as buildOllamaModelDefinition, Ii as enrichOllamaModelsWithContext, Li as fetchOllamaModels, Mi as buildSglangProvider, Ni as buildVllmProvider, Pi as OLLAMA_DEFAULT_BASE_URL, Q as pruneExpiredPending, Qr as writeJsonAtomic, Ri as resolveOllamaApiBase, Sr as readSecretFileSync, X as generatePairingToken, Xr as createAsyncLock, Z as rejectPendingPairingRequest, Zr as readJsonFile, br as DEFAULT_SECRET_FILE_MAX_BYTES, ji as buildOllamaProvider, mn as normalizeDeviceAuthScopes, t as upsertAuthProfileWithLock, xr as loadSecretFileSync, y as openUrl } from "./auth-profiles-Cwd0dOGj.js";
+import { $ as resolvePairingPaths, Ai as QIANFAN_DEFAULT_MODEL_ID, Cr as tryReadSecretFileSync, Fi as buildOllamaModelDefinition, Ii as enrichOllamaModelsWithContext, Li as fetchOllamaModels, Mi as buildSglangProvider, Ni as buildVllmProvider, Pi as OLLAMA_DEFAULT_BASE_URL, Q as pruneExpiredPending, Qr as writeJsonAtomic, Ri as resolveOllamaApiBase, Sr as readSecretFileSync, X as generatePairingToken, Xr as createAsyncLock, Z as rejectPendingPairingRequest, Zr as readJsonFile, br as DEFAULT_SECRET_FILE_MAX_BYTES, ji as buildOllamaProvider, mn as normalizeDeviceAuthScopes, t as upsertAuthProfileWithLock, xr as loadSecretFileSync, y as openUrl } from "./auth-profiles-D5pkvMZU.js";
 import { Vt as runCommandWithTimeout } from "./query-expansion-DjvqYw9a.js";
 import { i as isWSLEnv } from "./fetch-CwDr90re.js";
 import "node:fs";

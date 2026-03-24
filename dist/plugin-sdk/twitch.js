@@ -1,5 +1,5 @@
 import "./github-copilot-token-DsS-4gYS.js";
-import { C as createReplyPrefixOptions, Ei as MarkdownConfigSchema, f as formatDocsLink } from "./model-auth-DuD0_6S_.js";
+import { C as createReplyPrefixOptions, Ei as MarkdownConfigSchema, f as formatDocsLink } from "./model-auth-rx7s8oFQ.js";
 import "./logger-CO0eGZ-2.js";
 import "./paths-Dmn791zP.js";
 import "./fetch-BIaKGiR8.js";

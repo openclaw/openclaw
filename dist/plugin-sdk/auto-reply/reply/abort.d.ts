@@ -4,6 +4,7 @@ import { type CommandNormalizeOptions } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export declare function isAbortTrigger(text?: string): boolean;
+export declare function isIncidentThreadAbortControlText(text?: string, options?: CommandNormalizeOptions): boolean;
 export declare function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean;
 export declare function getAbortMemory(key: string): boolean | undefined;
 export declare function setAbortMemory(key: string, value: boolean): void;

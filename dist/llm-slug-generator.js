@@ -4,7 +4,7 @@ import "./paths-hfkBoC7i.js";
 import { t as createSubsystemLogger } from "./subsystem-2phE7Tdr.js";
 import "./workspace-B3nm_eCU.js";
 import "./logger-BYA-BLD7.js";
-import { Oi as DEFAULT_PROVIDER, o as parseModelRef, tt as runEmbeddedPiAgent } from "./model-selection-DOMbg4qO.js";
+import { Oi as DEFAULT_PROVIDER, o as parseModelRef, tt as runEmbeddedPiAgent } from "./model-selection-Bzn7nqXd.js";
 import "./boolean-Cuaw_-7j.js";
 import "./fetch-vIL6gZu4.js";
 import "./frontmatter-CEejIjxx.js";
