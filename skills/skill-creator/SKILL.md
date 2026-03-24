@@ -316,6 +316,19 @@ If you used `--examples`, delete any placeholder files that are not needed for t
 
 **Writing Guidelines:** Always use imperative/infinitive form.
 
+**Normative keywords (RECOMMENDED):** For coding standards and policy-oriented skills, use RFC 2119 requirement keywords to remove ambiguity.
+
+- `MUST` / `SHALL`: non-negotiable requirement (blocking)
+- `MUST NOT` / `SHALL NOT`: hard prohibition
+- `SHOULD` / `SHOULD NOT`: strong default; deviation requires explicit rationale
+- `MAY` / `OPTIONAL`: context-dependent choice
+
+When using these keywords, include an explicit line near the top of the SKILL body:
+
+> The key words MUST, SHOULD, MAY, etc. are used as defined in RFC 2119.
+
+Do not use all-caps keywords as emphasis unless they are intended to carry RFC 2119 semantics.
+
 ##### Frontmatter
 
 Write the YAML frontmatter with `name` and `description`:
