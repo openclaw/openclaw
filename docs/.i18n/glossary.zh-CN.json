@@ -184,12 +184,24 @@
     "target": "提供商"
   },
   {
+    "source": "Provider directory",
+    "target": "提供商目录"
+  },
+  {
     "source": "model",
     "target": "模型"
   },
   {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
     "source": "tool",
     "target": "工具"
+  },
+  {
+    "source": "Streaming + chunking",
+    "target": "流式传输 + 分块"
   },
   {
     "source": "CLI",
@@ -218,6 +230,10 @@
   {
     "source": "Onboarding",
     "target": "新手引导"
+  },
+  {
+    "source": "GigaChat",
+    "target": "GigaChat"
   },
   {
     "source": "wizard",
