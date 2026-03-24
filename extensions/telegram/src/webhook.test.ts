@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -98,9 +98,33 @@ vi.mock("./bot.js", () => ({
 
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 
-beforeEach(async () => {
+function resetTelegramWebhookMocks(): void {
+  handlerSpy.mockReset();
+  handlerSpy.mockImplementation((..._args: unknown[]): unknown => undefined);
+
+  setWebhookSpy.mockReset();
+  deleteWebhookSpy.mockReset();
+  deleteWebhookSpy.mockImplementation(async () => true);
+  initSpy.mockReset();
+  initSpy.mockImplementation(async () => undefined);
+  stopSpy.mockReset();
+  webhookCallbackSpy.mockReset();
+  webhookCallbackSpy.mockImplementation(() => handlerSpy);
+  createTelegramBotSpy.mockReset();
+  createTelegramBotSpy.mockImplementation(() => ({
+    init: initSpy,
+    api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
+    stop: stopSpy,
+  }));
+}
+
+beforeAll(async () => {
   vi.resetModules();
   ({ startTelegramWebhook } = await import("./webhook.js"));
+});
+
+beforeEach(() => {
+  resetTelegramWebhookMocks();
 });
 
 async function fetchWithTimeout(
