@@ -150,3 +150,24 @@ Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 - LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
 - Context errors? Lower `contextWindow` or raise your server limit.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.
+
+### Tool-calling triage for local stacks
+
+When a local model looks "close" to tool calling but still fails, the failure mode usually tells you where to look:
+
+- raw JSON or fenced ` ```json ` blocks in the assistant reply:
+  the model is trying to express a tool call in text instead of structured output
+- no tool call and no JSON at all:
+  the model likely ignored the tool schema or ran out of context budget
+- good behavior through the native provider but bad behavior through `/v1`:
+  the OpenAI-compatible proxy surface is the likely regression point
+
+Fastest debugging order:
+
+1. try the provider's native tool-calling surface when available
+2. retest with one tool instead of many
+3. shorten the system prompt
+4. retest on a larger checkpoint or less aggressive quantization
+5. only then tune `contextWindow` / `maxTokens`
+
+For Ollama specifically, start with [Ollama](/providers/ollama) and avoid the `/v1` URL unless you really need an OpenAI-compatible proxy layer.
