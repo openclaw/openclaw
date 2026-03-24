@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
+import {
+  buildPluginSnapshotCacheEnvKey,
+  resolvePluginSnapshotCacheTtlMs,
+  shouldUsePluginSnapshotCache,
+} from "./cache-controls.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -32,55 +37,6 @@ function resetWebSearchProviderSnapshotCacheForTests() {
 export const __testing = {
   resetWebSearchProviderSnapshotCacheForTests,
 } as const;
-
-const DEFAULT_DISCOVERY_CACHE_MS = 1000;
-const DEFAULT_MANIFEST_CACHE_MS = 1000;
-
-function shouldUseWebSearchProviderSnapshotCache(env: NodeJS.ProcessEnv): boolean {
-  if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
-    return false;
-  }
-  if (env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim()) {
-    return false;
-  }
-  const discoveryCacheMs = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
-  if (discoveryCacheMs === "0") {
-    return false;
-  }
-  const manifestCacheMs = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
-  if (manifestCacheMs === "0") {
-    return false;
-  }
-  return true;
-}
-
-function resolveWebSearchProviderSnapshotCacheTtlMs(env: NodeJS.ProcessEnv): number {
-  const discoveryCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
-    DEFAULT_DISCOVERY_CACHE_MS,
-  );
-  const manifestCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
-    DEFAULT_MANIFEST_CACHE_MS,
-  );
-  return Math.min(discoveryCacheMs, manifestCacheMs);
-}
-
-function resolveCacheMs(rawValue: string | undefined, defaultMs: number): number {
-  const raw = rawValue?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return defaultMs;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return defaultMs;
-  }
-  return Math.max(0, parsed);
-}
-
 function buildWebSearchSnapshotCacheKey(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -92,21 +48,9 @@ function buildWebSearchSnapshotCacheKey(params: {
     workspaceDir: params.workspaceDir ?? "",
     bundledAllowlistCompat: params.bundledAllowlistCompat === true,
     config: params.config ?? null,
-    env: {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE ?? "",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE ?? "",
-      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: params.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS ?? "",
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: params.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ?? "",
-      OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
-      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
-      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
-      HOME: params.env.HOME ?? "",
-      USERPROFILE: params.env.USERPROFILE ?? "",
-      VITEST: effectiveVitest,
-    },
+    env: buildPluginSnapshotCacheEnvKey(params.env, {
+      includeProcessVitestFallback: effectiveVitest !== (params.env.VITEST ?? ""),
+    }),
   });
 }
 
@@ -150,9 +94,7 @@ export function resolvePluginWebSearchProviders(params: {
   const env = params.env ?? process.env;
   const cacheOwnerConfig = params.config;
   const shouldMemoizeSnapshot =
-    params.activate !== true &&
-    params.cache !== true &&
-    shouldUseWebSearchProviderSnapshotCache(env);
+    params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);
   const cacheKey = buildWebSearchSnapshotCacheKey({
     config: cacheOwnerConfig,
     workspaceDir: params.workspaceDir,
@@ -193,7 +135,7 @@ export function resolvePluginWebSearchProviders(params: {
     })),
   );
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const ttlMs = resolveWebSearchProviderSnapshotCacheTtlMs(env);
+    const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
     let configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
     if (!configCache) {
       configCache = new WeakMap<

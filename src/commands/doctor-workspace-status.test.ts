@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginLoadResult,
+  createPluginRecord,
+  createTypedHook,
+} from "../plugins/status.test-helpers.js";
 import * as noteModule from "../terminal/note.js";
 
 const resolveAgentWorkspaceDirMock = vi.fn();
@@ -18,29 +23,6 @@ vi.mock("../agents/skills-status.js", () => ({
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
-
-function createPluginLoadResult(params: { plugins: unknown[]; typedHooks?: unknown[] }) {
-  return {
-    plugins: params.plugins,
-    diagnostics: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    webSearchProviders: [],
-    tools: [],
-    hooks: [],
-    typedHooks: params.typedHooks ?? [],
-    httpRoutes: [],
-    gatewayHandlers: {},
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-  };
-}
 
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
@@ -63,37 +45,14 @@ describe("noteWorkspaceStatus", () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
         plugins: [
-          {
+          createPluginRecord({
             id: "legacy-plugin",
             name: "Legacy Plugin",
-            source: "/tmp/legacy-plugin/index.ts",
-            origin: "workspace",
-            enabled: true,
-            status: "loaded",
-            toolNames: [],
-            hookNames: [],
-            channelIds: [],
-            providerIds: [],
-            speechProviderIds: [],
-            mediaUnderstandingProviderIds: [],
-            imageGenerationProviderIds: [],
-            webSearchProviderIds: [],
-            gatewayMethods: [],
-            cliCommands: [],
-            services: [],
-            commands: [],
-            httpRoutes: 0,
             hookCount: 1,
-            configSchema: false,
-          },
+          }),
         ],
         typedHooks: [
-          {
-            pluginId: "legacy-plugin",
-            hookName: "before_agent_start",
-            handler: () => undefined,
-            source: "/tmp/legacy-plugin/index.ts",
-          },
+          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" }),
         ],
       }),
     );
@@ -117,32 +76,14 @@ describe("noteWorkspaceStatus", () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
         plugins: [
-          {
+          createPluginRecord({
             id: "claude-bundle",
             name: "Claude Bundle",
             source: "/tmp/claude-bundle",
-            origin: "workspace",
-            enabled: true,
-            status: "loaded",
             format: "bundle",
             bundleFormat: "claude",
             bundleCapabilities: ["skills", "commands", "agents"],
-            toolNames: [],
-            hookNames: [],
-            channelIds: [],
-            providerIds: [],
-            speechProviderIds: [],
-            mediaUnderstandingProviderIds: [],
-            imageGenerationProviderIds: [],
-            webSearchProviderIds: [],
-            gatewayMethods: [],
-            cliCommands: [],
-            services: [],
-            commands: [],
-            httpRoutes: 0,
-            hookCount: 0,
-            configSchema: false,
-          },
+          }),
         ],
       }),
     );
@@ -161,29 +102,11 @@ describe("noteWorkspaceStatus", () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
         plugins: [
-          {
+          createPluginRecord({
             id: "modern-plugin",
             name: "Modern Plugin",
-            source: "/tmp/modern-plugin/index.ts",
-            origin: "workspace",
-            enabled: true,
-            status: "loaded",
-            toolNames: [],
-            hookNames: [],
-            channelIds: [],
             providerIds: ["modern"],
-            speechProviderIds: [],
-            mediaUnderstandingProviderIds: [],
-            imageGenerationProviderIds: [],
-            webSearchProviderIds: [],
-            gatewayMethods: [],
-            cliCommands: [],
-            services: [],
-            commands: [],
-            httpRoutes: 0,
-            hookCount: 0,
-            configSchema: false,
-          },
+          }),
         ],
       }),
     );
