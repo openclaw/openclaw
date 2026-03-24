@@ -1596,16 +1596,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
 
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  let latest: SubagentRunRecord | undefined;
   for (const runId of runIds) {
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
     }
-    if (typeof entry.endedAt !== "number") {
-      return true;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
     }
   }
-  return false;
+  return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
@@ -1777,6 +1778,27 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   }
 
   return latestActive ?? latestEnded;
+}
+
+export function getLatestSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
 }
 
 export function initSubagentRegistry() {
