@@ -1,4 +1,4 @@
-import { SsrFBlockedError } from "openclaw/plugin-sdk/compat";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/infra-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createTinyFishTool } from "./tinyfish-tool.js";
 

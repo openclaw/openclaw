@@ -1,13 +1,11 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createTinyFishTool } from "./src/tinyfish-tool.js";
 
-const plugin = {
+export default definePluginEntry({
   id: "tinyfish",
   name: "TinyFish",
   description: "Hosted browser automation for complex public web workflows.",
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerTool(createTinyFishTool(api));
   },
-};
-
-export default plugin;
+});

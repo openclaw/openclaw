@@ -18,14 +18,10 @@ if (shouldWarnCompatImport) {
 }
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
-export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-export { SsrFBlockedError, resolvePinnedHostname } from "../infra/net/ssrf.js";
-export { jsonResult, readStringParam, ToolInputError } from "../agents/tools/common.js";
 
 export { createAccountStatusSink } from "./channel-lifecycle.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";

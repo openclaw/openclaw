@@ -1,13 +1,11 @@
 import { Type } from "@sinclair/typebox";
+import { jsonResult, readStringParam, ToolInputError } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
   fetchWithSsrFGuard,
-  jsonResult,
-  readStringParam,
   resolvePinnedHostname,
   SsrFBlockedError,
-  ToolInputError,
-  type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/infra-runtime";
 
 const DEFAULT_BASE_URL = "https://agent.tinyfish.ai";
 const RUN_STREAM_PATH = "v1/automation/run-sse";
