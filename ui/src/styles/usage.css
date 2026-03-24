@@ -17,11 +17,8 @@
   animation: rise 0.25s var(--ease-out) backwards;
 }
 
-.usage-page .btn.btn-sm,
-.usage-page button.btn-sm {
+.usage-page .btn.btn--sm {
   min-height: 30px;
-  padding: 7px 11px;
-  font-size: 12px;
   line-height: 1.15;
 }
 
@@ -255,56 +252,8 @@
   color: var(--text-strong);
 }
 
-.usage-pin-btn,
-.usage-export-button,
-.usage-action-btn,
-.toggle-btn,
-.session-copy-btn,
-.context-expand-btn,
-.session-close-btn {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--secondary);
-  color: var(--secondary-foreground);
-  cursor: pointer;
-  transition:
-    transform 0.18s var(--ease-out),
-    border-color 0.18s var(--ease-out),
-    background 0.18s var(--ease-out),
-    color 0.18s var(--ease-out),
-    box-shadow 0.18s var(--ease-out);
-}
-
-.usage-pin-btn,
-.usage-export-button,
-.toggle-btn,
-.context-expand-btn,
-.session-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.usage-pin-btn:hover,
-.usage-export-button:hover,
-.usage-action-btn:hover,
-.toggle-btn:hover,
-.session-copy-btn:hover,
-.context-expand-btn:hover,
-.session-close-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--secondary));
-  color: var(--text-strong);
-}
-
+/* Toggle-btn active state layers on .btn for segmented controls */
 .usage-pin-btn.active,
-.usage-action-btn.usage-primary-btn,
 .chart-toggle .toggle-btn.active {
   border-color: var(--accent);
   background: var(--accent);
@@ -312,17 +261,10 @@
   box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.usage-primary-btn:disabled,
-.usage-secondary-btn:disabled,
 .usage-export-item:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
-}
-
-.usage-secondary-btn {
-  background: var(--secondary);
-  color: var(--secondary-foreground);
 }
 
 .usage-query-section {
@@ -359,7 +301,7 @@ details.usage-filter-select,
 }
 
 details.usage-filter-select summary,
-.usage-export-button {
+.usage-export-menu summary {
   list-style: none;
 }
 
@@ -1197,10 +1139,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   flex: 0 0 auto;
 }
 
-.session-copy-btn {
-  min-width: 58px;
-}
-
 .session-bar-value {
   font-size: 13px;
   font-weight: 700;
@@ -1245,18 +1183,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 8px 14px;
   color: var(--text);
   font-size: 13px;
-}
-
-.session-close-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: var(--radius-md);
-  font-size: 18px;
-  line-height: 1;
 }
 
 .session-detail-content,
