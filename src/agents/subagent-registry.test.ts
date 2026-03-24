@@ -346,4 +346,58 @@ describe("subagent registry seam flow", () => {
       });
     });
   });
+
+  it("loads runtime plugins before emitting killed subagent ended hooks", async () => {
+    const endedHookRunner = {
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded: mocks.runSubagentEnded,
+    };
+    mocks.getGlobalHookRunner.mockReturnValue(null);
+    mocks.ensureRuntimePluginsLoaded.mockImplementation(() => {
+      mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-killed-init",
+      childSessionKey: "agent:main:subagent:killed",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      task: "kill after init",
+      cleanup: "keep",
+      workspaceDir: "/tmp/killed-workspace",
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-init",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    await vi.waitFor(() => {
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+        config: {
+          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        workspaceDir: "/tmp/killed-workspace",
+        allowGatewaySubagentBinding: true,
+      });
+    });
+    expect(mocks.runSubagentEnded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: "agent:main:subagent:killed",
+        reason: "subagent-killed",
+        accountId: "acct-1",
+        runId: "run-killed-init",
+        outcome: "killed",
+        error: "manual kill",
+      }),
+      expect.objectContaining({
+        runId: "run-killed-init",
+        childSessionKey: "agent:main:subagent:killed",
+        requesterSessionKey: "agent:main:main",
+      }),
+    );
+  });
 });
