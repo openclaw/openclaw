@@ -16,12 +16,14 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatMessage: "",
     chatMessages: [],
     chatRunId: null,
+    chatStopping: false,
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
     client: null,
     connected: true,
+    ignoredTerminalRunIds: new Set<string>(),
     lastError: null,
     sessionKey: "main",
     ...overrides,
@@ -76,6 +78,41 @@ describe("handleChatEvent", () => {
 
     expect(handleChatEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe("Hello");
+  });
+
+  it("merges suffix-style delta updates without clobbering earlier text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      delta: " world",
+      message: { role: "assistant", content: [{ type: "text", text: " world" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello world");
+  });
+
+  it("ignores stale shorter snapshots after a longer streamed value", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello world",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello world");
   });
 
   it("appends final payload from another run without clearing active stream", () => {
@@ -575,6 +612,33 @@ describe("sendChatMessage", () => {
 });
 
 describe("abortChatRun", () => {
+  it("commits the current stream and clears active run state when abort succeeds", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      aborted: true,
+      runIds: ["run-1"],
+    });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "Partial answer",
+      chatStreamStartedAt: 100,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(true);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStopping).toBe(false);
+    expect(state.chatMessages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Partial answer" }],
+    });
+    expect(state.ignoredTerminalRunIds?.has("run-1")).toBe(true);
+  });
+
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.
     const request = vi.fn().mockRejectedValue(
@@ -598,6 +662,36 @@ describe("abortChatRun", () => {
       runId: "run-1",
     });
     expect(state.lastError).toContain("device identity required");
+  });
+
+  it("drops a late aborted event after local abort already committed the partial", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      aborted: true,
+      runIds: ["run-1"],
+    });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "Partial answer",
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await abortChatRun(state);
+
+    const terminalState = handleChatEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+    });
+
+    expect(terminalState).toBe("aborted");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.ignoredTerminalRunIds?.has("run-1")).toBe(false);
   });
 });
 

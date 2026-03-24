@@ -23,6 +23,7 @@ export type ChatHost = {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  chatStopping?: boolean;
   chatSending: boolean;
   lastError?: string | null;
   sessionKey: string;
@@ -41,7 +42,7 @@ export type ChatHost = {
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 
 export function isChatBusy(host: ChatHost) {
-  return host.chatSending || Boolean(host.chatRunId);
+  return host.chatSending || Boolean(host.chatRunId) || Boolean(host.chatStopping);
 }
 
 export function isChatStopCommand(text: string) {
@@ -336,6 +337,7 @@ async function clearChatHistory(host: ChatHost) {
     host.chatMessages = [];
     host.chatStream = null;
     host.chatRunId = null;
+    host.chatStopping = false;
     await loadChatHistory(host as unknown as OpenClawApp);
   } catch (err) {
     host.lastError = String(err);

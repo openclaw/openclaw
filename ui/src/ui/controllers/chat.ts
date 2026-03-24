@@ -43,8 +43,10 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatStopping?: boolean;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  ignoredTerminalRunIds?: Set<string>;
   lastError: string | null;
 };
 
@@ -53,6 +55,7 @@ export type ChatEventPayload = {
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  delta?: string;
   errorMessage?: string;
 };
 
@@ -90,6 +93,8 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatStopping = false;
+    state.ignoredTerminalRunIds?.clear();
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
@@ -160,6 +165,69 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function appendUniqueSuffix(base: string, suffix: string): string {
+  if (!suffix) {
+    return base;
+  }
+  if (!base) {
+    return suffix;
+  }
+  if (base.endsWith(suffix)) {
+    return base;
+  }
+  const maxOverlap = Math.min(base.length, suffix.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+      return base + suffix.slice(overlap);
+    }
+  }
+  return base + suffix;
+}
+
+function mergeAssistantStreamText(params: {
+  currentText: string;
+  nextText: string;
+  nextDelta?: string;
+}) {
+  const { currentText, nextText, nextDelta = "" } = params;
+  if (nextText && currentText) {
+    if (nextText.startsWith(currentText)) {
+      return nextText;
+    }
+    if (currentText.startsWith(nextText) && !nextDelta) {
+      return currentText;
+    }
+  }
+  if (nextDelta) {
+    return appendUniqueSuffix(currentText, nextDelta);
+  }
+  if (!nextText) {
+    return currentText;
+  }
+  return appendUniqueSuffix(currentText, nextText);
+}
+
+function clearActiveRunState(state: ChatState) {
+  state.chatStopping = false;
+  state.chatStream = null;
+  state.chatRunId = null;
+  state.chatStreamStartedAt = null;
+}
+
+function commitStreamTextToHistory(state: ChatState, text: string) {
+  if (!text.trim() || isSilentReplyStream(text)) {
+    return;
+  }
+  state.chatMessages = [
+    ...state.chatMessages,
+    {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    },
+  ];
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -201,6 +269,7 @@ export async function sendChatMessage(
   ];
 
   state.chatSending = true;
+  state.chatStopping = false;
   state.lastError = null;
   const runId = generateUUID();
   state.chatRunId = runId;
@@ -259,12 +328,30 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request(
+    const response = await state.client.request<{
+      ok?: boolean;
+      aborted?: boolean;
+      runIds?: string[];
+    }>(
       "chat.abort",
       runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
     );
+    const abortedRunIds = Array.isArray(response.runIds)
+      ? response.runIds.filter((value): value is string => typeof value === "string")
+      : [];
+    const abortedCurrentRun = Boolean(runId && abortedRunIds.includes(runId));
+    if (abortedCurrentRun) {
+      state.ignoredTerminalRunIds ??= new Set<string>();
+      state.ignoredTerminalRunIds.add(runId);
+      commitStreamTextToHistory(state, state.chatStream ?? "");
+      clearActiveRunState(state);
+      maybeResetToolStream(state);
+      return true;
+    }
+    state.chatStopping = Boolean(runId && response.aborted);
     return true;
   } catch (err) {
+    state.chatStopping = false;
     state.lastError = formatConnectError(err);
     return false;
   }
@@ -276,6 +363,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (payload.sessionKey !== state.sessionKey) {
     return null;
+  }
+  if (payload.runId && state.ignoredTerminalRunIds?.has(payload.runId)) {
+    if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+      state.ignoredTerminalRunIds.delete(payload.runId);
+      return payload.state;
+    }
   }
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
@@ -296,51 +389,32 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
       const current = state.chatStream ?? "";
-      if (!current || next.length >= current.length) {
-        state.chatStream = next;
-      }
+      state.chatStopping = false;
+      state.chatStream = mergeAssistantStreamText({
+        currentText: current,
+        nextText: next,
+        nextDelta: payload.delta,
+      });
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      commitStreamTextToHistory(state, state.chatStream);
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearActiveRunState(state);
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
-      }
+      commitStreamTextToHistory(state, streamedText);
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearActiveRunState(state);
   } else if (payload.state === "error") {
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearActiveRunState(state);
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;

@@ -13,6 +13,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
   return {
     sessionKey: "main",
     chatRunId: null,
+    chatStopping: false,
     chatStream: null,
     chatStreamStartedAt: null,
     chatStreamSegments: [],

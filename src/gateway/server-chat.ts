@@ -541,6 +541,7 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "delta" as const,
+      ...(cleanedDelta ? { delta: cleanedDelta } : {}),
       message: {
         role: "assistant",
         content: [{ type: "text", text: mergedText }],

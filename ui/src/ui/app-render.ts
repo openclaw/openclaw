@@ -1391,6 +1391,7 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  state.chatStopping = false;
                   state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
@@ -1444,7 +1445,7 @@ export function renderApp(state: AppViewState) {
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
-                canAbort: Boolean(state.chatRunId),
+                canAbort: Boolean(state.chatRunId || state.chatStopping),
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
@@ -1457,6 +1458,7 @@ export function renderApp(state: AppViewState) {
                     state.chatMessages = [];
                     state.chatStream = null;
                     state.chatRunId = null;
+                    state.chatStopping = false;
                     await loadChatHistory(state);
                   } catch (err) {
                     state.lastError = String(err);
@@ -1469,6 +1471,7 @@ export function renderApp(state: AppViewState) {
                   state.chatMessages = [];
                   state.chatStream = null;
                   state.chatRunId = null;
+                  state.chatStopping = false;
                   state.applySettings({
                     ...state.settings,
                     sessionKey: state.sessionKey,

@@ -191,6 +191,31 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("includes assistant delta text in chat delta payloads", () => {
+    const { broadcast, nowSpy, chatRunState, handler } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world", delta: " world" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      delta?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.delta).toBe(" world");
+    expect(payload.message?.content?.[0]?.text).toBe("Hello world");
+    nowSpy?.mockRestore();
+  });
+
   it("strips inline directives from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
