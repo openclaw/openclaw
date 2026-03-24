@@ -244,7 +244,8 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     normalizeNonEmptyString(creds.email);
   const stableSubject = resolveCodexStableSubject(payload);
   const resolvedEmailOrFallback =
-    resolvedEmail ?? (stableSubject ? `id-${Buffer.from(stableSubject).toString("base64url")}` : undefined);
+    resolvedEmail ??
+    (stableSubject ? `id-${Buffer.from(stableSubject).toString("base64url")}` : undefined);
 
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
