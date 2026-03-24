@@ -1,7 +1,8 @@
 import { RequestClient } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createDiscordRestClient } from "./client.js";
+import * as restFetchMod from "./monitor/rest-fetch.js";
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
@@ -67,19 +68,24 @@ describe("createDiscordRestClient", () => {
   });
 
   it("creates a proxy-aware RequestClient when proxy is configured", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot proxy-token",
-          proxy: "http://proxy.test:8080",
+    const spy = vi.spyOn(restFetchMod, "resolveDiscordRestFetch");
+    try {
+      const cfg = {
+        channels: {
+          discord: {
+            token: "Bot proxy-token",
+            proxy: "http://proxy.test:8080",
+          },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const result = createDiscordRestClient({ token: "Bot proxy-token" }, cfg);
+      const result = createDiscordRestClient({ token: "Bot proxy-token" }, cfg);
 
-    expect(result.rest).toBeInstanceOf(RequestClient);
-    expect((result.rest as unknown as Record<string, unknown>).customFetch).toBeDefined();
+      expect(result.rest).toBeInstanceOf(RequestClient);
+      expect(spy).toHaveBeenCalledWith("http://proxy.test:8080", expect.any(Object));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("skips proxy fetch when opts.rest is already provided", () => {
@@ -97,19 +103,24 @@ describe("createDiscordRestClient", () => {
     expect(result.rest).toBe(fakeRest);
   });
 
-  it("does not set customFetch when no proxy is configured", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot no-proxy-token",
+  it("does not invoke resolveDiscordRestFetch when no proxy is configured", () => {
+    const spy = vi.spyOn(restFetchMod, "resolveDiscordRestFetch");
+    try {
+      const cfg = {
+        channels: {
+          discord: {
+            token: "Bot no-proxy-token",
+          },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const result = createDiscordRestClient({ token: "Bot no-proxy-token" }, cfg);
+      const result = createDiscordRestClient({ token: "Bot no-proxy-token" }, cfg);
 
-    expect(result.rest).toBeInstanceOf(RequestClient);
-    expect((result.rest as unknown as Record<string, unknown>).customFetch).toBeUndefined();
+      expect(result.rest).toBeInstanceOf(RequestClient);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("still throws when no explicit token is provided and config token is unresolved", () => {

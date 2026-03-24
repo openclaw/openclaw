@@ -74,7 +74,11 @@ export function createDiscordRestClient(
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch =
     !opts.rest && proxyUrl
-      ? resolveDiscordRestFetch(proxyUrl, { log: () => {}, error: () => {}, exit: () => {} })
+      ? resolveDiscordRestFetch(proxyUrl, {
+          log: console.warn,
+          error: console.error,
+          exit: process.exit,
+        })
       : undefined;
   const rest = resolveRest(token, opts.rest, proxyFetch);
   return { token, rest, account };
