@@ -118,7 +118,6 @@ async function createInFlightMessageScenario(ts: string) {
 
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 

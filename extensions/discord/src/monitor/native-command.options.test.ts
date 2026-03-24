@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
 let listNativeCommandSpecs: typeof import("../../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
@@ -64,8 +64,7 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
 }
 
 describe("createDiscordNativeCommand option wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("../../../../src/auto-reply/commands-registry.js"));
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
