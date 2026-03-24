@@ -225,9 +225,30 @@ describe("getMemorySearchManager caching", () => {
 
     requireManager(full);
     requireManager(status);
-    expect(status.manager).toBe(full.manager);
+    expect(status.manager).not.toBe(full.manager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    await status.manager?.close?.();
+    expect(mockPrimary.close).not.toHaveBeenCalled();
+
+    const fullAgain = await getMemorySearchManager({ cfg, agentId });
+    expect(fullAgain.manager).toBe(full.manager);
+  });
+
+  it("evicts closed cached status managers so later status requests get a fresh manager", async () => {
+    const agentId = "status-eviction-agent";
+    const cfg = createQmdCfg(agentId);
+
+    const first = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const firstManager = requireManager(first);
+    await firstManager.close?.();
+
+    const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    requireManager(second);
+
+    expect(second.manager).not.toBe(firstManager);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {
