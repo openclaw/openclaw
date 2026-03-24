@@ -336,10 +336,12 @@ export async function handleBashChatCommand(params: {
     const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
+    const denyPatterns = params.cfg?.tools?.exec?.denyPatterns;
     const execTool = createExecTool({
       scopeKey: CHAT_BASH_SCOPE_KEY,
       allowBackground: true,
       timeoutSec,
+      denyPatterns,
       sessionKey: params.sessionKey,
       notifyOnExit,
       notifyOnExitEmptySuccess,

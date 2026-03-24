@@ -12,6 +12,7 @@ export type ExecToolDefaults = {
   strictInlineEval?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  denyPatterns?: string[];
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;

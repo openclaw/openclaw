@@ -426,6 +426,7 @@ const ToolExecBaseShape = {
   strictInlineEval: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
+  denyPatterns: z.array(z.string()).optional(),
   backgroundMs: z.number().int().positive().optional(),
   timeoutSec: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),

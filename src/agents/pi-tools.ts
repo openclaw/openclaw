@@ -158,6 +158,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     notifyOnExitEmptySuccess:
       agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
     applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+    denyPatterns: [...(globalExec?.denyPatterns ?? []), ...(agentExec?.denyPatterns ?? [])],
   };
 }
 
@@ -424,6 +425,7 @@ export function createOpenClawCodingTools(options?: {
     strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
     safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
     safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
+    denyPatterns: options?.exec?.denyPatterns ?? execConfig.denyPatterns,
     agentId,
     cwd: workspaceRoot,
     allowBackground,

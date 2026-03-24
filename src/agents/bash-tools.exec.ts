@@ -251,6 +251,25 @@ export function createExecTool(
         throw new Error("Provide a command to start.");
       }
 
+      // Deny pattern enforcement — must run before any execution path
+      if (defaults?.denyPatterns?.length) {
+        for (const pattern of defaults.denyPatterns) {
+          let matched = false;
+          try {
+            matched = new RegExp(pattern).test(params.command);
+          } catch {
+            // Invalid regex — skip this pattern, don't crash
+            logInfo(`exec: invalid denyPattern regex ignored: "${pattern}"`);
+          }
+          if (matched) {
+            throw new Error(
+              `exec denied: command matches deny pattern "${pattern}". ` +
+                `Use the sessions_spawn tool instead for coding agent dispatch.`,
+            );
+          }
+        }
+      }
+
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];

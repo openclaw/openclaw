@@ -247,6 +247,13 @@ export type ExecToolConfig = {
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  /**
+   * Regex patterns for commands that should be blocked from exec.
+   * Commands matching any pattern are rejected with an informative error.
+   * Agent-level patterns are merged with global patterns (not replaced).
+   * Example: ["^claude\\s", "^codex\\s"] blocks direct claude/codex CLI invocations.
+   */
+  denyPatterns?: string[];
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
