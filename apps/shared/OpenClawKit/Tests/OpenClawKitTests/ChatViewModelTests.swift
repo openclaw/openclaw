@@ -224,6 +224,7 @@ private actor TestChatTransportState {
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
     var resetSessionKeys: [String] = []
+    var compactSessionKeys: [String] = []
     var sentRunIds: [String] = []
     var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
@@ -237,6 +238,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
     private let resetSessionHook: (@Sendable (String) async throws -> Void)?
+    private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
 
@@ -248,6 +250,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
+        compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil)
     {
@@ -255,6 +258,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
         self.resetSessionHook = resetSessionHook
+        self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -336,6 +340,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
+    func compactSession(sessionKey: String) async throws {
+        await self.state.compactSessionKeysAppend(sessionKey)
+        if let compactSessionHook = self.compactSessionHook {
+            try await compactSessionHook(sessionKey)
+        }
+    }
+
     func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
         await self.state.patchedThinkingLevelsAppend(thinkingLevel)
         if let setSessionThinkingHook = self.setSessionThinkingHook {
@@ -375,6 +386,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func resetSessionKeys() async -> [String] {
         await self.state.resetSessionKeys
     }
+
+    func compactSessionKeys() async -> [String] {
+        await self.state.compactSessionKeys
+    }
 }
 
 extension TestChatTransportState {
@@ -412,6 +427,10 @@ extension TestChatTransportState {
 
     fileprivate func resetSessionKeysAppend(_ v: String) {
         self.resetSessionKeys.append(v)
+    }
+
+    fileprivate func compactSessionKeysAppend(_ v: String) {
+        self.compactSessionKeys.append(v)
     }
 }
 
@@ -911,6 +930,36 @@ extension TestChatTransportState {
         }
         try await waitUntil("history reloaded") {
             await MainActor.run { vm.messages.first?.content.first?.text == "after reset" }
+        }
+        #expect(await transport.lastSentRunId() == nil)
+    }
+
+    @Test func compactTriggerCompactsSessionAndReloadsHistory() async throws {
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "before compact", timestamp: 1),
+            ])
+        let after = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "after compact", timestamp: 2),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [before, after])
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial history loaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "before compact" }
+        }
+
+        await MainActor.run {
+            vm.input = "/compact"
+            vm.send()
+        }
+
+        try await waitUntil("compact called") {
+            await transport.compactSessionKeys() == ["main"]
+        }
+        try await waitUntil("history reloaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "after compact" }
         }
         #expect(await transport.lastSentRunId() == nil)
     }
