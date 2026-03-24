@@ -265,7 +265,6 @@ describe("FeishuConfigSchema tool policies", () => {
     const result = FeishuConfigSchema.parse({
       dms: {
         "*": {
-          historyLimit: 5,
           tools: { allow: ["read"], deny: ["exec"] },
         },
         ou_owner: {
@@ -277,7 +276,7 @@ describe("FeishuConfigSchema tool policies", () => {
       },
     });
 
-    expect(result.dms?.["*"]?.historyLimit).toBe(5);
+    expect(result.dms?.["*"]?.tools).toEqual({ allow: ["read"], deny: ["exec"] });
     expect(result.dms?.ou_owner?.tools).toEqual({ alsoAllow: ["fd_*"] });
     expect(result.dms?.ou_owner?.toolsBySender?.["id:ou_owner"]).toEqual({
       alsoAllow: ["gateway"],

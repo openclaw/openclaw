@@ -15607,16 +15607,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.feishu.accounts.*.dms.*.historyLimit",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.feishu.accounts.*.dms.*.systemPrompt",
       "kind": "channel",
       "type": "string",
@@ -16727,16 +16717,6 @@
       "path": "channels.feishu.dms.*.enabled",
       "kind": "channel",
       "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.feishu.dms.*.historyLimit",
-      "kind": "channel",
-      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,
