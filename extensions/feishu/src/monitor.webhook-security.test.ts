@@ -120,6 +120,44 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
+  it("marks webhook accounts connected once the server starts listening", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    const statusSink = vi.fn();
+    const port = await getFreePort();
+    const cfg = buildWebhookConfig({
+      accountId: "webhook-connected",
+      path: "/hook-connected",
+      port,
+      verificationToken: "verify_token",
+      encryptKey: "encrypt_key",
+    });
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+      statusSink,
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(statusSink).toHaveBeenCalledWith(
+          expect.objectContaining({
+            connected: true,
+            reconnectAttempts: 0,
+            lastConnectedAt: expect.any(Number),
+            lastDisconnect: null,
+            lastError: null,
+          }),
+        );
+      });
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
   it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
     const now = 1_000_000;
     for (let i = 0; i < 4_500; i += 1) {

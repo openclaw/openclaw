@@ -98,6 +98,14 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
+type FeishuWSLogger = {
+  error: (...msg: unknown[]) => void | Promise<void>;
+  warn: (...msg: unknown[]) => void | Promise<void>;
+  info: (...msg: unknown[]) => void | Promise<void>;
+  debug: (...msg: unknown[]) => void | Promise<void>;
+  trace: (...msg: unknown[]) => void | Promise<void>;
+};
+
 function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
   const clampTimeout = (value: number): number => {
     const rounded = Math.floor(value);
@@ -175,7 +183,10 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSClient {
+export function createFeishuWSClient(
+  account: ResolvedFeishuAccount,
+  opts?: { logger?: FeishuWSLogger },
+): Lark.WSClient {
   const { accountId, appId, appSecret, domain } = account;
 
   if (!appId || !appSecret) {
@@ -188,6 +199,7 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: feishuClientSdk.LoggerLevel.info,
+    ...(opts?.logger ? { logger: opts.logger } : {}),
     ...(agent ? { agent } : {}),
   });
 }

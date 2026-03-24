@@ -629,6 +629,17 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  statusSink?: (patch: {
+    connected?: boolean;
+    reconnectAttempts?: number;
+    lastConnectedAt?: number | null;
+    lastDisconnect?: {
+      at: number;
+      error?: string;
+    } | null;
+    lastError?: string | null;
+    lastEventAt?: number | null;
+  }) => void;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -676,12 +687,27 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: true,
+      statusSink: params.statusSink,
     });
 
     if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+      return await monitorWebhook({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher,
+        statusSink: params.statusSink,
+      });
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return await monitorWebSocket({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      statusSink: params.statusSink,
+    });
   } finally {
     threadBindingManager?.stop();
   }

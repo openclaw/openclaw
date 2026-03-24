@@ -292,6 +292,21 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
+  it("forwards a custom logger into the ws client options", () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+    };
+
+    createFeishuWSClient(baseAccount, { logger });
+
+    const options = firstWsClientOptions() as { logger?: unknown };
+    expect(options.logger).toBe(logger);
+  });
+
   it("does not set a ws proxy agent when proxy env is absent", () => {
     createFeishuWSClient(baseAccount);
 
