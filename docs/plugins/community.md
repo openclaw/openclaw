@@ -138,6 +138,17 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+For **security-sensitive** plugins (for example plugins that gate shell/network
+behavior, handle credentials, or inspect untrusted content), we also strongly
+prefer:
+
+- a `SECURITY.md` or equivalent vulnerability-reporting path
+- a clear limitations/scope section in the README
+- a short verification path maintainers can run quickly
+
+These are not separate hard gates today, but they materially improve review and
+operator trust.
+
 ## Related
 
 - [Install and Configure Plugins](/tools/plugin) — how to install any plugin

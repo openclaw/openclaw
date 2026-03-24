@@ -50,7 +50,7 @@ Git/URL/file 规格和 semver 范围都会被拒绝。
 3. 重启 Gateway 网关，然后在 `plugins.entries.<id>.config` 下进行配置。
 
 查看 [Voice Call](/plugins/voice-call) 获取一个具体的插件示例。
-想找第三方列表？请查看 [Community plugins](/plugins/community)。
+想找第三方列表？请查看 [社区插件](/plugins/community)。
 需要了解 bundle 兼容性细节？请查看 [Plugin bundles](/plugins/bundles)。
 
 对于兼容的 bundle，可从本地目录或归档文件安装：
