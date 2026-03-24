@@ -9,6 +9,8 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { normalizeToolName } from "../agents/tool-policy-shared.js";
+import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
@@ -864,7 +866,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /skill <name> [input]");
 
   lines.push("");
-  lines.push("More: /commands for full list");
+  lines.push("More: /commands for full list, /tools for available capabilities");
 
   return lines.join("\n");
 }
@@ -883,6 +885,134 @@ export type CommandsMessageResult = {
   hasNext: boolean;
   hasPrev: boolean;
 };
+
+type ToolsMessageItem = {
+  id: string;
+  name: string;
+  description: string;
+  rawDescription: string;
+  source: EffectiveToolInventoryResult["groups"][number]["source"];
+  pluginId?: string;
+  channelId?: string;
+};
+
+function sortToolsMessageItems(items: ToolsMessageItem[]): ToolsMessageItem[] {
+  return items.toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function formatCompactToolEntry(tool: ToolsMessageItem): string {
+  if (tool.source === "plugin") {
+    return tool.pluginId ? `${tool.id} (${tool.pluginId})` : tool.id;
+  }
+  if (tool.source === "channel") {
+    return tool.channelId ? `${tool.id} (${tool.channelId})` : tool.id;
+  }
+  return tool.id;
+}
+
+function stripVerboseToolDocTail(raw: string): string {
+  const lines = raw.split("\n").map((line) => line.trimEnd());
+  const kept: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (kept.length > 0 && kept.at(-1) !== "") {
+        kept.push("");
+      }
+      continue;
+    }
+    const upper = trimmed.toUpperCase();
+    if (
+      upper === "ACTIONS:" ||
+      upper === "JOB SCHEMA (FOR ADD ACTION):" ||
+      upper === "JOB SCHEMA:" ||
+      upper === "SESSION TARGET OPTIONS:" ||
+      upper === "DEFAULT BEHAVIOR (UNCHANGED FOR BACKWARD COMPATIBILITY):" ||
+      upper === "SCHEDULE TYPES (SCHEDULE.KIND):" ||
+      upper === "PAYLOAD TYPES (PAYLOAD.KIND):" ||
+      upper === "DELIVERY (TOP-LEVEL):" ||
+      upper === "CRITICAL CONSTRAINTS:" ||
+      upper === "WAKE MODES (FOR WAKE ACTION):"
+    ) {
+      break;
+    }
+    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("- ")) {
+      break;
+    }
+    kept.push(trimmed);
+    if (kept.join(" ").length >= 280) {
+      break;
+    }
+  }
+  return kept.join("\n").trim();
+}
+
+function formatVerboseToolDescription(tool: ToolsMessageItem): string {
+  const raw = tool.rawDescription.trim();
+  if (!raw) {
+    return tool.description;
+  }
+  const stripped = stripVerboseToolDocTail(raw);
+  const normalized = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  if (!normalized) {
+    return tool.description;
+  }
+  if (normalized.length <= 320) {
+    return normalized;
+  }
+  const sliced = normalized.slice(0, 317);
+  const boundary = sliced.lastIndexOf(" ");
+  return `${(boundary >= 160 ? sliced.slice(0, boundary) : sliced).trimEnd()}...`;
+}
+
+export function buildToolsMessage(
+  result: EffectiveToolInventoryResult,
+  options?: { verbose?: boolean },
+): string {
+  const groups = result.groups
+    .map((group) => ({
+      label: group.label,
+      tools: sortToolsMessageItems(
+        group.tools.map((tool) => ({
+          id: normalizeToolName(tool.id),
+          name: tool.label,
+          description: tool.description || "Tool",
+          rawDescription: tool.rawDescription || tool.description || "Tool",
+          source: tool.source,
+          pluginId: tool.pluginId,
+          channelId: tool.channelId,
+        })),
+      ),
+    }))
+    .filter((group) => group.tools.length > 0);
+
+  if (groups.length === 0) {
+    return "No tools are available for this agent right now.";
+  }
+
+  const verbose = options?.verbose === true;
+  const lines = verbose
+    ? ["Available tools", "", "What this agent can use right now:"]
+    : ["Available tools"];
+
+  for (const group of groups) {
+    lines.push("", group.label);
+    if (verbose) {
+      for (const tool of group.tools) {
+        lines.push(`  ${tool.name} - ${formatVerboseToolDescription(tool)}`);
+      }
+      continue;
+    }
+    lines.push(`  ${group.tools.map((tool) => formatCompactToolEntry(tool)).join(", ")}`);
+  }
+
+  if (verbose) {
+    lines.push("", "Tool availability depends on this agent's configuration.");
+  } else {
+    lines.push("", "Use /tools verbose for descriptions.");
+  }
+  return lines.join("\n");
+}
 
 function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
@@ -985,6 +1115,7 @@ export function buildCommandsMessagePaginated(
   if (!isTelegram) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
+    lines.push("", "More: /tools for available capabilities");
     return {
       text: lines.join("\n").trim(),
       totalPages: 1,

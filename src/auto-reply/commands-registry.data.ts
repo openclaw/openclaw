@@ -145,6 +145,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "tools",
+      nativeName: "tools",
+      description: "List available runtime tools.",
+      textAlias: "/tools",
+      category: "status",
+      args: [
+        {
+          name: "mode",
+          description: "compact or verbose",
+          type: "string",
+          choices: ["compact", "verbose"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "skill",
       nativeName: "skill",
       description: "Run a skill by name.",
