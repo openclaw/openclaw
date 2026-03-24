@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
@@ -34,9 +34,12 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
 let batchViaPlaywright: typeof import("./pw-tools-core.interactions.js").batchViaPlaywright;
 
 describe("batchViaPlaywright", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ batchViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     page = {
       evaluate: vi.fn(async () => "ok"),
