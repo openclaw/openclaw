@@ -329,40 +329,25 @@ async function restartGatewayDaemon(params: {
   }
 
   const s = !params.json ? spinner() : null;
-  s?.start("Stopping gateway daemon…");
+  s?.start("Refreshing gateway service definition…");
 
   await runOpenClawCommand({
     openclawCommand,
-    args: ["--profile", params.profile, "gateway", "stop"],
-    timeoutMs: 90_000,
-  }).catch(() => ({ code: 1, stdout: "", stderr: "stop timed out" }));
-
-  s?.message("Installing gateway daemon…");
-  await runOpenClawCommand({
-    openclawCommand,
-    args: [
-      "--profile", params.profile,
-      "gateway", "install", "--force",
-      "--port", String(params.gatewayPort),
-    ],
+    args: ["--profile", params.profile, "gateway", "install", "--force"],
     timeoutMs: 2 * 60_000,
   }).catch(() => ({ code: 1, stdout: "", stderr: "install failed" }));
 
-  s?.message("Starting gateway daemon…");
-  const startResult = await runOpenClawCommand({
+  s?.message("Restarting gateway daemon…");
+  const restartResult = await runOpenClawCommand({
     openclawCommand,
-    args: [
-      "--profile", params.profile,
-      "gateway", "start",
-      "--port", String(params.gatewayPort),
-    ],
+    args: ["--profile", params.profile, "gateway", "restart"],
     timeoutMs: 2 * 60_000,
-  }).catch(() => ({ code: 1, stdout: "", stderr: "start failed" }));
+  }).catch(() => ({ code: 1, stdout: "", stderr: "restart failed" }));
 
-  if (startResult.code !== 0) {
-    const detail = firstNonEmptyLine(startResult.stderr, startResult.stdout);
+  if (restartResult.code !== 0) {
+    const detail = firstNonEmptyLine(restartResult.stderr, restartResult.stdout);
     s?.stop(detail ? `Gateway restart failed: ${detail}` : "Gateway restart failed.");
-    return { restarted: false, error: detail ?? "gateway start failed" };
+    return { restarted: false, error: detail ?? "gateway restart failed" };
   }
 
   s?.stop("Gateway daemon restarted.");

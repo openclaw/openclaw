@@ -1592,9 +1592,9 @@ describe("bootstrapCommand always-onboard behavior", () => {
         call.args.includes("install") &&
         call.args.includes("--force"),
     );
-    const gatewayStartCalled = spawnCalls.some(
+    const gatewayRestartCalledInAutofix = spawnCalls.some(
       (call) =>
-        call.command === "openclaw" && call.args.includes("gateway") && call.args.includes("start"),
+        call.command === "openclaw" && call.args.includes("gateway") && call.args.includes("restart"),
     );
     const toolsProfileSetCall = spawnCalls.find(
       (call) =>
@@ -1607,7 +1607,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(doctorFixCalled).toBe(true);
     expect(gatewayStopCalled).toBe(true);
     expect(gatewayInstallCalled).toBe(true);
-    expect(gatewayStartCalled).toBe(true);
+    expect(gatewayRestartCalledInAutofix).toBe(true);
     expect(toolsProfileSetCall?.args).toEqual(
       expect.arrayContaining(["--profile", "dench", "config", "set", "tools.profile", "full"]),
     );

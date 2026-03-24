@@ -1420,14 +1420,12 @@ async function attemptGatewayAutoFix(params: {
         "gateway",
         "install",
         "--force",
-        "--port",
-        String(params.gatewayPort),
       ],
       timeoutMs: 2 * 60_000,
     },
     {
-      name: "openclaw gateway start",
-      args: ["--profile", params.profile, "gateway", "start", "--port", String(params.gatewayPort)],
+      name: "openclaw gateway restart",
+      args: ["--profile", params.profile, "gateway", "restart"],
       timeoutMs: 2 * 60_000,
     },
   ];
