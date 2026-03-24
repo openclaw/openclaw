@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { registerConfigDerivedCache } from "./config-derived-caches.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -84,6 +85,18 @@ let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
 let modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
+
+registerConfigDerivedCache({
+  name: "contextWindowCache",
+  prefixes: ["models"],
+  invalidate: () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    loadPromise = null;
+    configuredConfig = undefined;
+    configLoadFailures = 0;
+    nextConfigLoadAttemptAtMs = 0;
+  },
+});
 
 function loadModelsConfigRuntime() {
   modelsConfigRuntimePromise ??= import("./models-config.runtime.js");

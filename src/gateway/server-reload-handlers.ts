@@ -1,3 +1,4 @@
+import { invalidateConfigDerivedCaches } from "../agents/config-derived-caches.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -78,6 +79,11 @@ export function createGatewayReloadHandlers(params: {
     }
 
     resetDirectoryCache();
+
+    const invalidated = invalidateConfigDerivedCaches(plan.changedPaths);
+    if (invalidated.length > 0) {
+      params.logReload.info(`invalidated config-derived caches: ${invalidated.join(", ")}`);
+    }
 
     if (plan.restartCron) {
       state.cronState.cron.stop();
