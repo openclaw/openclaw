@@ -681,6 +681,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    explicitProvider?: ProviderConfig;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -689,7 +690,11 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({
+        apiKey,
+        discoveryApiKey,
+        explicitProvider: ctx.explicitProviders?.[providerKey],
+      }),
     };
   };
 }
