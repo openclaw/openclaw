@@ -227,8 +227,8 @@ export async function buildStatusReply(params: {
       },
       contextTokens,
       thinkingDefault: agentEntry?.thinkingDefault ?? agentDefaults.thinkingDefault,
-      verboseDefault: agentEntry?.verboseDefault ?? agentDefaults.verboseDefault,
-      elevatedDefault: agentEntry?.elevatedDefault ?? agentDefaults.elevatedDefault,
+      verboseDefault: agentDefaults.verboseDefault,
+      elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
     explicitConfiguredContextTokens:

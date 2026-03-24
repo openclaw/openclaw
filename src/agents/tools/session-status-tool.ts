@@ -484,8 +484,6 @@ export function createSessionStatusTool(opts?: {
           ...agentDefaults,
           model: agentModel,
           thinkingDefault: agentEntry?.thinkingDefault ?? agentDefaults.thinkingDefault,
-          verboseDefault: agentEntry?.verboseDefault ?? agentDefaults.verboseDefault,
-          elevatedDefault: agentEntry?.elevatedDefault ?? agentDefaults.elevatedDefault,
         },
         agentId,
         explicitConfiguredContextTokens:
