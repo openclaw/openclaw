@@ -30,13 +30,36 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
   };
 }
 
+// Native binaries cannot be bundled by rolldown. These packages pull in .node
+// files (e.g. @snazzah/davey as an optional dep of @discordjs/voice) that
+// rolldown cannot load. Mark them as external so they are resolved at runtime.
+const NEVER_BUNDLE = [
+  "@snazzah/davey",
+  "@snazzah/davey-darwin-arm64",
+  "@snazzah/davey-darwin-x64",
+  "@snazzah/davey-linux-x64-gnu",
+  "@snazzah/davey-linux-arm64-gnu",
+  "@discordjs/voice",
+  "@discordjs/opus",
+  "opusscript",
+  "@lancedb/lancedb",
+];
+
 function nodeBuildConfig(config: Record<string, unknown>) {
+  const existingDeps = (config.deps as Record<string, unknown> | undefined) ?? {};
+  const existingNeverBundle = Array.isArray(existingDeps.neverBundle)
+    ? (existingDeps.neverBundle as string[])
+    : [];
   return {
     ...config,
     env,
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,
+    deps: {
+      ...existingDeps,
+      neverBundle: Array.from(new Set([...NEVER_BUNDLE, ...existingNeverBundle])),
+    },
   };
 }
 
@@ -109,8 +132,8 @@ export default defineConfig([
       "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
       "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
       "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
-      "telegram/audit": "src/telegram/audit.ts",
-      "telegram/token": "src/telegram/token.ts",
+      "telegram/audit": "extensions/telegram/src/audit.ts",
+      "telegram/token": "extensions/telegram/src/token.ts",
       "line/accounts": "src/line/accounts.ts",
       "line/send": "src/line/send.ts",
       "line/template-messages": "src/line/template-messages.ts",

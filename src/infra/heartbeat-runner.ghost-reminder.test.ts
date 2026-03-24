@@ -121,7 +121,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           agentId: "main",
           reason: params.reason,
           deps: {
-            sendTelegram,
+            telegram: sendTelegram,
           },
         });
         const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {

@@ -20,7 +20,6 @@ const mkdirSafe = mkdirSafeDir;
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_HOME: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
@@ -366,7 +365,6 @@ describe("discoverOpenClawPlugins", () => {
         env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },
       });

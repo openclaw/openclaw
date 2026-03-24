@@ -18,6 +18,16 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type {
+  SpeechListVoicesRequest,
+  SpeechProviderConfiguredContext,
+  SpeechProviderId,
+  SpeechSynthesisRequest,
+  SpeechSynthesisResult,
+  SpeechTelephonySynthesisRequest,
+  SpeechTelephonySynthesisResult,
+  SpeechVoiceOption,
+} from "../tts/provider-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -992,4 +1002,23 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   source: string;
+};
+
+/** Speech capability registered by a plugin. */
+export type SpeechProviderPlugin = {
+  id: SpeechProviderId;
+  label: string;
+  aliases?: string[];
+  models?: readonly string[];
+  voices?: readonly string[];
+  isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
+  synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  synthesizeTelephony?: (
+    req: SpeechTelephonySynthesisRequest,
+  ) => Promise<SpeechTelephonySynthesisResult>;
+  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+};
+
+export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
+  pluginId: string;
 };

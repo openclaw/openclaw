@@ -21,7 +21,7 @@ const processingClaims = createDedupeCache({
 });
 
 function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   if (stateOverride) {
     return stateOverride;
   }

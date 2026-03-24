@@ -8,17 +8,18 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
   createConditionalWarningCollector,
-  projectAccountWarningCollector,
+  projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
-import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   registerSynologyWebhookRoute,
   validateSynologyGatewayAccountStartup,
@@ -28,6 +29,7 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+const SynologyChatConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -49,7 +51,6 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
-    "dangerouslyAllowNameMatching",
     "dmPolicy",
     "allowedUserIds",
     "rateLimitPerMinute",
@@ -72,9 +73,6 @@ const collectSynologyChatSecurityWarnings =
     (account) =>
       account.allowInsecureSsl &&
       "- Synology Chat: SSL verification is disabled (allowInsecureSsl=true). Only use this for local NAS with self-signed certificates.",
-    (account) =>
-      account.dangerouslyAllowNameMatching &&
-      "- Synology Chat: dangerouslyAllowNameMatching=true re-enables mutable username/nickname recipient matching for replies. Prefer stable numeric user IDs.",
     (account) =>
       account.dmPolicy === "open" &&
       '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
@@ -172,7 +170,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         blockStreaming: false,
       },
       reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
-      configSchema: SynologyChatChannelConfigSchema,
+      configSchema: SynologyChatConfigSchema,
       setup: synologyChatSetupAdapter,
       setupWizard: synologyChatSetupWizard,
       config: {
@@ -200,7 +198,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         startAccount: async (ctx: any) => {
           const { cfg, accountId, log } = ctx;
           const account = resolveAccount(cfg, accountId);
-          if (!validateSynologyGatewayAccountStartup({ cfg, account, accountId, log }).ok) {
+          if (!validateSynologyGatewayAccountStartup({ account, accountId, log }).ok) {
             return waitUntilAbort(ctx.abortSignal);
           }
 
@@ -264,10 +262,10 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
     },
     security: {
       resolveDmPolicy: resolveSynologyChatDmPolicy,
-      collectWarnings: projectAccountWarningCollector<
-        ResolvedSynologyChatAccount,
-        { account: ResolvedSynologyChatAccount }
-      >(collectSynologyChatSecurityWarnings),
+      collectWarnings: projectWarningCollector(
+        ({ account }: { account: ResolvedSynologyChatAccount }) => account,
+        collectSynologyChatSecurityWarnings,
+      ),
     },
     outbound: {
       deliveryMode: "gateway" as const,

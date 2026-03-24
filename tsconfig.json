@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "rootDir": ".",
     "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
     "declaration": true,

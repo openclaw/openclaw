@@ -1,5 +1,5 @@
-import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
-import { truncateSlackText } from "../../slack/truncate.js";
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { truncateSlackText } from "../../../extensions/slack/src/truncate.js";
 import type { ReplyPayload } from "../types.js";
 
 const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";

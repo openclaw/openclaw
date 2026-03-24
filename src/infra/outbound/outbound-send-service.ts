@@ -84,6 +84,7 @@ export async function executeSendAction(params: {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
@@ -150,14 +151,23 @@ export async function executeSendAction(params: {
 
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
-  to: string;
-  question: string;
-  options: string[];
-  maxSelections: number;
+  to?: string;
+  question?: string;
+  options?: string[];
+  maxSelections?: number;
   durationSeconds?: number;
   durationHours?: number;
   threadId?: string;
   isAnonymous?: boolean;
+  resolveCorePoll?: () => {
+    to: string;
+    question: string;
+    options: string[];
+    maxSelections: number;
+    durationHours?: number;
+    threadId?: string;
+    isAnonymous?: boolean;
+  };
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -172,19 +182,31 @@ export async function executePollAction(params: {
     return pluginHandled;
   }
 
+  const resolved = params.resolveCorePoll
+    ? params.resolveCorePoll()
+    : {
+        to: params.to!,
+        question: params.question!,
+        options: params.options!,
+        maxSelections: params.maxSelections ?? 1,
+        durationHours: params.durationHours,
+        threadId: params.threadId,
+        isAnonymous: params.isAnonymous,
+      };
+
   const result: MessagePollResult = await sendPoll({
     cfg: params.ctx.cfg,
-    to: params.to,
-    question: params.question,
-    options: params.options,
-    maxSelections: params.maxSelections,
+    to: resolved.to,
+    question: resolved.question,
+    options: resolved.options,
+    maxSelections: resolved.maxSelections,
     durationSeconds: params.durationSeconds ?? undefined,
-    durationHours: params.durationHours ?? undefined,
+    durationHours: resolved.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: params.threadId ?? undefined,
+    threadId: resolved.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: params.isAnonymous ?? undefined,
+    isAnonymous: resolved.isAnonymous ?? params.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
   });

@@ -1,5 +1,5 @@
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import { ToolAuthorizationError } from "./common.js";
 

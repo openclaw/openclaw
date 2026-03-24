@@ -5,15 +5,12 @@ import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyAuthChoiceLoadedPluginProvider } from "./auth-choice.apply.plugin-provider.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
-
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/provider-wizard.js", () => ({
+vi.mock("./auth-choice.apply.plugin-provider.runtime.js", () => ({
+  resolvePluginProviders,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
 }));

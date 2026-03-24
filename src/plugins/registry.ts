@@ -42,6 +42,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  SpeechProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -100,6 +101,42 @@ export type PluginCommandRegistration = {
   source: string;
 };
 
+export type PluginSpeechProviderRegistration = {
+  pluginId: string;
+  provider: SpeechProviderPlugin;
+  source: string;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type PluginMediaUnderstandingProviderRegistration = {
+  pluginId: string;
+  provider: any;
+  source: string;
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type PluginImageGenerationProviderRegistration = {
+  pluginId: string;
+  provider: any;
+  source: string;
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type PluginWebSearchProviderRegistration = {
+  pluginId: string;
+  provider: any;
+  source: string;
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type PluginConversationBindingResolvedHandler = {
+  pluginId: string;
+  handler: (...args: any[]) => any;
+  source: string;
+};
+export type PluginChannelSetupRegistration = {
+  pluginId: string;
+  plugin: ChannelPlugin;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -133,12 +170,18 @@ export type PluginRegistry = {
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
+  channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  speechProviders: PluginSpeechProviderRegistration[];
+  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
+  webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandler[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -173,12 +216,18 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     hooks: [],
     typedHooks: [],
     channels: [],
+    channelSetups: [],
     providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],
     services: [],
     commands: [],
+    conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };
 }
