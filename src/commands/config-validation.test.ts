@@ -21,7 +21,7 @@ describe("requireValidConfigSnapshot", () => {
     vi.clearAllMocks();
   });
 
-  it("returns config without emitting compatibility advice by default", async () => {
+  function createValidSnapshot() {
     readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
@@ -37,11 +37,19 @@ describe("requireValidConfigSnapshot", () => {
           "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
-    const runtime = {
+  }
+
+  function createRuntime() {
+    return {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
+  }
+
+  it("returns config without emitting compatibility advice by default", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime);
@@ -54,26 +62,8 @@ describe("requireValidConfigSnapshot", () => {
   });
 
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: { plugins: {} },
-      issues: [],
-    });
-    buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
-    ]);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    createValidSnapshot();
+    const runtime = createRuntime();
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
@@ -96,11 +86,7 @@ describe("requireValidConfigSnapshot", () => {
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {

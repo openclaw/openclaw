@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../command-format.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
@@ -115,6 +116,8 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Gateway runtime PID does not own the listening port"),
     );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(formatCliCommand("openclaw gateway restart")),
+    );
   });
 });
