@@ -21,6 +21,8 @@ export type RequestExecApprovalDecisionParams = {
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
+  /** Chat/session UUID for research events (not the approval id). */
+  sessionId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -49,6 +51,7 @@ function buildExecApprovalRequestToolParams(
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
     turnSourceChannel: params.turnSourceChannel,
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
@@ -111,7 +114,7 @@ export async function registerExecApprovalRequest(
     await emitStandaloneResearchEvent({
       cfg,
       runId: id,
-      sessionId: id,
+      sessionId: params.sessionId ?? id,
       sessionKey: params.sessionKey,
       agentId: params.agentId ?? "default",
       event: {
@@ -136,12 +139,18 @@ export async function waitForExecApprovalDecision(params: {
   id: string;
   sessionKey?: string;
   agentId?: string;
+  sessionId?: string;
 }): Promise<string | null> {
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: params.id },
+      {
+        id: params.id,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      },
     );
     const value = parseDecision(decisionResult).value;
     try {
@@ -149,7 +158,7 @@ export async function waitForExecApprovalDecision(params: {
       await emitStandaloneResearchEvent({
         cfg,
         runId: params.id,
-        sessionId: params.id,
+        sessionId: params.sessionId ?? params.id,
         sessionKey: params.sessionKey,
         agentId: params.agentId ?? "default",
         event: {
@@ -176,7 +185,7 @@ export async function waitForExecApprovalDecision(params: {
         await emitStandaloneResearchEvent({
           cfg,
           runId: params.id,
-          sessionId: params.id,
+          sessionId: params.sessionId ?? params.id,
           sessionKey: params.sessionKey,
           agentId: params.agentId ?? "default",
           event: {
@@ -198,6 +207,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   preResolvedDecision: string | null | undefined;
   sessionKey?: string;
   agentId?: string;
+  sessionId?: string;
 }): Promise<string | null> {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
@@ -206,6 +216,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
     id: params.approvalId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    sessionId: params.sessionId,
   });
 }
 
@@ -220,6 +231,7 @@ export async function requestExecApprovalDecision(
     id: registration.id,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    sessionId: params.sessionId,
   });
 }
 
@@ -237,6 +249,7 @@ type HostExecApprovalParams = {
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
+  sessionId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -295,6 +308,7 @@ function buildHostApprovalDecisionParams(
       sessionKey: params.sessionKey,
     }),
     resolvedPath: params.resolvedPath,
+    sessionId: params.sessionId,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -168,13 +169,37 @@ export function createSkillsManageTool(opts: {
         }
 
         await fs.mkdir(proposal.skillDir, { recursive: true });
-        await fs.writeFile(proposal.skillMdPath, proposal.contents, "utf8");
+        let resolvedSkillDir: string;
+        let resolvedSkillMdPath: string;
+        let resolvedAllowedRoot: string;
+        try {
+          resolvedSkillDir = await fs.realpath(proposal.skillDir);
+          resolvedSkillMdPath = path.join(resolvedSkillDir, path.basename(proposal.skillMdPath));
+          resolvedAllowedRoot = await fs.realpath(targetRoot.rootPath);
+        } catch {
+          return jsonResult({
+            ok: false,
+            action,
+            error: "could not resolve proposal paths",
+          });
+        }
+        if (
+          !isPathInside(resolvedAllowedRoot, resolvedSkillDir) ||
+          !isPathInside(resolvedAllowedRoot, resolvedSkillMdPath)
+        ) {
+          return jsonResult({
+            ok: false,
+            action,
+            error: "proposal path escapes allowed skill roots after symlink resolution",
+          });
+        }
+        await fs.writeFile(resolvedSkillMdPath, proposal.contents, "utf8");
         deleteProposal(proposalId);
 
         return jsonResult({
           ok: true,
           action,
-          skillMdPath: proposal.skillMdPath,
+          skillMdPath: resolvedSkillMdPath,
           targetRoot: proposal.targetRoot,
           sizeBytes,
         });

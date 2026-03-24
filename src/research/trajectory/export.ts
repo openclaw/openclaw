@@ -145,6 +145,14 @@ function parseResearchEvents(lines: unknown[]): ResearchEventV1[] {
   return out;
 }
 
+/**
+ * Derive tool call rows for TrajectoryV1.toolCalls.
+ *
+ * Invariant: `stepIdx` is the **assistant / model turn index** for replay pairing: all tools
+ * invoked in the same assistant turn share one `stepIdx`. Boundaries come from `llm.response`
+ * events (increment per assistant completion). Events before the first `llm.response` use
+ * step `0` so tool-only fixtures remain stable.
+ */
 function deriveToolCalls(events: ResearchEventV1[]): TrajectoryToolCall[] {
   const starts = new Map<
     string,
@@ -156,16 +164,20 @@ function deriveToolCalls(events: ResearchEventV1[]): TrajectoryToolCall[] {
     }
   >();
   const out: TrajectoryToolCall[] = [];
-  let stepIdx = 0;
+  let assistantTurnIdx = -1;
   for (const event of events) {
+    if (event.kind === "llm.response") {
+      assistantTurnIdx += 1;
+      continue;
+    }
     if (event.kind === "tool.start") {
+      const stepIdx = Math.max(0, assistantTurnIdx);
       starts.set(event.payload.toolCallId, {
         stepIdx,
         toolName: event.payload.toolName,
         startTs: event.ts,
         argsSummary: event.payload.argsSummary,
       });
-      stepIdx += 1;
       continue;
     }
     if (event.kind !== "tool.end") {
@@ -173,7 +185,7 @@ function deriveToolCalls(events: ResearchEventV1[]): TrajectoryToolCall[] {
     }
     const start = starts.get(event.payload.toolCallId);
     out.push({
-      stepIdx: start?.stepIdx ?? stepIdx,
+      stepIdx: start?.stepIdx ?? Math.max(0, assistantTurnIdx),
       toolCallId: event.payload.toolCallId,
       toolName: event.payload.toolName,
       startTs: start?.startTs ?? event.ts,

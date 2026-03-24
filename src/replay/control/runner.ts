@@ -51,7 +51,7 @@ export async function createReplayRun(params: {
   const nowMs = params.nowMs ?? Date.now();
   const trajectory = await loadTrajectory(params.request.trajectoryPath);
   const toolAllowlist = new Set(
-    params.request.toolAllowlist?.length
+    params.request.toolAllowlist !== undefined
       ? params.request.toolAllowlist
       : trajectory.toolCalls.map((toolCall) => toolCall.toolName),
   );

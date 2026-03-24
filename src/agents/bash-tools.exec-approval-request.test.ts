@@ -80,7 +80,7 @@ describe("requestExecApprovalDecision", () => {
       2,
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: "approval-id" },
+      { id: "approval-id", sessionKey: "session", agentId: "main" },
     );
   });
 

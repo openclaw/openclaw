@@ -89,4 +89,15 @@ describe("replay runner", () => {
     expect(() => stepReplayRun({ run, nowMs: 1002 })).toThrowError(ReplayControlError);
     expect(() => stepReplayRun({ run, nowMs: 1002 })).toThrow(/Replay timeout exceeded/);
   });
+
+  it("treats explicit empty toolAllowlist as deny-all (tri-state)", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const run = await createReplayRun({
+      runId: "run-empty-allow",
+      request: { trajectoryPath, mode: "recorded", toolAllowlist: [] },
+    });
+    expect(run.toolAllowlist.size).toBe(0);
+    expect(() => stepReplayRun({ run })).toThrowError(ReplayControlError);
+    expect(() => stepReplayRun({ run })).toThrow(/allowlisted in replay/);
+  });
 });

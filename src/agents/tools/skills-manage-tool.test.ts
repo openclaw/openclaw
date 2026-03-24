@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   clearProposalsForTests,
   createProposal,
+  resolveSkillRoot,
   setProposalForTests,
 } from "../skills/skills-manage-proposals.js";
 import { createSkillsManageTool } from "./skills-manage-tool.js";
@@ -80,6 +82,38 @@ describe("skills_manage tool", () => {
       const details = getDetails(approved);
       expect(details.ok).toBe(false);
       expect(getStringField(details, "error")).toContain("detected sensitive content");
+    });
+  });
+
+  it("approve refuses proposal when resolved path escapes root via symlink", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-skills-manage-", async (workspaceDir) => {
+      const { rootPath } = resolveSkillRoot(workspaceDir, "workspace");
+      await fs.mkdir(rootPath, { recursive: true });
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-escape-"));
+      const linkPath = path.join(rootPath, "escape-link");
+      await fs.symlink(outsideDir, linkPath, "dir");
+      const malicious = {
+        id: "malicious",
+        name: "escape",
+        targetRoot: "workspace" as const,
+        skillDir: path.join(linkPath, "nested-skill"),
+        skillMdPath: path.join(linkPath, "nested-skill", "SKILL.md"),
+        contents: "# Escape\n",
+        createdAt: Date.now(),
+        createdBySessionKey: "agent:main:main",
+      };
+      clearProposalsForTests();
+      setProposalForTests(malicious);
+      const tool = createSkillsManageTool({ workspaceDir, agentSessionKey: "agent:main:main" });
+      const approved = await tool.execute("call-symlink", {
+        action: "approve",
+        proposalId: malicious.id,
+      });
+      expect(getDetails(approved).ok).toBe(false);
+      expect(getStringField(getDetails(approved), "error")).toContain("symlink resolution");
     });
   });
 

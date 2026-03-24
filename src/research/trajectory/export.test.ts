@@ -127,4 +127,79 @@ describe("trajectory export", () => {
     });
     expect(result.bytes).not.toContain("sk-raw-secret-value");
   });
+
+  it("assigns the same stepIdx to multiple tools in one assistant turn", async () => {
+    const transcriptPath = path.join(tmpRoot, "session-multi.jsonl");
+    const eventsPath = path.join(tmpRoot, "session-multi.events.jsonl");
+    const outputPath = path.join(tmpRoot, "session-multi.trajectory.v1.json");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "use two tools" }] },
+      })}\n`,
+      "utf8",
+    );
+    const baseEvent = {
+      v: 1 as const,
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "main",
+      agentId: "default",
+    };
+    await fs.writeFile(
+      eventsPath,
+      [
+        JSON.stringify({
+          ...baseEvent,
+          ts: 1700000000000,
+          kind: "llm.response",
+          payload: { model: "test" },
+        }),
+        JSON.stringify({
+          ...baseEvent,
+          ts: 1700000000100,
+          kind: "tool.start",
+          payload: { toolName: "exec", toolCallId: "call-a", argsSummary: "a" },
+        }),
+        JSON.stringify({
+          ...baseEvent,
+          ts: 1700000000200,
+          kind: "tool.end",
+          payload: { toolName: "exec", toolCallId: "call-a", ok: true, resultSummary: "ok" },
+        }),
+        JSON.stringify({
+          ...baseEvent,
+          ts: 1700000000300,
+          kind: "tool.start",
+          payload: { toolName: "memory_search", toolCallId: "call-b", argsSummary: "b" },
+        }),
+        JSON.stringify({
+          ...baseEvent,
+          ts: 1700000000400,
+          kind: "tool.end",
+          payload: {
+            toolName: "memory_search",
+            toolCallId: "call-b",
+            ok: true,
+            resultSummary: "ok",
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await exportTrajectoryV1({
+      agentId: "default",
+      sessionId: "session-1",
+      sessionKey: "main",
+      transcriptPath,
+      eventsPath,
+      outputPath,
+    });
+    const parsed = JSON.parse(result.bytes) as { toolCalls: Array<{ stepIdx: number }> };
+    expect(parsed.toolCalls).toHaveLength(2);
+    expect(parsed.toolCalls[0]?.stepIdx).toBe(0);
+    expect(parsed.toolCalls[1]?.stepIdx).toBe(0);
+  });
 });

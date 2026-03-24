@@ -248,7 +248,8 @@ export async function runEmbeddedPiAgent(
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
       if (workspaceResolution.agentId && workspaceResolution.agentId !== research.agentId) {
-        // no-op: keep emitted agent id stable for a run.
+        // Workspace resolution may disagree with the caller; we still emit research/telemetry using
+        // `research.agentId` from createResearchRunContext for a stable run identity.
       }
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);

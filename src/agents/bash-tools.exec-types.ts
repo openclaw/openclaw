@@ -21,6 +21,8 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID — used for research telemetry (distinct from approval id). */
+  sessionId?: string;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;

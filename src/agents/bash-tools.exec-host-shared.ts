@@ -195,6 +195,7 @@ export async function resolveApprovalDecisionOrUndefined(params: {
   preResolvedDecision: string | null | undefined;
   sessionKey?: string;
   agentId?: string;
+  sessionId?: string;
   onFailure: () => void;
 }): Promise<string | null | undefined> {
   try {
@@ -203,6 +204,7 @@ export async function resolveApprovalDecisionOrUndefined(params: {
       preResolvedDecision: params.preResolvedDecision,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      sessionId: params.sessionId,
     });
   } catch {
     params.onFailure();
