@@ -161,6 +161,10 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/deepseek",
+      "destination": "/providers/deepseek"
+    },
+    {
       "source": "/mistral",
       "destination": "/providers/mistral"
     },

@@ -285,6 +285,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/moonshot/**"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
 "extensions: nvidia":
   - changed-files:
       - any-glob-to-any-file:

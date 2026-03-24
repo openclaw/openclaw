@@ -260,6 +260,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
+- DeepSeek: `deepseek` (`DEEPSEEK_API_KEY`)
 - Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
@@ -330,6 +331,17 @@ Kimi K2 model IDs:
   },
 }
 ```
+
+### DeepSeek
+
+DeepSeek uses OpenAI-compatible endpoints (`https://api.deepseek.com/v1`).
+
+- Provider: `deepseek`
+- Auth: `DEEPSEEK_API_KEY`
+- Example model: `deepseek/deepseek-chat`
+- CLI: `openclaw onboard --auth-choice deepseek-api-key`
+
+See [/providers/deepseek](/providers/deepseek).
 
 ### Kimi Coding
 
