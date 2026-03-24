@@ -29,6 +29,7 @@ export type OpenVikingPluginConfig = {
   writebackEnabled?: boolean;
   writebackMode?: OpenVikingWritebackMode;
   writebackDirectory?: string;
+  writebackIndexFile?: string;
   writebackMaxChars?: number;
   diagnosticEnabled?: boolean;
   diagnosticFile?: string;
@@ -96,6 +97,11 @@ type OpenVikingDiagnosticState = {
   writebackOutcomes?: string[];
   writebackError?: string;
   writebackDigest?: string;
+  writebackSkipped?: string;
+};
+
+type OpenVikingWritebackIndex = {
+  digests: string[];
 };
 
 type OpenVikingLogger = {
@@ -116,9 +122,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 7_000;
 const DEFAULT_SYSTEM_PROMPT_HEADER =
   "Retrieved context from OpenViking. Use it as supporting evidence, but prefer the current conversation if they conflict.";
 const DEFAULT_WRITEBACK_DIRECTORY = "memory/openviking";
+const DEFAULT_WRITEBACK_INDEX_FILE = "memory/openviking/_writeback-index.json";
 const DEFAULT_WRITEBACK_MAX_CHARS = 800;
 const DEFAULT_WRITEBACK_MODE: OpenVikingWritebackMode = "hybrid";
 const DEFAULT_DIAGNOSTIC_FILE = "memory/openviking/_status.json";
+const MAX_PERSISTED_WRITEBACK_DIGESTS = 256;
 
 export class OpenVikingContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -224,14 +232,52 @@ export class OpenVikingContextEngine implements ContextEngine {
     if (!candidate) {
       return;
     }
+    const mode = this.config.writebackMode ?? DEFAULT_WRITEBACK_MODE;
+    const workspaceDir = resolveRuntimeWorkspaceDir(params.runtimeContext);
+    const persistentDuplicate =
+      workspaceDir != null
+        ? await this.hasPersistedWritebackDigest(workspaceDir, candidate.digest)
+        : false;
     if (this.recentWritebackDigests.has(candidate.digest)) {
       if (this.config.logWriteback) {
         this.logger?.debug?.(`openviking: writeback skipped duplicate digest=${candidate.digest}`);
       }
+      this.rememberDiagnosticState(params.sessionId, {
+        updatedAt: new Date().toISOString(),
+        sessionId: params.sessionId,
+        query: candidate.query,
+        writebackEnabled: true,
+        writebackMode: mode,
+        writebackDigest: candidate.digest,
+        writebackSkipped: "duplicate digest (process cache)",
+        writebackError: undefined,
+        writebackOutcomes: undefined,
+      });
+      await this.writeDiagnosticSnapshotBestEffort(params);
+      return;
+    }
+    if (persistentDuplicate) {
+      if (this.config.logWriteback) {
+        this.logger?.debug?.(
+          `openviking: writeback skipped duplicate digest=${candidate.digest} (persisted index)`,
+        );
+      }
+      this.rememberWritebackDigest(candidate.digest);
+      this.rememberDiagnosticState(params.sessionId, {
+        updatedAt: new Date().toISOString(),
+        sessionId: params.sessionId,
+        query: candidate.query,
+        writebackEnabled: true,
+        writebackMode: mode,
+        writebackDigest: candidate.digest,
+        writebackSkipped: "duplicate digest (persisted index)",
+        writebackError: undefined,
+        writebackOutcomes: undefined,
+      });
+      await this.writeDiagnosticSnapshotBestEffort(params);
       return;
     }
 
-    const mode = this.config.writebackMode ?? DEFAULT_WRITEBACK_MODE;
     const outcomes: string[] = [];
     let sessionApiError: unknown;
     let workspaceError: unknown;
@@ -251,7 +297,6 @@ export class OpenVikingContextEngine implements ContextEngine {
 
     if (mode === "workspace-memory" || mode === "hybrid") {
       try {
-        const workspaceDir = resolveRuntimeWorkspaceDir(params.runtimeContext);
         if (workspaceDir) {
           const filePath = await this.writeWorkspaceMemory({
             workspaceDir,
@@ -285,6 +330,9 @@ export class OpenVikingContextEngine implements ContextEngine {
     }
 
     this.rememberWritebackDigest(candidate.digest);
+    if (workspaceDir) {
+      await this.persistWritebackDigest(workspaceDir, candidate.digest);
+    }
     this.rememberDiagnosticState(params.sessionId, {
       updatedAt: new Date().toISOString(),
       sessionId: params.sessionId,
@@ -293,6 +341,8 @@ export class OpenVikingContextEngine implements ContextEngine {
       writebackMode: mode,
       writebackOutcomes: outcomes,
       writebackDigest: candidate.digest,
+      writebackSkipped: undefined,
+      writebackError: undefined,
     });
     await this.writeDiagnosticSnapshotBestEffort(params);
     if (this.config.logWriteback) {
@@ -495,6 +545,69 @@ export class OpenVikingContextEngine implements ContextEngine {
     const oldest = this.diagnosticStateBySession.keys().next().value;
     if (oldest) {
       this.diagnosticStateBySession.delete(oldest);
+    }
+  }
+
+  private async hasPersistedWritebackDigest(
+    workspaceDir: string,
+    digest: string,
+  ): Promise<boolean> {
+    const digests = await this.readPersistedWritebackDigests(workspaceDir);
+    return digests.includes(digest);
+  }
+
+  private async persistWritebackDigest(workspaceDir: string, digest: string): Promise<void> {
+    const existing = await this.readPersistedWritebackDigests(workspaceDir);
+    const next = [...existing.filter((entry) => entry !== digest), digest].slice(
+      -MAX_PERSISTED_WRITEBACK_DIGESTS,
+    );
+    const filePath = resolveWorkspaceChild(
+      workspaceDir,
+      ensureNativeMemoryRelativePath(
+        this.config.writebackIndexFile ?? DEFAULT_WRITEBACK_INDEX_FILE,
+        "writebackIndexFile",
+      ),
+    );
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const payload: OpenVikingWritebackIndex = { digests: next };
+    await fs.writeFile(`${filePath}.tmp`, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+    await fs.rename(`${filePath}.tmp`, filePath);
+  }
+
+  private async readPersistedWritebackDigests(workspaceDir: string): Promise<string[]> {
+    let filePath: string;
+    try {
+      filePath = resolveWorkspaceChild(
+        workspaceDir,
+        ensureNativeMemoryRelativePath(
+          this.config.writebackIndexFile ?? DEFAULT_WRITEBACK_INDEX_FILE,
+          "writebackIndexFile",
+        ),
+      );
+    } catch (error) {
+      this.logger?.warn?.(`openviking: writeback index skipped: ${String(error)}`);
+      return [];
+    }
+
+    try {
+      const raw = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
+      if (
+        typeof raw === "object" &&
+        raw !== null &&
+        Array.isArray((raw as { digests?: unknown }).digests)
+      ) {
+        return (raw as { digests: unknown[] }).digests.filter(
+          (entry): entry is string => typeof entry === "string" && entry.length > 0,
+        );
+      }
+      this.logger?.warn?.("openviking: writeback index unreadable: invalid JSON shape");
+      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      this.logger?.warn?.(`openviking: writeback index unreadable: ${String(error)}`);
+      return [];
     }
   }
 

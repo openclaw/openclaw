@@ -2660,6 +2660,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           writebackDirectory: {
             type: "string",
           },
+          writebackIndexFile: {
+            type: "string",
+          },
           writebackMaxChars: {
             type: "integer",
             minimum: 100,
@@ -2742,6 +2745,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Writeback Directory",
           advanced: true,
           help: "Workspace-relative directory used when workspace-memory writeback is enabled. Must stay under memory/.",
+        },
+        writebackIndexFile: {
+          label: "Writeback Index File",
+          advanced: true,
+          help: "Workspace-relative JSON file used to persist recently written digests and suppress duplicate OpenViking writebacks across restarts. Must stay under memory/.",
         },
         writebackMaxChars: {
           label: "Writeback Max Chars",

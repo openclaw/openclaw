@@ -235,6 +235,67 @@ describe("OpenVikingContextEngine.afterTurn", () => {
     ) as Record<string, unknown>;
     expect(diagnostic.writebackMode).toBe("hybrid");
     expect(diagnostic.writebackDigest).toBeTypeOf("string");
+    const index = JSON.parse(
+      await fs.readFile(
+        path.join(workspaceDir, "memory/openviking/_writeback-index.json"),
+        "utf-8",
+      ),
+    ) as { digests: string[] };
+    expect(index.digests).toHaveLength(1);
+  });
+
+  it("skips duplicate writebacks across engine restarts with a persisted index", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openviking-engine-"));
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/sessions")) {
+        return new Response(JSON.stringify({ result: { session_id: "session-123" } }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/api/v1/sessions/session-123/messages")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.includes("/api/v1/sessions/session-123/commit")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const config = {
+      baseUrl: "http://127.0.0.1:1933",
+      writebackEnabled: true,
+      writebackMode: "hybrid" as const,
+      writebackDirectory: "memory/openviking",
+    };
+    const turn = {
+      sessionId: "session-main",
+      sessionKey: "agent/main",
+      sessionFile: "/tmp/fake.jsonl",
+      prePromptMessageCount: 0,
+      messages: [
+        userMessage("Remember the Feishu fix."),
+        assistantMessage("Create the empty doc first, then append blocks."),
+      ],
+      runtimeContext: { workspaceDir },
+    };
+
+    await new OpenVikingContextEngine(config).afterTurn(turn);
+    await new OpenVikingContextEngine(config).afterTurn(turn);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const dailyPath = path.join(
+      workspaceDir,
+      `memory/openviking/${new Date().toISOString().slice(0, 10)}.md`,
+    );
+    const written = await fs.readFile(dailyPath, "utf-8");
+    expect(written.match(/openviking-writeback:/g)).toHaveLength(1);
+
+    const diagnostic = JSON.parse(
+      await fs.readFile(path.join(workspaceDir, "memory/openviking/_status.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    expect(diagnostic.writebackSkipped).toBe("duplicate digest (persisted index)");
   });
 
   it("skips diagnostic snapshots that point outside native memory", async () => {

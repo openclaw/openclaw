@@ -70,6 +70,11 @@
       "advanced": true,
       "help": "Workspace-relative directory used when workspace-memory writeback is enabled. Must stay under memory/."
     },
+    "writebackIndexFile": {
+      "label": "Writeback Index File",
+      "advanced": true,
+      "help": "Workspace-relative JSON file used to persist recently written digests and suppress duplicate OpenViking writebacks across restarts. Must stay under memory/."
+    },
     "writebackMaxChars": {
       "label": "Writeback Max Chars",
       "advanced": true
@@ -146,6 +151,9 @@
         "enum": ["session-api", "workspace-memory", "hybrid"]
       },
       "writebackDirectory": {
+        "type": "string"
+      },
+      "writebackIndexFile": {
         "type": "string"
       },
       "writebackMaxChars": {

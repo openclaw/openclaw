@@ -14,6 +14,10 @@ source of truth; the model only "remembers" what gets written to disk.
 Memory search tools are provided by the active memory plugin (default:
 `memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
 
+If you use OpenViking as the active context engine and want it to be the only
+retrieval layer across native memory plus an external knowledge base, see
+[OpenViking Context and Memory](/concepts/openviking-context-memory).
+
 ## Memory files (Markdown)
 
 The default workspace layout uses two memory layers:

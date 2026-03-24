@@ -174,6 +174,7 @@ function buildOpenVikingRuntimeSnapshot(
   const writebackMode = toStringValue(raw.writebackMode);
   const writebackError = toStringValue(raw.writebackError);
   const writebackDigest = toStringValue(raw.writebackDigest);
+  const writebackSkipped = toStringValue(raw.writebackSkipped);
   const writebackOutcomes = Array.isArray(raw.writebackOutcomes)
     ? raw.writebackOutcomes.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -203,6 +204,9 @@ function buildOpenVikingRuntimeSnapshot(
   if (writebackDigest) {
     summary.push(`Writeback digest: ${writebackDigest}`);
   }
+  if (writebackSkipped) {
+    summary.push(`Writeback skipped: ${writebackSkipped}`);
+  }
 
   const notices: NonNullable<PluginInspectReport["runtimeSnapshot"]>["notices"] = [];
   if (retrievalOk === false) {
@@ -217,6 +221,12 @@ function buildOpenVikingRuntimeSnapshot(
     notices.push({
       severity: "error",
       message: `writeback failed: ${writebackError}`,
+    });
+  }
+  if (writebackSkipped) {
+    notices.push({
+      severity: "info",
+      message: `writeback skipped: ${writebackSkipped}`,
     });
   }
 
