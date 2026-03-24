@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeUsage } from "../usage.js";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
@@ -136,6 +137,31 @@ describe("UsageAccumulator", () => {
 
     it("returns undefined for a zero accumulator", () => {
       expect(toLastCallUsage(createUsageAccumulator())).toBeUndefined();
+    });
+
+    it("serves as fallback when lastAssistant exists but usage is absent", () => {
+      // Reproduces the edge steipete identified: lastAssistant is truthy but
+      // lastAssistant.usage is undefined, so normalizeUsage returns undefined.
+      // The composition `normalizeUsage(...) ?? toLastCallUsage(acc)` must
+      // still yield a context-size snapshot from the accumulator.
+      const acc = createUsageAccumulator();
+      mergeUsageIntoAccumulator(acc, {
+        input: 200,
+        output: 60,
+        cacheRead: 90_000,
+        cacheWrite: 3_000,
+      });
+
+      // Simulate: lastAssistant present but usage absent.
+      const lastAssistant = { content: [{ type: "text", text: "ok" }] };
+      const lastCallUsage =
+        normalizeUsage((lastAssistant as { usage?: unknown }).usage as undefined) ??
+        toLastCallUsage(acc);
+
+      expect(lastCallUsage).toBeDefined();
+      expect(lastCallUsage!.input).toBe(200);
+      expect(lastCallUsage!.cacheRead).toBe(90_000);
+      expect(lastCallUsage!.cacheWrite).toBe(3_000);
     });
   });
 });

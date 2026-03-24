@@ -177,11 +177,12 @@ function buildErrorAgentMeta(params: {
     usage.total = params.lastTurnTotal;
   }
   // Prefer the raw last-assistant snapshot; fall back to the accumulator's
-  // last-call fields so session persistence always has a context-size snapshot
-  // even on retry-limit paths where lastAssistant may be undefined.
-  const lastCallUsage = params.lastAssistant
-    ? normalizeUsage(params.lastAssistant.usage as UsageLike)
-    : toLastCallUsage(params.usageAccumulator);
+  // last-call fields so session persistence always has a context-size snapshot.
+  // Covers two cases: lastAssistant absent (retry-limit path) and
+  // lastAssistant present but lastAssistant.usage absent/empty.
+  const lastCallUsage =
+    (params.lastAssistant ? normalizeUsage(params.lastAssistant.usage as UsageLike) : undefined) ??
+    toLastCallUsage(params.usageAccumulator);
   const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
   return {
     sessionId: params.sessionId,
