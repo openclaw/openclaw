@@ -538,12 +538,12 @@ export class ClawBrowserPanel extends LitElement {
               : null
           }
           <div
-            ${ref(this.canvasRef)}
             class="screen ${displayFloating ? "floating" : ""}"
             style="${screenStyle}"
             tabindex="0"
           >
             <canvas
+              ${ref(this.canvasRef)}
               width=${this.pageMeta.width}
               height=${this.pageMeta.height}
               @mousedown=${this.handleMouseDown}
@@ -615,9 +615,12 @@ export class ClawBrowserPanel extends LitElement {
     };
   }
 
+  private renderCount = 0;
+
   private async connect() {
     try {
       this.status = "正在连接浏览器...";
+      this.renderCount = 0;
       let wsBase = this.gatewayUrl.replace(/^http/i, "ws").replace(/\/+$/, "");
       if (!wsBase) {
         wsBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
@@ -643,7 +646,13 @@ export class ClawBrowserPanel extends LitElement {
 
             let targetId = "";
             if (pages.length > 0) {
-              targetId = pages[pages.length - 1].targetId;
+              // 优先选 Google 或非空页面
+              const preferred = pages.find(
+                (p) =>
+                  p.url.includes("google") ||
+                  (p.url !== "about:blank" && !p.url.startsWith("chrome")),
+              );
+              targetId = preferred ? preferred.targetId : pages[pages.length - 1].targetId;
             } else {
               const newTarget = (await this.cdp!.send("Target.createTarget", {
                 url: "about:blank",
@@ -669,7 +678,7 @@ export class ClawBrowserPanel extends LitElement {
               title: p.title || p.url,
             }));
             await this.setupPageSession(this.currentSessionId);
-            this.status = "✅ 运行中";
+            this.status = "✅ 运行中 (准备接收画面)";
 
             this.cdp!.on(
               "Target.attachedToTarget",
@@ -731,40 +740,49 @@ export class ClawBrowserPanel extends LitElement {
               this.requestUpdate();
             });
 
-            this.cdp!.on("Page.screencastFrame", (params: { sessionId: string; data: string }) => {
-              if (this.currentSessionId && params.sessionId !== this.currentSessionId) {
-                void this.cdp
-                  ?.send(
-                    "Page.screencastFrameAck",
-                    { sessionId: params.sessionId },
-                    params.sessionId,
-                  )
-                  .catch(() => {});
-                return;
-              }
-              const img = new Image();
-              img.addEventListener("load", () => {
-                const canvas = this.getCanvas();
-                if (canvas) {
-                  if (canvas.width !== img.width || canvas.height !== img.height) {
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    this.pageMeta = { width: img.width, height: img.height };
-                  }
-                  this.ctx?.drawImage(img, 0, 0);
+            this.cdp!.on(
+              "Page.screencastFrame",
+              (params: { sessionId: string; data: string; metadata: unknown }) => {
+                const { sessionId, data } = params;
+                if (this.currentSessionId && sessionId !== this.currentSessionId) {
+                  void this.cdp
+                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    .catch(() => {});
+                  return;
                 }
-                void this.cdp
-                  ?.send(
-                    "Page.screencastFrameAck",
-                    { sessionId: params.sessionId },
-                    params.sessionId,
-                  )
-                  .catch(() => {});
-              });
-              img.src = `data:image/jpeg;base64,${params.data}`;
-            });
-          } catch {
-            this.status = "❌ 初始化失败";
+
+                const img = new Image();
+                img.addEventListener("load", () => {
+                  const canvas = this.getCanvas();
+                  if (canvas) {
+                    if (canvas.width !== img.width || canvas.height !== img.height) {
+                      canvas.width = img.width;
+                      canvas.height = img.height;
+                      this.pageMeta = { width: img.width, height: img.height };
+                    }
+                    const ctx = canvas.getContext("2d");
+                    if (ctx) {
+                      ctx.drawImage(img, 0, 0);
+                      this.renderCount++;
+                      if (this.renderCount % 10 === 0) {
+                        this.status = `✅ 运行中 (已接收 ${this.renderCount} 帧)`;
+                      }
+                    }
+                  }
+                  void this.cdp
+                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    .catch(() => {});
+                });
+                img.addEventListener("error", () => {
+                  void this.cdp
+                    ?.send("Page.screencastFrameAck", { sessionId }, sessionId)
+                    .catch(() => {});
+                });
+                img.src = `data:image/jpeg;base64,${data}`;
+              },
+            );
+          } catch (e) {
+            this.status = `❌ 初始化失败: ${e instanceof Error ? e.message : String(e)}`;
           }
         })();
       });
@@ -784,15 +802,16 @@ export class ClawBrowserPanel extends LitElement {
   private async setupPageSession(sessionId: string) {
     await this.cdp!.send("Page.enable", {}, sessionId);
     try {
+      // 强制设置视口，确保有内容渲染
       await this.cdp!.send(
         "Emulation.setDeviceMetricsOverride",
         {
-          width: this.pageMeta.width,
-          height: this.pageMeta.height,
+          width: 1280,
+          height: 720,
           deviceScaleFactor: 1,
           mobile: false,
-          screenWidth: this.pageMeta.width,
-          screenHeight: this.pageMeta.height,
+          screenWidth: 1280,
+          screenHeight: 720,
           positionX: 0,
           positionY: 0,
           dontSetVisibleSize: false,
@@ -804,15 +823,28 @@ export class ClawBrowserPanel extends LitElement {
     }
     await this.cdp!.send("Page.bringToFront", {}, sessionId).catch(() => {});
     try {
+      // 停止之前的 screencast (如果有)
+      await this.cdp!.send("Page.stopScreencast", {}, sessionId).catch(() => {});
+      // 开启新的 screencast
       await this.cdp!.send(
         "Page.startScreencast",
-        { format: "jpeg", quality: 80, everyNthFrame: 1 },
+        {
+          format: "jpeg",
+          quality: 80,
+          everyNthFrame: 1,
+          maxWidth: 1280,
+          maxHeight: 720,
+        },
         sessionId,
       );
     } catch {
       // 忽略
     }
-    this.startPollingScreenshot(sessionId);
+    // 移除之前的 polling 逻辑，完全依赖 screencast 提高效率
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
   }
 
   private startPollingScreenshot(sessionId: string) {
