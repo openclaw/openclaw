@@ -523,7 +523,7 @@ describe("resolveAgentIdsByWorkspacePath", () => {
   });
 });
 
-describe("resolveAgentIdsByWorkspace", () => {
+describe("resolveAgentIdsByExactWorkspacePath", () => {
   it("returns only agents whose workspace matches exactly", () => {
     const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
     const opsWorkspace = `${workspaceRoot}/projects/ops`;
