@@ -156,10 +156,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
     process.env.HOME = tempHome;
+
+    await loadGatewayOnboardModules();
   });
 
-  beforeEach(async () => {
-    await loadGatewayOnboardModules();
+  beforeEach(() => {
     gatewayClientCalls.length = 0;
   });
 
