@@ -137,12 +137,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./media.js"));
-});
-
 describe("web media loading", () => {
   beforeAll(() => {
     // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.

@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let extractLocationData: typeof import("./inbound.js").extractLocationData;
 let extractMediaPlaceholder: typeof import("./inbound.js").extractMediaPlaceholder;
 let extractText: typeof import("./inbound.js").extractText;
 
 describe("web inbound helpers", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ extractLocationData, extractMediaPlaceholder, extractText } = await import("./inbound.js"));
   });
