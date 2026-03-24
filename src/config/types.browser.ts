@@ -11,6 +11,8 @@ export type BrowserProfileConfig = {
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Per-profile headless override. undefined = use global setting. */
+  headless: boolean | undefined;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -44,6 +46,8 @@ export type BrowserConfig = {
   remoteCdpHandshakeTimeoutMs?: number;
   /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
   color?: string;
+  /** Override the global headless setting for this profile. */
+  headless?: boolean;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
   /** Start Chrome headless (best-effort). Default: false */

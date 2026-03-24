@@ -105,7 +105,8 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
-  if (resolved.headless) {
+  const headless = profile.headless !== undefined ? profile.headless : resolved.headless;
+  if (headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
   }

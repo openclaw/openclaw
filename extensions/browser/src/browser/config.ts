@@ -333,6 +333,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
+      headless: undefined,
       attachOnly: true,
     };
   }
@@ -356,6 +357,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    headless: profile.headless,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
