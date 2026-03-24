@@ -8,27 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- ModelStudio/Qwen: add standard (pay-as-you-go) DashScope endpoints for China and global Qwen API keys alongside the existing Coding Plan endpoints, and relabel the provider group to `Qwen (Alibaba Cloud Model Studio)`. (#43878)
-- UI/clarity: consolidate button primitives (`btn--icon`, `btn--ghost`, `btn--xs`), refine the Knot theme to a black-and-red palette with WCAG 2.1 AA contrast, add config icons for Diagnostics/CLI/Secrets/ACP/MCP sections, replace the roundness slider with discrete stops, and improve accessibility with aria-labels across usage filters. (#53272) Thanks @BunsDev.
-- CSP/Control UI: compute SHA-256 hashes for inline `<script>` blocks in the served `index.html` and include them in the `script-src` CSP directive, keeping inline scripts blocked by default while allowing explicitly hashed bootstrap code. (#53307) Thanks @BunsDev.
-
 ### Fixes
-
-- Plugins/ClawHub: resolve plugin API compatibility against the active runtime version at install time, and add regression coverage for current `>=2026.3.22` ClawHub package checks so installs no longer fail behind the stale `1.2.0` constant. (#53157) Thanks @futhgar.
-- CLI/channel auth: auto-select the single login-capable configured channel for `channels login`/`logout` instead of relying on the outbound message-channel resolver, so env-only or non-auth channels no longer cause false ambiguity errors. (#53254) Thanks @BunsDev.
-- Control UI/auth: preserve operator scopes through the device-auth bypass path, ignore cached under-scoped operator tokens, and show a clear `operator.read` fallback message when a connection really lacks read scope, so operator sessions stop failing or blanking on read-backed pages. (#53110) Thanks @BunsDev.
-- Plugins/uninstall: accept installed `clawhub:` specs and versionless ClawHub package names as uninstall targets, so `openclaw plugins uninstall clawhub:<package>` works again even when the recorded install was pinned to a version.
-- Auth/OpenAI tokens: stop live gateway auth-profile writes from reverting freshly saved credentials back to stale in-memory values, and make `models auth paste-token` write to the resolved agent store, so Configure, Onboard, and token-paste flows stop snapping back to expired OpenAI tokens. Fixes #53207. Related to #45516.
-- Agents/failover: classify generic `api_error` payloads as retryable only when they include transient failure signals, so MiniMax-style backend failures still trigger model fallback without misclassifying billing, auth, or format/context errors. (#49611) Thanks @ayushozha.
-- Diagnostics/cache trace: strip credential fields from cache-trace JSONL output while preserving non-sensitive diagnostic fields and image redaction metadata.
-- Docs/Feishu: replace `botName` with `name` in the channel config examples so the docs match the strict account schema for per-account display names. (#52753) Thanks @haroldfabla2-hue.
-- Doctor/plugins: make `openclaw doctor --fix` remove stale `plugins.allow` and `plugins.entries` refs left behind after plugin removal. Thanks @sallyom
-- Agents/replay: canonicalize malformed assistant transcript content before session-history sanitization so legacy or corrupted assistant turns stop crashing Pi replay and subagent recovery paths.
-- ClawHub/skills: keep updating already-tracked legacy Unicode slugs after the ASCII-only slug hardening, so older installs do not get stuck behind `Invalid skill slug` errors during `openclaw skills update`. (#53206) Thanks @drobison00.
-- Infra/exec trust: preserve shell-multiplexer wrapper binaries for policy checks without breaking approved-command reconstruction, so BusyBox/ToyBox allowlist and audit flows bind to the real wrapper while execution plans stay coherent. (#53134) Thanks @vincentkoc.
-- LINE/runtime-api: pre-export overlapping runtime symbols before the `line-runtime` star export so jiti no longer throws `TypeError: Cannot redefine property` on startup. (#53221) Thanks @Drickon.
-- CLI/cron: make `openclaw cron add|edit --at ... --tz <iana>` honor the requested local wall-clock time for offset-less one-shot datetimes, including DST boundaries, and keep `--tz` rejected for `--every`. (#53224) Thanks @RolfHegr.
-- Commands/auth: stop slash-command authorization from crashing or dropping valid allowlists when channel `allowFrom` resolution hits unresolved SecretRef-backed accounts, and fail closed only for the affected provider inference path. (#52791) Thanks @Lukavyi.
 
 ## 2026.3.23
 
@@ -36,17 +16,39 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- ModelStudio/Qwen: add standard (pay-as-you-go) DashScope endpoints for China and global Qwen API keys alongside the existing Coding Plan endpoints, and relabel the provider group to `Qwen (Alibaba Cloud Model Studio)`. (#43878)
+- UI/clarity: consolidate button primitives (`btn--icon`, `btn--ghost`, `btn--xs`), refine the Knot theme to a black-and-red palette with WCAG 2.1 AA contrast, add config icons for Diagnostics/CLI/Secrets/ACP/MCP sections, replace the roundness slider with discrete stops, and improve accessibility with aria-labels across usage filters. (#53272) Thanks @BunsDev.
+- CSP/Control UI: compute SHA-256 hashes for inline `<script>` blocks in the served `index.html` and include them in the `script-src` CSP directive, keeping inline scripts blocked by default while allowing explicitly hashed bootstrap code. (#53307) Thanks @BunsDev.
+
 ### Fixes
 
+- Plugins/bundled runtimes: ship bundled plugin runtime sidecars like WhatsApp `light-runtime-api.js`, Matrix `runtime-api.js`, and other plugin runtime entry files in the npm package again, so global installs stop failing on missing bundled plugin runtime surfaces.
+- CLI/channel auth: auto-select the single configured login-capable channel for `channels login`/`logout`, harden channel ids against prototype-chain and control-character abuse, and fall back cleanly to catalog-backed channel installs, so channel auth works again for single-channel setups and on-demand channel installs. (#53254) Thanks @BunsDev.
+- Auth/OpenAI tokens: stop live gateway auth-profile writes from reverting freshly saved credentials back to stale in-memory values, and make `models auth paste-token` write to the resolved agent store, so Configure, Onboard, and token-paste flows stop snapping back to expired OpenAI tokens. Fixes #53207. Related to #45516.
+- Control UI/auth: preserve operator scopes through the device-auth bypass path, ignore cached under-scoped operator tokens, and show a clear `operator.read` fallback message when a connection really lacks read scope, so operator sessions stop failing or blanking on read-backed pages. (#53110) Thanks @BunsDev.
+- Plugins/ClawHub: resolve plugin API compatibility against the active runtime version at install time, and add regression coverage for current `>=2026.3.22` ClawHub package checks so installs no longer fail behind the stale `1.2.0` constant. (#53157) Thanks @futhgar.
+- Plugins/uninstall: accept installed `clawhub:` specs and versionless ClawHub package names as uninstall targets, so `openclaw plugins uninstall clawhub:<package>` works again even when the recorded install was pinned to a version.
 - Browser/Chrome MCP: wait for existing-session browser tabs to become usable after attach instead of treating the initial Chrome MCP handshake as ready, which reduces user-profile timeouts and repeated consent churn on macOS Chrome attach flows. Fixes #52930. Thanks @vincentkoc.
 - Browser/CDP: reuse an already-running loopback browser after a short initial reachability miss instead of immediately falling back to relaunch detection, which fixes second-run browser start/open regressions on slower headless Linux setups. Fixes #53004. Thanks @vincentkoc.
+- Agents/web_search: use the active runtime `web_search` provider instead of stale/default selection, so agent turns keep hitting the provider you actually configured. Fixes #53020. Thanks @jzakirov.
+- Mistral/models: lower bundled Mistral max-token defaults to safe output budgets and teach `openclaw doctor --fix` to repair old persisted Mistral provider configs that still carry context-sized output limits, avoiding deterministic Mistral 422 rejects on fresh and existing setups. Fixes #52599. Thanks @vincentkoc.
 - ClawHub/macOS auth: honor macOS auth config and XDG auth paths for saved ClawHub credentials, so `openclaw skills ...` and gateway skill browsing keep using the signed-in auth state instead of silently falling back to unauthenticated mode. Fixes #53034.
 - ClawHub/macOS: read the local ClawHub login from the macOS Application Support path and still honor XDG config on macOS, so skill browsing uses the logged-in token on both default and XDG-style setups. Fixes #52949. Thanks @scoootscooob.
 - ClawHub/skills: resolve the local ClawHub auth token for gateway skill browsing and switch browse-all requests to search so ClawControl stops falling into unauthenticated 429s and empty authenticated skill lists. Fixes #52949. Thanks @vincentkoc.
+- Config/warnings: suppress the confusing “newer OpenClaw” warning when a config written by a same-base correction release like `2026.3.23-2` is read by `2026.3.23`, while still warning for truly newer or incompatible versions.
+- CLI/cron: make `openclaw cron add|edit --at ... --tz <iana>` honor the requested local wall-clock time for offset-less one-shot datetimes, including DST boundaries, and keep `--tz` rejected for `--every`. (#53224) Thanks @RolfHegr.
+- Commands/auth: stop slash-command authorization from crashing or dropping valid allowlists when channel `allowFrom` resolution hits unresolved SecretRef-backed accounts, and fail closed only for the affected provider inference path. (#52791) Thanks @Lukavyi.
+- Agents/failover: classify generic `api_error` payloads as retryable only when they include transient failure signals, so MiniMax-style backend failures still trigger model fallback without misclassifying billing, auth, or format/context errors. (#49611) Thanks @ayushozha.
+- LINE/runtime-api: pre-export overlapping runtime symbols before the `line-runtime` star export so jiti no longer throws `TypeError: Cannot redefine property` on startup. (#53221) Thanks @Drickon.
+- Telegram/threading: populate `currentThreadTs` in the threading tool-context fallback for Telegram DM topics so thread-aware tools still receive the active topic context when the main thread metadata is missing. (#52217)
+- Diagnostics/cache trace: strip credential fields from cache-trace JSONL output while preserving non-sensitive diagnostic fields and image redaction metadata.
+- Docs/Feishu: replace `botName` with `name` in the channel config examples so the docs match the strict account schema for per-account display names. (#52753) Thanks @haroldfabla2-hue.
+- Doctor/plugins: make `openclaw doctor --fix` remove stale `plugins.allow` and `plugins.entries` refs left behind after plugin removal. Thanks @sallyom
+- Agents/replay: canonicalize malformed assistant transcript content before session-history sanitization so legacy or corrupted assistant turns stop crashing Pi replay and subagent recovery paths.
+- ClawHub/skills: keep updating already-tracked legacy Unicode slugs after the ASCII-only slug hardening, so older installs do not get stuck behind `Invalid skill slug` errors during `openclaw skills update`. (#53206) Thanks @drobison00.
+- Infra/exec trust: preserve shell-multiplexer wrapper binaries for policy checks without breaking approved-command reconstruction, so BusyBox/ToyBox allowlist and audit flows bind to the real wrapper while execution plans stay coherent. (#53134) Thanks @vincentkoc.
 - Plugins/message tool: make Discord `components` and Slack `blocks` optional again, and route Feishu `message(..., media=...)` sends through the outbound media path, so pin/unpin/react flows stop failing schema validation and Feishu file/image attachments actually send. Fixes #52970 and #52962. Thanks @vincentkoc.
 - Gateway/model pricing: stop `openrouter/auto` pricing refresh from recursing indefinitely during bootstrap, so OpenRouter auto routes can populate cached pricing and `usage.cost` again. Fixes #53035. Thanks @vincentkoc.
-- Mistral/models: lower bundled Mistral max-token defaults to safe output budgets and teach `openclaw doctor --fix` to repair old persisted Mistral provider configs that still carry context-sized output limits, avoiding deterministic Mistral 422 rejects on fresh and existing setups. Fixes #52599. Thanks @vincentkoc.
-- Agents/web_search: use the active runtime `web_search` provider instead of stale/default selection, so agent turns keep hitting the provider you actually configured. Fixes #53020. Thanks @jzakirov.
 - Models/OpenAI Codex OAuth: bootstrap the env-configured HTTP/HTTPS proxy dispatcher on the stored-credential refresh path before token renewal runs, so expired Codex OAuth profiles can refresh successfully in proxy-required environments instead of locking users out after the first token expiry.
 - Models/OpenAI Codex OAuth and Plugins/MiniMax OAuth: ensure env-configured HTTP/HTTPS proxy dispatchers are initialized before OAuth preflight and token exchange requests so proxy-required environments can complete MiniMax and OpenAI Codex sign-in flows again. (#52228; fixes #51619, #51569) Thanks @openperf.
 - Plugins/memory-lancedb: bootstrap LanceDB into plugin runtime state on first use when the bundled npm install does not already have it, so `plugins.slots.memory="memory-lancedb"` works again after global npm installs without moving LanceDB into OpenClaw core dependencies. Fixes #26100.
