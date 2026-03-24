@@ -156,6 +156,17 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  statusSink?: (patch: {
+    connected?: boolean;
+    reconnectAttempts?: number;
+    lastConnectedAt?: number | null;
+    lastDisconnect?: {
+      at: number;
+      error?: string;
+    } | null;
+    lastError?: string | null;
+    lastEventAt?: number | null;
+  }) => void;
 };
 
 /**
