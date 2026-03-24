@@ -19,10 +19,12 @@
 }
 
 .chat-text {
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.7;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  letter-spacing: -0.01em;
+  color: var(--chat-text);
 }
 
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
@@ -70,18 +72,20 @@
 }
 
 .chat-text :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.15);
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.85em;
   overflow-wrap: normal;
   word-break: keep-all;
 }
 
 .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.04);
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   overflow-x: auto;
+  font-size: 0.85em;
 }
 
 .chat-text :where(pre code) {

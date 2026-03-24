@@ -572,27 +572,38 @@ export function renderApp(state: AppViewState) {
           state.updateAvailable &&
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
           !isUpdateBannerDismissed(state.updateAvailable)
-            ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
-              <button
-                class="btn btn--sm update-banner__btn"
-                ?disabled=${state.updateRunning || !state.connected}
-                @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
-              <button
-                class="update-banner__close"
-                type="button"
-                title="Dismiss"
-                aria-label="Dismiss update banner"
-                @click=${() => {
-                  dismissUpdateBanner(state.updateAvailable);
-                  state.updateAvailable = null;
-                }}
-              >
-                ${icons.x}
-              </button>
-            </div>`
+            ? html`<div class="update-toast-overlay" role="dialog" aria-label="Update available"
+                @click=${(e: Event) => {
+                  if ((e.target as HTMLElement).classList.contains("update-toast-overlay")) {
+                    dismissUpdateBanner(state.updateAvailable);
+                    state.updateAvailable = null;
+                  }
+                }}>
+                <div class="update-toast">
+                  <p class="update-toast__title">Update available</p>
+                  <p class="update-toast__version">v${state.updateAvailable.latestVersion} — running v${state.updateAvailable.currentVersion}</p>
+                  <div class="update-toast__actions">
+                    <button
+                      class="update-toast__btn-dismiss"
+                      @click=${() => {
+                        dismissUpdateBanner(state.updateAvailable);
+                        state.updateAvailable = null;
+                      }}
+                    >Later</button>
+                    <button
+                      class="update-toast__btn-update"
+                      ?disabled=${state.updateRunning || !state.connected}
+                      @click=${async () => {
+                        await runUpdate(state);
+                        if (!state.lastError) {
+                          dismissUpdateBanner(state.updateAvailable);
+                          state.updateAvailable = null;
+                        }
+                      }}
+                    >${state.updateRunning ? "Updating…" : "Update"}</button>
+                  </div>
+                </div>
+              </div>`
             : nothing
         }
         ${

@@ -281,9 +281,16 @@ export const icons = {
     </svg>
   `,
   send: html`
-    <svg viewBox="0 0 24 24">
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
     </svg>
   `,
   stop: html`

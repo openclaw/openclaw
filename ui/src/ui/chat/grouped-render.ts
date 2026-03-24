@@ -89,7 +89,7 @@ export function renderStreamingGroup(
   const name = assistant?.name ?? "Assistant";
 
   return html`
-    <div class="chat-group assistant">
+    <div class="chat-group assistant chat-group--streaming">
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
@@ -150,8 +150,9 @@ export function renderMessageGroup(
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
+  const streamingClass = group.isStreaming ? "chat-group--streaming" : "";
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass} ${streamingClass}">
       ${renderAvatar(
         group.role,
         {
@@ -503,9 +504,9 @@ function renderAvatar(
     />`;
   }
 
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
+  /* Assistant with no custom avatar: always use logo */
+  if (normalized === "assistant") {
+    const logoUrl = agentLogoUrl(basePath ?? "");
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
       src="${logoUrl}"

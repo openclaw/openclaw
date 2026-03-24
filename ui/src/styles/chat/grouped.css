@@ -12,6 +12,11 @@
   margin-right: 16px;
 }
 
+/* Hide tool message groups entirely from chat */
+.chat-group.tool {
+  display: none !important;
+}
+
 /* User messages on right */
 .chat-group.user {
   flex-direction: row-reverse;
@@ -23,6 +28,11 @@
   flex-direction: column;
   gap: 2px;
   max-width: min(900px, calc(100% - 60px));
+}
+
+/* User messages: compact width like ChatGPT/Gemini */
+.chat-group.user .chat-group-messages {
+  max-width: min(520px, 75%);
 }
 
 /* User messages align content right */
@@ -132,29 +142,51 @@
 
 /* Avatar Styles */
 .chat-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: var(--panel-strong);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
   display: grid;
   place-items: center;
   font-weight: 600;
   font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end;
-  margin-bottom: 4px;
-  border: 1px solid var(--border);
+  align-self: flex-start;
+  margin-top: 2px;
+  border: none;
 }
 
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
 }
 
 .chat-avatar.assistant {
-  background: var(--secondary);
+  background: transparent;
   color: var(--muted);
+  border: none;
+}
+
+/* Logo avatar for assistant */
+.chat-avatar.assistant.chat-avatar--logo {
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  width: 28px;
+  height: 28px;
+}
+
+img.chat-avatar.assistant {
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .chat-avatar.other {
@@ -163,8 +195,29 @@
 }
 
 .chat-avatar.tool {
-  background: var(--secondary);
+  background: transparent;
   color: var(--muted);
+  border: none;
+  width: 28px;
+  height: 28px;
+}
+
+/* Thinking animation on mascot while streaming */
+.chat-group--streaming .chat-avatar {
+  animation: thinking-wobble 1.2s ease-in-out infinite;
+}
+
+@keyframes thinking-wobble {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(-5deg) scale(1.05);
+  }
+  75% {
+    transform: rotate(5deg) scale(1.05);
+  }
 }
 
 /* Image avatar support */
@@ -178,8 +231,8 @@ img.chat-avatar {
 .chat-bubble {
   position: relative;
   display: inline-block;
-  border: 1px solid var(--border);
-  background: var(--card);
+  border: 1px solid transparent;
+  background: transparent;
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   box-shadow: none;
@@ -311,20 +364,28 @@ img.chat-avatar {
   stroke-linejoin: round;
 }
 
-/* Light mode: restore borders */
+/* Assistant bubbles: subtle container */
+.chat-group.assistant .chat-bubble,
+.chat-group.other .chat-bubble {
+  background: var(--card);
+  border-color: var(--border);
+  padding: 10px 14px;
+}
+
+/* Light mode */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
 .chat-bubble:hover {
   background: var(--bg-hover);
 }
 
-/* User bubbles have different styling */
+/* User bubbles keep background styling */
 .chat-group.user .chat-bubble {
   background: var(--accent-subtle);
   border-color: transparent;
+  border-radius: 20px;
 }
 
 :root[data-theme-mode="light"] .chat-group.user .chat-bubble {

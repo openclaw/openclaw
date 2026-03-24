@@ -63,6 +63,14 @@
   background: transparent;
 }
 
+/* Center chat content like Claude/Gemini */
+.chat-thread-inner {
+  max-width: 768px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }
@@ -190,6 +198,10 @@
   padding: 12px 4px 4px;
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
+  max-width: 768px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
 
 /* Image attachments preview */
@@ -367,13 +379,15 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0 auto 14px;
+  max-width: 768px;
+  width: calc(100% - 36px);
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
@@ -405,6 +419,7 @@
   line-height: 1.4;
   outline: none;
   box-sizing: border-box;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
 .agent-chat__input > textarea:focus-visible {
@@ -494,17 +509,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-md);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
   border: none;
-  background: var(--muted-strong);
-  color: var(--text-strong);
+  background: #fff;
+  color: #000;
   cursor: pointer;
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    box-shadow var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
   padding: 0;
 }
 
@@ -519,13 +535,24 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--muted);
+  background: #e0e0e0;
   box-shadow: none;
 }
 
 .chat-send-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.25;
   cursor: not-allowed;
+  background: var(--muted-strong);
+  color: var(--text-strong);
+}
+
+:root[data-theme-mode="light"] .chat-send-btn {
+  background: #000;
+  color: #fff;
+}
+
+:root[data-theme-mode="light"] .chat-send-btn:hover:not(:disabled) {
+  background: #333;
 }
 
 .chat-send-btn--stop {
@@ -1010,6 +1037,99 @@
 .agent-chat__suggestion:hover {
   background: var(--panel-strong);
   border-color: var(--accent);
+}
+
+/* Actions menu popup (attach, new session, export) */
+.agent-chat__actions-menu-wrap {
+  position: relative;
+}
+
+.agent-chat__actions-popup {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 48px);
+  left: 0;
+  min-width: 240px;
+  background: var(--popover);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  padding: 6px;
+  animation: popup-enter 0.15s ease-out;
+}
+
+.agent-chat__actions-popup--open {
+  display: block;
+}
+
+@keyframes popup-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-chat__actions-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+  text-align: left;
+}
+
+.agent-chat__actions-item:hover {
+  background: var(--bg-hover);
+}
+
+.agent-chat__actions-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.agent-chat__actions-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.agent-chat__actions-item-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__actions-item-label {
+  flex: 1;
+}
+
+:root[data-theme-mode="light"] .agent-chat__actions-popup {
+  background: #fff;
+  border-color: var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 /* Mobile dropdown toggle — hidden on desktop */

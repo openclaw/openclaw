@@ -1210,16 +1210,66 @@ export function renderChat(props: ChatProps) {
 
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
-            <button
-              class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
-              title="Attach file"
-              ?disabled=${!props.connected}
-            >
-              ${icons.paperclip}
-            </button>
+            <div class="agent-chat__actions-menu-wrap">
+              <button
+                class="agent-chat__input-btn"
+                @click=${(e: Event) => {
+                  const wrap = (e.currentTarget as HTMLElement).parentElement!;
+                  const menu = wrap.querySelector(".agent-chat__actions-popup") as HTMLElement;
+                  if (menu) {
+                    menu.classList.toggle("agent-chat__actions-popup--open");
+                    const close = (ev: MouseEvent) => {
+                      if (!wrap.contains(ev.target as Node)) {
+                        menu.classList.remove("agent-chat__actions-popup--open");
+                        document.removeEventListener("click", close);
+                      }
+                    };
+                    if (menu.classList.contains("agent-chat__actions-popup--open")) {
+                      setTimeout(() => document.addEventListener("click", close), 0);
+                    }
+                  }
+                }}
+                title="Actions"
+                ?disabled=${!props.connected}
+              >
+                ${icons.plus}
+              </button>
+              <div class="agent-chat__actions-popup">
+                <button class="agent-chat__actions-item" @click=${() => {
+                  document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
+                  document
+                    .querySelector(".agent-chat__actions-popup")
+                    ?.classList.remove("agent-chat__actions-popup--open");
+                }}>
+                  <span class="agent-chat__actions-item-icon">${icons.paperclip}</span>
+                  <span class="agent-chat__actions-item-label">Joindre un fichier</span>
+                </button>
+                ${
+                  canAbort
+                    ? nothing
+                    : html`
+                  <button class="agent-chat__actions-item" @click=${() => {
+                    props.onNewSession();
+                    document
+                      .querySelector(".agent-chat__actions-popup")
+                      ?.classList.remove("agent-chat__actions-popup--open");
+                  }}>
+                    <span class="agent-chat__actions-item-icon">${icons.plus}</span>
+                    <span class="agent-chat__actions-item-label">Nouvelle session</span>
+                  </button>
+                `
+                }
+                <button class="agent-chat__actions-item" @click=${() => {
+                  exportMarkdown(props);
+                  document
+                    .querySelector(".agent-chat__actions-popup")
+                    ?.classList.remove("agent-chat__actions-popup--open");
+                }} ?disabled=${props.messages.length === 0}>
+                  <span class="agent-chat__actions-item-icon">${icons.download}</span>
+                  <span class="agent-chat__actions-item-label">Exporter la conversation</span>
+                </button>
+              </div>
+            </div>
 
             ${
               isSttSupported()
@@ -1279,25 +1329,6 @@ export function renderChat(props: ChatProps) {
           </div>
 
           <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
-            ${
-              canAbort
-                ? nothing
-                : html`
-                    <button
-                      class="btn-ghost"
-                      @click=${props.onNewSession}
-                      title="New session"
-                      aria-label="New session"
-                    >
-                      ${icons.plus}
-                    </button>
-                  `
-            }
-            <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
-              ${icons.download}
-            </button>
-
             ${
               canAbort && (isBusy || props.sending)
                 ? html`
