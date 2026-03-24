@@ -2186,6 +2186,63 @@ describe("handleCommands subagents", () => {
     expect(trackedRuns[0].endedAt).toBeUndefined();
   });
 
+  it("steers ended orchestrators that are still waiting on active descendants", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-steer-ended-parent" };
+      }
+      return {};
+    });
+    const parentKey = "agent:main:subagent:orchestrator-ended";
+    const childKey = "agent:main:subagent:orchestrator-ended:subagent:child";
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-steer-ended-parent.json");
+    await updateSessionStore(storePath, (store) => {
+      store[parentKey] = {
+        sessionId: "ended-parent-session",
+        updatedAt: Date.now(),
+      };
+      store[childKey] = {
+        sessionId: "active-child-session",
+        updatedAt: Date.now(),
+      };
+    });
+    addSubagentRunForTests({
+      runId: "run-ended-parent",
+      childSessionKey: parentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+      endedAt: Date.now() - 110_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-active-child",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/steer 1 regroup around the remaining child work", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("steered");
+    const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(trackedRuns[0].runId).toBe("run-steer-ended-parent");
+  });
+
   it("restores announce behavior when /steer replacement dispatch fails", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
