@@ -7,9 +7,9 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
@@ -93,15 +93,32 @@ async function safeSaveCreds(
   }
 }
 
-/** Check if any WhatsApp group is configured with requireMention: "monitor". */
+/** Check if any WhatsApp group is configured with requireMention: "monitor".
+ *  Checks both top-level groups and per-account groups. */
 function hasMonitorGroups(): boolean {
   try {
     const cfg = loadConfig();
-    const groups = (cfg.channels as Record<string, any>)?.whatsapp?.groups;
-    if (!groups) return false;
-    return Object.values(groups).some(
-      (g: any) => g?.requireMention === "monitor",
-    );
+    const wa = (cfg.channels as Record<string, any>)?.whatsapp;
+    if (!wa) return false;
+    // Check top-level groups
+    const topGroups = wa.groups;
+    if (topGroups && Object.values(topGroups).some((g: any) => g?.requireMention === "monitor")) {
+      return true;
+    }
+    // Check per-account groups
+    const accounts = wa.accounts;
+    if (accounts) {
+      for (const acct of Object.values(accounts) as any[]) {
+        const acctGroups = acct?.groups;
+        if (
+          acctGroups &&
+          Object.values(acctGroups).some((g: any) => g?.requireMention === "monitor")
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   } catch {
     return false;
   }

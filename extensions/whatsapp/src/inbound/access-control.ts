@@ -99,13 +99,27 @@ export async function checkInboundAccessControl(params: {
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
-  // Monitor-only groups bypass all sender-level filtering.
-  // Read raw config value directly since "monitor" is a custom string value.
-  const rawRequireMention = cfg.channels?.whatsapp?.groups?.[params.remoteJid]?.requireMention;
+  // Monitor-only groups bypass sender-level filtering but respect groupPolicy: "disabled".
+  // Check both top-level and per-account group config for the monitor setting.
+  const topLevelGroup = cfg.channels?.whatsapp?.groups?.[params.remoteJid];
+  const accountGroups = (cfg.channels?.whatsapp as Record<string, any>)?.accounts?.[
+    account.accountId
+  ]?.groups?.[params.remoteJid];
+  const rawRequireMention = accountGroups?.requireMention ?? topLevelGroup?.requireMention;
   if (params.group && rawRequireMention === "monitor") {
+    // Respect groupPolicy: "disabled" — monitor mode should not override an explicit disable.
+    if (groupPolicy === "disabled") {
+      logVerbose("Blocked monitor group message (groupPolicy: disabled)");
+      return {
+        allowed: false,
+        shouldMarkRead: true,
+        isSelfChat,
+        resolvedAccountId: account.accountId,
+      };
+    }
     return {
       allowed: true,
-      shouldMarkRead: true,
+      shouldMarkRead: false, // Don't mark monitor messages as read to avoid clearing unread state
       isSelfChat,
       resolvedAccountId: account.accountId,
     };

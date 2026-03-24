@@ -86,6 +86,17 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     return { shouldProcess: false };
   }
 
+  // Monitor-mode groups are passive: log only, never reply — even if the bot is mentioned.
+  const topLevelGroup = (params.cfg.channels as Record<string, any>)?.whatsapp?.groups?.[
+    params.conversationId
+  ];
+  if (topLevelGroup?.requireMention === "monitor") {
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `Monitor-mode group ${params.conversationId}: message logged, no reply`,
+    );
+  }
+
   noteGroupMember(
     params.groupMemberNames,
     params.groupHistoryKey,
