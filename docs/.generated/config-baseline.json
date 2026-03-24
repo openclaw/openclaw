@@ -56474,6 +56474,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.voice-call.config.responseAgent",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Response Agent",
+      "help": "Agent ID for voice responses (default: main). Use a different agent for custom personality/skills.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.voice-call.config.responseModel",
       "kind": "plugin",
       "type": "string",
@@ -56573,6 +56587,59 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.voice-call.config.silenceFiller",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.silenceFiller.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Silence Filler",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.silenceFiller.sfxSet",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "typing",
+        "processing"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Silence Filler Sound Set",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.silenceFiller.thresholdMs",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Silence Filler Threshold (ms)",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.voice-call.config.silenceTimeoutMs",
       "kind": "plugin",
       "type": "integer",
@@ -56628,6 +56695,26 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.streaming.elevenlabsLanguageCode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.voice-call.config.streaming.enabled",
@@ -56741,7 +56828,8 @@
       "type": "string",
       "required": false,
       "enumValues": [
-        "openai-realtime"
+        "openai-realtime",
+        "elevenlabs-scribe"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -57437,7 +57525,7 @@
         "media"
       ],
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "help": "Used for voice-call TTS only (does not read or merge messages.tts). Edge is ignored for calls.",
       "hasChildren": false
     },
     {

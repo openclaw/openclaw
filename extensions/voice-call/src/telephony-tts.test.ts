@@ -55,7 +55,7 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     const openai = tts.openai as Record<string, unknown>;
 
     expect(openai.voice).toBe("coral");
-    expect(openai.model).toBe("gpt-4o-mini-tts");
+    expect(openai.model).toBeUndefined();
   });
 
   it("blocks top-level __proto__ keys", async () => {
