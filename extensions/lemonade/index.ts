@@ -65,8 +65,7 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.lemonade;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
-          const { apiKey: lemonadeKey, discoveryApiKey } =
-            ctx.resolveProviderApiKey(PROVIDER_ID);
+          const { apiKey: lemonadeKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
 
           if (hasExplicitModels && explicit) {
             return {
