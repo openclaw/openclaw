@@ -172,6 +172,7 @@ export const zh_CN: TranslationMap = {
     ptBR: "Português (巴西葡萄牙语)",
     de: "Deutsch (德语)",
     es: "Español (西班牙语)",
+    ko: "韩语 (한국어)",
   },
   cron: {
     summary: {
