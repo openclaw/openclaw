@@ -363,7 +363,7 @@ Recurring job in a custom persistent session:
 Notes:
 
 - `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
+- `schedule.at` accepts ISO 8601. Tool/API values without a timezone are treated as UTC; the CLI also accepts `openclaw cron add|edit --at "<offset-less-iso>" --tz <iana>` for local wall-clock one-shots.
 - `everyMs` is milliseconds.
 - `sessionTarget`: `"main"`, `"isolated"`, `"current"`, or `"session:<custom-id>"`.
 - `"current"` is resolved to `"session:<sessionKey>"` at creation time.
