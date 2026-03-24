@@ -198,10 +198,23 @@ function makeMarkdownToolCallRe(): RegExp {
   return /```(?:json)?\s*\n?\s*(\{(?:(?!```)[\s\S])*?"name"\s*:\s*"[^"]+"(?:(?!```)[\s\S])*?\})\s*\n?```/g;
 }
 
-function stripMarkdownToolCallBlocks(input: string): string {
+function stripMarkdownToolCallBlocks(input: string, allowedNames?: ReadonlySet<string>): string {
   return input
-    .replace(makeMarkdownToolCallRe(), "")
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+    .replace(makeMarkdownToolCallRe(), (match, raw: string) => {
+      try {
+        const parsed = parseJsonPreservingUnsafeIntegers((raw ?? "").trim()) as Record<string, unknown>;
+        const name = typeof parsed.name === "string" ? parsed.name : undefined;
+        if (!name) {
+          return match;
+        }
+        if (allowedNames && !allowedNames.has(name)) {
+          return match;
+        }
+        return "";
+      } catch {
+        return match;
+      }
+    })
     .trim();
 }
 
@@ -584,7 +597,10 @@ export function createOllamaStreamFn(
           const markdownToolCalls = extractMarkdownToolCalls(accumulatedContent, allowedNames);
           if (markdownToolCalls.length > 0) {
             accumulatedToolCalls.push(...markdownToolCalls);
-            finalResponse.message.content = stripMarkdownToolCallBlocks(accumulatedContent);
+            finalResponse.message.content = stripMarkdownToolCallBlocks(
+              accumulatedContent,
+              allowedNames,
+            );
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
         }

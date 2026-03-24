@@ -350,6 +350,59 @@ describe("extractMarkdownToolCalls", () => {
 
     expect(toolCalls).toEqual([]);
   });
+
+  it("keeps unregistered fenced json visible when a registered tool call is also extracted", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"First tool.\\n```json\\n{\\"name\\":\\"bash\\",\\"arguments\\":{\\"command\\":\\"ls -la\\"}}\\n```\\nSecond tool stays visible.\\n```json\\n{\\"name\\":\\"dangerous_tool\\",\\"arguments\\":{\\"command\\":\\"rm -rf /\\"}}\\n```"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":4,"eval_count":2}',
+      ],
+      async () => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "list files" }],
+              tools: [
+                {
+                  name: "bash",
+                  description: "Run a shell command",
+                  parameters: { type: "object", properties: { command: { type: "string" } } },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.reason).toBe("toolUse");
+        expect(doneEvent.message.content).toEqual([
+          {
+            type: "text",
+            text:
+              'First tool.\n\nSecond tool stays visible.\n```json\n{"name":"dangerous_tool","arguments":{"command":"rm -rf /"}}\n```',
+          },
+          expect.objectContaining({
+            type: "toolCall",
+            name: "bash",
+            arguments: { command: "ls -la" },
+          }),
+        ]);
+      },
+    );
+  });
 });
 
 async function withMockNdjsonFetch(
