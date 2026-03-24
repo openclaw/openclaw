@@ -299,27 +299,52 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
   // Helper function to check if a date satisfies the cron constraints
   function satisfiesDateConstraints(date: Date): boolean {
     // Check month constraint
+    // If parseCronField returns empty (e.g. unrecognized tokens), treat as wildcard
     if (monField !== "*") {
       const validMons = parseCronField(monField, 1, 12);
-      if (!validMons.includes(date.getMonth() + 1)) {
+      if (validMons.length > 0 && !validMons.includes(date.getMonth() + 1)) {
         return false;
       }
     }
 
     // Check day-of-month constraint
-    if (domField !== "*" && domField !== "?") {
-      const validDoms = parseCronField(domField, 1, 31);
-      if (!validDoms.includes(date.getDate())) {
-        return false;
-      }
-    }
+    // DOM + DOW: per cron spec and Croner, when both are restricted
+    // (neither is * or ?), they use OR semantics — the job runs if
+    // either condition matches. Only when one side is wildcard does
+    // the other act as the sole constraint.
+    const domRestricted = domField !== "*" && domField !== "?";
+    const dowRestricted = dowField !== "*" && dowField !== "?";
 
-    // Check day-of-week constraint
-    if (dowField !== "*" && dowField !== "?") {
+    if (domRestricted && dowRestricted) {
+      // OR: at least one must match (empty result from unrecognized tokens → treat as match)
+      const validDoms = parseCronField(domField, 1, 31);
       const validDows = parseCronField(dowField, 0, 7);
       const dateDow = date.getDay();
-      if (!validDows.includes(dateDow) && !(dateDow === 0 && validDows.includes(7))) {
+      const domMatch = validDoms.length === 0 || validDoms.includes(date.getDate());
+      const dowMatch =
+        validDows.length === 0 ||
+        validDows.includes(dateDow) ||
+        (dateDow === 0 && validDows.includes(7));
+      if (!domMatch && !dowMatch) {
         return false;
+      }
+    } else {
+      if (domRestricted) {
+        const validDoms = parseCronField(domField, 1, 31);
+        if (validDoms.length > 0 && !validDoms.includes(date.getDate())) {
+          return false;
+        }
+      }
+      if (dowRestricted) {
+        const validDows = parseCronField(dowField, 0, 7);
+        const dateDow = date.getDay();
+        if (
+          validDows.length > 0 &&
+          !validDows.includes(dateDow) &&
+          !(dateDow === 0 && validDows.includes(7))
+        ) {
+          return false;
+        }
       }
     }
 
@@ -369,7 +394,34 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
   return result.toSorted((a, b) => a - b);
 }
 
-/** Parse a single cron field into an array of values. */
+// Name-to-number mappings for Croner-compatible cron tokens
+const MONTH_NAMES: Record<string, number> = {
+  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+  JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+};
+const DOW_NAMES: Record<string, number> = {
+  SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6,
+};
+
+/** Resolve a cron token to a number, handling named days/months.
+ *  Returns NaN if the token is not recognized (e.g. L, #, W). */
+function resolveToken(token: string, min: number, max: number): number {
+  const upper = token.toUpperCase();
+  if (max === 12 && MONTH_NAMES[upper] !== undefined) {
+    return MONTH_NAMES[upper];
+  }
+  if (max === 7 && DOW_NAMES[upper] !== undefined) {
+    return DOW_NAMES[upper];
+  }
+  return parseInt(token, 10);
+}
+
+/** Parse a single cron field into an array of values.
+ *  Supports numeric values, ranges, steps, and named tokens
+ *  (MON-FRI, JAN, etc.). Unrecognized tokens like L, #, W are
+ *  skipped — if parseCronField returns an empty array for a
+ *  restricted field, callers treat it as "any" (wildcard) to
+ *  avoid hiding jobs from the timeline. */
 function parseCronField(field: string, min: number, max: number): number[] {
   if (field === "*") {
     const result: number[] = [];
@@ -404,10 +456,10 @@ function parseCronField(field: string, min: number, max: number): number[] {
       continue;
     }
 
-    const rangeMatch = part.match(/^(\d+)-(\d+)$/);
+    const rangeMatch = part.match(/^(\w+)-(\w+)$/);
     if (rangeMatch) {
-      const start = Math.max(min, parseInt(rangeMatch[1], 10));
-      const end = Math.min(max, parseInt(rangeMatch[2], 10));
+      const start = Math.max(min, resolveToken(rangeMatch[1], min, max));
+      const end = Math.min(max, resolveToken(rangeMatch[2], min, max));
       if (start > end) {
         continue;
       }
@@ -417,7 +469,7 @@ function parseCronField(field: string, min: number, max: number): number[] {
       continue;
     }
 
-    const num = parseInt(part, 10);
+    const num = resolveToken(part, min, max);
     if (!isNaN(num) && num >= min && num <= max) {
       values.add(num);
     }
