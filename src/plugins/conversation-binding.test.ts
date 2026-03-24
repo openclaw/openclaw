@@ -7,8 +7,8 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
@@ -83,6 +83,14 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
+const pluginRuntimeState = vi.hoisted(
+  () =>
+    ({
+      // The runtime mock is initialized before imports; beforeEach installs the real shared stub.
+      registry: null as unknown as PluginRegistry,
+    }) satisfies { registry: PluginRegistry },
+);
+
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
   return {
@@ -96,19 +104,36 @@ vi.mock("../infra/home-dir.js", async (importOriginal) => {
   };
 });
 
-const {
-  __testing,
-  buildPluginBindingApprovalCustomId,
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  parsePluginBindingApprovalCustomId,
-  requestPluginConversationBinding,
-  resolvePluginConversationBindingApproval,
-} = await import("./conversation-binding.js");
-const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-  await import("../infra/outbound/session-binding-service.js");
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => pluginRuntimeState.registry,
+  setActivePluginRegistry: (registry: PluginRegistry) => {
+    pluginRuntimeState.registry = registry;
+  },
+}));
+
+let __testing: typeof import("./conversation-binding.js").__testing;
+let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
+let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
+let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
+let requestPluginConversationBinding: typeof import("./conversation-binding.js").requestPluginConversationBinding;
+let resolvePluginConversationBindingApproval: typeof import("./conversation-binding.js").resolvePluginConversationBindingApproval;
+let registerSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").registerSessionBindingAdapter;
+let unregisterSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").unregisterSessionBindingAdapter;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
+type ConversationBindingModule = typeof import("./conversation-binding.js");
+
+const conversationBindingModuleUrl = new URL("./conversation-binding.ts", import.meta.url).href;
+
+async function importConversationBindingModule(
+  cacheBust: string,
+): Promise<ConversationBindingModule> {
+  return (await import(
+    `${conversationBindingModuleUrl}?t=${cacheBust}`
+  )) as ConversationBindingModule;
+}
 
 function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
   return {
@@ -160,7 +185,38 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+      return {
+        ...actual,
+        expandHomePrefix: (value: string) => {
+          if (value === "~/.openclaw/plugin-binding-approvals.json") {
+            return approvalsPath;
+          }
+          return actual.expandHomePrefix(value);
+        },
+      };
+    });
+    vi.doMock("./runtime.js", () => ({
+      getActivePluginRegistry: () => pluginRuntimeState.registry,
+      setActivePluginRegistry: (registry: PluginRegistry) => {
+        pluginRuntimeState.registry = registry;
+      },
+    }));
+    ({
+      __testing,
+      buildPluginBindingApprovalCustomId,
+      detachPluginConversationBinding,
+      getCurrentPluginConversationBinding,
+      parsePluginBindingApprovalCustomId,
+      requestPluginConversationBinding,
+      resolvePluginConversationBindingApproval,
+    } = await import("./conversation-binding.js"));
+    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+      await import("../infra/outbound/session-binding-service.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -288,6 +344,108 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(differentAccount.status).toBe("pending");
+  });
+
+  it("shares pending bind approvals across duplicate module instances", async () => {
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await expect(
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "approved",
+      binding: expect.objectContaining({
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "-10099:topic:77",
+      }),
+    });
+
+    second.__testing.reset();
+  });
+
+  it("shares persistent approvals across duplicate module instances", async () => {
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await expect(
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "approved",
+      decision: "allow-always",
+    });
+
+    const rebound = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:78",
+        parentConversationId: "-10099",
+        threadId: "78",
+      },
+      binding: { summary: "Bind this conversation to Codex thread def." },
+    });
+
+    expect(rebound.status).toBe("bound");
+
+    first.__testing.reset();
+    fs.rmSync(approvalsPath, { force: true });
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {

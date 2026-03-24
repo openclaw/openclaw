@@ -86,6 +86,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
       error: null,
       result: null,
     },
+    modelCatalog: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
     onSelectPanel: () => undefined,

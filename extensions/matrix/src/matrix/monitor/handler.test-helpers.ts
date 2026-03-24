@@ -24,6 +24,8 @@ type MatrixHandlerTestHarnessOptions = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
+  accountAllowBots?: boolean | "mentions";
+  configuredBotUserIds?: Set<string>;
   mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
@@ -50,16 +52,28 @@ type MatrixHandlerTestHarnessOptions = {
   resolveEnvelopeFormatOptions?: () => Record<string, never>;
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
   finalizeInboundContext?: (ctx: unknown) => unknown;
-  createReplyDispatcherWithTyping?: () => {
+  createReplyDispatcherWithTyping?: (params?: {
+    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+  }) => {
     dispatcher: Record<string, unknown>;
     replyOptions: Record<string, unknown>;
     markDispatchIdle: () => void;
+    markRunComplete: () => void;
   };
   resolveHumanDelayConfig?: () => undefined;
   dispatchReplyFromConfig?: () => Promise<{
     queuedFinal: boolean;
     counts: { final: number; block: number; tool: number };
   }>;
+  withReplyDispatcher?: <T>(params: {
+    dispatcher: {
+      markComplete?: () => void;
+      waitForIdle?: () => Promise<void>;
+    };
+    run: () => Promise<T>;
+    onSettled?: () => void | Promise<void>;
+  }) => Promise<T>;
+  inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
@@ -120,6 +134,9 @@ export function createMatrixHandlerTestHarness(
         routing: {
           resolveAgentRoute,
         },
+        mentions: {
+          buildMentionRegexes: () => options.mentionRegexes ?? [],
+        },
         session: {
           resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
           readSessionUpdatedAt: options.readSessionUpdatedAt ?? (() => undefined),
@@ -136,9 +153,32 @@ export function createMatrixHandlerTestHarness(
               dispatcher: {},
               replyOptions: {},
               markDispatchIdle: () => {},
+              markRunComplete: () => {},
             })),
           resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
           dispatchReplyFromConfig,
+          withReplyDispatcher:
+            options.withReplyDispatcher ??
+            (async <T>(params: {
+              dispatcher: {
+                markComplete?: () => void;
+                waitForIdle?: () => Promise<void>;
+              };
+              run: () => Promise<T>;
+              onSettled?: () => void | Promise<void>;
+            }) => {
+              const { dispatcher, run, onSettled } = params;
+              try {
+                return await run();
+              } finally {
+                dispatcher.markComplete?.();
+                try {
+                  await dispatcher.waitForIdle?.();
+                } finally {
+                  await onSettled?.();
+                }
+              }
+            }),
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
@@ -164,6 +204,8 @@ export function createMatrixHandlerTestHarness(
     allowFrom: options.allowFrom ?? [],
     groupAllowFrom: options.groupAllowFrom ?? [],
     roomsConfig: options.roomsConfig,
+    accountAllowBots: options.accountAllowBots,
+    configuredBotUserIds: options.configuredBotUserIds,
     mentionRegexes: options.mentionRegexes ?? [],
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
@@ -175,6 +217,7 @@ export function createMatrixHandlerTestHarness(
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
+    inboundDeduper: options.inboundDeduper,
     directTracker: {
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },

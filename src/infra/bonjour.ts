@@ -1,6 +1,6 @@
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
-import { ignoreCiaoCancellationRejection } from "./bonjour-ciao.js";
+import { classifyCiaoUnhandledRejection } from "./bonjour-ciao.js";
 import { formatBonjourError } from "./bonjour-errors.js";
 import { isTruthyEnvValue } from "./env.js";
 import { registerUnhandledRejectionHandler } from "./unhandled-rejections.js";
@@ -94,6 +94,21 @@ function isAnnouncedState(state: BonjourServiceState | "unknown") {
   return String(state) === "announced";
 }
 
+function handleCiaoUnhandledRejection(reason: unknown): boolean {
+  const classification = classifyCiaoUnhandledRejection(reason);
+  if (!classification) {
+    return false;
+  }
+
+  if (classification.kind === "interface-assertion") {
+    logWarn(`bonjour: suppressing ciao interface assertion: ${classification.formatted}`);
+    return true;
+  }
+
+  logDebug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+  return true;
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
 ): Promise<GatewayBonjourAdvertiser> {
@@ -106,10 +121,7 @@ export async function startGatewayBonjourAdvertiser(
   // mDNS service instance names are single DNS labels; dots in hostnames (like
   // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
   // Keep only the first label and normalize away a trailing `.local`.
-  const hostnameRaw =
-    process.env.OPENCLAW_MDNS_HOSTNAME?.trim() ||
-    process.env.CLAWDBOT_MDNS_HOSTNAME?.trim() ||
-    "openclaw";
+  const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
   const hostname =
     hostnameRaw
       .replace(/\.local$/i, "")
@@ -175,7 +187,7 @@ export async function startGatewayBonjourAdvertiser(
 
     const cleanupUnhandledRejection =
       services.length > 0
-        ? registerUnhandledRejectionHandler(ignoreCiaoCancellationRejection)
+        ? registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
         : undefined;
 
     return { responder, services, cleanupUnhandledRejection };

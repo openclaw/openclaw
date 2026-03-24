@@ -19,6 +19,7 @@ import {
   type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
+import { filterContainerGenericHints } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
@@ -81,7 +82,9 @@ async function handleServiceNotLoaded(params: {
   json: boolean;
   emit: ReturnType<typeof createActionIO>["emit"];
 }) {
-  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  const hints = filterContainerGenericHints(
+    await maybeAugmentSystemdHints(params.renderStartHints()),
+  );
   params.emit({
     ok: true,
     result: "not-loaded",

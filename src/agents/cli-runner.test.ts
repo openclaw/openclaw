@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -48,6 +47,32 @@ vi.mock("./bootstrap-files.js", () => ({
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
 }));
 
+let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+
+async function loadFreshCliRunnerModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../process/supervisor/index.js", () => ({
+    getProcessSupervisor: () => ({
+      spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+  }));
+  vi.doMock("../infra/system-events.js", () => ({
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  }));
+  vi.doMock("../infra/heartbeat-wake.js", () => ({
+    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+  }));
+  vi.doMock("./bootstrap-files.js", () => ({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  }));
+  ({ runCliAgent } = await import("./cli-runner.js"));
+}
+
 type MockRunExit = {
   reason:
     | "manual-cancel"
@@ -77,7 +102,7 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 describe("runCliAgent with process supervisor", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
@@ -85,6 +110,7 @@ describe("runCliAgent with process supervisor", () => {
       bootstrapFiles: [],
       contextFiles: [],
     });
+    await loadFreshCliRunnerModuleForTest();
   });
 
   it("runs CLI through supervisor and returns payload", async () => {

@@ -194,7 +194,12 @@ async function loadRegisterSlackMonitorSlashCommands(): Promise<RegisterFn> {
 
 const { dispatchMock } = getSlackSlashMocks();
 
-beforeEach(() => {
+beforeAll(() => {
+  vi.resetModules();
+});
+
+beforeEach(async () => {
+  registerSlackMonitorSlashCommandsPromise = undefined;
   resetSlackSlashMocks();
 });
 

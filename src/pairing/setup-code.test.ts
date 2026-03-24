@@ -10,6 +10,7 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 
 let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
 let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
+let issueDeviceBootstrapTokenMock: typeof import("../infra/device-bootstrap.js").issueDeviceBootstrapToken;
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -45,8 +46,6 @@ describe("pairing setup code", () => {
       authLabel: string;
       url?: string;
       urlSource?: string;
-      token?: string;
-      password?: string;
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -55,8 +54,14 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(resolved.payload.token).toBe(params.token);
-    expect(resolved.payload.password).toBe(params.password);
+    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: {
+          roles: ["node"],
+          scopes: [],
+        },
+      }),
+    );
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -76,15 +81,15 @@ describe("pairing setup code", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", "");
   });
 
   beforeEach(async () => {
     ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
+    ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+      await import("../infra/device-bootstrap.js"));
+    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -117,7 +122,6 @@ describe("pairing setup code", () => {
       payload: {
         url: "ws://gateway.local:19001",
         bootstrapToken: "bootstrap-123",
-        token: "tok_123",
       },
       authLabel: "token",
       urlSource: "gateway.bind=custom",
@@ -144,7 +148,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expectResolvedSetupOk(resolved, { authLabel: "password", password: "resolved-password" });
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef", async () => {
@@ -167,7 +171,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expectResolvedSetupOk(resolved, { authLabel: "password", password: "password-from-env" });
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("does not resolve gateway.auth.password SecretRef in token mode", async () => {
@@ -189,7 +193,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expectResolvedSetupOk(resolved, { authLabel: "token", token: "tok_123" });
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("resolves gateway.auth.token SecretRef for pairing payload", async () => {
@@ -212,7 +216,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expectResolvedSetupOk(resolved, { authLabel: "token", token: "resolved-token" });
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("errors when gateway.auth.token SecretRef is unresolved in token mode", async () => {
@@ -261,13 +265,13 @@ describe("pairing setup code", () => {
       id: "MISSING_GW_TOKEN",
     });
 
-    expectResolvedSetupOk(resolved, { authLabel: "password", password: "password-from-env" });
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("does not treat env-template token as plaintext in inferred mode", async () => {
     const resolved = await resolveInferredModeWithPasswordEnv("${MISSING_GW_TOKEN}");
 
-    expectResolvedSetupOk(resolved, { authLabel: "password", password: "password-from-env" });
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("requires explicit auth mode when token and password are both configured", async () => {
@@ -333,7 +337,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expectResolvedSetupOk(resolved, { authLabel: "token", token: "new-token" });
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("errors when gateway is loopback only", async () => {
@@ -367,10 +371,30 @@ describe("pairing setup code", () => {
       payload: {
         url: "wss://mb-server.tailnet.ts.net",
         bootstrapToken: "bootstrap-123",
-        password: "secret",
       },
       authLabel: "password",
       urlSource: "gateway.tailscale.mode=serve",
+    });
+  });
+
+  it("returns a bind-specific error when interface discovery throws", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok" },
+        },
+      },
+      {
+        networkInterfaces: () => {
+          throw new Error("uv_interface_addresses failed");
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      ok: false,
+      error: "gateway.bind=lan set, but no private LAN IP was found.",
     });
   });
 
@@ -396,7 +420,6 @@ describe("pairing setup code", () => {
       payload: {
         url: "wss://remote.example.com:444",
         bootstrapToken: "bootstrap-123",
-        token: "tok_123",
       },
       authLabel: "token",
       urlSource: "gateway.remote.url",

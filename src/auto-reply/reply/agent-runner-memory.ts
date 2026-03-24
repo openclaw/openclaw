@@ -38,7 +38,7 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
-import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -476,6 +476,7 @@ export async function runMemoryFlushIfNeeded(params: {
   ]
     .filter(Boolean)
     .join("\n\n");
+  let postCompactionSessionId: string | undefined;
   try {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
@@ -515,6 +516,9 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        if (result.meta?.agentMeta?.sessionId) {
+          postCompactionSessionId = result.meta.agentMeta.sessionId;
+        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -526,12 +530,31 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
+      const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        newSessionId: postCompactionSessionId,
       });
+      const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
+      if (updatedEntry) {
+        activeSessionEntry = updatedEntry;
+        params.followupRun.run.sessionId = updatedEntry.sessionId;
+        if (updatedEntry.sessionFile) {
+          params.followupRun.run.sessionFile = updatedEntry.sessionFile;
+        }
+        const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+        if (queueKey) {
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: updatedEntry.sessionId,
+            nextSessionFile: updatedEntry.sessionFile,
+          });
+        }
+      }
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
@@ -548,6 +571,10 @@ export async function runMemoryFlushIfNeeded(params: {
         });
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
+          params.followupRun.run.sessionId = updatedEntry.sessionId;
+          if (updatedEntry.sessionFile) {
+            params.followupRun.run.sessionFile = updatedEntry.sessionFile;
+          }
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
