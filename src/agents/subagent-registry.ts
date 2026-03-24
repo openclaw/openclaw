@@ -1596,16 +1596,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
 
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  let latest: SubagentRunRecord | undefined;
   for (const runId of runIds) {
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
     }
-    if (typeof entry.endedAt !== "number") {
-      return true;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
     }
   }
-  return false;
+  return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
