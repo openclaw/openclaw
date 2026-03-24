@@ -580,7 +580,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
   if (!targetSessionKey) {
     return { found: false as const, killed: false };
   }
-  const entry = getSubagentRunByChildSessionKey(targetSessionKey);
+  const entry = getLatestSubagentRunByChildSessionKey(targetSessionKey);
   if (!entry) {
     return { found: false as const, killed: false };
   }
