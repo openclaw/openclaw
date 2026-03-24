@@ -118,7 +118,7 @@ Runs the full diagnostic pipeline: generation, logit lens, probing, attention, a
 
 ```
 embedding                    — Token + position embedding
-block_0 … block_N           — Transformer blocks
+final_norm                   — Final layer normalization
 block_X.attention            — Self-attention sub-tree
 block_X.attn.ln_qkv         — LayerNorm + Q/K/V projection
 block_X.attn.scores          — Scaled dot-product attention
