@@ -40,6 +40,17 @@ describe("buildSystemdUnit", () => {
     );
   });
 
+  it("renders EnvironmentFile paths without systemd argument quoting", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environmentFiles: ["/home/test user/.openclaw/runtime env.env"],
+      environment: {},
+    });
+    expect(unit).toContain("EnvironmentFile=/home/test user/.openclaw/runtime env.env");
+    expect(unit).not.toContain('EnvironmentFile="/home/test user/.openclaw/runtime env.env"');
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({

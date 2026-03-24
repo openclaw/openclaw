@@ -92,20 +92,25 @@ async function resolveSystemdInstallEnvironment(params: {
   }
 
   const envFilePath = resolveSystemdGatewayEnvFilePath(params.env);
-  let envFileKeys: Set<string> | undefined;
+  let envFileEnvironment: Record<string, string> | undefined;
   try {
-    envFileKeys = new Set(Object.keys(await readSystemdEnvironmentFile(envFilePath)));
+    envFileEnvironment = await readSystemdEnvironmentFile(envFilePath);
   } catch {
-    envFileKeys = undefined;
+    envFileEnvironment = undefined;
   }
 
-  if (!envFileKeys || envFileKeys.size === 0) {
+  if (!envFileEnvironment || Object.keys(envFileEnvironment).length === 0) {
     return { environment };
   }
 
   let stripped = false;
   for (const key of SYSTEMD_ENVFILE_MANAGED_KEYS) {
-    if (!envFileKeys.has(key) || environment[key] === undefined) {
+    const inlineValue = environment[key];
+    if (inlineValue === undefined) {
+      continue;
+    }
+    const envFileValue = envFileEnvironment[key];
+    if (typeof envFileValue !== "string" || envFileValue !== inlineValue) {
       continue;
     }
     delete environment[key];
@@ -525,7 +530,10 @@ async function writeSystemdUnit({
   workingDirectory,
   environment,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+  unitPath: string;
+  backedUp: boolean;
+}> {
   await assertSystemdAvailable(env);
 
   const unitPath = resolveSystemdUnitPath(env);
