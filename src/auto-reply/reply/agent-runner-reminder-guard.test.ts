@@ -32,6 +32,8 @@ describe("hasUnbackedReminderCommitment", () => {
       "I'll remember and set a reminder for tomorrow",
       "I will remember, then create a reminder",
       "I'll remember and make sure to remind you tomorrow",
+      "I'll make sure to remember and remind you tomorrow",
+      "I will make sure to remember, then follow up later",
       // Multiline conjunction forms
       "I'll remember\nand remind you tomorrow",
       "I will remember,\nthen follow up later",
