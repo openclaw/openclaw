@@ -9,7 +9,7 @@ import {
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
 import { isModernModelRef } from "./live-model-filter.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -18,7 +18,7 @@ import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS = isLiveTestEnabled(["OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS"]);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
 
 const describeLive = LIVE ? describe : describe.skip;

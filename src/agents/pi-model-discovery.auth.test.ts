@@ -149,4 +149,31 @@ describe("discoverAuthStorage", () => {
       }
     });
   });
+
+  it("includes env-backed provider auth when no auth profile exists", async () => {
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.MISTRAL_API_KEY;
+      process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+      try {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {},
+          },
+          agentDir,
+        );
+
+        const authStorage = discoverAuthStorage(agentDir);
+
+        expect(authStorage.hasAuth("mistral")).toBe(true);
+        await expect(authStorage.getApiKey("mistral")).resolves.toBe("mistral-env-test-key");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MISTRAL_API_KEY;
+        } else {
+          process.env.MISTRAL_API_KEY = previous;
+        }
+      }
+    });
+  });
 });
