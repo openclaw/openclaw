@@ -71,6 +71,23 @@ RUN --mount=type=cache,id=tony-npm-cache,target=/root/.npm \
     npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" ${OPENCLAW_TONY_NPM_PACKAGES} \
   && acpx --version
 
+# ─── QMD CLI (memory search backend) ─────────────────────────────────────────
+# Required by the memory subsystem when memory.backend = "qmd".
+# QMD uses bun:sqlite — needs bun runtime. Skip `bun build --compile`
+# because node-llama-cpp optional deps break the bundler on linux/amd64.
+# Instead: install bun, clone qmd, install deps, create a wrapper script.
+RUN curl -fsSL https://bun.sh/install | bash \
+  && cp /root/.bun/bin/bun /usr/local/bin/bun \
+  && chmod 755 /usr/local/bin/bun \
+  && git clone --depth 1 https://github.com/tobi/qmd /opt/qmd \
+  && cd /opt/qmd \
+  && bun install --trust \
+  && sed -i 's/PRAGMA journal_mode = WAL/PRAGMA busy_timeout = 10000; PRAGMA journal_mode = DELETE/' src/store.ts \
+  && chmod -R a+rX /opt/qmd \
+  && printf '#!/bin/sh\nexec /usr/local/bin/bun run /opt/qmd/src/cli/qmd.ts "$@"\n' > /usr/local/bin/qmd \
+  && chmod +x /usr/local/bin/qmd \
+  && qmd --version
+
 # ─── Plugin runtime deps (durable across rebuilds) ───────────────────────────
 # Some bundled plugins rely on peer/runtime packages not baked into openclaw:local.
 # Install them in the stock extension module root so enabling those plugins does
@@ -104,8 +121,8 @@ RUN set -eux; \
 # Run inside container to confirm gateway tools are present:
 #
 #   docker run --rm openclaw-tony:local \
-#     sh -c 'for t in docker kubectl kustomize ruby python3 pip3 jq socat make acpx; do \
+#     sh -c 'for t in docker kubectl kustomize ruby python3 pip3 jq socat make acpx qmd; do \
 #       command -v $t && echo "✅ $t" || echo "❌ $t MISSING"; done'
 #
-# Expected output: 10x ✅
+# Expected output: 11x ✅
 # =============================================================================
