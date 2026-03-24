@@ -146,8 +146,9 @@ describe("on-message fromMe echo protection", () => {
     // processMessage should NOT have been called
     expect(processMessage).not.toHaveBeenCalled();
 
-    // echoTracker.has should NOT have been called (fromMe exits before it)
-    expect(echoTracker.has).not.toHaveBeenCalled();
+    // echoTracker.has IS called to consume any stale key, preventing
+    // false suppression of later real user messages with the same body
+    expect(echoTracker.has).toHaveBeenCalledWith("Hello from the group");
 
     // logVerbose should have logged the skip reason
     expect(logVerbose).toHaveBeenCalledWith(
@@ -213,6 +214,21 @@ describe("on-message fromMe echo protection", () => {
     expect(echoTracker.forget).toHaveBeenCalledWith("echoed text");
     // processMessage should NOT have been called (echo detected)
     expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("consumes echo tracker key when skipping fromMe to avoid stale matches", async () => {
+    const echoHas = vi.fn(() => true);
+    const { handler, echoTracker } = createHandler({ echoTrackerHas: echoHas });
+    const msg = makeMsg({ fromMe: true, chatType: "group", body: "ok" });
+
+    await handler(msg);
+
+    // fromMe should skip the message
+    expect(processMessage).not.toHaveBeenCalled();
+    // But it should also consume the echo tracker key so "ok" from a real
+    // user later is not falsely dropped
+    expect(echoHas).toHaveBeenCalledWith("ok");
+    expect(echoTracker.forget).toHaveBeenCalledWith("ok");
   });
 
   it("treats undefined fromMe as non-fromMe and processes the message", async () => {

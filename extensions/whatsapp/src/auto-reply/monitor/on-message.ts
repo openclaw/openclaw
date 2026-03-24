@@ -103,6 +103,12 @@ export function createWebOnMessageHandler(params: {
     const isSamePhone =
       msg.selfE164 != null && normalizeE164(msg.from) === normalizeE164(msg.selfE164);
     if (msg.fromMe && !isSamePhone) {
+      // Consume any matching echo-tracker key so it does not linger and
+      // falsely suppress a later *real* user message with the same body
+      // (e.g. common short replies like "ok" or "thanks").
+      if (params.echoTracker.has(msg.body)) {
+        params.echoTracker.forget(msg.body);
+      }
       logVerbose(`Skipping auto-reply: fromMe message in ${msg.chatType} chat ${conversationId}`);
       return;
     }
