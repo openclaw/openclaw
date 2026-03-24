@@ -200,6 +200,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "avian",
+    idHint: "avian",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/avian-provider",
+    packageVersion: "2026.3.20",
+    packageDescription: "OpenClaw Avian provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "avian",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["avian"],
+      providerAuthEnvVars: {
+        avian: ["AVIAN_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "avian",
+          method: "api-key",
+          choiceId: "avian-api-key",
+          choiceLabel: "Avian API key",
+          groupId: "avian",
+          groupLabel: "Avian",
+          groupHint: "API key",
+          optionKey: "avianApiKey",
+          cliFlag: "--avian-api-key",
+          cliOption: "--avian-api-key <key>",
+          cliDescription: "Avian API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "bluebubbles",
     idHint: "bluebubbles",
     source: {
