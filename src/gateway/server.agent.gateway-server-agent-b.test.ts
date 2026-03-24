@@ -48,7 +48,7 @@ const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => 
     label: "Microsoft Teams",
     selectionLabel: "Microsoft Teams (Bot Framework)",
     docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
+    blurb: "Teams SDK; enterprise support.",
     aliases: params?.aliases,
   },
   capabilities: { chatTypes: ["direct"] },
