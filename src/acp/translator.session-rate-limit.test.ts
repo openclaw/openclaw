@@ -148,6 +148,244 @@ describe("acp unsupported bridge session setup", () => {
   });
 });
 
+describe("acp session UX bridge behavior", () => {
+  it("returns initial modes and thought-level config options for new sessions", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(result.modes?.currentModeId).toBe("adaptive");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("adaptive");
+    expect(result.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "thought_level",
+          currentValue: "adaptive",
+          category: "thought_level",
+        }),
+        expect.objectContaining({
+          id: "verbose_level",
+          currentValue: "off",
+        }),
+        expect.objectContaining({
+          id: "reasoning_level",
+          currentValue: "off",
+        }),
+        expect.objectContaining({
+          id: "response_usage",
+          currentValue: "off",
+        }),
+        expect.objectContaining({
+          id: "elevated_level",
+          currentValue: "off",
+        }),
+      ]),
+    );
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "agent:main:work",
+              label: "main-work",
+              displayName: "Main work",
+              derivedTitle: "Fix ACP bridge",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingLevel: "high",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              verboseLevel: "full",
+              reasoningLevel: "stream",
+              responseUsage: "tokens",
+              elevatedLevel: "ask",
+              totalTokens: 4096,
+              totalTokensFresh: true,
+              contextTokens: 8192,
+            },
+          ],
+        };
+      }
+      if (method === "sessions.get") {
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Question" }] },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Internal loop about NO_REPLY" },
+                { type: "text", text: "Answer" },
+              ],
+            },
+            { role: "system", content: [{ type: "text", text: "ignore me" }] },
+            { role: "assistant", content: [{ type: "image", image: "skip" }] },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(createLoadSessionRequest("agent:main:work"));
+
+    expect(result.modes?.currentModeId).toBe("high");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual(
+      listThinkingLevels("openai", "gpt-5.4"),
+    );
+    expect(result.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "thought_level",
+          currentValue: "high",
+        }),
+        expect.objectContaining({
+          id: "verbose_level",
+          currentValue: "full",
+        }),
+        expect.objectContaining({
+          id: "reasoning_level",
+          currentValue: "stream",
+        }),
+        expect.objectContaining({
+          id: "response_usage",
+          currentValue: "tokens",
+        }),
+        expect.objectContaining({
+          id: "elevated_level",
+          currentValue: "ask",
+        }),
+      ]),
+    );
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "Question" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Internal loop about NO_REPLY" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Answer" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: expect.objectContaining({
+        sessionUpdate: "available_commands_update",
+      }),
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Fix ACP bridge",
+        updatedAt: "2024-03-09T16:00:00.000Z",
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 4096,
+        size: 8192,
+        _meta: {
+          source: "gateway-session-store",
+          approximate: true,
+        },
+      },
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("falls back to an empty transcript when sessions.get fails during loadSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "agent:main:recover",
+              label: "recover",
+              displayName: "Recover session",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingLevel: "adaptive",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.get") {
+        throw new Error("sessions.get unavailable");
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(createLoadSessionRequest("agent:main:recover"));
+
+    expect(result.modes?.currentModeId).toBe("adaptive");
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:recover",
+      update: expect.objectContaining({
+        sessionUpdate: "available_commands_update",
+      }),
+    });
+    expect(sessionUpdate).not.toHaveBeenCalledWith({
+      sessionId: "agent:main:recover",
+      update: expect.objectContaining({
+        sessionUpdate: "user_message_chunk",
+      }),
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+});
+
 describe("acp setSessionMode bridge behavior", () => {
   it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
     const sessionStore = createInMemorySessionStore();

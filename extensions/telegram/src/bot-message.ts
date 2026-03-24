@@ -1,12 +1,13 @@
-import type { ReplyToMode } from "../../../src/config/config.js";
+import type { ReplyToMode } from "../../../src/config/types.base.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
-import { danger } from "../../../src/globals.js";
+import { danger, logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
@@ -52,9 +53,16 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
+    options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
   ) => {
+    const ingressReceivedAtMs =
+      typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
+        ? options.receivedAtMs
+        : undefined;
+    const ingressDebugEnabled =
+      shouldLogVerbose() || process.env.OPENCLAW_DEBUG_TELEGRAM_INGRESS === "1";
+    const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -77,7 +85,20 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       sendChatActionHandler,
     });
     if (!context) {
+      if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
+        logVerbose(
+          `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
+            `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+        );
+      }
       return;
+    }
+    if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
+      logVerbose(
+        `telegram ingress: chatId=${context.chatId} contextReadyMs=${Date.now() - ingressReceivedAtMs}` +
+          ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
+          `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+      );
     }
     try {
       await dispatchTelegramMessage({
@@ -91,6 +112,12 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         telegramCfg,
         opts,
       });
+      if (ingressDebugEnabled && ingressReceivedAtMs) {
+        logVerbose(
+          `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
+            `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+        );
+      }
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
       try {

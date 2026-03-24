@@ -33,6 +33,9 @@ const BASE_CFG: Config = {
       workspace: "/tmp/openclaw",
     },
   },
+  messages: {
+    inbound: { debounceMs: 0 },
+  },
   session: { store: "/tmp/openclaw-sessions.json" },
 };
 

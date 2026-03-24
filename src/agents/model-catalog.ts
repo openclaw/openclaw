@@ -32,6 +32,10 @@ let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 
+function shouldLogModelCatalogTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
+
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
@@ -203,6 +207,15 @@ export async function loadModelCatalog(params?: {
 
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
+    const timingEnabled = shouldLogModelCatalogTiming();
+    const startMs = timingEnabled ? Date.now() : 0;
+    const logStage = (stage: string, extra?: string) => {
+      if (!timingEnabled) {
+        return;
+      }
+      const suffix = extra ? ` ${extra}` : "";
+      log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
+    };
     const sortModels = (entries: ModelCatalogEntry[]) =>
       entries.sort((a, b) => {
         const p = a.provider.localeCompare(b.provider);
@@ -214,14 +227,17 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
+      logStage("models-json-ready");
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
+      logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
+      logStage("auth-storage-ready");
       const registry = new (piSdk.ModelRegistry as unknown as {
         new (
           authStorage: unknown,
@@ -232,7 +248,9 @@ export async function loadModelCatalog(params?: {
               getAll: () => Array<DiscoveredModel>;
             };
       })(authStorage, join(agentDir, "models.json"));
+      logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
+      logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
         if (!id) {
@@ -253,13 +271,15 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applySyntheticCatalogFallbacks(models);
+      logStage("complete", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
         modelCatalogPromise = null;
       }
 
-      return sortModels(models);
+      const sorted = sortModels(models);
+      return sorted;
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
