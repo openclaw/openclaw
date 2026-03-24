@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatMigrateExportSummary, type MigrateExportResult } from "./migrate-export.js";
+import {
+  formatMigrateExportSummary,
+  type MigrateExportResult,
+  redactConfigSecrets,
+} from "./migrate-export.js";
 
 function makeResult(overrides: Partial<MigrateExportResult> = {}): MigrateExportResult {
   return {
@@ -99,5 +103,46 @@ describe("formatMigrateExportSummary", () => {
 
     expect(lines).toContain("Warnings:");
     expect(lines.some((l) => l.includes("--strip-secrets only redacts"))).toBe(true);
+  });
+});
+
+describe("redactConfigSecrets", () => {
+  it("redacts known secret keys in nested objects", () => {
+    const input = JSON.stringify({
+      gateway: { authToken: "secret123" },
+      models: { provider: "openai" },
+    });
+    const result = JSON.parse(redactConfigSecrets(input));
+    expect(result.gateway.authToken).toBe("<REDACTED>");
+    expect(result.models.provider).toBe("openai");
+  });
+
+  it("redacts secrets inside array elements", () => {
+    const input = JSON.stringify({
+      agents: {
+        list: [
+          { id: "main", apiToken: "tok_abc" },
+          { id: "research", apiKey: "key_xyz", name: "R" },
+        ],
+      },
+    });
+    const result = JSON.parse(redactConfigSecrets(input));
+    expect(result.agents.list[0].apiToken).toBe("<REDACTED>");
+    expect(result.agents.list[0].id).toBe("main");
+    expect(result.agents.list[1].apiKey).toBe("<REDACTED>");
+    expect(result.agents.list[1].name).toBe("R");
+  });
+
+  it("handles deeply nested arrays with secret keys", () => {
+    const input = JSON.stringify({
+      providers: [{ credentials: [{ secret: "s1" }, { secret: "s2" }] }],
+    });
+    const result = JSON.parse(redactConfigSecrets(input));
+    expect(result.providers[0].credentials[0].secret).toBe("<REDACTED>");
+    expect(result.providers[0].credentials[1].secret).toBe("<REDACTED>");
+  });
+
+  it("returns invalid JSON as-is", () => {
+    expect(redactConfigSecrets("not json")).toBe("not json");
   });
 });

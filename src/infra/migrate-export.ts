@@ -169,11 +169,20 @@ function redactObjectSecrets(obj: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === "string" && isSecretKey(key)) {
       obj[key] = "<REDACTED>";
-    } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    } else if (Array.isArray(value)) {
+      for (const element of value) {
+        if (typeof element === "object" && element !== null && !Array.isArray(element)) {
+          redactObjectSecrets(element as Record<string, unknown>);
+        }
+      }
+    } else if (typeof value === "object" && value !== null) {
       redactObjectSecrets(value as Record<string, unknown>);
     }
   }
 }
+
+/** @internal Exported for testing. */
+export { redactConfigSecrets };
 
 function buildManifest(params: {
   createdAt: string;

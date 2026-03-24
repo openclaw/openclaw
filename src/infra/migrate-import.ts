@@ -450,11 +450,17 @@ export async function importMigrateArchive(
       const extractedPath = path.join(tempDir, manifestAsset.archivePath);
       const resolvedTempDir = path.resolve(tempDir);
       const resolvedExtracted = path.resolve(extractedPath);
-      // Guard against path traversal via crafted manifest archivePath values.
-      if (
-        resolvedExtracted !== resolvedTempDir &&
-        !resolvedExtracted.startsWith(resolvedTempDir + path.sep)
-      ) {
+
+      // Constrain to the payload subdirectory within the archive root.
+      // This rejects paths like ".", "${archiveRoot}/manifest.json", or traversal attempts.
+      const payloadRoot = path.resolve(path.join(tempDir, manifest.archiveRoot, "payload"));
+      if (!resolvedExtracted.startsWith(payloadRoot + path.sep)) {
+        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
+        continue;
+      }
+
+      // Also verify the path stays within the temp directory (belt-and-suspenders).
+      if (!resolvedExtracted.startsWith(resolvedTempDir + path.sep)) {
         warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
         continue;
       }
