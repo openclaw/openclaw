@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupBrowserControlServerTestContext,
@@ -10,6 +9,7 @@ import {
   setBrowserControlServerReachable,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
+import { getBrowserTestFetch } from "./test-fetch.js";
 
 describe("browser control server", () => {
   installBrowserControlServerHooks();
@@ -17,6 +17,7 @@ describe("browser control server", () => {
   it("POST /tabs/open?profile=unknown returns 404", async () => {
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const result = await realFetch(`${base}/tabs/open?profile=unknown`, {
       method: "POST",
@@ -32,6 +33,7 @@ describe("browser control server", () => {
     setBrowserControlServerReachable(true);
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const result = await realFetch(`${base}/tabs/open`, {
       method: "POST",
@@ -67,6 +69,7 @@ describe("profile CRUD endpoints", () => {
   it("validates profile create/delete endpoints", async () => {
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const createMissingName = await realFetch(`${base}/profiles/create`, {
       method: "POST",

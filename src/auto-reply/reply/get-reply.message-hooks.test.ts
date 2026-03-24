@@ -45,7 +45,12 @@ vi.mock("./session.js", () => ({
   initSessionState: mocks.initSessionState,
 }));
 
-const { getReplyFromConfig } = await import("./get-reply.js");
+let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+
+async function loadFreshGetReplyModuleForTest() {
+  vi.resetModules();
+  ({ getReplyFromConfig } = await import("./get-reply.js"));
+}
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
@@ -71,7 +76,8 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
 }
 
 describe("getReplyFromConfig message hooks", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshGetReplyModuleForTest();
     delete process.env.OPENCLAW_TEST_FAST;
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();

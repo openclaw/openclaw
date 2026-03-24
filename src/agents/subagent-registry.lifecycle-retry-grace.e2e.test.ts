@@ -114,11 +114,15 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
-}));
+vi.mock("./pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: () => false,
+    queueEmbeddedPiMessage: () => false,
+    waitForEmbeddedPiRunEnd: async () => true,
+  };
+});
 
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
@@ -156,11 +160,15 @@ describe("subagent registry lifecycle error grace", () => {
     vi.doMock("../plugins/hook-runner-global.js", () => ({
       getGlobalHookRunner: vi.fn(() => null),
     }));
-    vi.doMock("./pi-embedded.js", () => ({
-      isEmbeddedPiRunActive: () => false,
-      queueEmbeddedPiMessage: () => false,
-      waitForEmbeddedPiRunEnd: async () => true,
-    }));
+    vi.doMock("./pi-embedded.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+      return {
+        ...actual,
+        isEmbeddedPiRunActive: () => false,
+        queueEmbeddedPiMessage: () => false,
+        waitForEmbeddedPiRunEnd: async () => true,
+      };
+    });
     vi.doMock("./subagent-depth.js", () => ({
       getSubagentDepthFromSessionStore: () => 0,
     }));
