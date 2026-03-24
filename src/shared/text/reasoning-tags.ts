@@ -66,7 +66,7 @@ export function stripReasoningTagsFromText(
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
-    const isClose = match[1] === "/";
+    const isClose = match[1] === "/" || match[0].toLowerCase().includes("final");
 
     if (isInsideCode(idx, codeRegions)) {
       continue;
