@@ -175,11 +175,11 @@ export const ko: TranslationMap = {
   },
   languages: {
     en: "English",
-    zhCN: "简体中文 (Simplified Chinese)",
-    zhTW: "繁體中文 (Traditional Chinese)",
-    ptBR: "Português (Brazilian Portuguese)",
-    de: "Deutsch (German)",
-    es: "Español (Spanish)",
+    zhCN: "简体中文 (중국어 간체)",
+    zhTW: "繁體中文 (중국어 번체)",
+    ptBR: "Português (브라질 포르투갈어)",
+    de: "Deutsch (독일어)",
+    es: "Español (스페인어)",
     ko: "한국어 (Korean)",
   },
   cron: {

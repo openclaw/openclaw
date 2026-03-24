@@ -242,7 +242,7 @@ export function buildAgentSystemPrompt(params: {
     exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search:
-      "Search the web (supports Brave, Perplexity, xAI Grok, Tavily, and SearXNG). Use 'freshness' (pd, pw, pm, py) for recent results and 'search_lang' (e.g., 'ko') for language-specific searching.",
+      "Search the web (supports Brave, Perplexity, xAI Grok, Tavily, and SearXNG). Use 'freshness' (pd, pw, pm, py) for recent results and 'search_lang' (e.g., 'en') for language-specific searching.",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
@@ -417,7 +417,7 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw. Always respond in the same language as the user's message (e.g., if the user asks in Korean, reply in Korean). 사용자의 메시지와 동일한 언어로 답변하십시오 (예: 사용자가 한국어로 질문하면 한국어로 답변하십시오).",
+    "You are a personal assistant running inside OpenClaw. Always respond in the same language as the user's message.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
