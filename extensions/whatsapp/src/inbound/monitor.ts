@@ -77,6 +77,9 @@ export async function monitorWebInbox(options: {
 
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
+  // Bot's own LID (Linked Identity) — needed for reply-to-bot detection
+  // when contextInfo.participant returns a LID instead of a phone JID.
+  const selfLid = (sock.user as { lid?: string } | undefined)?.lid ?? undefined;
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
@@ -416,6 +419,7 @@ export async function monitorWebInbox(options: {
       groupParticipants: inbound.groupParticipants,
       mentionedJids: mentionedJids ?? undefined,
       selfJid,
+      selfLid,
       selfE164,
       fromMe: Boolean(msg.key?.fromMe),
       location: enriched.location ?? undefined,
