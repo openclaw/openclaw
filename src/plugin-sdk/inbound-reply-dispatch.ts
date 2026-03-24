@@ -7,8 +7,13 @@ import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
-import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
+import {
+  createNormalizedOutboundDeliverer,
+  resolveOutboundMediaUrls,
+  type OutboundReplyPayload,
+} from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
   Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
@@ -129,7 +134,66 @@ export async function recordInboundSessionAndDispatchReply(params: {
     channel: params.channel,
     accountId: params.accountId,
   });
-  const deliver = createNormalizedOutboundDeliverer(params.deliver);
+
+  const sessionKey = params.ctxPayload.SessionKey ?? params.routeSessionKey;
+  const channelId = params.channel;
+  const to =
+    params.ctxPayload.OriginatingTo ?? params.ctxPayload.To ?? params.ctxPayload.From ?? "";
+  const accountId = params.accountId;
+
+  // Wrap the deliver callback to emit message:sent internal hooks after each
+  // delivery attempt. Channel plugin reply paths bypass deliverOutboundPayloads
+  // (which normally emits this hook), so without this wrapper the policy feedback
+  // subsystem never sees agent_reply actions for same-channel replies.
+  const rawDeliver = createNormalizedOutboundDeliverer(params.deliver);
+  const emitSentHook = (payload: unknown, success: boolean, error?: string): void => {
+    try {
+      const p =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
+      // Extract text content — check both `text` and `content` fields since
+      // OutboundReplyPayload callers may use either.
+      const content = (() => {
+        if (!p) {
+          return "";
+        }
+        if (typeof p.text === "string") {
+          return p.text;
+        }
+        if (typeof p.content === "string") {
+          return p.content;
+        }
+        return "";
+      })();
+      // Flag media-only payloads so the policy layer can distinguish "empty
+      // content because media-only" from "empty content because error".
+      const hasMedia = p ? resolveOutboundMediaUrls(p as OutboundReplyPayload).length > 0 : false;
+      triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, {
+          to,
+          content,
+          success,
+          ...(error ? { error } : {}),
+          ...(hasMedia ? { hasMedia } : {}),
+          channelId,
+          accountId,
+          conversationId: to,
+        }),
+      ).catch(() => {});
+    } catch {
+      // Internal hooks are non-critical — never disrupt delivery
+    }
+  };
+  // Note: `deliver` below intentionally shadows the outer `params.deliver` —
+  // the wrapped version is what gets passed to dispatchReplyWithBufferedBlockDispatcher.
+  const deliver = async (payload: unknown): Promise<void> => {
+    try {
+      await rawDeliver(payload);
+      emitSentHook(payload, true);
+    } catch (err: unknown) {
+      emitSentHook(payload, false, String(err));
+      throw err; // Re-throw so the dispatcher's onError handler still fires
+    }
+  };
 
   await params.dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.ctxPayload,
