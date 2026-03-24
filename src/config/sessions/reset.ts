@@ -20,6 +20,13 @@ export type SessionFreshness = {
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
+/**
+ * Default idle timeout for group and thread sessions when no explicit reset
+ * policy is configured. 7 days (10080 minutes) — long enough to survive a
+ * weekend without losing context, but still expires stale threads eventually.
+ */
+export const DEFAULT_GROUP_THREAD_IDLE_MINUTES = 10080;
+
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
@@ -97,10 +104,20 @@ export function resolveSessionResetPolicy(params: {
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+
+  // Group and thread sessions default to idle mode when no explicit policy is
+  // configured. Daily resets are disruptive for ongoing group conversations and
+  // forum topics — they wipe context overnight even for active threads.
+  // See: github.com/openclaw/openclaw/issues/32109
+  const isGroupOrThread =
+    params.resetType === "group" || params.resetType === "thread";
+  const impliedDefaultMode: SessionResetMode =
+    !hasExplicitReset && isGroupOrThread ? "idle" : DEFAULT_RESET_MODE;
+
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : impliedDefaultMode);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
@@ -113,7 +130,9 @@ export function resolveSessionResetPolicy(params: {
       idleMinutes = Math.max(normalized, 0);
     }
   } else if (mode === "idle") {
-    idleMinutes = DEFAULT_IDLE_MINUTES;
+    // Group/thread sessions get a 7-day idle window by default; direct sessions
+    // keep the legacy DEFAULT_IDLE_MINUTES (0 = no idle expiry beyond daily reset).
+    idleMinutes = isGroupOrThread ? DEFAULT_GROUP_THREAD_IDLE_MINUTES : DEFAULT_IDLE_MINUTES;
   }
 
   return { mode, atHour, idleMinutes };
