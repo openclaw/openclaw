@@ -1,7 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
+import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { collectDoctorPreviewWarnings } from "./preview-warnings.js";
 
+function manifest(id: string): PluginManifestRecord {
+  return {
+    id,
+    channels: [],
+    providers: [],
+    skills: [],
+    hooks: [],
+    origin: "bundled",
+    rootDir: `/plugins/${id}`,
+    source: `/plugins/${id}`,
+    manifestPath: `/plugins/${id}/openclaw.plugin.json`,
+  };
+}
+
 describe("doctor preview warnings", () => {
+  beforeEach(() => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [manifest("discord")],
+      diagnostics: [],
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("collects provider and shared preview warnings", () => {
     const warnings = collectDoctorPreviewWarnings({
       cfg: {
@@ -44,5 +71,53 @@ describe("doctor preview warnings", () => {
     ]);
     expect(warnings[0]).not.toContain("\u001B");
     expect(warnings[0]).not.toContain("\r");
+  });
+
+  it("includes stale plugin config warnings", () => {
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          allow: ["acpx"],
+          entries: {
+            acpx: { enabled: true },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
+    ]);
+    expect(warnings[0]).toContain("plugins.entries.acpx");
+    expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
+    expect(warnings[0]).not.toContain("Auto-removal is paused");
+  });
+
+  it("warns but skips auto-removal when plugin discovery has errors", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        { level: "error", message: "plugin path not found: /missing", source: "/missing" },
+      ],
+    });
+
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          allow: ["acpx"],
+          entries: {
+            acpx: { enabled: true },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
+    ]);
+    expect(warnings[0]).toContain("Auto-removal is paused");
+    expect(warnings[0]).toContain('rerun "openclaw doctor --fix"');
   });
 });
