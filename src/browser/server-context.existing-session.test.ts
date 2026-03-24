@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteContext } from "./server-context.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome-mcp.js", () => ({
@@ -20,7 +19,8 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
-import * as chromeMcp from "./chrome-mcp.js";
+let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
+let chromeMcp: typeof import("./chrome-mcp.js");
 
 function makeState(): BrowserServerState {
   return {
@@ -62,6 +62,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createBrowserRouteContext } = await import("./server-context.js"));
+  chromeMcp = await import("./chrome-mcp.js");
+});
+
 describe("browser server-context existing-session profile", () => {
   it("routes tab operations through the Chrome MCP backend", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
@@ -74,13 +80,19 @@ describe("browser server-context existing-session profile", () => {
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
       ])
       .mockResolvedValueOnce([
-        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
       ])
       .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
         { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
       ])
       .mockResolvedValueOnce([
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
+        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
+      ])
+      .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
+        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
       ]);
 
     await live.ensureBrowserAvailable();

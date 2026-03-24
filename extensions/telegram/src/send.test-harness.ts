@@ -44,11 +44,15 @@ type TelegramSendTestMocks = {
   maybePersistResolvedTelegramTarget: MockFn;
 };
 
-vi.mock("../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   Bot: class {
     api = botApi;
     catch = vi.fn();
@@ -68,6 +72,9 @@ vi.mock("grammy", () => ({
     ) {
       super(message);
     }
+  },
+  GrammyError: class GrammyError extends Error {
+    description = "";
   },
   InputFile: class {},
 }));

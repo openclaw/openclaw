@@ -9,16 +9,13 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
-import { resolveDefaultModel } from "./directive-handling.js";
+import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
@@ -28,6 +25,8 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+
+type ResetCommandAction = "new" | "reset";
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -52,6 +51,52 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+function hasInboundMedia(ctx: MsgContext): boolean {
+  return Boolean(
+    ctx.StickerMediaIncluded ||
+    ctx.Sticker ||
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    ctx.MediaPaths?.some((value) => value?.trim()) ||
+    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    ctx.MediaTypes?.length,
+  );
+}
+
+function hasLinkCandidate(ctx: MsgContext): boolean {
+  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  if (!message) {
+    return false;
+  }
+  return /\bhttps?:\/\/\S+/i.test(message);
+}
+
+async function applyMediaUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  activeModel: { provider: string; model: string };
+}): Promise<boolean> {
+  if (!hasInboundMedia(params.ctx)) {
+    return false;
+  }
+  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  await applyMediaUnderstanding(params);
+  return true;
+}
+
+async function applyLinkUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  if (!hasLinkCandidate(params.ctx)) {
+    return false;
+  }
+  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  await applyLinkUnderstanding(params);
+  return true;
 }
 
 export async function getReplyFromConfig(
@@ -126,13 +171,13 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
+    await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstanding({
+    await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
@@ -289,6 +334,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
+    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
     const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,

@@ -54,4 +54,28 @@ describe("fetchTelegramChatId", () => {
       undefined,
     );
   });
+
+  it("uses caller-provided fetch impl when present", async () => {
+    const customFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 12345 } }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("global fetch should not be called");
+      }),
+    );
+
+    await fetchTelegramChatId({
+      token: "abc",
+      chatId: "@user",
+      fetchImpl: customFetch as unknown as typeof fetch,
+    });
+
+    expect(customFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/botabc/getChat?chat_id=%40user",
+      undefined,
+    );
+  });
 });

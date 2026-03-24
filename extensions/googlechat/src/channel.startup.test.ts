@@ -1,9 +1,9 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/googlechat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  abortStartedAccount,
+  expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
+  waitForStartedMocks,
 } from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
@@ -21,6 +21,21 @@ vi.mock("./monitor.js", async () => {
 
 import { googlechatPlugin } from "./channel.js";
 
+function buildAccount(): ResolvedGoogleChatAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    credentialSource: "inline",
+    credentials: {},
+    config: {
+      webhookPath: "/googlechat",
+      webhookUrl: "https://example.com/googlechat",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    },
+  };
+}
+
 describe("googlechatPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -30,28 +45,12 @@ describe("googlechatPlugin gateway.startAccount", () => {
     const unregister = vi.fn();
     hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);
 
-    const account: ResolvedGoogleChatAccount = {
-      accountId: "default",
-      enabled: true,
-      credentialSource: "inline",
-      credentials: {},
-      config: {
-        webhookPath: "/googlechat",
-        webhookUrl: "https://example.com/googlechat",
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-      },
-    };
-
     const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: googlechatPlugin.gateway!.startAccount!,
-      account,
+      account: buildAccount(),
     });
     await expectPendingUntilAbort({
-      waitForStarted: () =>
-        vi.waitFor(() => {
-          expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
-        }),
+      waitForStarted: waitForStartedMocks(hoisted.startGoogleChatMonitor),
       isSettled,
       abort,
       task,
@@ -62,7 +61,7 @@ describe("googlechatPlugin gateway.startAccount", () => {
         expect(unregister).toHaveBeenCalledOnce();
       },
     });
-    expect(patches.some((entry) => entry.running === true)).toBe(true);
-    expect(patches.some((entry) => entry.running === false)).toBe(true);
+    expectLifecyclePatch(patches, { running: true });
+    expectLifecyclePatch(patches, { running: false });
   });
 });

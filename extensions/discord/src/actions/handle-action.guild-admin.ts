@@ -5,12 +5,12 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { handleDiscordAction } from "./runtime.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { handleDiscordAction } from "openclaw/plugin-sdk/agent-runtime";
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-runtime";
+} from "./runtime.moderation-shared.js";
 
 type Ctx = Pick<
   ChannelMessageActionContext,

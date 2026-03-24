@@ -7,8 +7,8 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
@@ -83,28 +83,57 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/home-dir.js", () => ({
-  expandHomePrefix: (value: string) => {
-    if (value === "~/.openclaw/plugin-binding-approvals.json") {
-      return approvalsPath;
-    }
-    return value;
+const pluginRuntimeState = vi.hoisted(
+  () =>
+    ({
+      // The runtime mock is initialized before imports; beforeEach installs the real shared stub.
+      registry: null as unknown as PluginRegistry,
+    }) satisfies { registry: PluginRegistry },
+);
+
+vi.mock("../infra/home-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+  return {
+    ...actual,
+    expandHomePrefix: (value: string) => {
+      if (value === "~/.openclaw/plugin-binding-approvals.json") {
+        return approvalsPath;
+      }
+      return actual.expandHomePrefix(value);
+    },
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => pluginRuntimeState.registry,
+  setActivePluginRegistry: (registry: PluginRegistry) => {
+    pluginRuntimeState.registry = registry;
   },
 }));
 
-const {
-  __testing,
-  buildPluginBindingApprovalCustomId,
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  parsePluginBindingApprovalCustomId,
-  requestPluginConversationBinding,
-  resolvePluginConversationBindingApproval,
-} = await import("./conversation-binding.js");
-const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-  await import("../infra/outbound/session-binding-service.js");
+let __testing: typeof import("./conversation-binding.js").__testing;
+let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
+let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
+let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
+let requestPluginConversationBinding: typeof import("./conversation-binding.js").requestPluginConversationBinding;
+let resolvePluginConversationBindingApproval: typeof import("./conversation-binding.js").resolvePluginConversationBindingApproval;
+let registerSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").registerSessionBindingAdapter;
+let unregisterSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").unregisterSessionBindingAdapter;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
+type ConversationBindingModule = typeof import("./conversation-binding.js");
+
+const conversationBindingModuleUrl = new URL("./conversation-binding.ts", import.meta.url).href;
+
+async function importConversationBindingModule(
+  cacheBust: string,
+): Promise<ConversationBindingModule> {
+  return (await import(
+    `${conversationBindingModuleUrl}?t=${cacheBust}`
+  )) as ConversationBindingModule;
+}
 
 function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
   return {
@@ -143,8 +172,51 @@ async function resolveRequestedBinding(request: PluginBindingRequest) {
   throw new Error("expected pending or bound bind result");
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+      return {
+        ...actual,
+        expandHomePrefix: (value: string) => {
+          if (value === "~/.openclaw/plugin-binding-approvals.json") {
+            return approvalsPath;
+          }
+          return actual.expandHomePrefix(value);
+        },
+      };
+    });
+    vi.doMock("./runtime.js", () => ({
+      getActivePluginRegistry: () => pluginRuntimeState.registry,
+      setActivePluginRegistry: (registry: PluginRegistry) => {
+        pluginRuntimeState.registry = registry;
+      },
+    }));
+    ({
+      __testing,
+      buildPluginBindingApprovalCustomId,
+      detachPluginConversationBinding,
+      getCurrentPluginConversationBinding,
+      parsePluginBindingApprovalCustomId,
+      requestPluginConversationBinding,
+      resolvePluginConversationBindingApproval,
+    } = await import("./conversation-binding.js"));
+    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+      await import("../infra/outbound/session-binding-service.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -272,6 +344,108 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(differentAccount.status).toBe("pending");
+  });
+
+  it("shares pending bind approvals across duplicate module instances", async () => {
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await expect(
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "approved",
+      binding: expect.objectContaining({
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "-10099:topic:77",
+      }),
+    });
+
+    second.__testing.reset();
+  });
+
+  it("shares persistent approvals across duplicate module instances", async () => {
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await expect(
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "approved",
+      decision: "allow-always",
+    });
+
+    const rebound = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:78",
+        parentConversationId: "-10099",
+        threadId: "78",
+      },
+      binding: { summary: "Bind this conversation to Codex thread def." },
+    });
+
+    expect(rebound.status).toBe("bound");
+
+    first.__testing.reset();
+    fs.rmSync(approvalsPath, { force: true });
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {
@@ -406,6 +580,7 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(approved.status).toBe("approved");
+    await flushMicrotasks();
     expect(onResolved).toHaveBeenCalledWith({
       status: "approved",
       binding: expect.objectContaining({
@@ -464,6 +639,7 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(denied.status).toBe("denied");
+    await flushMicrotasks();
     expect(onResolved).toHaveBeenCalledWith({
       status: "denied",
       binding: undefined,
@@ -479,6 +655,108 @@ describe("plugin conversation binding approvals", () => {
         },
       },
     });
+  });
+
+  it("does not wait for an approved bind callback before returning", async () => {
+    const registry = createEmptyPluginRegistry();
+    const callbackGate = createDeferredVoid();
+    const onResolved = vi.fn(async () => callbackGate.promise);
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: "codex",
+      pluginRoot: "/plugins/callback-slow-approve",
+      handler: onResolved,
+      source: "/plugins/callback-slow-approve/index.ts",
+      rootDir: "/plugins/callback-slow-approve",
+    });
+    setActivePluginRegistry(registry);
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/callback-slow-approve",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:slow-approve",
+      },
+      binding: { summary: "Bind this conversation to Codex thread slow-approve." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    let settled = false;
+    const resolutionPromise = resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+
+    expect(settled).toBe(true);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+
+    callbackGate.resolve();
+    const approved = await resolutionPromise;
+    expect(approved.status).toBe("approved");
+  });
+
+  it("does not wait for a denied bind callback before returning", async () => {
+    const registry = createEmptyPluginRegistry();
+    const callbackGate = createDeferredVoid();
+    const onResolved = vi.fn(async () => callbackGate.promise);
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: "codex",
+      pluginRoot: "/plugins/callback-slow-deny",
+      handler: onResolved,
+      source: "/plugins/callback-slow-deny/index.ts",
+      rootDir: "/plugins/callback-slow-deny",
+    });
+    setActivePluginRegistry(registry);
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/callback-slow-deny",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "slow-deny",
+      },
+      binding: { summary: "Bind this conversation to Codex thread slow-deny." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    let settled = false;
+    const resolutionPromise = resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "deny",
+      senderId: "user-1",
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+
+    expect(settled).toBe(true);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+
+    callbackGate.resolve();
+    const denied = await resolutionPromise;
+    expect(denied.status).toBe("denied");
   });
 
   it("returns and detaches only bindings owned by the requesting plugin root", async () => {

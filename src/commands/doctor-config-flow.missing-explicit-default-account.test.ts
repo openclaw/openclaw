@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectMissingExplicitDefaultAccountWarnings } from "./doctor-config-flow.js";
+import { collectMissingExplicitDefaultAccountWarnings } from "./doctor/shared/default-account-warnings.js";
 
 describe("collectMissingExplicitDefaultAccountWarnings", () => {
   it("warns when multiple named accounts are configured without default selection", () => {

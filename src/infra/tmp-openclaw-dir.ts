@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import os from "node:os";
+import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
@@ -48,7 +48,7 @@ export function resolvePreferredOpenClawTmpDir(
         return undefined;
       }
     });
-  const tmpdir = options.tmpdir ?? os.tmpdir;
+  const tmpdir = typeof options.tmpdir === "function" ? options.tmpdir : getOsTmpDir;
   const uid = getuid();
 
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {

@@ -7,6 +7,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
@@ -25,6 +26,7 @@ export type GenerateImageParams = {
   modelOverride?: string;
   count?: number;
   size?: string;
+  aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
 };
@@ -99,6 +101,28 @@ function throwImageGenerationFailure(params: {
   });
 }
 
+function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
+  const providers = listImageGenerationProviders(cfg);
+  const sampleModel =
+    providers.find((provider) => provider.defaultModel) ??
+    ({ id: "google", defaultModel: "gemini-3-pro-image-preview" } as const);
+  const authHints = providers
+    .flatMap((provider) => {
+      const envVars = getProviderEnvVars(provider.id);
+      if (envVars.length === 0) {
+        return [];
+      }
+      return [`${provider.id}: ${envVars.join(" / ")}`];
+    })
+    .slice(0, 3);
+  return [
+    `No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "${sampleModel.id}/${sampleModel.defaultModel}".`,
+    authHints.length > 0
+      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
+      : "If you want a specific provider, also configure that provider's auth/API key first.",
+  ].join(" ");
+}
+
 export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listImageGenerationProviders(params?.config);
 }
@@ -111,9 +135,7 @@ export async function generateImage(
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
-    throw new Error(
-      "No image-generation model configured. Set agents.defaults.imageGenerationModel.primary or agents.defaults.imageGenerationModel.fallbacks.",
-    );
+    throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
   }
 
   const attempts: FallbackAttempt[] = [];
@@ -142,6 +164,7 @@ export async function generateImage(
         authStore: params.authStore,
         count: params.count,
         size: params.size,
+        aspectRatio: params.aspectRatio,
         resolution: params.resolution,
         inputImages: params.inputImages,
       });

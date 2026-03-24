@@ -219,6 +219,9 @@ export async function getStatusSummary(
       model: configModel,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      // Keep `status`/`status --json` startup read-only. These summary lookups
+      // should not kick off background provider discovery or plugin scans.
+      allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
@@ -250,6 +253,7 @@ export async function getStatusSummary(
             model,
             contextTokensOverride: entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
+            allowAsyncLoad: false,
           }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =

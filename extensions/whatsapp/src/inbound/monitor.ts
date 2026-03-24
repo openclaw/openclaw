@@ -1,9 +1,8 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-runtime";
+import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { createInboundDebouncer } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
@@ -18,9 +17,16 @@ import {
   extractMentionedJids,
   extractText,
 } from "./extract.js";
+import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
+function isGroupJid(jid: string): boolean {
+  return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+}
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
@@ -176,7 +182,7 @@ export async function monitorWebInbox(options: {
       return null;
     }
 
-    const group = isJidGroup(remoteJid) === true;
+    const group = isGroupJid(remoteJid);
     if (id) {
       const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
       if (isRecentInboundMessage(dedupeKey)) {
@@ -430,8 +436,6 @@ export async function monitorWebInbox(options: {
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
-  sock.ev.on("messages.upsert", handleMessagesUpsert);
-
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -440,7 +444,7 @@ export async function monitorWebInbox(options: {
         const status = getStatusCode(update.lastDisconnect?.error);
         resolveClose({
           status,
-          isLoggedOut: status === DisconnectReason.loggedOut,
+          isLoggedOut: status === LOGGED_OUT_STATUS,
           error: update.lastDisconnect?.error,
         });
       }
@@ -449,7 +453,24 @@ export async function monitorWebInbox(options: {
       resolveClose({ status: undefined, isLoggedOut: false, error: err });
     }
   };
-  sock.ev.on("connection.update", handleConnectionUpdate);
+  const detachMessagesUpsert = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messages.upsert",
+    handleMessagesUpsert as unknown as (...args: unknown[]) => void,
+  );
+  const detachConnectionUpdate = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "connection.update",
+    handleConnectionUpdate as unknown as (...args: unknown[]) => void,
+  );
 
   const sendApi = createWebSendApi({
     sock: {
@@ -462,24 +483,9 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
-        const ev = sock.ev as unknown as {
-          off?: (event: string, listener: (...args: unknown[]) => void) => void;
-          removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
-        };
-        const messagesUpsertHandler = handleMessagesUpsert as unknown as (
-          ...args: unknown[]
-        ) => void;
-        const connectionUpdateHandler = handleConnectionUpdate as unknown as (
-          ...args: unknown[]
-        ) => void;
-        if (typeof ev.off === "function") {
-          ev.off("messages.upsert", messagesUpsertHandler);
-          ev.off("connection.update", connectionUpdateHandler);
-        } else if (typeof ev.removeListener === "function") {
-          ev.removeListener("messages.upsert", messagesUpsertHandler);
-          ev.removeListener("connection.update", connectionUpdateHandler);
-        }
-        sock.ws?.close();
+        detachMessagesUpsert();
+        detachConnectionUpdate();
+        closeInboundMonitorSocket(sock);
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
       }
