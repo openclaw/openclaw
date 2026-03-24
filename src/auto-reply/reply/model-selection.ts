@@ -124,12 +124,32 @@ function collectImageModelKeys(
 
 /**
  * Check if a given provider/model combination is in the set of image models.
- * Normalizes the key format for comparison.
+ * Checks:
+ * 1. "provider/model" format (exact match)
+ * 2. Raw model string (providerless IDs added by collectImageModelKeys)
+ * 3. Any provider-qualified key in the set that matches the model name
+ *    (for stored overrides where provider differs from imageModel config)
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
   const key = modelKey(provider, model);
-  // Check both "provider/model" format and raw model string
-  return imageModelKeys.has(key) || imageModelKeys.has(`${provider}/${model}`);
+  // Check "provider/model" format
+  if (imageModelKeys.has(key)) {
+    return true;
+  }
+  // Check raw model string (providerless IDs added by collectImageModelKeys)
+  if (imageModelKeys.has(model)) {
+    return true;
+  }
+  // Check if any provider-qualified key in the set matches the model name.
+  // This handles stored overrides where the provider differs from imageModel config:
+  // e.g., stored override "gpt-4.1" (defaults to provider X) vs imageModel "openai/gpt-4.1"
+  for (const entry of imageModelKeys) {
+    const slash = entry.indexOf("/");
+    if (slash > 0 && entry.slice(slash + 1) === model) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const FUZZY_VARIANT_TOKENS = [
