@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
+import {
+  createNoopLogger,
+  createCronStoreHarness,
+  withCronServiceStateForTest,
+} from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
 import { resetReaperThrottle } from "./session-reaper.js";
@@ -27,13 +31,6 @@ function createDueIsolatedJob(params: { id: string; nowMs: number }): CronJob {
     delivery: { mode: "none" },
     state: { nextRunAtMs: params.nowMs },
   };
-}
-
-function clearCronTimer(state: { timer: NodeJS.Timeout | null }): void {
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
 }
 
 describe("CronService - session reaper runs in finally block (#31946)", () => {
@@ -79,7 +76,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       sessionStorePath,
     });
 
-    try {
+    await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
       // After onTimer finishes (even with a job error), state.running must be
@@ -88,9 +85,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
 
       // The timer must be re-armed.
       expect(state.timer).not.toBeNull();
-    } finally {
-      clearCronTimer(state);
-    }
+    });
   });
 
   it("session reaper runs when resolveSessionStorePath is provided", async () => {
@@ -123,16 +118,14 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       },
     });
 
-    try {
+    await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
       // The resolveSessionStorePath callback should have been invoked to build
       // the set of store paths for the session reaper.
       expect(resolvedPaths.length).toBeGreaterThan(0);
       expect(state.running).toBe(false);
-    } finally {
-      clearCronTimer(state);
-    }
+    });
   });
 
   it("prunes expired cron-run sessions even when cron store load throws", async () => {
@@ -168,7 +161,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       sessionStorePath,
     });
 
-    try {
+    await withCronServiceStateForTest(state, async () => {
       await expect(onTimer(state)).rejects.toThrow("Failed to parse cron store");
 
       const updatedSessionStore = JSON.parse(
@@ -176,8 +169,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       ) as Record<string, unknown>;
       expect(updatedSessionStore).toEqual({});
       expect(state.running).toBe(false);
-    } finally {
-      clearCronTimer(state);
-    }
+    });
   });
 });
