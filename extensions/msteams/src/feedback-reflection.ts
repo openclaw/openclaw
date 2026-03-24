@@ -10,6 +10,7 @@
  * 6. Optionally sends a proactive follow-up to the user
  */
 
+import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/msteams";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
@@ -213,10 +214,11 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
   });
 
   try {
-    await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
+    await dispatchReplyFromConfigWithSettledDispatcher({
+      ctxPayload,
       cfg,
       dispatcher,
+      onSettled: () => {},
       replyOptions,
     });
   } catch (err) {
