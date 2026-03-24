@@ -294,12 +294,21 @@ export function createBlueBubblesDebounceRegistry(params: {
               const messageId = entry.message.messageId?.trim();
               const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
               if (associatedMessageGuid && !messageId) {
+                // Flush both balloon and msg buckets keyed by the assoc GUID
+                // so any buffered pre-edit body or preview doesn't fire after
+                // the immediate edit dispatch.
                 await debouncer.flushKey(
                   `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
                 );
                 await debouncer.flushKey(
                   `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`,
                 );
+              } else if (messageId) {
+                // When the edit carries its own messageId, flush any pending
+                // balloon bucket keyed by the same GUID to prevent stale
+                // pre-edit body from firing after the edit.
+                await debouncer.flushKey(`bluebubbles:${account.accountId}:balloon:${messageId}`);
+                await debouncer.flushKey(`bluebubbles:${account.accountId}:msg:${messageId}`);
               }
             }
             await debouncer.enqueue(entry);

@@ -275,10 +275,10 @@ function buildInboundReplayKey(params: {
     (typeof message.chatId === "number" && Number.isFinite(message.chatId)
       ? String(message.chatId)
       : "");
-  const itemType =
-    typeof message.itemType === "number" && Number.isFinite(message.itemType)
-      ? String(message.itemType)
-      : "";
+  // NOTE: itemType is part of the normal BlueBubbles message payload shape
+  // (0 = text, 1 = participantChange, etc.) and is NOT edit-specific metadata.
+  // Including it in the replay key would make non-edit updated-message payloads
+  // with itemType: 0 bypass noise filtering, so we intentionally omit it.
   const dateEdited =
     typeof message.dateEdited === "number" && Number.isFinite(message.dateEdited)
       ? String(message.dateEdited)
@@ -302,7 +302,6 @@ function buildInboundReplayKey(params: {
     message.senderId,
     chatKey,
     stableIdentity,
-    itemType,
     dateEdited,
     stableIdentity,
     associatedMessageType,
