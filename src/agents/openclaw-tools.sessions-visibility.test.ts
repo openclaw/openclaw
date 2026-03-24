@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -18,7 +18,24 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+
+async function loadFreshOpenClawToolsModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => mockConfig,
+      resolveGatewayPort: () => 18789,
+    };
+  });
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}
 
 function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
   const tool = createOpenClawTools({
@@ -50,6 +67,10 @@ function mockGatewayWithHistory(
 }
 
 describe("sessions tools visibility", () => {
+  beforeEach(async () => {
+    await loadFreshOpenClawToolsModuleForTest();
+  });
+
   it("defaults to tree visibility (self + spawned) for sessions_history", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
