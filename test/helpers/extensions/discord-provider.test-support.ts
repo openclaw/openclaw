@@ -297,9 +297,16 @@ vi.mock("@buape/carbon", async (importOriginal) => {
   return { ...actual, Client, RateLimitError };
 });
 
-vi.mock("@buape/carbon/gateway", () => ({
-  GatewayCloseCodes: { DisallowedIntents: 4014 },
-}));
+vi.mock("@buape/carbon/gateway", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon/gateway")>();
+  return {
+    ...actual,
+    GatewayCloseCodes: {
+      ...(actual.GatewayCloseCodes ?? {}),
+      DisallowedIntents: 4014,
+    },
+  };
+});
 
 vi.mock("@buape/carbon/voice", () => ({
   VoicePlugin: class VoicePlugin {},

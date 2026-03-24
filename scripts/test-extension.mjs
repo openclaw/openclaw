@@ -364,6 +364,18 @@ async function run() {
     `[test-extension] Running ${plan.testFiles.length} test files for ${plan.extensionId} with ${plan.config}`,
   );
 
+  const childEnv = { ...process.env };
+  // Channel extension suites contain extensive module-level mocks and are flaky
+  // under shared workers. Prefer isolated execution unless the caller already
+  // chose a specific isolation mode.
+  if (
+    plan.config === "vitest.channels.config.ts" &&
+    childEnv.OPENCLAW_TEST_ISOLATE === undefined &&
+    childEnv.OPENCLAW_TEST_NO_ISOLATE === undefined
+  ) {
+    childEnv.OPENCLAW_TEST_ISOLATE = "1";
+  }
+
   const child = spawn(
     pnpm,
     ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...passthroughArgs],
@@ -371,7 +383,7 @@ async function run() {
       cwd: repoRoot,
       stdio: "inherit",
       shell: process.platform === "win32",
-      env: process.env,
+      env: childEnv,
     },
   );
 

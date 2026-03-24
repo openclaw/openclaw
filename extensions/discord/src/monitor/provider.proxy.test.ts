@@ -77,10 +77,14 @@ const {
 });
 
 // Unit test: don't import Carbon just to check the prototype chain.
-vi.mock("@buape/carbon/gateway", () => ({
-  GatewayIntents,
-  GatewayPlugin,
-}));
+vi.mock("@buape/carbon/gateway", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon/gateway")>();
+  return {
+    ...actual,
+    GatewayIntents,
+    GatewayPlugin,
+  };
+});
 
 vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
