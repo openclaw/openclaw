@@ -137,6 +137,29 @@ describe("tinyfish automation tool", () => {
     });
   });
 
+  it("rejects TinyFish base URLs with query strings or fragments", async () => {
+    const fetchWithGuard = vi.fn();
+    const tool = createTinyFishTool(
+      createApi({
+        apiKey: "config-key",
+        baseUrl: "https://proxy.example/api?tenant=a#frag",
+      }),
+      {
+        fetchWithGuard,
+        env: {},
+        resolveHostname: allowPublicHostname(),
+      },
+    );
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://example.com",
+        goal: "Collect the pricing table",
+      }),
+    ).rejects.toThrow(/query parameters or fragments/);
+    expect(fetchWithGuard).not.toHaveBeenCalled();
+  });
+
   it("points missing-key errors at plugins.entries.tinyfish.config.apiKey", async () => {
     const tool = createTinyFishTool(createApi(), {
       fetchWithGuard: vi.fn(),

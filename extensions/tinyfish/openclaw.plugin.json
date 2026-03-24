@@ -2,6 +2,9 @@
   "id": "tinyfish",
   "name": "TinyFish",
   "description": "Hosted browser automation for complex public web workflows.",
+  "providerAuthEnvVars": {
+    "tinyfish": ["TINYFISH_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

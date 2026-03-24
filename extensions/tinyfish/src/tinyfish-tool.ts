@@ -87,8 +87,13 @@ function buildBaseUrl(rawBaseUrl: unknown): string {
       "TinyFish base URL must use http or https. Check plugins.entries.tinyfish.config.baseUrl.",
     );
   }
-  const normalized = parsed.toString();
-  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+  if (parsed.search || parsed.hash) {
+    throw new Error(
+      "TinyFish base URL must not include query parameters or fragments. Check plugins.entries.tinyfish.config.baseUrl.",
+    );
+  }
+  parsed.pathname = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+  return parsed.toString();
 }
 
 function resolveTinyFishConfig(
