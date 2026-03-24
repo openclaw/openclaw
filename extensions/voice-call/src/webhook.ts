@@ -713,12 +713,19 @@ export class VoiceCallWebhookServer {
         return;
       }
 
+      let speakResult: { success: boolean } = { success: true };
       if (result.text) {
         console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+        speakResult = await this.manager.speak(callId, result.text);
       }
 
       if (result.endCall) {
+        if (!speakResult.success) {
+          console.warn(
+            `[voice-call] Skipping end_call for ${callId} because farewell playback failed`,
+          );
+          return;
+        }
         // Agent requested hangup — give TTS a moment to finish, then hang up.
         // If fallback <Say> is used, speak() resolves immediately, so we pad the timeout
         // based on text length to avoid truncating the goodbye message.
