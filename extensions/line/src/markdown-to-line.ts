@@ -340,6 +340,48 @@ export function convertLinksToFlexBubble(links: MarkdownLink[]): FlexBubble {
 }
 
 /**
+<<<<<<< HEAD:extensions/line/src/markdown-to-line.ts
+=======
+ * Strip markdown formatting from text (for plain text output)
+ * Handles: bold, italic, strikethrough, headers, blockquotes, horizontal rules
+ */
+export function stripMarkdown(text: string): string {
+  let result = text;
+
+  // Remove bold: **text** or __text__
+  result = result.replace(/\*\*(.+?)\*\*/g, "$1");
+  result = result.replace(/__(.+?)__/g, "$1");
+
+  // Remove italic: *text* or _text_ (but not already processed)
+  // Only match underscores at word boundaries to avoid stripping intra-word underscores
+  // Allow punctuation/quotes/brackets/slashes as boundaries to handle (_italic_), "_italic_", [_italic_], {_italic_}, /_italic_/, <_italic_>
+  result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$1");
+  result = result.replace(/(?<=\s|^|[("'\[{</])_(?!_)(.+?)(?<!_)_(?=\s|$|[.,;:!?"')\]}/>])/g, "$1");
+
+  // Remove strikethrough: ~~text~~
+  result = result.replace(/~~(.+?)~~/g, "$1");
+
+  // Remove headers: # Title, ## Title, etc.
+  result = result.replace(/^#{1,6}\s+(.+)$/gm, "$1");
+
+  // Remove blockquotes: > text
+  result = result.replace(/^>\s?(.*)$/gm, "$1");
+
+  // Remove horizontal rules: ---, ***, ___
+  result = result.replace(/^[-*_]{3,}$/gm, "");
+
+  // Remove inline code: `code`
+  result = result.replace(/`([^`]+)`/g, "$1");
+
+  // Clean up extra whitespace
+  result = result.replace(/\n{3,}/g, "\n\n");
+  result = result.trim();
+
+  return result;
+}
+
+/**
+>>>>>>> f925e2b2ed (fix(bluebubbles): preserve intra-word underscores in stripMarkdown):src/line/markdown-to-line.ts
  * Main function: Process text for LINE output
  * - Extracts tables → Flex Messages
  * - Extracts code blocks → Flex Messages
