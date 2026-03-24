@@ -23,7 +23,12 @@ import {
   normalizeProviderIdForAuth,
 } from "./provider-id.js";
 
-const log = createSubsystemLogger("model-selection");
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+function getLog(): ReturnType<typeof createSubsystemLogger> {
+  log ??= createSubsystemLogger("model-selection");
+  return log;
+}
 
 export type ModelRef = {
   provider: string;
@@ -292,7 +297,7 @@ export function resolveConfiguredModelRef(params: {
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeForLog(trimmed);
-      log.warn(
+      getLog().warn(
         `Model "${safeTrimmed}" specified without provider. Falling back to "anthropic/${safeTrimmed}". Please use "anthropic/${safeTrimmed}" in your config.`,
       );
       return { provider: "anthropic", model: trimmed };
@@ -310,7 +315,9 @@ export function resolveConfiguredModelRef(params: {
     // User specified a model but it could not be resolved — warn before falling back.
     const safe = sanitizeForLog(trimmed);
     const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
+    getLog().warn(
+      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
+    );
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer
