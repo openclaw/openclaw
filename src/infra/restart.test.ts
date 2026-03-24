@@ -4,9 +4,13 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => spawnSyncMock(...args),
+  };
+});
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
@@ -24,9 +28,13 @@ let currentTimeMs = 0;
 
 beforeEach(async () => {
   vi.resetModules();
-  vi.doMock("node:child_process", () => ({
-    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  }));
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:child_process")>();
+    return {
+      ...actual,
+      spawnSync: (...args: Parameters<typeof actual.spawnSync>) => spawnSyncMock(...args),
+    };
+  });
   vi.doMock("./ports-lsof.js", () => ({
     resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
   }));
