@@ -1,6 +1,6 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { SessionsListResult, SessionsListRpcResult } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -11,6 +11,10 @@ export type SessionsState = {
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  /** Hash from last full `sessions.list` response; sent as `lastHash` for incremental refresh. */
+  sessionsListLastHash: string | null;
+  /** Serialized params key that produced `sessionsListLastHash`; hash is only sent when params match. */
+  sessionsListLastHashParamsKey: string | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -51,6 +55,7 @@ export async function loadSessions(
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const paramsKey = JSON.stringify({ includeGlobal, includeUnknown, activeMinutes, limit });
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
@@ -61,13 +66,27 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    if (state.sessionsListLastHash && state.sessionsListLastHashParamsKey === paramsKey) {
+      params.lastHash = state.sessionsListLastHash;
+    }
+    const res = await state.client.request<SessionsListRpcResult | undefined>(
+      "sessions.list",
+      params,
+    );
     if (res) {
-      state.sessionsResult = res;
+      if ("unchanged" in res && res.unchanged) {
+        state.sessionsListLastHash = res.hash;
+        state.sessionsListLastHashParamsKey = paramsKey;
+      } else {
+        state.sessionsResult = res as SessionsListResult;
+        state.sessionsListLastHash = typeof res.hash === "string" ? res.hash : null;
+        state.sessionsListLastHashParamsKey = state.sessionsListLastHash ? paramsKey : null;
+      }
     }
   } catch (err) {
+    state.sessionsListLastHash = null;
+    state.sessionsListLastHashParamsKey = null;
     if (isMissingOperatorReadScopeError(err)) {
-      state.sessionsResult = null;
       state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
     } else {
       state.sessionsError = String(err);
@@ -139,7 +158,10 @@ export async function deleteSessionsAndRefresh(
   try {
     for (const key of keys) {
       try {
-        await state.client.request("sessions.delete", { key, deleteTranscript: true });
+        await state.client.request("sessions.delete", {
+          key,
+          deleteTranscript: true,
+        });
         deleted.push(key);
       } catch (err) {
         deleteErrors.push(String(err));

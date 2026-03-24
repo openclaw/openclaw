@@ -47,6 +47,7 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { getFileStatSnapshot } from "./cache-utils.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -1900,6 +1901,141 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     readConfigFileSnapshotForWrite,
     writeConfigFile,
   };
+}
+
+function buildSortedConfigStatFingerprint(configPath: string, includePaths: string[]): string {
+  const markers: string[] = [];
+  const seenPaths = new Set<string>();
+  const pushPathMarker = (filePath: string) => {
+    if (seenPaths.has(filePath)) {
+      return;
+    }
+    seenPaths.add(filePath);
+    const snap = getFileStatSnapshot(filePath);
+    markers.push(
+      snap ? `cfg:${filePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `cfg:${filePath}:missing`,
+    );
+  };
+  pushPathMarker(configPath);
+  for (const p of includePaths) {
+    pushPathMarker(p);
+  }
+  markers.sort();
+  return markers.join("\n");
+}
+
+function computeResolvedConfigSourceStatFingerprint(
+  deps: Required<ConfigIoDeps>,
+  configPath: string,
+): { fingerprint: string; includePaths: string[] } {
+  const includePaths: string[] = [];
+
+  if (!deps.fs.existsSync(configPath)) {
+    return { fingerprint: buildSortedConfigStatFingerprint(configPath, []), includePaths };
+  }
+
+  try {
+    const raw = deps.fs.readFileSync(configPath, "utf-8");
+    const parsedRes = parseConfigJson5(raw, deps.json5);
+    if (!parsedRes.ok) {
+      return { fingerprint: buildSortedConfigStatFingerprint(configPath, []), includePaths };
+    }
+    resolveConfigIncludes(parsedRes.parsed, configPath, {
+      readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+        readConfigIncludeFileWithGuards({
+          includePath,
+          resolvedPath,
+          rootRealDir,
+          ioFs: deps.fs,
+        }),
+      parseJson: (rawInner) => deps.json5.parse(rawInner),
+      onResolvedIncludePath: (resolvedPath) => {
+        includePaths.push(resolvedPath);
+      },
+    });
+  } catch {
+    // Broken includes: primary path is still tracked via stat markers below.
+  }
+
+  return {
+    fingerprint: buildSortedConfigStatFingerprint(configPath, includePaths),
+    includePaths,
+  };
+}
+
+type ConfigSourceStatFingerprintMemo = {
+  configPath: string;
+  rootMtimeMs: number | null;
+  rootSizeBytes: number | null;
+  includePaths: string[];
+  fingerprint: string;
+};
+
+let configSourceStatFingerprintMemo: ConfigSourceStatFingerprintMemo | null = null;
+
+/** Test-only: clears the default-deps fingerprint memo used by `sessions.list` cache keys. */
+export function clearResolvedConfigSourceStatFingerprintSyncCacheForTest(): void {
+  configSourceStatFingerprintMemo = null;
+}
+
+function fingerprintRootStatParts(configPath: string): {
+  mtimeMs: number | null;
+  sizeBytes: number | null;
+} {
+  const snap = getFileStatSnapshot(configPath);
+  if (!snap) {
+    return { mtimeMs: null, sizeBytes: null };
+  }
+  return { mtimeMs: snap.mtimeMs, sizeBytes: snap.sizeBytes };
+}
+
+/**
+ * Sorted stat fingerprint for the active config file plus every `$include` target.
+ * Keeps derived caches (for example `sessions.list`) aligned with modular configs.
+ *
+ * With default deps (no overrides), repeats reuse resolved `$include` paths and only
+ * re-stat files until the root config file changes.
+ */
+export function collectResolvedConfigSourceStatFingerprintSync(overrides: ConfigIoDeps = {}): string {
+  const deps = normalizeDeps(overrides);
+  const requestedConfigPath = resolveConfigPathForDeps(deps);
+  const candidatePaths = deps.configPath
+    ? [requestedConfigPath]
+    : resolveDefaultConfigCandidates(deps.env, deps.homedir);
+  const configPath =
+    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+
+  const useMemo = Object.keys(overrides).length === 0;
+  const rootParts = fingerprintRootStatParts(configPath);
+
+  if (
+    useMemo &&
+    configSourceStatFingerprintMemo &&
+    configSourceStatFingerprintMemo.configPath === configPath &&
+    configSourceStatFingerprintMemo.rootMtimeMs === rootParts.mtimeMs &&
+    configSourceStatFingerprintMemo.rootSizeBytes === rootParts.sizeBytes
+  ) {
+    const fpFast = buildSortedConfigStatFingerprint(
+      configPath,
+      configSourceStatFingerprintMemo.includePaths,
+    );
+    if (fpFast === configSourceStatFingerprintMemo.fingerprint) {
+      return fpFast;
+    }
+  }
+
+  const computed = computeResolvedConfigSourceStatFingerprint(deps, configPath);
+  if (useMemo) {
+    configSourceStatFingerprintMemo = {
+      configPath,
+      rootMtimeMs: rootParts.mtimeMs,
+      rootSizeBytes: rootParts.sizeBytes,
+      includePaths: computed.includePaths,
+      fingerprint: computed.fingerprint,
+    };
+  }
+  return computed.fingerprint;
 }
 
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at

@@ -20,6 +20,18 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   sessions: TRow[];
 };
 
+/** `sessions.list` with `lastHash`: unchanged rows short-circuit. */
+export type SessionsListUnchangedResult = {
+  unchanged: true;
+  hash: string;
+  ts: number;
+  count: number;
+};
+
+export type SessionsListRpcResultBase<TDefaults, TRow> =
+  | (SessionsListResultBase<TDefaults, TRow> & { hash?: string })
+  | SessionsListUnchangedResult;
+
 export type SessionsPatchResultBase<TEntry> = {
   ok: true;
   path: string;
