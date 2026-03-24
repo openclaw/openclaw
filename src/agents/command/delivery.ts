@@ -74,7 +74,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
   result: RunResult;
   deliveryChannel?: string;
   accountId?: string;
-  compileSlackInteractiveReplies?: boolean;
+  applyChannelTransforms?: boolean;
 }): ReplyPayload[] {
   const payloads = params.payloads ?? [];
   if (payloads.length === 0) {
@@ -111,14 +111,14 @@ export function normalizeAgentCommandReplyPayloads(params: {
     });
   }
   const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
-  const compileSlackInteractiveReplies = params.compileSlackInteractiveReplies ?? true;
+  const applyChannelTransforms = params.applyChannelTransforms ?? true;
 
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const normalized = normalizeReplyPayload(payload as ReplyPayload, {
       responsePrefix: replyPrefix.responsePrefix,
-      enableSlackInteractiveReplies:
-        compileSlackInteractiveReplies && replyPrefix.enableSlackInteractiveReplies,
+      enableSlackInteractiveReplies: replyPrefix.enableSlackInteractiveReplies,
+      applyChannelTransforms,
       responsePrefixContext,
     });
     if (normalized) {
@@ -247,7 +247,7 @@ export async function deliverAgentCommandResult(params: {
     result,
     deliveryChannel,
     accountId: resolvedAccountId,
-    compileSlackInteractiveReplies: deliver,
+    applyChannelTransforms: deliver,
   });
   const normalizedPayloads = normalizeOutboundPayloadsForJson(normalizedReplyPayloads);
   if (opts.json) {

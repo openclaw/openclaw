@@ -140,4 +140,38 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
     expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
   });
+
+  it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "line",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [
+        {
+          text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+        },
+      ],
+      result: createResult(),
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+    );
+    expect(delivered.payloads).toMatchObject([
+      {
+        text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+      },
+    ]);
+  });
 });
