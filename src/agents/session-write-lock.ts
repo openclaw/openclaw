@@ -177,9 +177,10 @@ async function releaseHeldLock(
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
+    const fd = held.handle.fd; // Capture fd before close() - Node 22 sets fd to -1 immediately
     void held.handle.close().catch(() => undefined);
     try {
-      fsSync.closeSync(held.handle.fd);
+      fsSync.closeSync(fd);
     } catch {
       // Ignore errors during cleanup - best effort
     }
