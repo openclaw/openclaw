@@ -1,10 +1,10 @@
 ---
-
-## title: "HPC-AI"
+title: "HPC-AI"
 summary: "HPC-AI setup (auth + model selection)"
 read_when:
   - You want to use HPC-AI with OpenClaw
   - You need the API key env var or CLI auth choice
+---
 
 # HPC-AI
 
@@ -22,7 +22,7 @@ read_when:
 openclaw onboard --auth-choice hpc-ai-api-key
 ```
 
-1. Default model after onboarding:
+2. Default model after onboarding:
 
 ```json5
 {
@@ -65,10 +65,7 @@ If the Gateway runs as a daemon (launchd/systemd), make sure `HPC_AI_API_KEY` is
 
 ## Models
 
-
 | Model ref                     | Context | Max tokens | Notes         |
 | ----------------------------- | ------- | ---------- | ------------- |
 | `hpc-ai/minimax/minimax-m2.5` | 196000  | 65536      | Default; text |
 | `hpc-ai/moonshotai/kimi-k2.5` | 256000  | 64000      | Text + image  |
-
-
