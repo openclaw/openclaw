@@ -658,6 +658,7 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
@@ -690,9 +691,12 @@ export function buildModelOptions(
   if (options.length === 0) {
     return nothing;
   }
+  const sel = selected !== undefined ? selected : current;
   return options.map(
     (option) =>
-      html`<option value=${option.value} ?selected=${option.value === current}>${option.label}</option>`,
+      html`<option value=${option.value} ?selected=${option.value === sel}>
+        ${option.label}
+      </option>`,
   );
 }
 

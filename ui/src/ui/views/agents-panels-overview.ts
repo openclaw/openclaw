@@ -153,7 +153,12 @@ export function renderAgentOverview(params: {
                       ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
                     </option>
                   `}
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
+              ${buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelCatalog,
+                isDefault ? (effectivePrimary ?? null) : (entryPrimary ?? null),
+              )}
             </select>
           </label>
           <div class="field">
