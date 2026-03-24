@@ -565,6 +565,12 @@ async function saveSessionStoreUnlocked(
     return;
   }
 
+  const json = JSON.stringify(store, null, 2);
+  if (getSerializedSessionStore(storePath) === json) {
+    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    return;
+  }
+
   if (hasLegacySessionStoreFile(storePath)) {
     const migrated = await migrateLegacySessionStoreToDirectory({
       storePath,
@@ -587,11 +593,6 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
-  if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
-    return;
-  }
 
   // Windows: keep retry semantics because rename can fail while readers hold locks.
   if (process.platform === "win32") {
