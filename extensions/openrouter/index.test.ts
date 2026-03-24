@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/extensions/provider-registration.js";
-import plugin from "./index.js";
+import plugin, { injectAutoRouterPlugin } from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const LIVE_MODEL_ID =
@@ -35,6 +36,42 @@ describe("openrouter plugin", () => {
     expect(speechProviders).toHaveLength(0);
     expect(mediaProviders).toHaveLength(0);
     expect(imageProviders).toHaveLength(0);
+  });
+});
+
+describe("injectAutoRouterPlugin", () => {
+  function makeBaseStreamFn(payloads: Record<string, unknown>[]): StreamFn {
+    return (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return Promise.resolve({ type: "text", text: "" }) as ReturnType<StreamFn>;
+    };
+  }
+
+  it("injects auto-router plugin with allowed_models", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const wrapped = injectAutoRouterPlugin(makeBaseStreamFn(payloads), ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"]);
+    void wrapped({} as never, {} as never, {});
+    expect(payloads[0]?.plugins).toEqual([
+      { id: "auto-router", allowed_models: ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"] },
+    ]);
+  });
+
+  it("merges with pre-existing plugins rather than overwriting", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const base: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { plugins: [{ id: "existing" }] };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return Promise.resolve({ type: "text", text: "" }) as ReturnType<StreamFn>;
+    };
+    const wrapped = injectAutoRouterPlugin(base, ["anthropic/*"]);
+    void wrapped({} as never, {} as never, {});
+    expect(payloads[0]?.plugins).toEqual([
+      { id: "existing" },
+      { id: "auto-router", allowed_models: ["anthropic/*"] },
+    ]);
   });
 });
 
