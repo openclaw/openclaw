@@ -25,7 +25,7 @@ import {
 } from "./policy.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import { sendMessageNextcloudTalk } from "./send.js";
+import { sendMessageNextcloudTalk, sendReactionNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
 export type NextcloudTalkMentionEntry = {
@@ -348,6 +348,19 @@ export async function handleNextcloudTalkInbound(params: {
   if (isGroup && mentionGate.shouldSkip) {
     runtime.log?.(`nextcloud-talk: drop room ${roomToken} (no mention)`);
     return;
+  }
+
+  // Best-effort acknowledgment reaction — room-level takes precedence over account-level.
+  const ackReaction = roomConfig?.ackReaction ?? account.config.ackReaction;
+  if (ackReaction) {
+    sendReactionNextcloudTalk(roomToken, message.messageId, ackReaction, {
+      accountId: account.accountId,
+      cfg: config,
+    }).catch((err: unknown) => {
+      runtime.error?.(
+        `nextcloud-talk: ack reaction failed for ${message.messageId}: ${String(err)}`,
+      );
+    });
   }
 
   const route = core.channel.routing.resolveAgentRoute({

@@ -20,6 +20,8 @@ export type NextcloudTalkRoomConfig = {
   allowFrom?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+  /** Emoji to auto-react with on every received message (best-effort acknowledgment). */
+  ackReaction?: string;
 };
 
 export type NextcloudTalkNetworkConfig = {
@@ -80,6 +82,8 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Emoji to auto-react with on every received message (best-effort acknowledgment). */
+  ackReaction?: string;
   /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
   network?: NextcloudTalkNetworkConfig;
 };
