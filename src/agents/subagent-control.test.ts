@@ -744,6 +744,79 @@ describe("killAllControlledSubagentRuns", () => {
       labels: [],
     });
   });
+
+  it("cascades through descendants for an ended current bulk target even when a stale older row is still active", async () => {
+    const parentSessionKey = "agent:main:subagent:stale-bulk-desc-parent";
+    const childSessionKey = `${parentSessionKey}:subagent:leaf`;
+
+    addSubagentRunForTests({
+      runId: "run-stale-bulk-desc-parent",
+      childSessionKey: parentSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale bulk parent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 9_000,
+      startedAt: Date.now() - 8_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-current-bulk-desc-parent",
+      childSessionKey: parentSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current bulk parent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-active-bulk-desc-child",
+      childSessionKey,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "active bulk child task",
+      cleanup: "keep",
+      createdAt: Date.now() - 3_000,
+      startedAt: Date.now() - 2_000,
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-current-bulk-desc-parent",
+          childSessionKey: parentSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "current bulk parent task",
+          cleanup: "keep",
+          createdAt: Date.now() - 5_000,
+          startedAt: Date.now() - 4_000,
+          endedAt: Date.now() - 1_000,
+          outcome: { status: "ok" },
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 1,
+      labels: ["active bulk child task"],
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
 });
 
 describe("steerControlledSubagentRun", () => {
