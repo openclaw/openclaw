@@ -74,6 +74,26 @@ describe("locateUfw", () => {
     expect(result).toEqual({ path: "/usr/sbin/ufw", viaPath: false });
   });
 
+  it("tries /usr/local/sbin/ufw when earlier sbin paths are not found", () => {
+    spawnSyncMock.mockReturnValue({
+      status: 1,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      pid: 1,
+      output: [],
+      signal: null,
+    });
+    accessSyncMock.mockImplementation((p) => {
+      if (p === "/usr/local/sbin/ufw") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+
+    const result = locateUfw({ PATH: "/usr/bin" });
+    expect(result).toEqual({ path: "/usr/local/sbin/ufw", viaPath: false });
+  });
+
   it("tries /sbin/ufw when /usr/sbin/ufw is not found", () => {
     spawnSyncMock.mockReturnValue({
       status: 1,
@@ -184,6 +204,20 @@ describe("queryUfwStatus", () => {
     const envArg = (spawnCall[2] as { env: NodeJS.ProcessEnv }).env;
     expect(envArg.PATH).toContain("/usr/sbin");
     expect(envArg.PATH).toContain("/usr/bin");
+  });
+
+  it("returns null active when output has abnormal format", () => {
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: Buffer.from("ERROR: problem running iptables\n"),
+      stderr: Buffer.alloc(0),
+      pid: 1,
+      output: [],
+      signal: null,
+    });
+
+    const result = queryUfwStatus("/usr/sbin/ufw");
+    expect(result).toEqual({ active: null, statusLine: "ERROR: problem running iptables" });
   });
 
   it("returns null active when command fails", () => {
