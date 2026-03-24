@@ -4,6 +4,7 @@
 
 import type { Client } from "@larksuiteoapi/node-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/feishu";
+import { resolveFeishuCardTemplate } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
@@ -203,7 +204,7 @@ export class FeishuStreamingSession {
     if (options?.header) {
       cardJson.header = {
         title: { tag: "plain_text", content: options.header.title },
-        template: options.header.template ?? "blue",
+        template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
       };
     }
 
@@ -413,7 +414,10 @@ export class FeishuStreamingSession {
       })
       .catch((e) => this.log?.(`Close failed: ${String(e)}`));
 
-    this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
+    const finalState = this.state;
+    this.pendingText = null;
+    this.state = null;
+    this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
   }
 
   isActive(): boolean {
