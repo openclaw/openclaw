@@ -38,6 +38,7 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
@@ -74,7 +75,8 @@ export async function ensureConfigReady(params: {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName)) ||
