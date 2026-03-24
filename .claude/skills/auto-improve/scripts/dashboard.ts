@@ -65,13 +65,22 @@ const prevScore = results.length > 0 ? parseFloat(results[results.length - 1].sc
 const scoreDiff = main && prevScore !== null ? main.composite - prevScore : 0;
 const diffClass = scoreDiff > 0.01 ? "up" : scoreDiff < -0.01 ? "down" : "flat";
 const diffText = scoreDiff >= 0 ? `+${scoreDiff.toFixed(3)}` : scoreDiff.toFixed(3);
-const openIssues = ghIssues.filter((i: Record<string, string>) => i.state === "OPEN");
-const openPRs = ghPRs.filter((p: Record<string, string>) => p.state === "OPEN");
 const autoIssues = ghIssues.filter(
   (i: Record<string, unknown>) =>
     Array.isArray(i.labels) &&
     (i.labels as Record<string, string>[]).some((l) => l.name === "auto-improve"),
 );
+const autoPRs = ghPRs.filter(
+  (p: Record<string, unknown>) =>
+    String(p.title || "").startsWith("auto-fix:") ||
+    String(p.title || "").startsWith("auto-improve:") ||
+    (Array.isArray(p.labels) &&
+      (p.labels as Record<string, string>[]).some((l) => l.name === "auto-improve")),
+);
+const autoOpenIssues = autoIssues.filter((i: Record<string, string>) => i.state === "OPEN");
+const autoClosedIssues = autoIssues.filter((i: Record<string, string>) => i.state === "CLOSED");
+const autoOpenPRs = autoPRs.filter((p: Record<string, string>) => p.state === "OPEN");
+const autoMergedPRs = autoPRs.filter((p: Record<string, string>) => p.state === "MERGED");
 const fixesVerified = fixes.filter((f) => f.status === "verified").length;
 const fixesFailed = fixes.filter((f) => f.status === "failed").length;
 const fixesPending = fixes.filter((f) => f.status === "pr-open" || f.status === "merged").length;
@@ -179,7 +188,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('metrics')">Agent Improvement</div>
-  <div class="tab" onclick="switchTab('platform')">Platform Improvement<span class="cnt">${fixes.length + openIssues.length}</span></div>
+  <div class="tab" onclick="switchTab('platform')">Platform Improvement<span class="cnt">${fixes.length + autoOpenIssues.length}</span></div>
   <div class="tab" onclick="switchTab('history')">History<span class="cnt">${results.length + fixes.length}</span></div>
 </div>
 
@@ -313,19 +322,19 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 
 <div class="sr">
   <div class="sc">
-    <div class="num">${openIssues.length}</div>
+    <div class="num">${autoOpenIssues.length}</div>
     <div class="lbl">Open Issues</div>
   </div>
   <div class="sc">
-    <div class="num">${ghIssues.filter((i: Record<string, string>) => i.state === "CLOSED").length}</div>
+    <div class="num">${autoClosedIssues.length}</div>
     <div class="lbl">Closed Issues</div>
   </div>
   <div class="sc">
-    <div class="num">${openPRs.length}</div>
+    <div class="num">${autoOpenPRs.length}</div>
     <div class="lbl">Open PRs</div>
   </div>
   <div class="sc">
-    <div class="num">${ghPRs.filter((p: Record<string, string>) => p.state === "MERGED").length}</div>
+    <div class="num">${autoMergedPRs.length}</div>
     <div class="lbl">Merged PRs</div>
   </div>
 </div>
@@ -362,13 +371,13 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 
 <div class="grid">
   <div class="card">
-    <h2>Issues</h2>
+    <h2>Issues (auto-improve)</h2>
     ${
-      ghIssues.length === 0
-        ? '<div class="es">No issues</div>'
+      autoIssues.length === 0
+        ? '<div class="es">No auto-improve issues</div>'
         : `<div class="scroll"><table>
       <thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Created</th></tr></thead>
-      <tbody>${ghIssues
+      <tbody>${autoIssues
         .map((i: Record<string, unknown>) => {
           const labels = Array.isArray(i.labels)
             ? (i.labels as Record<string, string>[]).map((l) => l.name).join(", ")
@@ -385,13 +394,13 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
     }
   </div>
   <div class="card">
-    <h2>Pull Requests</h2>
+    <h2>Pull Requests (auto-fix)</h2>
     ${
-      ghPRs.length === 0
-        ? '<div class="es">No PRs</div>'
+      autoPRs.length === 0
+        ? '<div class="es">No auto-fix PRs</div>'
         : `<div class="scroll"><table>
       <thead><tr><th>#</th><th>Title</th><th>State</th><th>+/-</th><th>Created</th></tr></thead>
-      <tbody>${ghPRs
+      <tbody>${autoPRs
         .map(
           (p: Record<string, unknown>) => `<tr>
         <td><a href="${p.url}">#${p.number}</a></td>

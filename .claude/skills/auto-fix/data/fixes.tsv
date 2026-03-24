@@ -1,2 +1,3 @@
 issue	category	severity	pr	status	error_signature	files_changed	description
 16	session-stability	low	17	merged	session-abort:*:aborted	1	Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session
+16	session-stability	low	18	pr-open	session-abort:*:aborted	2	Extend isFailoverAssistantError to handle stopReason=aborted and add /request was aborted/i pattern; ZAI resolves stream with stopReason=aborted bypassing promptError fallback path
