@@ -1630,7 +1630,7 @@ export async function runSubagentAnnounceFlow(params: {
           params: {
             key: params.childSessionKey,
             deleteTranscript: true,
-            emitLifecycleHooks: false,
+            emitLifecycleHooks: params.spawnMode === "session",
           },
           timeoutMs: 10_000,
         });
