@@ -30,43 +30,21 @@ const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
 
-function markFileHandleClosedSync(handle: fs.FileHandle): void {
-  const mutableHandle = handle as unknown as Record<PropertyKey, unknown>;
-  for (const key of Reflect.ownKeys(handle)) {
-    if (typeof key !== "symbol") {
-      continue;
-    }
-    const name = String(key);
-    if (name === "Symbol(kFd)") {
-      mutableHandle[key] = -1;
-      continue;
-    }
-    if (name === "Symbol(kRefs)") {
-      mutableHandle[key] = 0;
-      continue;
-    }
-    if (name === "Symbol(kClosePromise)") {
-      mutableHandle[key] = undefined;
-    }
+function releaseAllLocksSync(): void {
+  for (const [normalizedFile, held] of HELD_LOCKS) {
+    // Let the OS close live descriptors on process exit. On Linux/macOS this
+    // avoids Node's unmanaged-fd warnings while still unlinking the stale
+    // lock path before the process is fully gone.
+    rmLockPathSync(held.lockPath);
+    HELD_LOCKS.delete(normalizedFile);
   }
 }
 
-function releaseAllLocksSync(): void {
-  for (const [normalizedFile, held] of HELD_LOCKS) {
-    try {
-      if (typeof held.handle.fd === "number" && held.handle.fd >= 0) {
-        fsSync.closeSync(held.handle.fd);
-        markFileHandleClosedSync(held.handle);
-      }
-    } catch {
-      // Best-effort exit cleanup only.
-    }
-    try {
-      fsSync.rmSync(held.lockPath, { force: true });
-    } catch {
-      // Best-effort exit cleanup only.
-    }
-    HELD_LOCKS.delete(normalizedFile);
+function rmLockPathSync(lockPath: string): void {
+  try {
+    fsSync.rmSync(lockPath, { force: true });
+  } catch {
+    // Best-effort exit cleanup only.
   }
 }
 

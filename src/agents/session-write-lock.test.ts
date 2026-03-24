@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -228,17 +227,14 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
-  it("closes file descriptors synchronously during process-exit cleanup", async () => {
+  it("removes lock files during process-exit cleanup", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
-      const closeSyncSpy = vi.spyOn(fsSync, "closeSync");
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
       __testing.releaseAllLocksSync();
 
-      expect(closeSyncSpy).toHaveBeenCalledTimes(1);
       await expect(fs.access(lockPath)).rejects.toThrow();
       await lock.release();
-      closeSyncSpy.mockRestore();
     });
   });
 
