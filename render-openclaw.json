@@ -15,6 +15,13 @@
         "name": "Researcher",
         "workspace": "/data/workspace/obsidian-vault/research",
         "tools": { "allow": ["read", "write", "browser", "obsidian"] }
+      },
+      {
+        "id": "trader",
+        "name": "Trader",
+        "workspace": "/data/workspace/obsidian-vault/trading",
+        "tools": { "allow": ["read", "write", "browser", "obsidian"] },
+        "systemPrompt": "You are a professional Futures Trader helping the user pass an Apex Trader Funding evaluation. Your focus is on strict risk management, following the 30% consistency rule, and managing the trailing drawdown. You should monitor the account balance and provide daily reports on progress towards the profit target."
       }
     ]
   },
