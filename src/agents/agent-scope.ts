@@ -326,6 +326,17 @@ export function resolveAgentIdsByWorkspacePath(
   return matches.map((entry) => entry.id);
 }
 
+export function resolveAgentIdsByExactWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string[] {
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  return listAgentIds(cfg).filter((id) => {
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    return workspaceDir === normalizedWorkspacePath;
+  });
+}
+
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,

@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentIdsByExactWorkspacePath,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { writeConfigFile } from "../config/config.js";
@@ -50,21 +53,6 @@ async function loadIdentityFromFile(filePath: string): Promise<AgentIdentity | n
   }
 }
 
-function resolveAgentIdByWorkspace(
-  cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
-  workspaceDir: string,
-): string[] {
-  const list = listAgentEntries(cfg);
-  const ids =
-    list.length > 0
-      ? list.map((entry) => normalizeAgentId(entry.id))
-      : [resolveDefaultAgentId(cfg)];
-  const normalizedTarget = normalizeWorkspacePath(workspaceDir);
-  return ids.filter(
-    (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
-  );
-}
-
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -104,7 +92,7 @@ export async function agentsSetIdentityCommand(
       runtime.exit(1);
       return;
     }
-    const matches = resolveAgentIdByWorkspace(cfg, workspaceDir);
+    const matches = resolveAgentIdsByExactWorkspacePath(cfg, workspaceDir);
     if (matches.length === 0) {
       runtime.error(
         `No agent workspace matches ${shortenHomePath(workspaceDir)}. Pass --agent to target a specific agent.`,
