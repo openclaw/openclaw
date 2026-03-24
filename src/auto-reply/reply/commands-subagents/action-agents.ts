@@ -14,7 +14,7 @@ function formatConversationBindingText(params: {
   channel: string;
   conversationId: string;
 }): string {
-  if (params.channel === "discord") {
+  if (params.channel === "discord" || params.channel === "matrix") {
     return `thread:${params.conversationId}`;
   }
   if (params.channel === "telegram") {
@@ -96,7 +96,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
             channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram"
+        : channel === "discord" || channel === "telegram" || channel === "matrix"
           ? "unbound"
           : "bindings available on discord/telegram";
       const resolvedIndex = indexByChildSessionKey.get(entry.childSessionKey);
