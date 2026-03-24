@@ -17,6 +17,7 @@ import {
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   normalizeFreshness,
+  readResponseText,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -93,6 +94,7 @@ async function runBochaSearch(params: {
       init: {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
           Authorization: `Bearer ${params.apiKey}`,
         },
@@ -101,8 +103,8 @@ async function runBochaSearch(params: {
     },
     async (res): Promise<{ content: string; citations: string[] }> => {
       if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(`Bocha API error (${res.status}): ${detail || res.statusText}`);
+        const detail = await readResponseText(res, { maxBytes: 64_000 });
+        throw new Error(`Bocha API error (${res.status}): ${detail.text || res.statusText}`);
       }
 
       const data = (await res.json()) as BochaSearchResponse;
@@ -170,11 +172,14 @@ function createBochaToolDefinition(
       }
 
       const query = readStringParam(params, "query", { required: true });
-      const count = Math.min(
-        readNumberParam(params, "count", { integer: true }) ??
-          searchConfig?.maxResults ??
-          DEFAULT_SEARCH_COUNT,
-        MAX_SEARCH_COUNT,
+      const count = Math.max(
+        Math.min(
+          readNumberParam(params, "count", { integer: true }) ??
+            searchConfig?.maxResults ??
+            DEFAULT_SEARCH_COUNT,
+          MAX_SEARCH_COUNT,
+        ),
+        1,
       );
       const rawFreshness = readStringParam(params, "freshness");
       const freshness = normalizeFreshness(rawFreshness, "bocha") || "noLimit";
@@ -235,7 +240,7 @@ export function createBochaWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "sk-...",
     signupUrl: "https://open.bocha.cn/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 35,
+    autoDetectOrder: 15,
     credentialPath: "plugins.entries.bocha.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.bocha.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "bocha"),
