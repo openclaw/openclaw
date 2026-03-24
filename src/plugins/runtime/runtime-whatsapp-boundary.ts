@@ -14,6 +14,18 @@ import {
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
 
+// The gateway sets the active WhatsApp listener via the natively-loaded module,
+// but the Jiti-loaded module may get a separate globalThis and therefore a
+// separate singleton state.  Use the same Symbol.for key that active-listener.ts
+// uses so we can read the host process's listener map and bridge it into the
+// Jiti-loaded module before any outbound send.
+const WHATSAPP_ACTIVE_LISTENER_STATE_KEY = Symbol.for("openclaw.whatsapp.activeListenerState");
+
+type HostActiveListenerState = {
+  listeners: Map<string, unknown>;
+  current: unknown;
+};
+
 type WhatsAppLightModule = typeof import("../../../extensions/whatsapp/light-runtime-api.js");
 type WhatsAppHeavyModule = typeof import("../../../extensions/whatsapp/runtime-api.js");
 
@@ -86,6 +98,35 @@ async function loadWhatsAppHeavyModule(): Promise<WhatsAppHeavyModule> {
   return loaded;
 }
 
+/**
+ * Bridge active listener state from the host process into the Jiti-loaded
+ * WhatsApp module.  The gateway's monitor sets listeners via the natively-
+ * loaded active-listener module, but Jiti may evaluate the same module in an
+ * isolated context whose globalThis is distinct.  Without this bridge, cron
+ * delivery and other outbound-only paths fail with "No active WhatsApp Web
+ * listener" even though the channel is connected.
+ *
+ * The bridge reads the host-side Map (stored on the host globalThis under the
+ * well-known Symbol key) and copies any missing entries into the Jiti-loaded
+ * module via its own setActiveWebListener export.
+ */
+function syncActiveListenersToLoadedModule(loaded: WhatsAppHeavyModule): void {
+  const hostState = (globalThis as Record<PropertyKey, unknown>)[
+    WHATSAPP_ACTIVE_LISTENER_STATE_KEY
+  ] as HostActiveListenerState | undefined;
+  if (!hostState?.listeners?.size) {
+    return;
+  }
+  for (const [accountId, listener] of hostState.listeners) {
+    if (listener && !loaded.getActiveWebListener(accountId)) {
+      // Two-argument overload: setActiveWebListener(accountId, listener).
+      // The listener object is the same reference the gateway holds, so the
+      // cast is safe even though the Jiti-loaded module has its own type scope.
+      (loaded.setActiveWebListener as (id: string, l: unknown) => void)(accountId, listener);
+    }
+  }
+}
+
 function getLightExport<K extends keyof WhatsAppLightModule>(
   exportName: K,
 ): NonNullable<WhatsAppLightModule[K]> {
@@ -153,19 +194,28 @@ export function webAuthExists(
 export function sendMessageWhatsApp(
   ...args: Parameters<WhatsAppHeavyModule["sendMessageWhatsApp"]>
 ): ReturnType<WhatsAppHeavyModule["sendMessageWhatsApp"]> {
-  return loadWhatsAppHeavyModule().then((loaded) => loaded.sendMessageWhatsApp(...args));
+  return loadWhatsAppHeavyModule().then((loaded) => {
+    syncActiveListenersToLoadedModule(loaded);
+    return loaded.sendMessageWhatsApp(...args);
+  });
 }
 
 export function sendPollWhatsApp(
   ...args: Parameters<WhatsAppHeavyModule["sendPollWhatsApp"]>
 ): ReturnType<WhatsAppHeavyModule["sendPollWhatsApp"]> {
-  return loadWhatsAppHeavyModule().then((loaded) => loaded.sendPollWhatsApp(...args));
+  return loadWhatsAppHeavyModule().then((loaded) => {
+    syncActiveListenersToLoadedModule(loaded);
+    return loaded.sendPollWhatsApp(...args);
+  });
 }
 
 export function sendReactionWhatsApp(
   ...args: Parameters<WhatsAppHeavyModule["sendReactionWhatsApp"]>
 ): ReturnType<WhatsAppHeavyModule["sendReactionWhatsApp"]> {
-  return loadWhatsAppHeavyModule().then((loaded) => loaded.sendReactionWhatsApp(...args));
+  return loadWhatsAppHeavyModule().then((loaded) => {
+    syncActiveListenersToLoadedModule(loaded);
+    return loaded.sendReactionWhatsApp(...args);
+  });
 }
 
 export function createRuntimeWhatsAppLoginTool(
@@ -241,7 +291,9 @@ export async function optimizeImageToJpeg(
 export async function runWebHeartbeatOnce(
   ...args: Parameters<WhatsAppHeavyModule["runWebHeartbeatOnce"]>
 ): ReturnType<WhatsAppHeavyModule["runWebHeartbeatOnce"]> {
-  return (await getHeavyExport("runWebHeartbeatOnce"))(...args);
+  const loaded = await loadWhatsAppHeavyModule();
+  syncActiveListenersToLoadedModule(loaded);
+  return loaded.runWebHeartbeatOnce(...args);
 }
 
 export async function startWebLoginWithQr(
