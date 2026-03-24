@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -58,6 +59,7 @@ describe("runMessageAction plugin dispatch", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
+      vi.unstubAllEnvs();
     });
 
     it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
@@ -114,6 +116,9 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
+      const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
       await runMessageAction({
         cfg: {
           channels: {
@@ -148,6 +153,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          mediaLocalRoots: expect.arrayContaining([path.join(stateDir, "workspace-alpha")]),
           toolContext: expect.objectContaining({
             currentChannelId: "chat:oc_123",
             currentThreadTs: "thread-456",
