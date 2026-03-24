@@ -693,7 +693,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       config,
     });
 
-    await runReplyAgent({
+    const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
       queueKey: "main",
@@ -718,6 +718,11 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
+    expect(result).toEqual(expect.objectContaining({ text: "done" }));
+    expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(followupRun.run.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(tmp, "session-rotated.jsonl")),
+    );
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(10_000);
     expect(stored[sessionKey].compactionCount).toBe(2);

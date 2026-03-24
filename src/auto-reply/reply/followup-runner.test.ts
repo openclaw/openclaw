@@ -422,6 +422,10 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
+    expect(queued.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(queued.run.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
     const firstCall = (
       onBlockReply.mock.calls as unknown as Array<
         Array<{ text?: string; isCompactionNotice?: boolean }>

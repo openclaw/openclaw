@@ -526,6 +526,14 @@ export function createFollowupRunner(params: {
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
         if (refreshedSessionEntry) {
+          const refreshedSessionId = refreshedSessionEntry.sessionId?.trim();
+          if (refreshedSessionId) {
+            queued.run.sessionId = refreshedSessionId;
+          }
+          const refreshedSessionFile = refreshedSessionEntry.sessionFile?.trim();
+          if (refreshedSessionFile) {
+            queued.run.sessionFile = refreshedSessionFile;
+          }
           const queueKey = queued.run.sessionKey ?? sessionKey;
           if (queueKey) {
             refreshQueuedFollowupSession({

@@ -841,6 +841,14 @@ export async function runReplyAgent(params: {
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
       if (refreshedSessionEntry) {
         activeSessionEntry = refreshedSessionEntry;
+        const refreshedSessionId = refreshedSessionEntry.sessionId?.trim();
+        if (refreshedSessionId) {
+          followupRun.run.sessionId = refreshedSessionId;
+        }
+        const refreshedSessionFile = refreshedSessionEntry.sessionFile?.trim();
+        if (refreshedSessionFile) {
+          followupRun.run.sessionFile = refreshedSessionFile;
+        }
         refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
