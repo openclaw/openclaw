@@ -118,18 +118,32 @@ export function parseManifest(raw: string): MigrateManifest {
     agents: Array.isArray(parsed.agents)
       ? (parsed.agents as unknown[]).filter((a): a is string => typeof a === "string")
       : [],
-    paths: isRecord(parsed.paths)
-      ? {
-          stateDir: typeof parsed.paths.stateDir === "string" ? parsed.paths.stateDir : "",
-          configPath: typeof parsed.paths.configPath === "string" ? parsed.paths.configPath : "",
-          oauthDir: typeof parsed.paths.oauthDir === "string" ? parsed.paths.oauthDir : "",
-          workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
-            ? (parsed.paths.workspaceDirs as unknown[]).filter(
-                (e): e is string => typeof e === "string",
-              )
-            : [],
-        }
-      : { stateDir: "", configPath: "", oauthDir: "", workspaceDirs: [] },
+    paths: (() => {
+      if (!isRecord(parsed.paths)) {
+        throw new Error("Migration manifest is missing paths.");
+      }
+      const stateDir =
+        typeof parsed.paths.stateDir === "string" ? parsed.paths.stateDir.trim() : "";
+      const configPath =
+        typeof parsed.paths.configPath === "string" ? parsed.paths.configPath.trim() : "";
+      const oauthDir =
+        typeof parsed.paths.oauthDir === "string" ? parsed.paths.oauthDir.trim() : "";
+      if (!stateDir || !configPath || !oauthDir) {
+        throw new Error(
+          "Migration manifest paths is missing required fields (stateDir, configPath, oauthDir).",
+        );
+      }
+      return {
+        stateDir,
+        configPath,
+        oauthDir,
+        workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
+          ? (parsed.paths.workspaceDirs as unknown[]).filter(
+              (e): e is string => typeof e === "string",
+            )
+          : [],
+      };
+    })(),
     assets,
     skipped: Array.isArray(parsed.skipped) ? (parsed.skipped as MigrateManifest["skipped"]) : [],
   };

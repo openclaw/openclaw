@@ -239,4 +239,32 @@ describe("parseManifest", () => {
     const manifest = parseManifest(json);
     expect(manifest.assets).toHaveLength(5);
   });
+
+  it("rejects manifest missing paths object", () => {
+    const json = validManifestJson({ paths: "not an object" });
+    expect(() => parseManifest(json)).toThrow("missing paths");
+  });
+
+  it("rejects manifest with empty stateDir", () => {
+    const json = validManifestJson({
+      paths: {
+        stateDir: "",
+        configPath: "/root/.openclaw/openclaw.json",
+        oauthDir: "/root/.openclaw/credentials",
+        workspaceDirs: [],
+      },
+    });
+    expect(() => parseManifest(json)).toThrow("missing required fields");
+  });
+
+  it("rejects manifest with missing configPath", () => {
+    const json = validManifestJson({
+      paths: {
+        stateDir: "/root/.openclaw",
+        oauthDir: "/root/.openclaw/credentials",
+        workspaceDirs: [],
+      },
+    });
+    expect(() => parseManifest(json)).toThrow("missing required fields");
+  });
 });

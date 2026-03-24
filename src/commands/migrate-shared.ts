@@ -154,19 +154,21 @@ function resolveAgentScopedWorkspaceDirs(
       : resolveDefaultAgentWorkspaceDir();
 
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  let foundExplicit = false;
+  const agentsWithExplicitWorkspace = new Set<string>();
   for (const agent of list) {
     const agentRecord = agent as { id?: string; workspace?: string };
     if (typeof agentRecord.id === "string" && agentIdSet.has(agentRecord.id)) {
       if (typeof agentRecord.workspace === "string" && agentRecord.workspace.trim()) {
         dirs.add(resolveUserPath(agentRecord.workspace));
-        foundExplicit = true;
+        agentsWithExplicitWorkspace.add(agentRecord.id);
       }
     }
   }
 
-  // If any selected agent has no explicit workspace, include the inherited default.
-  if (!foundExplicit || dirs.size === 0) {
+  // Include the inherited default workspace if any selected agent lacks
+  // an explicit workspace entry (they inherit the default).
+  const allHaveExplicit = agentIds.every((id) => agentsWithExplicitWorkspace.has(id));
+  if (!allHaveExplicit) {
     dirs.add(defaultWorkspace);
   }
 
