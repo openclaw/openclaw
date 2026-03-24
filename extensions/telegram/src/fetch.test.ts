@@ -59,6 +59,7 @@ let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
 beforeEach(async () => {
+  vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });
@@ -81,6 +82,7 @@ function getDispatcherFromUndiciCall(nth: number) {
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -126,10 +128,11 @@ function expectStickyAutoSelectDispatcher(
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined,
-  field: "connect" | "proxyTls" = "connect",
+  field: "connect" | "proxyTls" | "requestTls" = "connect",
 ): void {
   expect(dispatcher?.options?.[field]).toEqual(
     expect.objectContaining({
@@ -189,7 +192,7 @@ function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unkn
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
-  field: "connect" | "proxyTls";
+  field: "connect" | "proxyTls" | "requestTls";
 }) {
   await expect(params.resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
     "fetch failed",
@@ -349,7 +352,7 @@ describe("resolveTelegramFetch", () => {
         uri: "http://127.0.0.1:7890",
       }),
     );
-    expect(dispatcher?.options?.proxyTls).toEqual(
+    expect(dispatcher?.options?.requestTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
       }),
@@ -372,7 +375,7 @@ describe("resolveTelegramFetch", () => {
     await expectNoStickyRetryWithSameDispatcher({
       resolved,
       expectedAgentCtor: ProxyAgentCtor,
-      field: "proxyTls",
+      field: "requestTls",
     });
   });
 

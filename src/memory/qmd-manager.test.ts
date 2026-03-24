@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logDebugMock: vi.fn(),
   logInfoMock: vi.fn(),
 }));
+const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
@@ -38,7 +40,7 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
         child.emit("close", 0);
       });
     } else {
-      setTimeout(() => {
+      scheduleNativeTimeout(() => {
         child.emit("close", 0);
       }, delayMs);
     }
@@ -196,8 +198,7 @@ describe("QmdMemoryManager", () => {
     } else {
       (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
     }
-    delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
-    delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
+    delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
   });
 
   it("debounces back-to-back sync calls", async () => {

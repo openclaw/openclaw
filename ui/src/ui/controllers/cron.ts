@@ -18,6 +18,10 @@ import type {
 } from "../types.ts";
 import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type CronFieldKey =
   | "name"
@@ -183,7 +187,12 @@ export async function loadCronStatus(state: CronState) {
     const res = await state.client.request<CronStatus>("cron.status", {});
     state.cronStatus = res;
   } catch (err) {
-    state.cronError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.cronStatus = null;
+      state.cronError = formatMissingOperatorReadScopeMessage("cron status");
+    } else {
+      state.cronError = String(err);
+    }
   }
 }
 

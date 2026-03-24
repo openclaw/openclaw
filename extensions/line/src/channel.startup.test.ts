@@ -1,17 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type {
-  ChannelGatewayContext,
-  ChannelAccountSnapshot,
-  OpenClawConfig,
-  PluginRuntime,
-  ResolvedLineAccount,
-} from "../api.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import type { PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
 function createRuntime() {
-  const probeLineBot = vi.fn(async () => ({ ok: false }));
   const monitorLineProvider = vi.fn(async () => ({
     account: { accountId: "default" },
     handleWebhook: async () => {},
@@ -21,7 +14,6 @@ function createRuntime() {
   const runtime = {
     channel: {
       line: {
-        probeLineBot,
         monitorLineProvider,
       },
     },
@@ -30,90 +22,63 @@ function createRuntime() {
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, probeLineBot, monitorLineProvider };
+  return { runtime, monitorLineProvider };
 }
 
-function createStartAccountCtx(params: {
-  token: string;
-  secret: string;
-  runtime: ReturnType<typeof createRuntimeEnv>;
-  abortSignal?: AbortSignal;
-}): ChannelGatewayContext<ResolvedLineAccount> {
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: "default",
-    configured: true,
-    enabled: true,
-    running: false,
-  };
+function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {
   return {
     accountId: "default",
-    account: {
-      accountId: "default",
-      enabled: true,
-      channelAccessToken: params.token,
-      channelSecret: params.secret,
-      tokenSource: "config" as const,
-      config: {} as ResolvedLineAccount["config"],
-    },
-    cfg: {} as OpenClawConfig,
-    runtime: params.runtime,
-    abortSignal: params.abortSignal ?? new AbortController().signal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: vi.fn(),
+    enabled: true,
+    channelAccessToken: params.token,
+    channelSecret: params.secret,
+    tokenSource: "config",
+    config: {} as ResolvedLineAccount["config"],
+  };
+}
+
+function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
+  const { runtime, monitorLineProvider } = createRuntime();
+  setLineRuntime(runtime);
+  return {
+    monitorLineProvider,
+    task: linePlugin.gateway!.startAccount!(
+      createStartAccountContext({
+        account: params.account,
+        abortSignal: params.abortSignal,
+      }),
+    ),
   };
 }
 
 describe("linePlugin gateway.startAccount", () => {
   it("fails startup when channel secret is missing", async () => {
-    const { runtime, monitorLineProvider } = createRuntime();
-    setLineRuntime(runtime);
+    const { monitorLineProvider, task } = startLineAccount({
+      account: createAccount({ token: "token", secret: "   " }),
+    });
 
-    await expect(
-      linePlugin.gateway!.startAccount!(
-        createStartAccountCtx({
-          token: "token",
-          secret: "   ",
-          runtime: createRuntimeEnv(),
-        }),
-      ),
-    ).rejects.toThrow(
+    await expect(task).rejects.toThrow(
       'LINE webhook mode requires a non-empty channel secret for account "default".',
     );
     expect(monitorLineProvider).not.toHaveBeenCalled();
   });
 
   it("fails startup when channel access token is missing", async () => {
-    const { runtime, monitorLineProvider } = createRuntime();
-    setLineRuntime(runtime);
+    const { monitorLineProvider, task } = startLineAccount({
+      account: createAccount({ token: "   ", secret: "secret" }),
+    });
 
-    await expect(
-      linePlugin.gateway!.startAccount!(
-        createStartAccountCtx({
-          token: "   ",
-          secret: "secret",
-          runtime: createRuntimeEnv(),
-        }),
-      ),
-    ).rejects.toThrow(
+    await expect(task).rejects.toThrow(
       'LINE webhook mode requires a non-empty channel access token for account "default".',
     );
     expect(monitorLineProvider).not.toHaveBeenCalled();
   });
 
   it("starts provider when token and secret are present", async () => {
-    const { runtime, monitorLineProvider } = createRuntime();
-    setLineRuntime(runtime);
-
     const abort = new AbortController();
-    const task = linePlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        token: "token",
-        secret: "secret",
-        runtime: createRuntimeEnv(),
-        abortSignal: abort.signal,
-      }),
-    );
+    const { monitorLineProvider, task } = startLineAccount({
+      account: createAccount({ token: "token", secret: "secret" }),
+      abortSignal: abort.signal,
+    });
 
     await vi.waitFor(() => {
       expect(monitorLineProvider).toHaveBeenCalledWith(

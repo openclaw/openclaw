@@ -81,6 +81,63 @@ describe("buildPluginStatusReport", () => {
     );
   });
 
+  it("normalizes bundled plugin versions to the core base release", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "whatsapp",
+          name: "WhatsApp",
+          description: "Bundled channel plugin",
+          version: "2026.3.22",
+          source: "/tmp/whatsapp/index.ts",
+          origin: "bundled",
+          enabled: true,
+          status: "loaded",
+          toolNames: [],
+          hookNames: [],
+          channelIds: ["whatsapp"],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      channelSetups: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const report = buildPluginStatusReport({
+      config: {},
+      env: {
+        OPENCLAW_VERSION: "2026.3.23-1",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(report.plugins[0]?.version).toBe("2026.3.23");
+  });
+
   it("builds an inspect report with capability shape and policy", () => {
     loadConfigMock.mockReturnValue({
       plugins: {
