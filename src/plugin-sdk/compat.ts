@@ -26,9 +26,14 @@ export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
 
 export {
+  createHybridChannelConfigAdapter,
+  createHybridChannelConfigBase,
   createScopedAccountConfigAccessors,
+  createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
   createScopedDmSecurityResolver,
+  createTopLevelChannelConfigAdapter,
+  createTopLevelChannelConfigBase,
   mapAllowFromEntries,
 } from "./channel-config-helpers.js";
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";

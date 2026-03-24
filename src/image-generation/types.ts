@@ -25,7 +25,6 @@ export type ImageGenerationRequest = {
   cfg: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  timeoutMs?: number;
   count?: number;
   size?: string;
   resolution?: ImageGenerationResolution;

@@ -1,8 +1,9 @@
 /** Shared config-schema primitives for channel plugins with DM/group policy knobs. */
 export {
-  AllowFromEntrySchema,
+  AllowFromListSchema,
   buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
+  buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export {
   DmPolicySchema,
