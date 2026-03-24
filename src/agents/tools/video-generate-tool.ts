@@ -169,8 +169,13 @@ export function createVideoGenerateTool(params: {
       const draft = readBooleanParam(rawArgs, "draft");
 
       const currentProviders = listRuntimeVideoGenerationProviders({ config: cfg });
-      const firstProvider = currentProviders[0];
-      const validatedAspectRatio = validateAspectRatio(aspectRatio, firstProvider);
+      const parsedOverride = modelOverride?.includes("/")
+        ? { provider: modelOverride.split("/")[0] }
+        : null;
+      const validationProvider = parsedOverride
+        ? (currentProviders.find((p) => p.id === parsedOverride.provider) ?? currentProviders[0])
+        : currentProviders[0];
+      const validatedAspectRatio = validateAspectRatio(aspectRatio, validationProvider);
 
       const providerOptions: Record<string, unknown> = {};
       if (camerafixed != null) {
