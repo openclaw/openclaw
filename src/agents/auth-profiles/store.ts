@@ -102,8 +102,11 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
   // Record timestamp BEFORE populating the map so that any disk writes
-  // that happen between "load from disk" and "stamp here" are still detected
-  // as stale (the mtime will be >= this timestamp).
+  // that occur during or after map population are detected as stale on
+  // the next resolveRuntimeAuthProfileStore() call (mtime will be >= this timestamp).
+  // Note: writes between the upstream disk read and this point are NOT caught —
+  // that is an inherent limitation of mtime-based invalidation without holding a
+  // file lock across the entire prepare→activate sequence.
   runtimeSnapshotsLoadedAtMs = Date.now();
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
