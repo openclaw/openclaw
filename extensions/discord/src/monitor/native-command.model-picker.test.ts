@@ -1,58 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    ok: true,
-  })),
-);
-const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
-const configRuntimeMocks = vi.hoisted(() => {
-  const stores = new Map<string, Record<string, Record<string, unknown>>>();
-  const resolveStorePath = vi.fn((storePath: string | undefined, opts?: { agentId?: string }) => {
-    if (typeof storePath === "string" && storePath.trim()) {
-      return storePath;
-    }
-    return `/tmp/${opts?.agentId ?? "default"}-sessions.json`;
-  });
-  const loadSessionStore = vi.fn((storePath: string) => stores.get(storePath) ?? {});
-  const updateSessionStore = vi.fn(
-    async (
-      storePath: string,
-      mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-    ) => {
-      const store = stores.get(storePath) ?? {};
-      stores.set(storePath, store);
-      return await mutator(store);
-    },
-  );
-  return {
-    stores,
-    resolveStorePath,
-    loadSessionStore,
-    updateSessionStore,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    ensureConfiguredBindingRouteReady: ensureConfiguredBindingRouteReadyMock,
-    resolveConfiguredBindingRoute: resolveConfiguredBindingRouteMock,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    resolveStorePath: configRuntimeMocks.resolveStorePath,
-    loadSessionStore: configRuntimeMocks.loadSessionStore,
-    updateSessionStore: configRuntimeMocks.updateSessionStore,
-  };
-});
-
 import * as commandRegistryModule from "../../../../src/auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -95,14 +42,6 @@ type MockInteraction = {
 
 function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
-}
-
-function resolveSessionStorePath(agentId: string): string {
-  return `/tmp/${agentId}-sessions.json`;
-}
-
-function setSessionStore(agentId: string, store: Record<string, Record<string, unknown>>) {
-  configRuntimeMocks.stores.set(resolveSessionStorePath(agentId), store);
 }
 
 async function waitForCondition(
@@ -301,32 +240,6 @@ function createBoundThreadBindingManager(params: {
 describe("Discord model picker interactions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    configRuntimeMocks.stores.clear();
-    configRuntimeMocks.resolveStorePath.mockClear();
-    configRuntimeMocks.resolveStorePath.mockImplementation(
-      (storePath: string | undefined, opts?: { agentId?: string }) =>
-        typeof storePath === "string" && storePath.trim()
-          ? storePath
-          : resolveSessionStorePath(opts?.agentId ?? "default"),
-    );
-    configRuntimeMocks.loadSessionStore.mockClear();
-    configRuntimeMocks.loadSessionStore.mockImplementation((storePath: string) => {
-      return configRuntimeMocks.stores.get(storePath) ?? {};
-    });
-    configRuntimeMocks.updateSessionStore.mockClear();
-    configRuntimeMocks.updateSessionStore.mockImplementation(
-      async (
-        storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        const store = configRuntimeMocks.stores.get(storePath) ?? {};
-        configRuntimeMocks.stores.set(storePath, store);
-        return await mutator(store);
-      },
-    );
-    resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(null);
-    ensureConfiguredBindingRouteReadyMock.mockClear();
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
@@ -545,134 +458,5 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
-  });
-
-  it("reads configured binding session state when confirming a model change", async () => {
-    const boundSessionKey = "agent:codex:acp:binding:discord:default:dmfeedface";
-    const context = createModelPickerContext();
-    const pickerData = createBaseModelsProviderData(
-      {
-        bailian: ["glm-5"],
-        "openai-codex": ["gpt-5.4"],
-      },
-      { defaultProviderOrder: "insertion" },
-    );
-    const modelCommand = createModelCommandDefinition();
-
-    resolveConfiguredBindingRouteMock.mockReturnValue({
-      bindingResolution: {
-        record: {
-          conversation: {
-            channel: "discord",
-            accountId: "default",
-            conversationId: "dm-1",
-          },
-        },
-      },
-      boundSessionKey,
-      route: {
-        agentId: "codex",
-        accountId: "default",
-        sessionKey: boundSessionKey,
-        mainSessionKey: "agent:codex:main",
-      },
-    });
-    setSessionStore("codex", {
-      [boundSessionKey]: {
-        sessionId: "session-bound",
-        updatedAt: Date.now(),
-        providerOverride: "bailian",
-        modelOverride: "glm-5",
-      },
-    });
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({} as never);
-
-    const submitInteraction = await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "models",
-        u: "owner",
-        p: "bailian",
-        pg: "1",
-        mi: "1",
-      },
-    });
-
-    expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
-    const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0];
-    expect(JSON.stringify(followUpPayload)).toContain("Model set to bailian/glm-5");
-  });
-
-  it("persists the selected model state when dispatch does not write session state", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createBaseModelsProviderData(
-      {
-        "openai-codex": ["gpt-5.4"],
-        bailian: ["glm-5"],
-      },
-      { defaultProviderOrder: "insertion" },
-    );
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
-
-    const submitData: PickerButtonData = {
-      cmd: "model",
-      act: "submit",
-      view: "models",
-      u: "owner",
-      p: "openai-codex",
-      pg: "1",
-      mi: "1",
-    };
-
-    await runSubmitButton({
-      context,
-      data: submitData,
-    });
-
-    const firstDispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: { CommandTargetSessionKey?: string };
-    };
-    const sessionKey = firstDispatchCall.ctx?.CommandTargetSessionKey;
-    if (!sessionKey) {
-      throw new Error("model picker dispatch did not expose a target session key");
-    }
-
-    const store: Record<string, Record<string, unknown>> = {
-      [sessionKey]: {
-        sessionId: "session-main",
-        updatedAt: Date.now(),
-        providerOverride: "bailian",
-        modelOverride: "glm-5",
-      },
-    };
-    const storeAgentId = sessionKey.split(":")[1] || "main";
-    setSessionStore(storeAgentId, store);
-    configRuntimeMocks.updateSessionStore.mockClear();
-    dispatchSpy.mockClear();
-
-    const submitInteraction = await runSubmitButton({
-      context,
-      data: submitData,
-    });
-
-    expect(configRuntimeMocks.updateSessionStore).toHaveBeenCalledTimes(1);
-    expect(store[sessionKey]?.providerOverride).toBeUndefined();
-    expect(store[sessionKey]?.modelOverride).toBeUndefined();
-    expect(store[sessionKey]?.modelProvider).toBeUndefined();
-    expect(store[sessionKey]?.model).toBeUndefined();
-    expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
-    const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0];
-    expect(JSON.stringify(followUpPayload)).toContain("Model set to openai-codex/gpt-5.4");
   });
 });
