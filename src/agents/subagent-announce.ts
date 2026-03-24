@@ -549,6 +549,27 @@ function buildChildCompletionFindings(
   return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
+function dedupeLatestChildCompletionRows(
+  children: Array<{
+    childSessionKey: string;
+    task: string;
+    label?: string;
+    createdAt: number;
+    endedAt?: number;
+    frozenResultText?: string | null;
+    outcome?: SubagentRunOutcome;
+  }>,
+) {
+  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  for (const child of children) {
+    const existing = latestByChildSessionKey.get(child.childSessionKey);
+    if (!existing || child.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(child.childSessionKey, child);
+    }
+  }
+  return [...latestByChildSessionKey.values()];
+}
+
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -1396,7 +1417,9 @@ export async function runSubagentAnnounceFlow(params: {
           },
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
-          childCompletionFindings = buildChildCompletionFindings(directChildren);
+          childCompletionFindings = buildChildCompletionFindings(
+            dedupeLatestChildCompletionRows(directChildren),
+          );
         }
       }
     } catch {
