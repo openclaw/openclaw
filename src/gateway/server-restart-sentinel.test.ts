@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
+  enqueueDelivery: vi.fn(async () => "queue-1"),
+  ackDelivery: vi.fn(async () => {}),
+  failDelivery: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   requestHeartbeatNow: vi.fn(),
   logWarn: vi.fn(),
@@ -74,6 +77,12 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
+vi.mock("../infra/outbound/delivery-queue.js", () => ({
+  enqueueDelivery: mocks.enqueueDelivery,
+  ackDelivery: mocks.ackDelivery,
+  failDelivery: mocks.failDelivery,
+}));
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
@@ -105,6 +114,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
+    mocks.enqueueDelivery.mockReset();
+    mocks.enqueueDelivery.mockResolvedValue("queue-1");
+    mocks.ackDelivery.mockClear();
+    mocks.failDelivery.mockClear();
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeatNow.mockClear();
     mocks.logWarn.mockClear();
@@ -122,8 +135,19 @@ describe("scheduleRestartSentinelWake", () => {
         session: { key: "agent:main:main", agentId: "main" },
         deps,
         bestEffort: false,
+        skipQueue: true,
       }),
     );
+    expect(mocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15550002",
+        payloads: [{ text: "restart message" }],
+        bestEffort: false,
+      }),
+    );
+    expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
+    expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       "restart message",
       expect.objectContaining({
@@ -147,7 +171,22 @@ describe("scheduleRestartSentinelWake", () => {
     await vi.runAllTimersAsync();
     await wakePromise;
 
+    expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        skipQueue: true,
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        skipQueue: true,
+      }),
+    );
+    expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
+    expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
@@ -160,6 +199,22 @@ describe("scheduleRestartSentinelWake", () => {
         maxAttempts: 2,
       }),
     );
+  });
+
+  it("keeps one queued restart notice when outbound retries are exhausted", async () => {
+    vi.useFakeTimers();
+    mocks.deliverOutboundPayloads
+      .mockRejectedValueOnce(new Error("transport not ready"))
+      .mockRejectedValueOnce(new Error("transport still not ready"));
+
+    const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
+    await vi.runAllTimersAsync();
+    await wakePromise;
+
+    expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(mocks.ackDelivery).not.toHaveBeenCalled();
+    expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
   });
 
   it("prefers top-level sentinel threadId for wake routing context", async () => {
@@ -195,7 +250,7 @@ describe("scheduleRestartSentinelWake", () => {
       payload: {
         message: "restart message",
       },
-    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 

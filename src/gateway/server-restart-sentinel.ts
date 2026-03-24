@@ -5,6 +5,7 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
@@ -58,6 +59,18 @@ async function deliverRestartSentinelNotice(params: {
   threadId?: string;
   session: ReturnType<typeof buildOutboundSessionContext>;
 }) {
+  const payloads = [{ text: params.message }];
+  // Persist one recoverable notice across the whole retry loop so a transient
+  // failure does not leave behind a stale duplicate queue entry.
+  const queueId = await enqueueDelivery({
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    payloads,
+    bestEffort: false,
+  }).catch(() => null);
   for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
     try {
       const results = await deliverOutboundPayloads({
@@ -67,12 +80,16 @@ async function deliverRestartSentinelNotice(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
-        payloads: [{ text: params.message }],
+        payloads,
         session: params.session,
         deps: params.deps,
         bestEffort: false,
+        skipQueue: true,
       });
       if (results.length > 0) {
+        if (queueId) {
+          await ackDelivery(queueId).catch(() => {});
+        }
         return;
       }
       throw new Error("outbound delivery returned no results");
@@ -87,6 +104,13 @@ async function deliverRestartSentinelNotice(params: {
         maxAttempts: OUTBOUND_MAX_ATTEMPTS,
       });
       if (!retrying) {
+        if (queueId) {
+          await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
+            () => {
+              // Best-effort queue bookkeeping.
+            },
+          );
+        }
         return;
       }
       await waitForOutboundRetry(OUTBOUND_RETRY_DELAY_MS);
