@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { saveCredentialBackup } from "./credential-backup.js";
 import type { QQBotAccountConfig } from "./types.js";
 import { getUpdateInfo, checkVersionExists } from "./update-checker.js";
+import { debugLog, debugError } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
 const require = createRequire(import.meta.url);
 
@@ -82,7 +83,7 @@ const UPGRADE_REQUIREMENTS = {
   /** OpenClaw 最低版本（YYYY.M.D 格式，如 "2026.3.10"） */
   minFrameworkVersion: "2026.3.2",
   /** 支持的操作系统列表（process.platform 值） */
-  supportedPlatforms: ["darwin", "linux"] as string[],
+  supportedPlatforms: ["darwin", "linux", "win32"] as string[],
   /** 最低 Node.js 版本 */
   minNodeVersion: "18.0.0",
 };
@@ -755,7 +756,7 @@ function fireHotUpgrade(targetVersion?: string): HotUpgradeStartResult {
     ];
   }
 
-  console.log(
+  debugLog(
     `[qqbot] fireHotUpgrade: shell=${shell}, script=${scriptPath}, cli=${cli}, target=${targetVersion || "latest"}`,
   );
 
@@ -770,27 +771,27 @@ function fireHotUpgrade(targetVersion?: string): HotUpgradeStartResult {
     },
     (error, stdout, _stderr) => {
       if (error) {
-        console.error(`[qqbot] fireHotUpgrade: script failed: ${error.message}`);
-        if (stdout) console.error(`[qqbot] fireHotUpgrade: stdout: ${stdout.slice(0, 2000)}`);
-        if (_stderr) console.error(`[qqbot] fireHotUpgrade: stderr: ${_stderr.slice(0, 2000)}`);
+        debugError(`[qqbot] fireHotUpgrade: script failed: ${error.message}`);
+        if (stdout) debugError(`[qqbot] fireHotUpgrade: stdout: ${stdout.slice(0, 2000)}`);
+        if (_stderr) debugError(`[qqbot] fireHotUpgrade: stderr: ${_stderr.slice(0, 2000)}`);
         _upgrading = false;
         return;
       }
 
-      console.log(`[qqbot] fireHotUpgrade: script completed, stdout length=${stdout.length}`);
+      debugLog(`[qqbot] fireHotUpgrade: script completed, stdout length=${stdout.length}`);
 
       // 从脚本输出中提取版本号，验证文件替换是否成功
       const versionMatch = stdout.match(/QQBOT_NEW_VERSION=(\S+)/);
       const newVersion = versionMatch?.[1];
       if (newVersion === "unknown") {
-        console.error(
+        debugError(
           `[qqbot] fireHotUpgrade: script output QQBOT_NEW_VERSION=unknown, aborting restart`,
         );
         _upgrading = false;
         return;
       }
 
-      console.log(
+      debugLog(
         `[qqbot] fireHotUpgrade: new version=${newVersion || "(not detected)"}, triggering restart...`,
       );
 
@@ -828,11 +829,11 @@ function fireHotUpgrade(targetVersion?: string): HotUpgradeStartResult {
             },
           );
           child.unref();
-          console.log(
+          debugLog(
             `[qqbot] fireHotUpgrade: launched detached restart script (pid=${child.pid}): ${ps1Path}`,
           );
         } catch (psErr: any) {
-          console.error(
+          debugError(
             `[qqbot] fireHotUpgrade: failed to launch ps1 restart: ${psErr.message}, falling back to direct restart`,
           );
           execCliAsync(cli, ["gateway", "restart"], { timeout: 30_000 }, () => {});
@@ -841,7 +842,7 @@ function fireHotUpgrade(targetVersion?: string): HotUpgradeStartResult {
         // Mac/Linux: 直接 restart（框架通常以 daemon 模式运行）
         execCliAsync(cli, ["gateway", "restart"], { timeout: 30_000 }, (restartErr) => {
           if (restartErr) {
-            console.error(
+            debugError(
               `[qqbot] fireHotUpgrade: restart failed: ${restartErr.message}, trying stop+start fallback`,
             );
             execCliAsync(cli, ["gateway", "stop"], { timeout: 10_000 }, () => {

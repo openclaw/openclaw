@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getAccessToken } from "../api.js";
 import { resolveQQBotAccount } from "../config.js";
 import { listQQBotAccountIds } from "../config.js";
+import { debugLog, debugError } from "../utils/debug-log.js";
 
 // ========== 常量 ==========
 
@@ -114,13 +115,13 @@ function validatePath(path: string): string | null {
 export function registerChannelTool(api: OpenClawPluginApi): void {
   const cfg = api.config;
   if (!cfg) {
-    console.log("[qqbot-channel-api] No config available, skipping");
+    debugLog("[qqbot-channel-api] No config available, skipping");
     return;
   }
 
   const accountIds = listQQBotAccountIds(cfg);
   if (accountIds.length === 0) {
-    console.log("[qqbot-channel-api] No QQBot accounts configured, skipping");
+    debugLog("[qqbot-channel-api] No QQBot accounts configured, skipping");
     return;
   }
 
@@ -128,7 +129,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
   const account = resolveQQBotAccount(cfg, firstAccountId);
 
   if (!account.appId || !account.clientSecret) {
-    console.log("[qqbot-channel-api] Account not fully configured, skipping");
+    debugLog("[qqbot-channel-api] Account not fully configured, skipping");
     return;
   }
 
@@ -177,7 +178,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
 
         // GET/DELETE 不应有 body
         if ((method === "GET" || method === "DELETE") && p.body && Object.keys(p.body).length > 0) {
-          console.log(`[qqbot-channel-api] ${method} request with body, body will be ignored`);
+          debugLog(`[qqbot-channel-api] ${method} request with body, body will be ignored`);
         }
 
         try {
@@ -205,9 +206,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
             fetchOptions.body = JSON.stringify(p.body);
           }
 
-          console.log(
-            `[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`,
-          );
+          debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
 
           let res: Response;
           try {
@@ -215,12 +214,10 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
           } catch (err) {
             clearTimeout(timeoutId);
             if (err instanceof Error && err.name === "AbortError") {
-              console.error(
-                `[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`,
-              );
+              debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
               return json({ error: `请求超时（${DEFAULT_TIMEOUT_MS}ms）`, path: p.path });
             }
-            console.error(`[qqbot-channel-api] <<< Network error:`, err);
+            debugError(`[qqbot-channel-api] <<< Network error:`, err);
             return json({
               error: `网络错误: ${err instanceof Error ? err.message : String(err)}`,
               path: p.path,
@@ -229,7 +226,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
             clearTimeout(timeoutId);
           }
 
-          console.log(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
+          debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
           // 解析响应
           const rawBody = await res.text();
@@ -272,7 +269,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
           return json(data);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          console.error(`[qqbot-channel-api] Error [${method} ${p.path}]: ${errMsg}`);
+          debugError(`[qqbot-channel-api] Error [${method} ${p.path}]: ${errMsg}`);
           return json({ error: errMsg, path: p.path });
         }
       },

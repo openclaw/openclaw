@@ -73,3 +73,17 @@ export function loadCredentialBackup(accountId?: string): CredentialBackup | nul
     return null;
   }
 }
+
+/**
+ * 删除凭证备份文件（登出时调用，防止备份恢复已清除的凭证）
+ */
+export function clearCredentialBackup(): void {
+  try {
+    const backupPath = getBackupPath();
+    if (fs.existsSync(backupPath)) {
+      fs.unlinkSync(backupPath);
+    }
+  } catch {
+    // 非关键操作，静默忽略
+  }
+}

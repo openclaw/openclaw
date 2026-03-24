@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { decode, encode, isSilk } from "silk-wasm";
+import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
 /**
@@ -309,10 +310,10 @@ export async function textToSpeechPCM(
   const sampleRate = 24000;
   const { url, headers } = buildTTSRequest(ttsCfg);
 
-  console.log(
+  debugLog(
     `[tts] Request: model=${ttsCfg.model}, voice=${ttsCfg.voice}, authStyle=${ttsCfg.authStyle ?? "bearer"}, url=${url}`,
   );
-  console.log(
+  debugLog(
     `[tts] Input text (${text.length} chars): "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}"`,
   );
 
@@ -339,7 +340,7 @@ export async function textToSpeechPCM(
         ...(ttsCfg.speed !== undefined ? { speed: ttsCfg.speed } : {}),
       };
 
-      console.log(`[tts] Trying format=${format}...`);
+      debugLog(`[tts] Trying format=${format}...`);
       const fetchStart = Date.now();
       const resp = await fetch(url, {
         method: "POST",
@@ -352,12 +353,12 @@ export async function textToSpeechPCM(
 
       if (!resp.ok) {
         const detail = await resp.text().catch(() => "");
-        console.log(
+        debugLog(
           `[tts] HTTP ${resp.status} for format=${format} (${fetchMs}ms): ${detail.slice(0, 200)}`,
         );
         // 如果 PCM 不支持（Azure 等），回退到 mp3
         if (format === "pcm" && (resp.status === 400 || resp.status === 422)) {
-          console.log(`[tts] PCM format not supported, falling back to mp3`);
+          debugLog(`[tts] PCM format not supported, falling back to mp3`);
           lastError = new Error(`TTS PCM not supported: ${detail.slice(0, 200)}`);
           continue;
         }
@@ -366,19 +367,19 @@ export async function textToSpeechPCM(
 
       const arrayBuffer = await resp.arrayBuffer();
       const rawBuffer = Buffer.from(arrayBuffer);
-      console.log(
+      debugLog(
         `[tts] Response OK: format=${format}, size=${rawBuffer.length} bytes, latency=${fetchMs}ms`,
       );
 
       if (!needsDecode) {
-        console.log(
+        debugLog(
           `[tts] Done: PCM direct, ${rawBuffer.length} bytes, total=${Date.now() - startTime}ms`,
         );
         return { pcmBuffer: rawBuffer, sampleRate };
       }
 
       // mp3 需要解码为 PCM
-      console.log(`[tts] Decoding mp3 response (${rawBuffer.length} bytes) to PCM...`);
+      debugLog(`[tts] Decoding mp3 response (${rawBuffer.length} bytes) to PCM...`);
       const tmpDir = path.join(fs.mkdtempSync(path.join(require("node:os").tmpdir(), "tts-")));
       const tmpMp3 = path.join(tmpDir, "tts.mp3");
       fs.writeFileSync(tmpMp3, rawBuffer);
@@ -388,7 +389,7 @@ export async function textToSpeechPCM(
         const ffmpegCmd = await checkFfmpeg();
         if (ffmpegCmd) {
           const pcmBuf = await ffmpegToPCM(ffmpegCmd, tmpMp3, sampleRate);
-          console.log(
+          debugLog(
             `[tts] Done: mp3→PCM (ffmpeg), ${pcmBuf.length} bytes, total=${Date.now() - startTime}ms`,
           );
           return { pcmBuffer: pcmBuf, sampleRate };
@@ -396,7 +397,7 @@ export async function textToSpeechPCM(
         // WASM fallback
         const pcmBuf = await wasmDecodeMp3ToPCM(rawBuffer, sampleRate);
         if (pcmBuf) {
-          console.log(
+          debugLog(
             `[tts] Done: mp3→PCM (wasm), ${pcmBuf.length} bytes, total=${Date.now() - startTime}ms`,
           );
           return { pcmBuffer: pcmBuf, sampleRate };
@@ -411,7 +412,7 @@ export async function textToSpeechPCM(
     } catch (err) {
       clearTimeout(ttsTimeout);
       lastError = err instanceof Error ? err : new Error(String(err));
-      console.log(`[tts] Error for format=${format}: ${lastError.message.slice(0, 200)}`);
+      debugLog(`[tts] Error for format=${format}: ${lastError.message.slice(0, 200)}`);
       if (format === "pcm") {
         // PCM 失败时不立即抛出，尝试 mp3
         continue;
@@ -420,7 +421,7 @@ export async function textToSpeechPCM(
     }
   }
 
-  console.log(`[tts] All formats exhausted after ${Date.now() - startTime}ms`);
+  debugLog(`[tts] All formats exhausted after ${Date.now() - startTime}ms`);
   throw lastError ?? new Error("TTS failed: all formats exhausted");
 }
 
@@ -477,7 +478,7 @@ export async function audioFileToSilkBase64(
 
   const buf = fs.readFileSync(filePath);
   if (buf.length === 0) {
-    console.error(`[audio-convert] file is empty: ${filePath}`);
+    debugError(`[audio-convert] file is empty: ${filePath}`);
     return null;
   }
 
@@ -488,7 +489,7 @@ export async function audioFileToSilkBase64(
     ? normalizeFormats(directUploadFormats)
     : QQ_NATIVE_UPLOAD_FORMATS;
   if (uploadFormats.includes(ext)) {
-    console.log(`[audio-convert] direct upload (QQ native format): ${ext} (${buf.length} bytes)`);
+    debugLog(`[audio-convert] direct upload (QQ native format): ${ext} (${buf.length} bytes)`);
     return buf.toString("base64");
   }
 
@@ -497,7 +498,7 @@ export async function audioFileToSilkBase64(
     const stripped = stripAmrHeader(buf);
     const raw = new Uint8Array(stripped.buffer, stripped.byteOffset, stripped.byteLength);
     if (isSilk(raw)) {
-      console.log(`[audio-convert] SILK file, direct use: ${filePath} (${buf.length} bytes)`);
+      debugLog(`[audio-convert] SILK file, direct use: ${filePath} (${buf.length} bytes)`);
       return buf.toString("base64");
     }
   }
@@ -511,7 +512,7 @@ export async function audioFileToSilkBase64(
     strippedCheck.byteLength,
   );
   if (isSilk(rawCheck) || isSilk(strippedRaw)) {
-    console.log(`[audio-convert] SILK detected by header: ${filePath} (${buf.length} bytes)`);
+    debugLog(`[audio-convert] SILK detected by header: ${filePath} (${buf.length} bytes)`);
     return buf.toString("base64");
   }
 
@@ -521,19 +522,19 @@ export async function audioFileToSilkBase64(
   const ffmpegCmd = await checkFfmpeg();
   if (ffmpegCmd) {
     try {
-      console.log(
+      debugLog(
         `[audio-convert] ffmpeg (${ffmpegCmd}): converting ${ext} (${buf.length} bytes) → PCM s16le ${targetRate}Hz`,
       );
       const pcmBuf = await ffmpegToPCM(ffmpegCmd, filePath, targetRate);
       if (pcmBuf.length === 0) {
-        console.error(`[audio-convert] ffmpeg produced empty PCM output`);
+        debugError(`[audio-convert] ffmpeg produced empty PCM output`);
         return null;
       }
       const { silkBuffer } = await pcmToSilk(pcmBuf, targetRate);
-      console.log(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
+      debugLog(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     } catch (err) {
-      console.error(
+      debugError(
         `[audio-convert] ffmpeg conversion failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       // ffmpeg 失败后不 return，继续尝试 WASM fallback
@@ -541,7 +542,7 @@ export async function audioFileToSilkBase64(
   }
 
   // 3. WASM fallback（无 ffmpeg 时的降级方案）
-  console.log(`[audio-convert] fallback: trying WASM decoders for ${ext}`);
+  debugLog(`[audio-convert] fallback: trying WASM decoders for ${ext}`);
 
   // 3a. PCM：视为 s16le 24000Hz 单声道
   if (ext === ".pcm") {
@@ -564,7 +565,7 @@ export async function audioFileToSilkBase64(
     const pcmBuf = await wasmDecodeMp3ToPCM(buf, targetRate);
     if (pcmBuf) {
       const { silkBuffer } = await pcmToSilk(pcmBuf, targetRate);
-      console.log(`[audio-convert] WASM: MP3 → SILK done (${silkBuffer.length} bytes)`);
+      debugLog(`[audio-convert] WASM: MP3 → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     }
   }
@@ -574,7 +575,7 @@ export async function audioFileToSilkBase64(
     : process.platform === "darwin"
       ? "安装方式: brew install ffmpeg"
       : "安装方式: sudo apt install ffmpeg 或 sudo yum install ffmpeg";
-  console.error(`[audio-convert] unsupported format: ${ext} (no ffmpeg available). ${installHint}`);
+  debugError(`[audio-convert] unsupported format: ${ext} (no ffmpeg available). ${installHint}`);
   return null;
 }
 
@@ -616,7 +617,7 @@ export async function waitForFile(
       if (!fileExists) {
         fileExists = true;
         fileAppearedAt = Date.now();
-        console.log(
+        debugLog(
           `[audio-convert] waitForFile: file appeared (${stat.size} bytes, after ${Date.now() - start}ms): ${path.basename(filePath)}`,
         );
       }
@@ -624,7 +625,7 @@ export async function waitForFile(
         if (stat.size === lastSize) {
           stableCount++;
           if (stableCount >= 2) {
-            console.log(
+            debugLog(
               `[audio-convert] waitForFile: ready (${stat.size} bytes, waited ${Date.now() - start}ms, polls=${pollCount})`,
             );
             return stat.size;
@@ -636,7 +637,7 @@ export async function waitForFile(
       } else {
         // 文件存在但 0 字节：检查是否已超过空文件等待阈值
         if (Date.now() - fileAppearedAt > emptyGiveUpMs) {
-          console.error(
+          debugError(
             `[audio-convert] waitForFile: file still empty after ${emptyGiveUpMs}ms, giving up: ${path.basename(filePath)}`,
           );
           return 0;
@@ -645,7 +646,7 @@ export async function waitForFile(
     } catch {
       // 文件不存在：检查是否已超过无文件等待阈值
       if (!fileExists && Date.now() - start > noFileGiveUpMs) {
-        console.error(
+        debugError(
           `[audio-convert] waitForFile: file never appeared after ${noFileGiveUpMs}ms, giving up: ${path.basename(filePath)}`,
         );
         return 0;
@@ -658,16 +659,16 @@ export async function waitForFile(
   try {
     const finalStat = fs.statSync(filePath);
     if (finalStat.size > 0) {
-      console.warn(
+      debugWarn(
         `[audio-convert] waitForFile: timeout but file has data (${finalStat.size} bytes), using it`,
       );
       return finalStat.size;
     }
-    console.error(
+    debugError(
       `[audio-convert] waitForFile: timeout after ${timeoutMs}ms, file exists but empty (0 bytes): ${path.basename(filePath)}`,
     );
   } catch {
-    console.error(
+    debugError(
       `[audio-convert] waitForFile: timeout after ${timeoutMs}ms, file never appeared: ${path.basename(filePath)}`,
     );
   }
@@ -741,7 +742,7 @@ function ffmpegToPCM(
 async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
   try {
     const { MPEGDecoder } = await import("mpg123-decoder");
-    console.log(`[audio-convert] WASM MP3 decode: size=${buf.length} bytes`);
+    debugLog(`[audio-convert] WASM MP3 decode: size=${buf.length} bytes`);
     const decoder = new MPEGDecoder();
     await decoder.ready;
 
@@ -749,13 +750,13 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
     decoder.free();
 
     if (decoded.samplesDecoded === 0 || decoded.channelData.length === 0) {
-      console.error(
+      debugError(
         `[audio-convert] WASM MP3 decode: no samples (samplesDecoded=${decoded.samplesDecoded})`,
       );
       return null;
     }
 
-    console.log(
+    debugLog(
       `[audio-convert] WASM MP3 decode: samples=${decoded.samplesDecoded}, sampleRate=${decoded.sampleRate}, channels=${decoded.channelData.length}`,
     );
 
@@ -807,11 +808,11 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   } catch (err) {
-    console.error(
+    debugError(
       `[audio-convert] WASM MP3 decode failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     if (err instanceof Error && err.stack) {
-      console.error(`[audio-convert] stack: ${err.stack}`);
+      debugError(`[audio-convert] stack: ${err.stack}`);
     }
     return null;
   }

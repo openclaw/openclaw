@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { debugLog, debugError } from "./utils/debug-log.js";
 
 // 已知用户信息接口
 export interface KnownUser {
@@ -71,10 +72,10 @@ function loadUsersFromFile(): Map<string, KnownUser> {
         usersCache.set(key, user);
       }
 
-      console.log(`[known-users] Loaded ${usersCache.size} users`);
+      debugLog(`[known-users] Loaded ${usersCache.size} users`);
     }
   } catch (err) {
-    console.error(`[known-users] Failed to load users: ${err}`);
+    debugError(`[known-users] Failed to load users: ${err}`);
     usersCache = new Map();
   }
 
@@ -109,7 +110,7 @@ function doSaveUsersToFile(): void {
     fs.writeFileSync(KNOWN_USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
     isDirty = false;
   } catch (err) {
-    console.error(`[known-users] Failed to save users: ${err}`);
+    debugError(`[known-users] Failed to save users: ${err}`);
   }
 }
 
@@ -172,7 +173,7 @@ export function recordKnownUser(user: {
       interactionCount: 1,
     };
     cache.set(key, newUser);
-    console.log(`[known-users] New user: ${user.openid} (${user.type})`);
+    debugLog(`[known-users] New user: ${user.openid} (${user.type})`);
   }
 
   isDirty = true;
@@ -292,7 +293,7 @@ export function removeKnownUser(
     cache.delete(key);
     isDirty = true;
     saveUsersToFile();
-    console.log(`[known-users] Removed user ${openid}`);
+    debugLog(`[known-users] Removed user ${openid}`);
     return true;
   }
 
@@ -324,7 +325,7 @@ export function clearKnownUsers(accountId?: string): number {
   if (count > 0) {
     isDirty = true;
     doSaveUsersToFile(); // 立即保存
-    console.log(`[known-users] Cleared ${count} users`);
+    debugLog(`[known-users] Cleared ${count} users`);
   }
 
   return count;

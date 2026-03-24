@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { debugLog, debugWarn } from "./debug-log.js";
 
 // ============ 基础平台信息 ============
 
@@ -250,10 +251,10 @@ export function detectFfmpeg(): Promise<string | null> {
       const ok = await testExecutable(envPath, ["-version"]);
       if (ok) {
         _ffmpegPath = envPath;
-        console.log(`[platform] ffmpeg found via FFMPEG_PATH: ${envPath}`);
+        debugLog(`[platform] ffmpeg found via FFMPEG_PATH: ${envPath}`);
         return _ffmpegPath;
       }
-      console.warn(`[platform] FFMPEG_PATH set but not working: ${envPath}`);
+      debugWarn(`[platform] FFMPEG_PATH set but not working: ${envPath}`);
     }
 
     // 2. 系统 PATH 中检测
@@ -261,7 +262,7 @@ export function detectFfmpeg(): Promise<string | null> {
     const ok = await testExecutable(cmd, ["-version"]);
     if (ok) {
       _ffmpegPath = cmd;
-      console.log(`[platform] ffmpeg detected in PATH`);
+      debugLog(`[platform] ffmpeg detected in PATH`);
       return _ffmpegPath;
     }
 
@@ -284,7 +285,7 @@ export function detectFfmpeg(): Promise<string | null> {
         const works = await testExecutable(p, ["-version"]);
         if (works) {
           _ffmpegPath = p;
-          console.log(`[platform] ffmpeg found at: ${p}`);
+          debugLog(`[platform] ffmpeg found at: ${p}`);
           return _ffmpegPath;
         }
       }
@@ -332,10 +333,10 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
     // 用一个空 buffer 快速测试 WASM 是否能加载
     isSilk(new Uint8Array(0));
     _silkWasmAvailable = true;
-    console.log("[platform] silk-wasm: available");
+    debugLog("[platform] silk-wasm: available");
   } catch (err) {
     _silkWasmAvailable = false;
-    console.warn(
+    debugWarn(
       `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
     );
   }
@@ -422,20 +423,20 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
   };
 
   // 打印诊断报告
-  console.log("=== QQBot 环境诊断 ===");
-  console.log(`  平台: ${platform} (${arch})`);
-  console.log(`  Node: ${nodeVersion}`);
-  console.log(`  主目录: ${homeDir}`);
-  console.log(`  数据目录: ${dataDir}`);
-  console.log(`  ffmpeg: ${ffmpegPath ?? "未安装"}`);
-  console.log(`  silk-wasm: ${silkWasm ? "可用" : "不可用"}`);
+  debugLog("=== QQBot 环境诊断 ===");
+  debugLog(`  平台: ${platform} (${arch})`);
+  debugLog(`  Node: ${nodeVersion}`);
+  debugLog(`  主目录: ${homeDir}`);
+  debugLog(`  数据目录: ${dataDir}`);
+  debugLog(`  ffmpeg: ${ffmpegPath ?? "未安装"}`);
+  debugLog(`  silk-wasm: ${silkWasm ? "可用" : "不可用"}`);
   if (warnings.length > 0) {
-    console.log("  --- 警告 ---");
+    debugLog("  --- 警告 ---");
     for (const w of warnings) {
-      console.log(`  ${w}`);
+      debugLog(`  ${w}`);
     }
   }
-  console.log("======================");
+  debugLog("======================");
 
   return report;
 }

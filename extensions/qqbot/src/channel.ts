@@ -13,7 +13,11 @@ import {
   applyQQBotAccountConfig,
   resolveDefaultQQBotAccountId,
 } from "./config.js";
-import { saveCredentialBackup, loadCredentialBackup } from "./credential-backup.js";
+import {
+  saveCredentialBackup,
+  loadCredentialBackup,
+  clearCredentialBackup,
+} from "./credential-backup.js";
 import { startGateway } from "./gateway.js";
 import { sendText, sendMedia } from "./outbound.js";
 import { getQQBotRuntime } from "./runtime.js";
@@ -95,9 +99,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveQQBotAccount(cfg, accountId);
       const allowFrom = account.config?.allowFrom;
-      console.log(
-        `[qqbot] resolveAllowFrom: accountId=${accountId}, allowFrom=${JSON.stringify(allowFrom)}`,
-      );
       return allowFrom;
     },
     // 格式化 allowFrom 条目（移除 qqbot: 前缀，统一大写）
@@ -130,10 +131,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       let clientSecret = "";
 
       if (input.token) {
-        const parts = input.token.split(":");
-        if (parts.length === 2) {
-          appId = parts[0];
-          clientSecret = parts[1];
+        const colonIdx = input.token.indexOf(":");
+        if (colonIdx > 0) {
+          appId = input.token.slice(0, colonIdx);
+          clientSecret = input.token.slice(colonIdx + 1);
         }
       }
 
@@ -227,21 +228,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     chunkerMode: "markdown",
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
-      console.log(
-        `[qqbot:channel] sendText called — accountId=${accountId}, to=${to}, replyToId=${replyToId}, text.length=${text?.length ?? 0}`,
-      );
-      console.log(
-        `[qqbot:channel] sendText text preview: ${text?.slice(0, 100)}${(text?.length ?? 0) > 100 ? "..." : ""}`,
-      );
       const account = resolveQQBotAccount(cfg, accountId);
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-      console.log(
-        `[qqbot:channel] sendText resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
-      );
       const result = await sendText({ to, text, accountId, replyToId, account });
-      console.log(
-        `[qqbot:channel] sendText result: messageId=${result.messageId}, error=${result.error ?? "none"}`,
-      );
       return {
         channel: "qqbot" as const,
         messageId: result.messageId ?? "",
@@ -249,14 +238,8 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
-      console.log(
-        `[qqbot:channel] sendMedia called — accountId=${accountId}, to=${to}, replyToId=${replyToId}, mediaUrl=${mediaUrl?.slice(0, 80)}, text.length=${text?.length ?? 0}`,
-      );
       const account = resolveQQBotAccount(cfg, accountId);
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-      console.log(
-        `[qqbot:channel] sendMedia resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
-      );
       const result = await sendMedia({
         to,
         text: text ?? "",
@@ -265,9 +248,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         replyToId,
         account,
       });
-      console.log(
-        `[qqbot:channel] sendMedia result: messageId=${result.messageId}, error=${result.error ?? "none"}`,
-      );
       return {
         channel: "qqbot" as const,
         messageId: result.messageId ?? "",
@@ -308,9 +288,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       log?.info(
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
-      );
-      console.log(
-        `[qqbot:channel] startAccount: accountId=${account.accountId}, appId=${account.appId}, secretSource=${account.secretSource}`,
       );
 
       await startGateway({
@@ -374,6 +351,11 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
         };
         await configApi.writeConfigFile(nextCfg);
+      }
+
+      // 登出时清除凭证备份，防止 startAccount 从备份中恢复已清除的凭证
+      if (cleared) {
+        clearCredentialBackup();
       }
 
       const resolved = resolveQQBotAccount(changed ? nextCfg : cfg, accountId);

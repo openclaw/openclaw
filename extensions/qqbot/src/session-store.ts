@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { debugLog, debugError } from "./utils/debug-log.js";
 
 // Session 状态接口
 export interface SessionState {
@@ -84,7 +85,7 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
     // 检查是否过期
     const now = Date.now();
     if (now - state.savedAt > SESSION_EXPIRE_TIME) {
-      console.log(
+      debugLog(
         `[session-store] Session expired for ${accountId}, age: ${Math.round((now - state.savedAt) / 1000)}s`,
       );
       try {
@@ -97,7 +98,7 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
 
     // 检查 appId 是否匹配（凭据变更检测）
     if (expectedAppId && state.appId && state.appId !== expectedAppId) {
-      console.log(
+      debugLog(
         `[session-store] appId mismatch for ${accountId}: saved=${state.appId}, current=${expectedAppId}. Discarding stale session.`,
       );
       try {
@@ -110,16 +111,16 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
 
     // 验证必要字段
     if (!state.sessionId || state.lastSeq === null || state.lastSeq === undefined) {
-      console.log(`[session-store] Invalid session data for ${accountId}`);
+      debugLog(`[session-store] Invalid session data for ${accountId}`);
       return null;
     }
 
-    console.log(
+    debugLog(
       `[session-store] Loaded session for ${accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}, appId=${state.appId ?? "unknown"}, age=${Math.round((now - state.savedAt) / 1000)}s`,
     );
     return state;
   } catch (err) {
-    console.error(`[session-store] Failed to load session for ${accountId}: ${err}`);
+    debugError(`[session-store] Failed to load session for ${accountId}: ${err}`);
     return null;
   }
 }
@@ -194,11 +195,11 @@ function doSaveSession(state: SessionState): void {
     };
 
     fs.writeFileSync(filePath, JSON.stringify(stateToSave, null, 2), "utf-8");
-    console.log(
+    debugLog(
       `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
     );
   } catch (err) {
-    console.error(`[session-store] Failed to save session for ${state.accountId}: ${err}`);
+    debugError(`[session-store] Failed to save session for ${state.accountId}: ${err}`);
   }
 }
 
@@ -221,10 +222,10 @@ export function clearSession(accountId: string): void {
   try {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      console.log(`[session-store] Cleared session for ${accountId}`);
+      debugLog(`[session-store] Cleared session for ${accountId}`);
     }
   } catch (err) {
-    console.error(`[session-store] Failed to clear session for ${accountId}: ${err}`);
+    debugError(`[session-store] Failed to clear session for ${accountId}: ${err}`);
   }
 }
 
@@ -293,7 +294,7 @@ export function cleanupExpiredSessions(): number {
           if (now - state.savedAt > SESSION_EXPIRE_TIME) {
             fs.unlinkSync(filePath);
             cleaned++;
-            console.log(`[session-store] Cleaned expired session: ${file}`);
+            debugLog(`[session-store] Cleaned expired session: ${file}`);
           }
         } catch {
           // 忽略解析错误，但也删除损坏的文件

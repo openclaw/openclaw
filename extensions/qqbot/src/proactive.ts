@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ResolvedQQBotAccount } from "./types.js";
+import { debugLog, debugError } from "./utils/debug-log.js";
 
 // ============ 类型定义（本地） ============
 
@@ -125,7 +126,7 @@ function loadKnownUsers(): Map<string, KnownUser> {
       cacheLastModified = fs.statSync(KNOWN_USERS_FILE).mtimeMs;
     }
   } catch (err) {
-    console.error(`[qqbot:proactive] Failed to load known users: ${err}`);
+    debugError(`[qqbot:proactive] Failed to load known users: ${err}`);
   }
 
   knownUsersCache = users;
@@ -143,7 +144,7 @@ function saveKnownUsers(users: Map<string, KnownUser>): void {
     cacheLastModified = Date.now();
     knownUsersCache = users;
   } catch (err) {
-    console.error(`[qqbot:proactive] Failed to save known users: ${err}`);
+    debugError(`[qqbot:proactive] Failed to save known users: ${err}`);
   }
 }
 
@@ -168,7 +169,7 @@ export function recordKnownUser(user: Omit<KnownUser, "firstInteractionAt">): vo
   });
 
   saveKnownUsers(users);
-  console.log(`[qqbot:proactive] Recorded user: ${key}`);
+  debugLog(`[qqbot:proactive] Recorded user: ${key}`);
 }
 
 /**
@@ -333,9 +334,9 @@ export async function sendProactive(
             undefined,
           );
         }
-        console.log(`[qqbot:proactive] Sent image to ${type}:${to}`);
+        debugLog(`[qqbot:proactive] Sent image to ${type}:${to}`);
       } catch (err) {
-        console.error(`[qqbot:proactive] Failed to send image: ${err}`);
+        debugError(`[qqbot:proactive] Failed to send image: ${err}`);
         // 图片发送失败不影响文本发送
       }
     }
@@ -360,7 +361,7 @@ export async function sendProactive(
       };
     }
 
-    console.log(`[qqbot:proactive] Sent message to ${type}:${to}, id: ${result.id}`);
+    debugLog(`[qqbot:proactive] Sent message to ${type}:${to}, id: ${result.id}`);
 
     return {
       success: true,
@@ -369,7 +370,7 @@ export async function sendProactive(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[qqbot:proactive] Failed to send message: ${message}`);
+    debugError(`[qqbot:proactive] Failed to send message: ${message}`);
 
     return {
       success: false,

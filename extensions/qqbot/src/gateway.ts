@@ -693,9 +693,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 : ""),
           );
         }
-        // AI 看到的投递地址必须带完整前缀（qqbot:c2c: / qqbot:group:）
+        // AI 看到的投递地址必须带完整前缀（qqbot:c2c: / qqbot:group: / qqbot:channel:）
         const qualifiedTarget = isGroupChat
-          ? `qqbot:group:${event.groupOpenid}`
+          ? event.type === "guild"
+            ? `qqbot:channel:${event.channelId}`
+            : `qqbot:group:${event.groupOpenid}`
           : `qqbot:c2c:${event.senderId}`;
 
         // 动态检测 TTS 配置状态

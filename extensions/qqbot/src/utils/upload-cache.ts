@@ -9,6 +9,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import { debugLog } from "./debug-log.js";
 
 interface CacheEntry {
   fileInfo: string;
@@ -69,7 +70,7 @@ export function getCachedFileInfo(
     return null;
   }
 
-  console.log(`[upload-cache] Cache HIT: key=${key.slice(0, 40)}..., fileUuid=${entry.fileUuid}`);
+  debugLog(`[upload-cache] Cache HIT: key=${key.slice(0, 40)}..., fileUuid=${entry.fileUuid}`);
   return entry.fileInfo;
 }
 
@@ -114,7 +115,7 @@ export function setCachedFileInfo(
     expiresAt: Date.now() + effectiveTtl * 1000,
   });
 
-  console.log(
+  debugLog(
     `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
 }
@@ -131,5 +132,5 @@ export function getUploadCacheStats(): { size: number; maxSize: number } {
  */
 export function clearUploadCache(): void {
   cache.clear();
-  console.log(`[upload-cache] Cache cleared`);
+  debugLog(`[upload-cache] Cache cleared`);
 }

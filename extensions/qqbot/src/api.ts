@@ -5,6 +5,7 @@
 
 import { createRequire } from "node:module";
 import os from "node:os";
+import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
 
@@ -100,7 +101,7 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
   // Singleflight: 如果当前 appId 已有进行中的 Token 获取请求，复用它
   let fetchPromise = tokenFetchPromises.get(normalizedAppId);
   if (fetchPromise) {
-    console.log(
+    debugLog(
       `[qqbot-api:${normalizedAppId}] Token fetch in progress, waiting for existing request...`,
     );
     return fetchPromise;
@@ -128,7 +129,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   const requestHeaders = { "Content-Type": "application/json", "User-Agent": PLUGIN_USER_AGENT };
 
   // 打印请求信息（隐藏敏感信息）
-  console.log(`[qqbot-api:${appId}] >>> POST ${TOKEN_URL}`);
+  debugLog(`[qqbot-api:${appId}] >>> POST ${TOKEN_URL}`);
 
   let response: Response;
   try {
@@ -138,7 +139,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
       body: JSON.stringify(requestBody),
     });
   } catch (err) {
-    console.error(`[qqbot-api:${appId}] <<< Network error:`, err);
+    debugError(`[qqbot-api:${appId}] <<< Network error:`, err);
     throw new Error(
       `Network error getting access_token: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -150,7 +151,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     responseHeaders[key] = value;
   });
   const tokenTraceId = response.headers.get("x-tps-trace-id") ?? "";
-  console.log(
+  debugLog(
     `[qqbot-api:${appId}] <<< Status: ${response.status} ${response.statusText}${tokenTraceId ? ` | TraceId: ${tokenTraceId}` : ""}`,
   );
 
@@ -160,10 +161,10 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     rawBody = await response.text();
     // 隐藏 token 值
     const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-    console.log(`[qqbot-api:${appId}] <<< Body:`, logBody);
+    debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
     data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
   } catch (err) {
-    console.error(`[qqbot-api:${appId}] <<< Parse error:`, err);
+    debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
     throw new Error(
       `Failed to parse access_token response: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -181,9 +182,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     appId,
   });
 
-  console.log(
-    `[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`,
-  );
+  debugLog(`[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`);
   return data.access_token;
 }
 
@@ -195,10 +194,10 @@ export function clearTokenCache(appId?: string): void {
   if (appId) {
     const normalizedAppId = String(appId).trim();
     tokenCacheMap.delete(normalizedAppId);
-    console.log(`[qqbot-api:${normalizedAppId}] Token cache cleared manually.`);
+    debugLog(`[qqbot-api:${normalizedAppId}] Token cache cleared manually.`);
   } else {
     tokenCacheMap.clear();
-    console.log(`[qqbot-api] All token caches cleared.`);
+    debugLog(`[qqbot-api] All token caches cleared.`);
   }
 }
 
@@ -271,13 +270,13 @@ export async function apiRequest<T = unknown>(
   }
 
   // 打印请求信息
-  console.log(`[qqbot-api] >>> ${method} ${url} (timeout: ${timeout}ms)`);
+  debugLog(`[qqbot-api] >>> ${method} ${url} (timeout: ${timeout}ms)`);
   if (body) {
     const logBody = { ...body } as Record<string, unknown>;
     if (typeof logBody.file_data === "string") {
       logBody.file_data = `<base64 ${(logBody.file_data as string).length} chars>`;
     }
-    console.log(`[qqbot-api] >>> Body:`, JSON.stringify(logBody));
+    debugLog(`[qqbot-api] >>> Body:`, JSON.stringify(logBody));
   }
 
   let res: Response;
@@ -286,10 +285,10 @@ export async function apiRequest<T = unknown>(
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
-      console.error(`[qqbot-api] <<< Request timeout after ${timeout}ms`);
+      debugError(`[qqbot-api] <<< Request timeout after ${timeout}ms`);
       throw new Error(`Request timeout[${path}]: exceeded ${timeout}ms`);
     }
-    console.error(`[qqbot-api] <<< Network error:`, err);
+    debugError(`[qqbot-api] <<< Network error:`, err);
     throw new Error(`Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clearTimeout(timeoutId);
@@ -300,7 +299,7 @@ export async function apiRequest<T = unknown>(
     responseHeaders[key] = value;
   });
   const traceId = res.headers.get("x-tps-trace-id") ?? "";
-  console.log(
+  debugLog(
     `[qqbot-api] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
   );
 
@@ -308,7 +307,7 @@ export async function apiRequest<T = unknown>(
   let rawBody: string;
   try {
     rawBody = await res.text();
-    console.log(`[qqbot-api] <<< Body:`, rawBody);
+    debugLog(`[qqbot-api] <<< Body:`, rawBody);
     data = JSON.parse(rawBody) as T;
   } catch (err) {
     throw new Error(
@@ -358,7 +357,7 @@ async function apiRequestWithRetry<T = unknown>(
 
       if (attempt < maxRetries) {
         const delay = UPLOAD_BASE_DELAY_MS * Math.pow(2, attempt);
-        console.log(
+        debugLog(
           `[qqbot-api] Upload attempt ${attempt + 1} failed, retrying in ${delay}ms: ${errMsg.slice(0, 100)}`,
         );
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -403,7 +402,7 @@ async function sendAndNotify(
     try {
       hook(result.ext_info.ref_idx, meta);
     } catch (err) {
-      console.error(`[qqbot-api:${appId}] onMessageSent hook error: ${err}`);
+      debugError(`[qqbot-api:${appId}] onMessageSent hook error: ${err}`);
     }
   }
   return result;
@@ -947,7 +946,7 @@ export function startBackgroundTokenRefresh(
   options?: BackgroundTokenRefreshOptions,
 ): void {
   if (backgroundRefreshControllers.has(appId)) {
-    console.log(`[qqbot-api:${appId}] Background token refresh already running`);
+    debugLog(`[qqbot-api:${appId}] Background token refresh already running`);
     return;
   }
 

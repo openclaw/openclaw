@@ -15,6 +15,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { debugLog, debugError } from "./utils/debug-log.js";
 import { getQQBotDataDir } from "./utils/platform.js";
 
 // ============ 存储的消息摘要 ============
@@ -119,7 +120,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
       }
     }
 
-    console.log(
+    debugLog(
       `[ref-index-store] Loaded ${cache.size} entries from ${totalLinesOnDisk} lines (${expired} expired)`,
     );
 
@@ -128,7 +129,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
       compactFile();
     }
   } catch (err) {
-    console.error(`[ref-index-store] Failed to load: ${err}`);
+    debugError(`[ref-index-store] Failed to load: ${err}`);
     cache = new Map();
   }
 
@@ -146,7 +147,7 @@ function appendLine(line: RefIndexLine): void {
     fs.appendFileSync(REF_INDEX_FILE, JSON.stringify(line) + "\n", "utf-8");
     totalLinesOnDisk++;
   } catch (err) {
-    console.error(`[ref-index-store] Failed to append: ${err}`);
+    debugError(`[ref-index-store] Failed to append: ${err}`);
   }
 }
 
@@ -192,9 +193,9 @@ function compactFile(): void {
     fs.writeFileSync(tmpPath, lines.join("\n") + "\n", "utf-8");
     fs.renameSync(tmpPath, REF_INDEX_FILE);
     totalLinesOnDisk = cache.size;
-    console.log(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
+    debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
   } catch (err) {
-    console.error(`[ref-index-store] Compact failed: ${err}`);
+    debugError(`[ref-index-store] Compact failed: ${err}`);
   }
 }
 
@@ -218,7 +219,7 @@ function evictIfNeeded(): void {
     for (const [key] of toRemove) {
       cache.delete(key);
     }
-    console.log(`[ref-index-store] Evicted ${toRemove.length} oldest entries`);
+    debugLog(`[ref-index-store] Evicted ${toRemove.length} oldest entries`);
   }
 }
 

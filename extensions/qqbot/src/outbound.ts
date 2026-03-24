@@ -26,6 +26,7 @@ import {
   waitForFile,
   shouldTranscodeVoice,
 } from "./utils/audio-convert.js";
+import { debugLog, debugError, debugWarn } from "./utils/debug-log.js";
 import { downloadFile } from "./utils/file-utils.js";
 import {
   checkFileSize,
@@ -146,7 +147,7 @@ export function recordMessageReply(messageId: string): void {
       record.count++;
     }
   }
-  console.log(
+  debugLog(
     `[qqbot] recordMessageReply: ${messageId}, count=${messageReplyTracker.get(messageId)?.count}`,
   );
 }
@@ -206,7 +207,7 @@ export interface OutboundResult {
  */
 function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: string } {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] [qqbot] parseTarget: input=${to}`);
+  debugLog(`[${timestamp}] [qqbot] parseTarget: input=${to}`);
 
   // 去掉 qqbot: 前缀
   let id = to.replace(/^qqbot:/i, "");
@@ -215,10 +216,10 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
     const userId = id.slice(4);
     if (!userId || userId.length === 0) {
       const error = `Invalid c2c target format: ${to} - missing user ID`;
-      console.error(`[${timestamp}] [qqbot] parseTarget: ${error}`);
+      debugError(`[${timestamp}] [qqbot] parseTarget: ${error}`);
       throw new Error(error);
     }
-    console.log(`[${timestamp}] [qqbot] parseTarget: c2c target, user ID=${userId}`);
+    debugLog(`[${timestamp}] [qqbot] parseTarget: c2c target, user ID=${userId}`);
     return { type: "c2c", id: userId };
   }
 
@@ -226,10 +227,10 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
     const groupId = id.slice(6);
     if (!groupId || groupId.length === 0) {
       const error = `Invalid group target format: ${to} - missing group ID`;
-      console.error(`[${timestamp}] [qqbot] parseTarget: ${error}`);
+      debugError(`[${timestamp}] [qqbot] parseTarget: ${error}`);
       throw new Error(error);
     }
-    console.log(`[${timestamp}] [qqbot] parseTarget: group target, group ID=${groupId}`);
+    debugLog(`[${timestamp}] [qqbot] parseTarget: group target, group ID=${groupId}`);
     return { type: "group", id: groupId };
   }
 
@@ -237,21 +238,21 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
     const channelId = id.slice(8);
     if (!channelId || channelId.length === 0) {
       const error = `Invalid channel target format: ${to} - missing channel ID`;
-      console.error(`[${timestamp}] [qqbot] parseTarget: ${error}`);
+      debugError(`[${timestamp}] [qqbot] parseTarget: ${error}`);
       throw new Error(error);
     }
-    console.log(`[${timestamp}] [qqbot] parseTarget: channel target, channel ID=${channelId}`);
+    debugLog(`[${timestamp}] [qqbot] parseTarget: channel target, channel ID=${channelId}`);
     return { type: "channel", id: channelId };
   }
 
   // 默认当作 c2c（私聊）
   if (!id || id.length === 0) {
     const error = `Invalid target format: ${to} - empty ID after removing qqbot: prefix`;
-    console.error(`[${timestamp}] [qqbot] parseTarget: ${error}`);
+    debugError(`[${timestamp}] [qqbot] parseTarget: ${error}`);
     throw new Error(error);
   }
 
-  console.log(`[${timestamp}] [qqbot] parseTarget: default c2c target, ID=${id}`);
+  debugLog(`[${timestamp}] [qqbot] parseTarget: default c2c target, ID=${id}`);
   return { type: "c2c", id };
 }
 
@@ -322,7 +323,7 @@ export async function sendPhoto(
 
   // urlDirectUpload=false 时，公网 URL 直接下载到本地再发送
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    console.log(`${prefix} sendPhoto: urlDirectUpload=false, downloading URL first...`);
+    debugLog(`${prefix} sendPhoto: urlDirectUpload=false, downloading URL first...`);
     const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendPhoto");
     if (localFile) {
       return await sendPhoto(ctx, localFile);
@@ -355,7 +356,7 @@ export async function sendPhoto(
       return { channel: "qqbot", error: `Unsupported image format: ${ext}` };
     }
     imageUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
-    console.log(`${prefix} sendPhoto: local → Base64 (${formatFileSize(fileBuffer.length)})`);
+    debugLog(`${prefix} sendPhoto: local → Base64 (${formatFileSize(fileBuffer.length)})`);
   } else if (!isHttp && !isData) {
     return { channel: "qqbot", error: `不支持的图片来源: ${mediaPath.slice(0, 50)}` };
   }
@@ -390,7 +391,7 @@ export async function sendPhoto(
         const r = await sendChannelMessage(token, ctx.targetId, `![](${mediaPath})`, ctx.replyToId);
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       }
-      console.log(`${prefix} sendPhoto: channel does not support local/Base64 images`);
+      debugLog(`${prefix} sendPhoto: channel does not support local/Base64 images`);
       return { channel: "qqbot" };
     }
   } catch (err) {
@@ -398,14 +399,14 @@ export async function sendPhoto(
 
     // 公网 URL 直传失败（如 QQ 平台拉取海外域名超时/被墙）→ 插件自己下载 → Base64 重试
     if (isHttp && !isData) {
-      console.warn(
+      debugWarn(
         `${prefix} sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath, prefix);
       if (retryResult) return retryResult;
     }
 
-    console.error(`${prefix} sendPhoto failed: ${msg}`);
+    debugError(`${prefix} sendPhoto failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -423,17 +424,15 @@ async function downloadAndRetrySendPhoto(
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      console.error(
-        `${prefix} sendPhoto fallback: download also failed for ${httpUrl.slice(0, 80)}`,
-      );
+      debugError(`${prefix} sendPhoto fallback: download also failed for ${httpUrl.slice(0, 80)}`);
       return null;
     }
 
-    console.log(`${prefix} sendPhoto fallback: downloaded → ${localFile}, retrying as Base64`);
+    debugLog(`${prefix} sendPhoto fallback: downloaded → ${localFile}, retrying as Base64`);
     // 递归调用 sendPhoto，此时走本地文件路径
     return await sendPhoto(ctx, localFile);
   } catch (err) {
-    console.error(`${prefix} sendPhoto fallback error:`, err);
+    debugError(`${prefix} sendPhoto fallback error:`, err);
     return null;
   }
 }
@@ -487,17 +486,17 @@ export async function sendVoice(
           );
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
         } else {
-          console.log(`${prefix} sendVoice: voice not supported in channel`);
+          debugLog(`${prefix} sendVoice: voice not supported in channel`);
           return { channel: "qqbot", error: "Voice not supported in channel" };
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
+        debugWarn(
           `${prefix} sendVoice: URL direct upload failed (${msg}), downloading locally and retrying...`,
         );
       }
     } else {
-      console.log(`${prefix} sendVoice: urlDirectUpload=false, downloading URL first...`);
+      debugLog(`${prefix} sendVoice: urlDirectUpload=false, downloading URL first...`);
     }
 
     // 下载到本地，然后走本地文件路径（含转码）
@@ -538,7 +537,7 @@ async function sendVoiceFromLocal(
   // 转码已禁用但需要转码 → 提前 fallback
   if (needsTranscode && !transcodeEnabled) {
     const ext = path.extname(mediaPath).toLowerCase();
-    console.log(
+    debugLog(
       `${prefix} sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
     return { channel: "qqbot", error: `语音转码已禁用，格式 ${ext} 不支持直传` };
@@ -551,11 +550,11 @@ async function sendVoiceFromLocal(
     if (!uploadBase64) {
       const buf = await readFileAsync(mediaPath);
       uploadBase64 = buf.toString("base64");
-      console.log(
+      debugLog(
         `${prefix} sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`,
       );
     } else {
-      console.log(`${prefix} sendVoice: SILK ready (${fileSize} bytes)`);
+      debugLog(`${prefix} sendVoice: SILK ready (${fileSize} bytes)`);
     }
 
     const token = await getToken(ctx.account);
@@ -583,12 +582,12 @@ async function sendVoiceFromLocal(
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      console.log(`${prefix} sendVoice: voice not supported in channel`);
+      debugLog(`${prefix} sendVoice: voice not supported in channel`);
       return { channel: "qqbot", error: "Voice not supported in channel" };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${prefix} sendVoice (local) failed: ${msg}`);
+    debugError(`${prefix} sendVoice (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -608,7 +607,7 @@ export async function sendVideoMsg(
 
   // urlDirectUpload=false 时，公网 URL 直接下载到本地再发送
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    console.log(`${prefix} sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
+    debugLog(`${prefix} sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
     const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendVideoMsg");
     if (localFile) {
       return await sendVideoFromLocal(ctx, localFile, prefix);
@@ -642,7 +641,7 @@ export async function sendVideoMsg(
         );
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
-        console.log(`${prefix} sendVideoMsg: video not supported in channel`);
+        debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
         return { channel: "qqbot", error: "Video not supported in channel" };
       }
     }
@@ -654,7 +653,7 @@ export async function sendVideoMsg(
 
     // 公网 URL 直传失败 → 插件下载 → Base64 重试
     if (isHttp) {
-      console.warn(
+      debugWarn(
         `${prefix} sendVideoMsg: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendVideoMsg");
@@ -663,7 +662,7 @@ export async function sendVideoMsg(
       }
     }
 
-    console.error(`${prefix} sendVideoMsg failed: ${msg}`);
+    debugError(`${prefix} sendVideoMsg failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -684,7 +683,7 @@ async function sendVideoFromLocal(
 
   const fileBuffer = await readFileAsync(mediaPath);
   const videoBase64 = fileBuffer.toString("base64");
-  console.log(`${prefix} sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`${prefix} sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
 
   try {
     const token = await getToken(ctx.account);
@@ -711,12 +710,12 @@ async function sendVideoFromLocal(
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      console.log(`${prefix} sendVideoMsg: video not supported in channel`);
+      debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
       return { channel: "qqbot", error: "Video not supported in channel" };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${prefix} sendVideoMsg (local) failed: ${msg}`);
+    debugError(`${prefix} sendVideoMsg (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -737,7 +736,7 @@ export async function sendDocument(
 
   // urlDirectUpload=false 时，公网 URL 直接下载到本地再发送
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    console.log(`${prefix} sendDocument: urlDirectUpload=false, downloading URL first...`);
+    debugLog(`${prefix} sendDocument: urlDirectUpload=false, downloading URL first...`);
     const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendDocument");
     if (localFile) {
       return await sendDocumentFromLocal(ctx, localFile, prefix);
@@ -773,7 +772,7 @@ export async function sendDocument(
         );
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
-        console.log(`${prefix} sendDocument: file not supported in channel`);
+        debugLog(`${prefix} sendDocument: file not supported in channel`);
         return { channel: "qqbot", error: "File not supported in channel" };
       }
     }
@@ -785,7 +784,7 @@ export async function sendDocument(
 
     // 公网 URL 直传失败 → 插件下载 → Base64 重试
     if (isHttp) {
-      console.warn(
+      debugWarn(
         `${prefix} sendDocument: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendDocument");
@@ -794,7 +793,7 @@ export async function sendDocument(
       }
     }
 
-    console.error(`${prefix} sendDocument failed: ${msg}`);
+    debugError(`${prefix} sendDocument failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -819,7 +818,7 @@ async function sendDocumentFromLocal(
     return { channel: "qqbot", error: `文件内容为空: ${mediaPath}` };
   }
   const fileBase64 = fileBuffer.toString("base64");
-  console.log(`${prefix} sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`${prefix} sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
 
   try {
     const token = await getToken(ctx.account);
@@ -847,12 +846,12 @@ async function sendDocumentFromLocal(
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      console.log(`${prefix} sendDocument: file not supported in channel`);
+      debugLog(`${prefix} sendDocument: file not supported in channel`);
       return { channel: "qqbot", error: "File not supported in channel" };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${prefix} sendDocument (local) failed: ${msg}`);
+    debugError(`${prefix} sendDocument (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -870,15 +869,13 @@ async function downloadToFallbackDir(
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      console.error(
-        `${prefix} ${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`,
-      );
+      debugError(`${prefix} ${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`);
       return null;
     }
-    console.log(`${prefix} ${caller} fallback: downloaded → ${localFile}`);
+    debugLog(`${prefix} ${caller} fallback: downloaded → ${localFile}`);
     return localFile;
   } catch (err) {
-    console.error(`${prefix} ${caller} fallback download error:`, err);
+    debugError(`${prefix} ${caller} fallback download error:`, err);
     return null;
   }
 }
@@ -898,7 +895,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   let { text, replyToId } = ctx;
   let fallbackToProactive = false;
 
-  console.log(
+  debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
       { to, text: text?.slice(0, 50), replyToId, accountId: account.accountId },
@@ -915,19 +912,19 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     if (!limitCheck.allowed) {
       // 检查是否需要降级为主动消息
       if (limitCheck.shouldFallbackToProactive) {
-        console.warn(`[qqbot] sendText: 被动回复不可用，降级为主动消息 - ${limitCheck.message}`);
+        debugWarn(`[qqbot] sendText: 被动回复不可用，降级为主动消息 - ${limitCheck.message}`);
         fallbackToProactive = true;
         replyToId = null; // 清除 replyToId，改为主动消息
       } else {
         // 不应该发生，但作为保底
-        console.error(`[qqbot] sendText: 消息回复被限流但未设置降级 - ${limitCheck.message}`);
+        debugError(`[qqbot] sendText: 消息回复被限流但未设置降级 - ${limitCheck.message}`);
         return {
           channel: "qqbot",
           error: limitCheck.message,
         };
       }
     } else {
-      console.log(
+      debugLog(
         `[qqbot] sendText: 消息 ${replyToId} 剩余被动回复次数: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`,
       );
     }
@@ -949,7 +946,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const mediaTagMatches = text.match(mediaTagRegex);
 
   if (mediaTagMatches && mediaTagMatches.length > 0) {
-    console.log(`[qqbot] sendText: Detected ${mediaTagMatches.length} media tag(s), processing...`);
+    debugLog(`[qqbot] sendText: Detected ${mediaTagMatches.length} media tag(s), processing...`);
 
     // 构建发送队列：根据内容在原文中的实际位置顺序发送
     const sendQueue: Array<{
@@ -991,7 +988,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
 
         if (hasOctal || hasNonASCII) {
-          console.log(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
 
           // Step 1: 将八进制转义转换为字节
           let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
@@ -1016,29 +1013,29 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
           if (!utf8Decoded.includes("\uFFFD") || utf8Decoded.length < decoded.length) {
             mediaPath = utf8Decoded;
-            console.log(`[qqbot] sendText: Successfully decoded path: ${mediaPath}`);
+            debugLog(`[qqbot] sendText: Successfully decoded path: ${mediaPath}`);
           }
         }
       } catch (decodeErr) {
-        console.error(`[qqbot] sendText: Path decode error: ${decodeErr}`);
+        debugError(`[qqbot] sendText: Path decode error: ${decodeErr}`);
       }
 
       if (mediaPath) {
         if (tagName === "qqmedia") {
           sendQueue.push({ type: "media", content: mediaPath });
-          console.log(`[qqbot] sendText: Found auto-detect media in <qqmedia>: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Found auto-detect media in <qqmedia>: ${mediaPath}`);
         } else if (tagName === "qqvoice") {
           sendQueue.push({ type: "voice", content: mediaPath });
-          console.log(`[qqbot] sendText: Found voice path in <qqvoice>: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Found voice path in <qqvoice>: ${mediaPath}`);
         } else if (tagName === "qqvideo") {
           sendQueue.push({ type: "video", content: mediaPath });
-          console.log(`[qqbot] sendText: Found video URL in <qqvideo>: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Found video URL in <qqvideo>: ${mediaPath}`);
         } else if (tagName === "qqfile") {
           sendQueue.push({ type: "file", content: mediaPath });
-          console.log(`[qqbot] sendText: Found file path in <qqfile>: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Found file path in <qqfile>: ${mediaPath}`);
         } else {
           sendQueue.push({ type: "image", content: mediaPath });
-          console.log(`[qqbot] sendText: Found image path in <qqimg>: ${mediaPath}`);
+          debugLog(`[qqbot] sendText: Found image path in <qqimg>: ${mediaPath}`);
         }
       }
 
@@ -1054,7 +1051,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       sendQueue.push({ type: "text", content: textAfter });
     }
 
-    console.log(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
+    debugLog(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
     // 按顺序发送（使用 Telegram 风格的统一媒体发送函数）
     const mediaTarget = buildMediaTarget({ to, account, replyToId }, "[qqbot:sendText]");
@@ -1151,7 +1148,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
               };
             }
           }
-          console.log(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+          debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
         } else if (item.type === "voice") {
@@ -1178,7 +1175,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[qqbot] sendText: Failed to send ${item.type}: ${errMsg}`);
+        debugError(`[qqbot] sendText: Failed to send ${item.type}: ${errMsg}`);
       }
     }
 
@@ -1189,16 +1186,16 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   // 如果是主动消息（无 replyToId 或降级后），必须有消息内容
   if (!replyToId) {
     if (!text || text.trim().length === 0) {
-      console.error("[qqbot] sendText error: 主动消息的内容不能为空 (text is empty)");
+      debugError("[qqbot] sendText error: 主动消息的内容不能为空 (text is empty)");
       return {
         channel: "qqbot",
         error: "主动消息必须有内容 (--message 参数不能为空)",
       };
     }
     if (fallbackToProactive) {
-      console.log(`[qqbot] sendText: [降级] 发送主动消息到 ${to}, 内容长度: ${text.length}`);
+      debugLog(`[qqbot] sendText: [降级] 发送主动消息到 ${to}, 内容长度: ${text.length}`);
     } else {
-      console.log(`[qqbot] sendText: 发送主动消息到 ${to}, 内容长度: ${text.length}`);
+      debugLog(`[qqbot] sendText: 发送主动消息到 ${to}, 内容长度: ${text.length}`);
     }
   }
 
@@ -1209,7 +1206,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   try {
     const accessToken = await getAccessToken(account.appId, account.clientSecret);
     const target = parseTarget(to);
-    console.log("[qqbot] sendText target:", JSON.stringify(target));
+    debugLog("[qqbot] sendText target:", JSON.stringify(target));
 
     // 如果没有 replyToId，使用主动发送接口
     if (!replyToId) {
@@ -1297,33 +1294,33 @@ export async function sendProactiveMessage(
 
   if (!account.appId || !account.clientSecret) {
     const errorMsg = "QQBot not configured (missing appId or clientSecret)";
-    console.error(`[${timestamp}] [qqbot] sendProactiveMessage: ${errorMsg}`);
+    debugError(`[${timestamp}] [qqbot] sendProactiveMessage: ${errorMsg}`);
     return { channel: "qqbot", error: errorMsg };
   }
 
-  console.log(
+  debugLog(
     `[${timestamp}] [qqbot] sendProactiveMessage: starting, to=${to}, text length=${text.length}, accountId=${account.accountId}`,
   );
 
   try {
-    console.log(
+    debugLog(
       `[${timestamp}] [qqbot] sendProactiveMessage: getting access token for appId=${account.appId}`,
     );
     const accessToken = await getAccessToken(account.appId, account.clientSecret);
 
-    console.log(`[${timestamp}] [qqbot] sendProactiveMessage: parsing target=${to}`);
+    debugLog(`[${timestamp}] [qqbot] sendProactiveMessage: parsing target=${to}`);
     const target = parseTarget(to);
-    console.log(
+    debugLog(
       `[${timestamp}] [qqbot] sendProactiveMessage: target parsed, type=${target.type}, id=${target.id}`,
     );
 
     let outResult: OutboundResult;
     if (target.type === "c2c") {
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive C2C message to user=${target.id}`,
       );
       const result = await sendProactiveC2CMessage(account.appId, accessToken, target.id, text);
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: proactive C2C message sent successfully, messageId=${result.id}`,
       );
       outResult = {
@@ -1333,11 +1330,11 @@ export async function sendProactiveMessage(
         refIdx: (result as any).ext_info?.ref_idx,
       };
     } else if (target.type === "group") {
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive group message to group=${target.id}`,
       );
       const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: proactive group message sent successfully, messageId=${result.id}`,
       );
       outResult = {
@@ -1348,11 +1345,11 @@ export async function sendProactiveMessage(
       };
     } else {
       // 频道暂不支持主动消息，使用普通发送
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: sending channel message to channel=${target.id}`,
       );
       const result = await sendChannelMessage(accessToken, target.id, text);
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendProactiveMessage: channel message sent successfully, messageId=${result.id}`,
       );
       outResult = {
@@ -1365,8 +1362,8 @@ export async function sendProactiveMessage(
     return outResult;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error(`[${timestamp}] [qqbot] sendProactiveMessage: error: ${errorMessage}`);
-    console.error(
+    debugError(`[${timestamp}] [qqbot] sendProactiveMessage: error: ${errorMessage}`);
+    debugError(
       `[${timestamp}] [qqbot] sendProactiveMessage: error stack: ${err instanceof Error ? err.stack : "No stack trace"}`,
     );
     return { channel: "qqbot", error: errorMessage };
@@ -1441,9 +1438,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     }
     // 语音发送失败 fallback 到文件发送（保留错误链）
     const voiceError = result.error;
-    console.warn(
-      `[qqbot] sendMedia: sendVoice failed (${voiceError}), falling back to sendDocument`,
-    );
+    debugWarn(`[qqbot] sendMedia: sendVoice failed (${voiceError}), falling back to sendDocument`);
     const fallback = await sendDocument(target, mediaUrl);
     if (!fallback.error) {
       if (text?.trim()) await sendTextAfterMedia(target, text);
@@ -1485,7 +1480,7 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
       await sendGroupMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
-    console.error(`[qqbot] sendTextAfterMedia failed: ${err}`);
+    debugError(`[qqbot] sendTextAfterMedia failed: ${err}`);
   }
 }
 
@@ -1548,14 +1543,14 @@ export async function sendCronMessage(
   message: string,
 ): Promise<OutboundResult> {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] [qqbot] sendCronMessage: to=${to}, message length=${message.length}`);
+  debugLog(`[${timestamp}] [qqbot] sendCronMessage: to=${to}, message length=${message.length}`);
 
   // 检测是否是 QQBOT_CRON: 格式的结构化载荷
   const cronResult = decodeCronPayload(message);
 
   if (cronResult.isCronPayload) {
     if (cronResult.error) {
-      console.error(
+      debugError(
         `[${timestamp}] [qqbot] sendCronMessage: cron payload decode error: ${cronResult.error}`,
       );
       return {
@@ -1566,7 +1561,7 @@ export async function sendCronMessage(
 
     if (cronResult.payload) {
       const payload = cronResult.payload;
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendCronMessage: decoded cron payload, targetType=${payload.targetType}, targetAddress=${payload.targetAddress}, content length=${payload.content.length}`,
       );
 
@@ -1574,7 +1569,7 @@ export async function sendCronMessage(
       const targetTo =
         payload.targetType === "group" ? `group:${payload.targetAddress}` : payload.targetAddress;
 
-      console.log(
+      debugLog(
         `[${timestamp}] [qqbot] sendCronMessage: sending proactive message to targetTo=${targetTo}`,
       );
 
@@ -1582,11 +1577,11 @@ export async function sendCronMessage(
       const result = await sendProactiveMessage(account, targetTo, payload.content);
 
       if (result.error) {
-        console.error(
+        debugError(
           `[${timestamp}] [qqbot] sendCronMessage: proactive message failed, error=${result.error}`,
         );
       } else {
-        console.log(`[${timestamp}] [qqbot] sendCronMessage: proactive message sent successfully`);
+        debugLog(`[${timestamp}] [qqbot] sendCronMessage: proactive message sent successfully`);
       }
 
       return result;
@@ -1594,6 +1589,6 @@ export async function sendCronMessage(
   }
 
   // 非结构化载荷，作为普通文本处理
-  console.log(`[${timestamp}] [qqbot] sendCronMessage: plain text message, sending to ${to}`);
+  debugLog(`[${timestamp}] [qqbot] sendCronMessage: plain text message, sending to ${to}`);
   return await sendProactiveMessage(account, to, message);
 }

@@ -6,6 +6,7 @@
  */
 
 import { Buffer } from "buffer";
+import { debugLog } from "./debug-log.js";
 
 export interface ImageSize {
   width: number;
@@ -172,7 +173,7 @@ export async function getImageSizeFromUrl(
     clearTimeout(timeoutId);
 
     if (!response.ok && response.status !== 206) {
-      console.log(`[image-size] Failed to fetch ${url}: ${response.status}`);
+      debugLog(`[image-size] Failed to fetch ${url}: ${response.status}`);
       return null;
     }
 
@@ -181,14 +182,14 @@ export async function getImageSizeFromUrl(
 
     const size = parseImageSize(buffer);
     if (size) {
-      console.log(
+      debugLog(
         `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
       );
     }
 
     return size;
   } catch (err) {
-    console.log(`[image-size] Error fetching ${url.slice(0, 60)}...: ${err}`);
+    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${err}`);
     return null;
   }
 }
@@ -209,12 +210,12 @@ export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
 
     const size = parseImageSize(buffer);
     if (size) {
-      console.log(`[image-size] Got size from Base64: ${size.width}x${size.height}`);
+      debugLog(`[image-size] Got size from Base64: ${size.width}x${size.height}`);
     }
 
     return size;
   } catch (err) {
-    console.log(`[image-size] Error parsing Base64: ${err}`);
+    debugLog(`[image-size] Error parsing Base64: ${err}`);
     return null;
   }
 }
