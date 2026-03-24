@@ -1,7 +1,7 @@
 import AppKit
 import OSLog
 
-/// Monitors right Shift key (keyCode 60) to interrupt Talk Mode speech.
+/// Monitors right Option key (keyCode 61) to interrupt Talk Mode speech.
 /// Independent of Push-to-Talk — active whenever Talk Mode is enabled.
 final class TalkSpeechInterruptMonitor: @unchecked Sendable {
     static let shared = TalkSpeechInterruptMonitor()
@@ -46,11 +46,11 @@ final class TalkSpeechInterruptMonitor: @unchecked Sendable {
     }
 
     private func handleFlags(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        // Right Shift key down (keyCode 60).
-        guard keyCode == 60, modifierFlags.contains(.shift) else { return }
+        // Right Option key down (keyCode 61).
+        guard keyCode == 61, modifierFlags.contains(.option) else { return }
         Task { @MainActor in
             guard TalkModeController.shared.phase == .speaking else { return }
-            self.logger.info("right shift — interrupting talk mode speech")
+            self.logger.info("right option — interrupting talk mode speech")
             TalkModeController.shared.stopSpeaking(reason: .userTap)
         }
     }

@@ -81,6 +81,15 @@ struct VoiceWakeSettings: View {
                     binding: self.$state.talkPhaseSoundsEnabled)
                     .disabled(!voiceWakeSupported)
 
+                SettingsToggleRow(
+                    title: "Press Right Option to stop speech",
+                    subtitle: """
+                    Tap the right Option key to interrupt the assistant while it is
+                    speaking and return to listening.
+                    """,
+                    binding: self.$state.talkShiftToStopEnabled)
+                    .disabled(!voiceWakeSupported)
+
                 if !voiceWakeSupported {
                     Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)

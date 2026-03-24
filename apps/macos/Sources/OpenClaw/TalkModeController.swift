@@ -18,7 +18,7 @@ final class TalkModeController {
         } else {
             TalkOverlayController.shared.dismiss()
         }
-        TalkSpeechInterruptMonitor.shared.setEnabled(enabled)
+        TalkSpeechInterruptMonitor.shared.setEnabled(enabled && AppStateStore.shared.talkShiftToStopEnabled)
         await TalkModeRuntime.shared.setEnabled(enabled)
         // Resume voice wake listener *after* TalkMode audio is fully torn down.
         // Check swabbleEnabled (not voiceWakeTriggersTalkMode) so the paused wake listener

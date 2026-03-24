@@ -184,6 +184,15 @@ final class AppState {
         }
     }
 
+    var talkShiftToStopEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
+                Task { TalkSpeechInterruptMonitor.shared.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled) }
+            }
+        }
+    }
+
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
@@ -322,6 +331,12 @@ final class AppState {
         } else {
             self.talkPhaseSoundsEnabled = true
             UserDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
+        }
+        if let storedShiftToStop = UserDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
+            self.talkShiftToStopEnabled = storedShiftToStop
+        } else {
+            self.talkShiftToStopEnabled = true
+            UserDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
@@ -793,6 +808,7 @@ extension AppState {
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
         state.talkPhaseSoundsEnabled = true
+        state.talkShiftToStopEnabled = true
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
