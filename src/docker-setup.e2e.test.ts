@@ -224,6 +224,7 @@ describe("scripts/docker/setup.sh", () => {
   it("avoids shared-network openclaw-cli before the gateway is started", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
+    await writeFile(activeSandbox.logPath, "");
     const result = runDockerSetup(activeSandbox);
     expect(result.status).toBe(0);
 
