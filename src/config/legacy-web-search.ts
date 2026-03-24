@@ -214,7 +214,14 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     });
   }
 
-  for (const providerId of ["firecrawl", "gemini", "grok", "kimi", "perplexity"] as const) {
+  for (const providerId of [
+    "bocha",
+    "firecrawl",
+    "gemini",
+    "grok",
+    "kimi",
+    "perplexity",
+  ] as const) {
     const scoped = copyLegacyProviderConfig(search, providerId);
     if (!scoped || Object.keys(scoped).length === 0) {
       continue;

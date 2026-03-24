@@ -315,6 +315,34 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("migrates legacy bocha config to the plugin-owned path", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "bocha",
+            bocha: {
+              apiKey: "bocha-test-key",
+              summary: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.tools?.web?.search?.provider).toBe("bocha");
+    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.bocha).toBe(
+      undefined,
+    );
+    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "bocha")).toEqual(
+      "bocha-test-key",
+    );
+  });
+
   it("rejects invalid brave mode config values", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
