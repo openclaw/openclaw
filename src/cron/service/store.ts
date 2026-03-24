@@ -62,10 +62,7 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(
-  state: CronServiceState,
-  opts?: { skipBackup?: boolean },
-) {
+export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
   if (!state.store) {
     return;
   }
