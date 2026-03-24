@@ -216,6 +216,20 @@ describe("getMemorySearchManager caching", () => {
     expect(second.manager).toBe(first.manager);
   });
 
+  it("reuses cached full qmd manager for status-only requests", async () => {
+    const agentId = "status-reuses-full-agent";
+    const cfg = createQmdCfg(agentId);
+
+    const full = await getMemorySearchManager({ cfg, agentId });
+    const status = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+
+    requireManager(full);
+    requireManager(status);
+    expect(status.manager).toBe(full.manager);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {
     const retryAgentId = "retry-agent-close";
     const {

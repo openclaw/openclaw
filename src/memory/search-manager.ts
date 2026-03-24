@@ -52,6 +52,15 @@ export async function getMemorySearchManager(params: {
     if (cached) {
       return { manager: cached };
     }
+    if (statusOnly) {
+      // Reuse an existing full manager for status requests to avoid duplicate
+      // QMD managers and extra sqlite handles for the same agent/config.
+      const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
+      if (fullCached) {
+        QMD_MANAGER_CACHE.set(cacheKey, fullCached);
+        return { manager: fullCached };
+      }
+    }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
       const primary = await QmdMemoryManager.create({
