@@ -89,6 +89,8 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
+const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
@@ -104,20 +106,10 @@ export function parseAt(input: string, tz?: string): string | null {
 
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
-  if (tz) {
-    const isoNoOffset = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(raw);
-    if (isoNoOffset) {
-      try {
-        // Use Intl to find the UTC offset for the given tz at the specified local time.
-        // We first parse naively as UTC to get a rough Date, then compute the real offset.
-        const naiveMs = new Date(`${raw}Z`).getTime();
-        if (!Number.isNaN(naiveMs)) {
-          const offset = getTimezoneOffsetMs(naiveMs, tz);
-          return new Date(naiveMs - offset).toISOString();
-        }
-      } catch {
-        // Fall through to default parsing if tz is invalid
-      }
+  if (tz && OFFSETLESS_ISO_DATETIME_RE.test(raw)) {
+    const resolved = parseOffsetlessAtInTimezone(raw, tz);
+    if (resolved) {
+      return resolved;
     }
   }
 
@@ -130,6 +122,26 @@ export function parseAt(input: string, tz?: string): string | null {
     return new Date(Date.now() + dur).toISOString();
   }
   return null;
+}
+
+function parseOffsetlessAtInTimezone(raw: string, tz: string): string | null {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+
+    const naiveMs = new Date(`${raw}Z`).getTime();
+    if (Number.isNaN(naiveMs)) {
+      return null;
+    }
+
+    // Re-check the offset at the first candidate instant so DST boundaries
+    // land on the intended wall-clock time instead of drifting by one hour.
+    const firstOffsetMs = getTimezoneOffsetMs(naiveMs, tz);
+    const candidateMs = naiveMs - firstOffsetMs;
+    const finalOffsetMs = getTimezoneOffsetMs(candidateMs, tz);
+    return new Date(naiveMs - finalOffsetMs).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -160,7 +172,7 @@ function getTimezoneOffsetMs(utcMs: number, tz: string): number {
     get("year"),
     get("month") - 1,
     get("day"),
-    get("hour") === 24 ? 0 : get("hour"),
+    get("hour"),
     get("minute"),
     get("second"),
   );
