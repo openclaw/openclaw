@@ -177,6 +177,7 @@ async function releaseHeldLock(
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
+    void held.handle.close().catch(() => undefined);
     try {
       fsSync.closeSync(held.handle.fd);
     } catch {
@@ -580,6 +581,14 @@ export const __testing = {
   releaseAllLocksSync,
   runLockWatchdogCheck,
 };
+
+export async function drainSessionWriteLockStateForTest(): Promise<void> {
+  for (const [sessionFile, held] of Array.from(HELD_LOCKS.entries())) {
+    await releaseHeldLock(sessionFile, held, { force: true }).catch(() => undefined);
+  }
+  stopWatchdogTimer();
+  unregisterCleanupHandlers();
+}
 
 export function resetSessionWriteLockStateForTest(): void {
   releaseAllLocksSync();

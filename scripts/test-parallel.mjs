@@ -465,6 +465,11 @@ const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,
 );
+const defaultChannelsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
+const channelsBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_CHANNELS_BATCH_TARGET_MS",
+  defaultChannelsBatchTargetMs,
+);
 // Heap snapshots on current main show long-lived unit-fast workers retaining
 // transformed Vitest/Vite module graphs rather than app objects. Multiple
 // bounded unit-fast lanes only help if we also recycle them serially instead
@@ -506,6 +511,33 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
       ],
     }));
 });
+// Shared channel workers retain large transformed module graphs across files on
+// threads/non-isolated runs. Recycle that lane in bounded batches so the
+// process gets torn down before unrelated channel files inherit the full graph.
+const channelsSharedBatches = splitFilesByDurationBudget(
+  channelSharedCandidateFiles,
+  channelsBatchTargetMs,
+  estimateChannelDurationMs,
+);
+const channelsSharedEntries = channelsSharedBatches
+  .filter((batch) => batch.length > 0)
+  .map((batch, batchIndex) => ({
+    name:
+      channelsSharedBatches.length === 1 ? "channels" : `channels-batch-${String(batchIndex + 1)}`,
+    serialPhase: "channels",
+    includeFiles: batch,
+    estimatedDurationMs: estimateEntryFilesDurationMs(
+      { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
+      batch,
+    ),
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-channels-include-${String(batchIndex + 1)}`,
+        batch,
+      ),
+    },
+    args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -612,24 +644,7 @@ const baseRuns = [
           ...entry,
           args: [...entry.args.slice(0, 5), ...noIsolateArgs, ...entry.args.slice(5)],
         })),
-        {
-          name: "channels",
-          includeFiles: channelSharedCandidateFiles,
-          estimatedDurationMs: estimateEntryFilesDurationMs(
-            { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
-            channelSharedCandidateFiles,
-          ),
-          env:
-            channelSharedCandidateFiles.length > 0
-              ? {
-                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-                    "vitest-channels-include",
-                    channelSharedCandidateFiles,
-                  ),
-                }
-              : undefined,
-          args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
-        },
+        ...channelsSharedEntries,
       ]
     : []),
   ...(includeGatewaySuite
@@ -1159,11 +1174,15 @@ const memoryTraceEnabled =
     (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
 const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
 const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
-const heapSnapshotIntervalMs = Math.max(
+const requestedHeapSnapshotIntervalMs = Math.max(
   0,
   parseEnvNumber("OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS", 0),
 );
-const heapSnapshotMinIntervalMs = 5000;
+const heapSnapshotMinIntervalMs = 1000;
+const heapSnapshotIntervalMs =
+  requestedHeapSnapshotIntervalMs > 0
+    ? Math.max(heapSnapshotMinIntervalMs, requestedHeapSnapshotIntervalMs)
+    : 0;
 const heapSnapshotEnabled =
   process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
 const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
