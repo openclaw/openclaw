@@ -16,6 +16,7 @@ import { type EmbeddingInput, hasNonTextEmbeddingParts } from "./embedding-input
 import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
   buildMultimodalChunkForIndexing,
+  chunkCode,
   chunkMarkdown,
   hashText,
   parseEmbedding,
@@ -826,11 +827,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const rawChunks =
+        "kind" in entry && entry.kind === "code" && "lang" in entry && entry.lang
+          ? chunkCode(content, entry.lang, this.settings.chunking)
+          : chunkMarkdown(content, this.settings.chunking);
       chunks = enforceEmbeddingMaxInputTokens(
         this.provider,
-        chunkMarkdown(content, this.settings.chunking).filter(
-          (chunk) => chunk.text.trim().length > 0,
-        ),
+        rawChunks.filter((chunk) => chunk.text.trim().length > 0),
         EMBEDDING_BATCH_MAX_TOKENS,
       );
       if (options.source === "sessions" && "lineMap" in entry) {

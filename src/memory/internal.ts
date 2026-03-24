@@ -14,6 +14,45 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 
+/** Languages with first-class declaration-boundary chunking support. */
+export type CodeLanguage = "typescript" | "python" | "go" | "rust" | "generic";
+
+/**
+ * File extensions recognised as indexable code files.
+ * Maps lowercase extension (including leading dot) → CodeLanguage.
+ */
+export const CODE_EXTENSIONS: Readonly<Record<string, CodeLanguage>> = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".js": "typescript",
+  ".jsx": "typescript",
+  ".mjs": "typescript",
+  ".cjs": "typescript",
+  ".py": "python",
+  ".go": "go",
+  ".rs": "rust",
+  ".rb": "generic",
+  ".java": "generic",
+  ".kt": "generic",
+  ".cs": "generic",
+  ".swift": "generic",
+  ".cpp": "generic",
+  ".c": "generic",
+  ".h": "generic",
+  ".hpp": "generic",
+};
+
+/**
+ * Return the CodeLanguage for a file path, or null if the extension is not a
+ * recognised code extension.
+ */
+export function detectCodeLanguage(filePath: string): CodeLanguage | null {
+  const ext = path.extname(filePath).toLowerCase();
+  return CODE_EXTENSIONS[ext] ?? null;
+}
+
 export type MemoryFileEntry = {
   path: string;
   absPath: string;
@@ -21,7 +60,8 @@ export type MemoryFileEntry = {
   size: number;
   hash: string;
   dataHash?: string;
-  kind?: "markdown" | "multimodal";
+  kind?: "markdown" | "multimodal" | "code";
+  lang?: CodeLanguage;
   contentText?: string;
   modality?: MemoryMultimodalModality;
   mimeType?: string;
@@ -84,6 +124,9 @@ export function isMemoryPath(relPath: string): boolean {
 
 function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
   if (filePath.endsWith(".md")) {
+    return true;
+  }
+  if (detectCodeLanguage(filePath) !== null) {
     return true;
   }
   return (
@@ -252,6 +295,18 @@ export async function buildFileEntry(
     throw err;
   }
   const hash = hashText(content);
+  const codeLang = detectCodeLanguage(absPath);
+  if (codeLang !== null) {
+    return {
+      path: normalizedPath,
+      absPath,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      hash,
+      kind: "code",
+      lang: codeLang,
+    };
+  }
   return {
     path: normalizedPath,
     absPath,
@@ -413,6 +468,139 @@ export function chunkMarkdown(
   }
   flush();
   return chunks;
+}
+
+/**
+ * Patterns that match the opening line of a top-level declaration at
+ * indentation level 0 (no leading whitespace).
+ */
+const DECL_START_RE: Record<CodeLanguage, RegExp> = {
+  typescript:
+    /^(?:export\s|default\s|async\s+(?:function|class)\b|function\s+\w|class\s+\w|const\s+\w[\w$]*\s*[=:]\s*(?:async\s+)?(?:function|\(|<)|interface\s+\w|type\s+\w[\w$]*\s*=|enum\s+\w|declare\s+|abstract\s+class\b)/,
+  python: /^(?:async\s+)?(?:def|class)\s+\w|^@\w/,
+  go: /^func\s|^type\s+\w+\s+(?:struct|interface)\b/,
+  rust: /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|impl|trait|type|const|static|mod)\s+\w/,
+  generic: /^(?:function|class|def|fn|func|sub|procedure)\s+\w/,
+};
+
+/** Lines that are considered "leading context" and should be attached to the
+ *  following declaration rather than standing alone. */
+const LEADING_CONTEXT_RE = /^(?:\/\/|\/\*|\*|#[^!]|@\w|\[(?:derive|cfg|allow|test))/;
+
+/**
+ * Chunk source code using declaration-boundary heuristics (zero extra
+ * dependencies — no tree-sitter or AST parser required).
+ *
+ * Algorithm:
+ * 1. Scan lines at indentation level 0 for declaration starters.
+ * 2. Walk backward from each starter to pull in preceding doc-comments,
+ *    decorators, and blank lines as part of the same logical unit.
+ * 3. Emit each unit as a chunk.  Oversized units are split further with
+ *    chunkMarkdown() so the sliding-window size limit is always respected.
+ * 4. Falls back to chunkMarkdown() when no declarations are detected.
+ *
+ * Use this in place of chunkMarkdown() for files recognised by
+ * detectCodeLanguage() so that function/class boundaries become chunk
+ * boundaries, improving retrieval precision.
+ */
+export function chunkCode(
+  content: string,
+  lang: CodeLanguage,
+  chunking: { tokens: number; overlap: number },
+): MemoryChunk[] {
+  const lines = content.split("\n");
+  if (lines.length === 0) {
+    return [];
+  }
+
+  const maxChars = Math.max(32, chunking.tokens * 4);
+  const re = DECL_START_RE[lang];
+
+  // --- Phase 1: find declaration boundary lines ---
+  // A "boundary" is the earliest line in a logical unit (declaration + any
+  // leading comments/decorators immediately preceding it).
+  const rawBoundaries: number[] = []; // 0-indexed
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (line.length > 0 && /^\s/.test(line)) {
+      // Indented — skip (not a top-level declaration)
+      continue;
+    }
+    if (re.test(line)) {
+      // Walk backward to include preceding comments/decorators/blanks
+      let start = i;
+      while (start > 0) {
+        const prev = lines[start - 1] ?? "";
+        const trimmed = prev.trimStart();
+        if (trimmed === "" || LEADING_CONTEXT_RE.test(trimmed)) {
+          start -= 1;
+        } else {
+          break;
+        }
+      }
+      // Only add if this doesn't overlap with the previous boundary
+      if (rawBoundaries.length === 0 || start > (rawBoundaries[rawBoundaries.length - 1] ?? -1)) {
+        rawBoundaries.push(start);
+      }
+    }
+  }
+
+  // Fall back to sliding-window when the file has no detectable declarations
+  if (rawBoundaries.length === 0) {
+    return chunkMarkdown(content, chunking);
+  }
+
+  // --- Phase 2: build [startLine, endLine] unit ranges (1-indexed) ---
+  const unitRanges: Array<[number, number]> = [];
+
+  // Lines before the first declaration boundary (imports, file-level preamble)
+  const firstBoundary = rawBoundaries[0] ?? 0;
+  if (firstBoundary > 0) {
+    unitRanges.push([1, firstBoundary]); // 1-indexed; end is inclusive
+  }
+
+  for (let b = 0; b < rawBoundaries.length; b += 1) {
+    const start = (rawBoundaries[b] ?? 0) + 1; // convert to 1-indexed
+    const end =
+      b + 1 < rawBoundaries.length
+        ? (rawBoundaries[b + 1] ?? lines.length) // next boundary start (0-indexed) is end of this unit
+        : lines.length;
+    unitRanges.push([start, end]);
+  }
+
+  // --- Phase 3: emit chunks ---
+  const result: MemoryChunk[] = [];
+
+  for (const [unitStart, unitEnd] of unitRanges) {
+    const unitLines = lines.slice(unitStart - 1, unitEnd);
+    const unitText = unitLines.join("\n");
+    if (unitText.trim().length === 0) {
+      continue;
+    }
+
+    if (unitText.length <= maxChars) {
+      result.push({
+        startLine: unitStart,
+        endLine: unitEnd,
+        text: unitText,
+        hash: hashText(unitText),
+        embeddingInput: buildTextEmbeddingInput(unitText),
+      });
+    } else {
+      // Unit exceeds size limit — apply sliding-window within it and remap
+      // line numbers back to the source file coordinate space.
+      const subChunks = chunkMarkdown(unitText, chunking);
+      for (const sub of subChunks) {
+        result.push({
+          ...sub,
+          startLine: unitStart + sub.startLine - 1,
+          endLine: unitStart + sub.endLine - 1,
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
