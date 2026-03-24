@@ -216,7 +216,7 @@ export function createPluginApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          errorShape(ErrorCodes.APPROVAL_NOT_FOUND, "unknown or expired approval id"),
         );
         return;
       }
@@ -241,7 +241,7 @@ export function createPluginApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          errorShape(ErrorCodes.APPROVAL_NOT_FOUND, "unknown or expired approval id"),
         );
         return;
       }

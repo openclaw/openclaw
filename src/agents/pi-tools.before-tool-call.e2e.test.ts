@@ -349,6 +349,32 @@ describe("before_tool_call requireApproval handling", () => {
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   });
 
+  it("blocks without triggering approval when both block and requireApproval are set", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "Blocked by security plugin",
+      requireApproval: {
+        id: "approval-should-not-fire",
+        title: "Should not reach gateway",
+        description: "This approval should be skipped",
+        pluginId: "lower-priority-plugin",
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Blocked by security plugin");
+    expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
   it("calls gateway RPC and unblocks on allow-once", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);
@@ -509,5 +535,40 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Registration returns no id");
+  });
+
+  it("unblocks immediately when abort signal fires during waitDecision", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        id: "approval-abort",
+        title: "Abortable",
+        description: "Will be aborted",
+      },
+    });
+
+    const controller = new AbortController();
+
+    // First call: plugin.approval.request → accepted
+    mockCallGateway.mockResolvedValueOnce({ id: "approval-abort", status: "accepted" });
+    // Second call: plugin.approval.waitDecision → never resolves (simulates long wait)
+    mockCallGateway.mockImplementationOnce(
+      () => new Promise(() => {}), // hangs forever
+    );
+
+    // Abort after a short delay
+    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+      signal: controller.signal,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(mockCallGateway).toHaveBeenCalledTimes(2);
   });
 });

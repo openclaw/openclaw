@@ -1,9 +1,10 @@
-import { callGateway } from "../../gateway/call.js";
-import { logVerbose } from "../../globals.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
-} from "../../plugin-sdk/telegram-runtime.js";
+} from "../../../extensions/telegram/api.js";
+import { callGateway } from "../../gateway/call.js";
+import { ErrorCodes } from "../../gateway/protocol/index.js";
+import { logVerbose } from "../../globals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -138,8 +139,11 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   try {
     await callApprovalMethod("exec.approval.resolve");
   } catch (err) {
-    const errMessage = String(err);
-    if (errMessage.includes("unknown or expired approval id")) {
+    const isNotFound =
+      err instanceof Error &&
+      "gatewayCode" in err &&
+      (err as { gatewayCode: string }).gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND;
+    if (isNotFound) {
       try {
         await callApprovalMethod("plugin.approval.resolve");
       } catch (pluginErr) {
@@ -151,7 +155,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     } else {
       return {
         shouldContinue: false,
-        reply: { text: `❌ Failed to submit approval: ${errMessage}` },
+        reply: { text: `❌ Failed to submit approval: ${String(err)}` },
       };
     }
   }

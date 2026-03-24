@@ -14,7 +14,7 @@ export type ExecApprovalRequest = {
   kind: "exec" | "plugin";
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
-  pluginDescription?: string;
+  pluginDescription?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
   createdAtMs: number;
@@ -116,7 +116,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
     },
     pluginTitle: title,
-    pluginDescription: description ?? undefined,
+    pluginDescription: description,
     pluginSeverity: severity,
     pluginId,
     createdAtMs,

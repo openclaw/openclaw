@@ -89,7 +89,7 @@ describe("parsePluginApprovalRequested", () => {
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("plugin");
     expect(result!.pluginTitle).toBe("Alert");
-    expect(result!.pluginDescription).toBeUndefined();
+    expect(result!.pluginDescription).toBeNull();
     expect(result!.pluginSeverity).toBeNull();
     expect(result!.pluginId).toBeNull();
     expect(result!.request.agentId).toBeNull();

@@ -439,7 +439,10 @@ describe("/approve command", () => {
           Surface: "telegram",
           SenderId: "123",
         },
-        setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
+        setup: () =>
+          callGatewayMock.mockRejectedValue(
+            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+          ),
         expectedText: "unknown or expired approval id",
         expectGatewayCalls: 2,
       },
@@ -528,6 +531,13 @@ describe("/approve command", () => {
     }
   });
 
+  function gatewayError(message: string, gatewayCode: string): Error {
+    const err = new Error(message);
+    err.name = "GatewayClientRequestError";
+    (err as Error & { gatewayCode: string }).gatewayCode = gatewayCode;
+    return err;
+  }
+
   it("falls back to plugin.approval.resolve when exec approval id is unknown", async () => {
     const cfg = {
       commands: { text: true },
@@ -536,7 +546,7 @@ describe("/approve command", () => {
     const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
 
     callGatewayMock
-      .mockRejectedValueOnce(new Error("unknown or expired approval id"))
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"))
       .mockResolvedValueOnce({ ok: true });
 
     const result = await handleCommands(params);
@@ -564,8 +574,8 @@ describe("/approve command", () => {
     const params = buildParams("/approve bad-id deny", cfg, { SenderId: "123" });
 
     callGatewayMock
-      .mockRejectedValueOnce(new Error("unknown or expired approval id"))
-      .mockRejectedValueOnce(new Error("unknown or expired approval id"));
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"))
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"));
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
