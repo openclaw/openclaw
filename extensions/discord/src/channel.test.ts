@@ -238,10 +238,9 @@ describe("discordPlugin gateway startAccount error handling", () => {
     );
 
     const cfg = createCfg();
-    const ctx = createStartAccountCtx({
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
       cfg,
-      accountId: "default",
-      runtime: createRuntimeEnv(),
     });
 
     // Should NOT throw — error is caught internally
@@ -267,10 +266,9 @@ describe("discordPlugin gateway startAccount error handling", () => {
     monitorDiscordProviderMock.mockRejectedValue("raw string error");
 
     const cfg = createCfg();
-    const ctx = createStartAccountCtx({
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
       cfg,
-      accountId: "default",
-      runtime: createRuntimeEnv(),
     });
 
     await discordPlugin.gateway!.startAccount!(ctx);
