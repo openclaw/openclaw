@@ -305,13 +305,9 @@ async function dispatchSlashCommand(
   }
 
   const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(
-    host.client,
-    targetSessionKey,
-    name,
-    args,
-    host.chatModelCatalog,
-  );
+  const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+    chatModelCatalog: host.chatModelCatalog,
+  });
 
   if (result.content) {
     injectCommandResult(host, result.content);

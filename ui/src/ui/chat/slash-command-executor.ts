@@ -50,12 +50,16 @@ export type SlashCommandResult = {
   };
 };
 
+export type SlashCommandContext = {
+  chatModelCatalog?: ModelCatalogEntry[];
+};
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
   commandName: string,
   args: string,
-  chatModelCatalog: ModelCatalogEntry[] = [],
+  context: SlashCommandContext = {},
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
@@ -73,7 +77,7 @@ export async function executeSlashCommand(
     case "compact":
       return await executeCompact(client, sessionKey);
     case "model":
-      return await executeModel(client, sessionKey, args, chatModelCatalog);
+      return await executeModel(client, sessionKey, args, context);
     case "think":
       return await executeThink(client, sessionKey, args);
     case "fast":
@@ -130,7 +134,7 @@ async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
-  chatModelCatalog: ModelCatalogEntry[],
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   if (!args) {
     try {
@@ -163,6 +167,7 @@ async function executeModel(
     });
     const patchedModel = patched.resolved?.model ?? args.trim();
     const rawOverride = createChatModelOverride(patchedModel.trim());
+    const chatModelCatalog = context.chatModelCatalog ?? [];
     const resolvedValue = rawOverride
       ? normalizeChatModelOverrideValue(rawOverride, chatModelCatalog) ||
         resolveServerChatModelValue(patchedModel, patched.resolved?.modelProvider)
