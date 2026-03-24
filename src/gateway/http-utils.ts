@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import {
+  buildAllowedModelSet,
+  isCliProvider,
+  modelKey,
+  parseModelRef,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
+import { loadConfig } from "../config/config.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -48,6 +57,51 @@ export function resolveAgentIdFromModel(model: string | undefined): string | und
     return undefined;
   }
   return normalizeAgentId(agentId);
+}
+
+export async function resolveOpenAiCompatModelOverride(params: {
+  agentId: string;
+  model: string | undefined;
+}): Promise<{ modelOverride?: string; errorMessage?: string }> {
+  const model = params.model;
+  const raw = model?.trim();
+  if (!raw) {
+    return {};
+  }
+  if (raw.toLowerCase() === "openclaw") {
+    return {};
+  }
+  if (resolveAgentIdFromModel(raw)) {
+    return {};
+  }
+
+  const cfg = loadConfig();
+  const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
+  const defaultProvider = defaultModelRef.provider;
+  const parsed = parseModelRef(raw, defaultProvider);
+  if (!parsed) {
+    return { errorMessage: "Invalid `model`." };
+  }
+
+  const catalog = await loadGatewayModelCatalog();
+  const allowed = buildAllowedModelSet({
+    cfg,
+    catalog,
+    defaultProvider,
+    agentId: params.agentId,
+  });
+  const normalized = modelKey(parsed.provider, parsed.model);
+  if (
+    !isCliProvider(parsed.provider, cfg) &&
+    !allowed.allowAny &&
+    !allowed.allowedKeys.has(normalized)
+  ) {
+    return {
+      errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
+    };
+  }
+
+  return { modelOverride: raw };
 }
 
 export function resolveAgentIdForRequest(params: {
