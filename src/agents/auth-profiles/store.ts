@@ -642,6 +642,6 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   if (newMtime !== null) {
     runtimeSnapshotMtimes.set(key, newMtime);
   }
-  runtimeAuthStoreSnapshots.set(key, cloneAuthProfileStore(payload));
+  runtimeAuthStoreSnapshots.set(key, cloneAuthProfileStore(store));
   writeCachedAuthProfileStore(authPath, newMtime, payload);
 }
