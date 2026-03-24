@@ -66,7 +66,9 @@
   background: none;
   border: none;
   cursor: pointer;
-  padding: 2px;
+  padding: 4px;
+  min-width: 24px;
+  min-height: 24px;
   border-radius: var(--radius-sm, 4px);
   color: var(--muted);
   opacity: 0;
