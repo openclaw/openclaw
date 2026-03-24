@@ -56,11 +56,10 @@ import type {
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
-import { clearSessionStoreCacheForTest } from "../src/config/sessions/store.js";
-import { resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
@@ -354,10 +353,9 @@ beforeAll(() => {
   installDefaultPluginRegistry();
 });
 
-afterEach(() => {
-  clearSessionStoreCacheForTest();
+afterEach(async () => {
+  await cleanupSessionStateForTest();
   resetContextWindowCacheForTest();
-  resetFileLockStateForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
@@ -368,8 +366,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  clearSessionStoreCacheForTest();
+  await cleanupSessionStateForTest();
   await drainSessionWriteLockStateForTest();
-  resetFileLockStateForTest();
   testEnv.cleanup();
 });

@@ -40,6 +40,14 @@ function releaseAllLocksSync(): void {
   }
 }
 
+async function drainAllLocks(): Promise<void> {
+  for (const [normalizedFile, held] of Array.from(HELD_LOCKS.entries())) {
+    HELD_LOCKS.delete(normalizedFile);
+    await held.handle.close().catch(() => undefined);
+    await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
 function rmLockPathSync(lockPath: string): void {
   try {
     fsSync.rmSync(lockPath, { force: true });
@@ -131,6 +139,10 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
 
 export function resetFileLockStateForTest(): void {
   releaseAllLocksSync();
+}
+
+export async function drainFileLockStateForTest(): Promise<void> {
+  await drainAllLocks();
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
