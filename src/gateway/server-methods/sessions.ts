@@ -49,7 +49,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
   loadSessionEntry,
@@ -471,14 +471,14 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond }) => {
+  "sessions.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
     const cfg = loadConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
