@@ -14,6 +14,7 @@ const {
   editMessageTextSpy,
   enqueueSystemEventSpy,
   getFileSpy,
+  getChatSpy,
   getLoadConfigMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
@@ -1440,6 +1441,66 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 11, "Handled resume:thread-1", undefined);
     expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("routes Telegram #General callback payloads as topic 1 when Telegram omits topic metadata", async () => {
+    onSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
+    const handler = vi.fn(
+      async ({ respond, conversationId, threadId }: PluginInteractiveTelegramHandlerContext) => {
+        expect(conversationId).toBe("-100123456789:topic:1");
+        expect(threadId).toBe(1);
+        await respond.editMessage({
+          text: `Handled ${conversationId}`,
+        });
+        return { handled: true };
+      },
+    );
+    registerPluginInteractiveHandler("codex-plugin", {
+      channel: "telegram",
+      namespace: "codexapp",
+      handler,
+    });
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-codex-general",
+        data: "codexapp:resume:thread-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100123456789, type: "supergroup", title: "Forum Group" },
+          date: 1736380800,
+          message_id: 11,
+          text: "Select a thread",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(getChatSpy).toHaveBeenCalledWith(-100123456789);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      -100123456789,
+      11,
+      "Handled -100123456789:topic:1",
+      undefined,
+    );
   });
   it("sets command target session key for dm topic commands", async () => {
     onSpy.mockClear();

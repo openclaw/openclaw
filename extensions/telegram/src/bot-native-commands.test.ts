@@ -338,4 +338,63 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
   });
+
+  it("treats Telegram forum #General commands as topic 1 when Telegram omits topic metadata", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const getChat = vi.fn(async () => ({ id: -1001234567890, type: "supergroup", is_forum: true }));
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "plug", requireAuth: false },
+      args: undefined,
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {},
+        {
+          bot: {
+            api: {
+              setMyCommands: vi.fn().mockResolvedValue(undefined),
+              sendMessage: vi.fn().mockResolvedValue(undefined),
+              getChat,
+            },
+            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+              commandHandlers.set(name, cb);
+            }),
+          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+        },
+      ),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.({
+      match: "",
+      message: {
+        message_id: 2,
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+        },
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    expect(getChat).toHaveBeenCalledWith(-1001234567890);
+    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "telegram:group:-1001234567890:topic:1",
+        messageThreadId: 1,
+      }),
+    );
+  });
 });
