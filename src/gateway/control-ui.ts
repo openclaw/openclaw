@@ -239,8 +239,11 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath: str
   // the bootstrap config is loaded, causing a mismatch when the gateway serves at a different path.
   let html = body;
   if (basePath) {
-    // Use JSON.stringify to safely escape the basePath and prevent XSS attacks
-    const escapedPath = JSON.stringify(basePath);
+    // Escape for safe embedding in an inline <script> tag:
+    // 1. JSON.stringify escapes JS string characters (quotes, backslashes, etc.)
+    // 2. Replace < and > with JS escape sequences to prevent </script> injection
+    //    which could break out of the script tag and allow XSS.
+    const escapedPath = JSON.stringify(basePath).replace(/</g, "\\x3c").replace(/>/g, "\\x3e");
     const script = `<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${escapedPath};</script>`;
     // Insert after the opening <head> tag, before any other content.
     // Use a callback function to avoid replacement-token expansion (e.g., $&, $`, $').
