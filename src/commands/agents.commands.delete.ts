@@ -1,4 +1,6 @@
+import path from "node:path";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
@@ -76,7 +78,24 @@ export async function agentsDeleteCommand(
   }
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-  await moveToTrash(workspaceDir, quietRuntime);
+  // Guard: do not delete the shared default workspace — it may be used by other agents.
+  // Skip workspace deletion if:
+  // 1. workspaceDir equals the shared default workspace, OR
+  // 2. the default agent also uses this workspace path (indicating it is a shared custom workspace)
+  const isDefaultWorkspace =
+    path.normalize(workspaceDir) === path.normalize(DEFAULT_AGENT_WORKSPACE_DIR);
+  const defaultAgentWorkspace = isDefaultWorkspace
+    ? workspaceDir
+    : resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+  const isSharedWorkspace =
+    isDefaultWorkspace || path.normalize(workspaceDir) === path.normalize(defaultAgentWorkspace);
+  if (!isSharedWorkspace) {
+    await moveToTrash(workspaceDir, quietRuntime);
+  } else if (!opts.json) {
+    runtime.log(
+      `Skipped deleting shared workspace "${workspaceDir}" — it is used by the default agent or other agents. Only agent-specific state was removed.`,
+    );
+  }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
