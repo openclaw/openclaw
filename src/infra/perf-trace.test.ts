@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createPerfTrace, isPerfTraceEnabled } from "./perf-trace.js";
+import {
+  capturePerfTraceSnapshot,
+  createPerfTrace,
+  formatPerfTraceSummaryLine,
+  isPerfTraceEnabled,
+  summarizePerfTraceWindow,
+} from "./perf-trace.js";
 
 describe("isPerfTraceEnabled", () => {
   it("matches configured diagnostic flags", () => {
@@ -85,6 +91,47 @@ describe("createPerfTrace", () => {
     expect(secondPayload.meta).toMatchObject({
       accountId: "default",
       messageId: "123.456",
+    });
+  });
+});
+
+describe("perf trace summaries", () => {
+  it("captures end-to-end perf metrics from snapshots", () => {
+    const start = capturePerfTraceSnapshot();
+    const metrics = summarizePerfTraceWindow({ start });
+
+    expect(typeof metrics.wallMs).toBe("number");
+    expect(typeof metrics.cpuMs).toBe("number");
+    expect(typeof metrics.rssMb).toBe("number");
+    expect(typeof metrics.heapUsedDeltaMb).toBe("number");
+  });
+
+  it("formats summary lines with metrics and meta", () => {
+    const line = formatPerfTraceSummaryLine({
+      label: "slack.turn",
+      start: capturePerfTraceSnapshot(),
+      meta: {
+        accountId: "default",
+        replyDispatchWallMs: 123.4,
+      },
+    });
+
+    const payload = JSON.parse(line) as {
+      trace: string;
+      status: string;
+      wallMs: number;
+      cpuMs: number;
+      rssMb: number;
+      meta?: Record<string, unknown>;
+    };
+    expect(payload.trace).toBe("slack.turn");
+    expect(payload.status).toBe("summary");
+    expect(typeof payload.wallMs).toBe("number");
+    expect(typeof payload.cpuMs).toBe("number");
+    expect(typeof payload.rssMb).toBe("number");
+    expect(payload.meta).toMatchObject({
+      accountId: "default",
+      replyDispatchWallMs: 123.4,
     });
   });
 });

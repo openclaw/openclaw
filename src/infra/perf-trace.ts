@@ -14,10 +14,27 @@ export type PerfTrace = {
   fail: (phase: string, error: unknown, meta?: PerfTraceMeta) => void;
 };
 
-type PerfTraceSnapshot = {
+export type PerfTraceSnapshot = {
   atNs: bigint;
   cpu: NodeJS.CpuUsage;
   memory: NodeJS.MemoryUsage;
+};
+
+export type PerfTraceWindowMetrics = {
+  wallMs: number;
+  cpuMs: number;
+  cpuUserMs: number;
+  cpuSystemMs: number;
+  rssMb: number;
+  heapUsedMb: number;
+  heapTotalMb: number;
+  externalMb: number;
+  arrayBuffersMb: number;
+  rssDeltaMb: number;
+  heapUsedDeltaMb: number;
+  heapTotalDeltaMb: number;
+  externalDeltaMb: number;
+  arrayBuffersDeltaMb: number;
 };
 
 function roundMetric(value: number, digits = 1): number {
@@ -37,7 +54,7 @@ function toMsFromMicros(value: number): number {
   return roundMetric(value / 1_000, 1);
 }
 
-function capturePerfTraceSnapshot(): PerfTraceSnapshot {
+export function capturePerfTraceSnapshot(): PerfTraceSnapshot {
   return {
     atNs: process.hrtime.bigint(),
     cpu: process.cpuUsage(),
@@ -62,6 +79,31 @@ function diffMemoryUsage(next: NodeJS.MemoryUsage, prev: NodeJS.MemoryUsage) {
     heapTotalDeltaMb: toMb(next.heapTotal - prev.heapTotal),
     externalDeltaMb: toMb(next.external - prev.external),
     arrayBuffersDeltaMb: toMb(next.arrayBuffers - prev.arrayBuffers),
+  };
+}
+
+export function summarizePerfTraceWindow(params: {
+  start: PerfTraceSnapshot;
+  end?: PerfTraceSnapshot;
+}): PerfTraceWindowMetrics {
+  const end = params.end ?? capturePerfTraceSnapshot();
+  const totalCpu = diffCpuUsage(end.cpu, params.start.cpu);
+  const totalMemory = diffMemoryUsage(end.memory, params.start.memory);
+  return {
+    wallMs: toMsFromNs(end.atNs - params.start.atNs),
+    cpuMs: totalCpu.totalMs,
+    cpuUserMs: totalCpu.userMs,
+    cpuSystemMs: totalCpu.systemMs,
+    rssMb: toMb(end.memory.rss),
+    heapUsedMb: toMb(end.memory.heapUsed),
+    heapTotalMb: toMb(end.memory.heapTotal),
+    externalMb: toMb(end.memory.external),
+    arrayBuffersMb: toMb(end.memory.arrayBuffers),
+    rssDeltaMb: totalMemory.rssDeltaMb,
+    heapUsedDeltaMb: totalMemory.heapUsedDeltaMb,
+    heapTotalDeltaMb: totalMemory.heapTotalDeltaMb,
+    externalDeltaMb: totalMemory.externalDeltaMb,
+    arrayBuffersDeltaMb: totalMemory.arrayBuffersDeltaMb,
   };
 }
 
@@ -138,6 +180,25 @@ function buildPerfTraceLogLine(params: {
     stepHeapTotalDeltaMb: stepMemory.heapTotalDeltaMb,
     stepExternalDeltaMb: stepMemory.externalDeltaMb,
     stepArrayBuffersDeltaMb: stepMemory.arrayBuffersDeltaMb,
+    ...(params.meta && Object.keys(params.meta).length > 0 ? { meta: params.meta } : {}),
+  });
+}
+
+export function formatPerfTraceSummaryLine(params: {
+  label: string;
+  start: PerfTraceSnapshot;
+  end?: PerfTraceSnapshot;
+  meta?: PerfTraceMeta;
+}) {
+  const end = params.end ?? capturePerfTraceSnapshot();
+  return JSON.stringify({
+    trace: params.label,
+    status: "summary",
+    pid: process.pid,
+    ...summarizePerfTraceWindow({
+      start: params.start,
+      end,
+    }),
     ...(params.meta && Object.keys(params.meta).length > 0 ? { meta: params.meta } : {}),
   });
 }
