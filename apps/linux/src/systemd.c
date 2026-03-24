@@ -227,7 +227,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
     return cached_unit_name;
 }
 
-static gchar** parse_single_env_file(const gchar *env_file, const gchar *home_dir, gboolean is_optional, gchar **file_env) {
+gchar** systemd_parse_single_env_file(const gchar *env_file, const gchar *home_dir, const gchar *unit_dir, gboolean is_optional, gchar **file_env) {
     gchar *expanded_h = NULL;
     const gchar *target_file = env_file;
     
@@ -240,9 +240,13 @@ static gchar** parse_single_env_file(const gchar *env_file, const gchar *home_di
     
     gchar *resolved_path = NULL;
     if (!g_path_is_absolute(target_file)) {
-        gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
-        resolved_path = g_build_filename(systemd_user_dir, target_file, NULL);
-        g_free(systemd_user_dir);
+        if (unit_dir) {
+            resolved_path = g_build_filename(unit_dir, target_file, NULL);
+        } else {
+            gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+            resolved_path = g_build_filename(systemd_user_dir, target_file, NULL);
+            g_free(systemd_user_dir);
+        }
         target_file = resolved_path;
     }
     
@@ -279,7 +283,7 @@ static gchar** parse_single_env_file(const gchar *env_file, const gchar *home_di
     return file_env;
 }
 
-static gchar** parse_environment_file(const gchar *env_val, const gchar *home_dir, gchar **file_env) {
+gchar** systemd_parse_environment_file(const gchar *env_val, const gchar *home_dir, const gchar *unit_dir, gchar **file_env) {
     gint argc = 0;
     gchar **argv = NULL;
     
@@ -296,7 +300,7 @@ static gchar** parse_environment_file(const gchar *env_val, const gchar *home_di
             
             if (env_file[0] == '\0') continue;
             
-            file_env = parse_single_env_file(env_file, home_dir, is_optional, file_env);
+            file_env = systemd_parse_single_env_file(env_file, home_dir, unit_dir, is_optional, file_env);
         }
         g_strfreev(argv);
     }
@@ -330,14 +334,15 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     if (!unit_path) {
         return;
     }
+    
+    gchar *unit_dir = g_path_get_dirname(unit_path);
     g_free(unit_path);
 
     gchar **lines = g_strsplit(contents, "\n", -1);
     gboolean in_service_section = FALSE;
     gchar *exec_start = NULL;
     gchar *working_directory = NULL;
-    gchar **inline_env = g_new0(gchar*, 1);
-    gchar **file_env = g_new0(gchar*, 1);
+    gchar **merged_env = g_new0(gchar*, 1);
 
     for (gint i = 0; lines[i] != NULL; i++) {
         gchar *line = g_strstrip(lines[i]);
@@ -378,35 +383,23 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                         gchar *eq = strchr(argv[j], '=');
                         if (eq) {
                             *eq = '\0';
-                            inline_env = g_environ_setenv(inline_env, argv[j], eq + 1, TRUE);
+                            merged_env = g_environ_setenv(merged_env, argv[j], eq + 1, TRUE);
                         }
                     }
                     g_strfreev(argv);
                 }
             } else if (g_str_has_prefix(line, "EnvironmentFile=")) {
                 gchar *env_val = line + 16;
-                file_env = parse_environment_file(env_val, home_dir, file_env);
+                merged_env = systemd_parse_environment_file(env_val, home_dir, unit_dir, merged_env);
             }
         }
     }
 
     g_strfreev(lines);
+    g_free(unit_dir);
 
     *exec_start_out = exec_start;
     *working_directory_out = working_directory;
-    
-    // Merge: file_env overrides inline_env
-    gchar **merged_env = inline_env;
-    for (gint i = 0; file_env && file_env[i]; i++) {
-        gchar *eq = strchr(file_env[i], '=');
-        if (eq) {
-            *eq = '\0';
-            merged_env = g_environ_setenv(merged_env, file_env[i], eq + 1, TRUE);
-            *eq = '=';
-        }
-    }
-    
-    g_strfreev(file_env);
     
     if (g_strv_length(merged_env) > 0) {
         *environment_out = merged_env;

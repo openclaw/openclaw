@@ -1,6 +1,31 @@
 #include "health_helpers.h"
 #include <string.h>
 
+gboolean health_gateway_arg_should_be_forwarded(const gchar *arg, const gchar *subcommand) {
+    if (!arg) return FALSE;
+    if (g_strcmp0(subcommand, "probe") == 0 || g_strcmp0(subcommand, "status") == 0) {
+        return (g_strcmp0(arg, "--token") == 0 || g_str_has_prefix(arg, "--token=") ||
+                g_strcmp0(arg, "-t") == 0 ||
+                g_strcmp0(arg, "--password") == 0 || g_str_has_prefix(arg, "--password="));
+    }
+    return (g_strcmp0(arg, "--port") == 0 || g_str_has_prefix(arg, "--port=") || 
+            g_strcmp0(arg, "-p") == 0 ||
+            g_strcmp0(arg, "--token") == 0 || g_str_has_prefix(arg, "--token=") || 
+            g_strcmp0(arg, "-t") == 0 ||
+            g_strcmp0(arg, "--password") == 0 || g_str_has_prefix(arg, "--password="));
+}
+
+gboolean health_gateway_arg_consumes_next_value(const gchar *arg) {
+    if (!arg) return FALSE;
+    // Only exact split-form flags consume the next argument.
+    // If it contains '=', it is an inline assignment and does not consume the next token.
+    return (g_strcmp0(arg, "--token") == 0 || 
+            g_strcmp0(arg, "-t") == 0 ||
+            g_strcmp0(arg, "--password") == 0 || 
+            g_strcmp0(arg, "--port") == 0 || 
+            g_strcmp0(arg, "-p") == 0);
+}
+
 void health_parse_probe_stdout(const gchar *stdout_buf, ProbeState *ps) {
     if (!ps) return;
     if (stdout_buf) {
