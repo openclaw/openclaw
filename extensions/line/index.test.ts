@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 describe("line runtime api", () => {
   it("loads through Jiti without duplicate export errors", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    const jiti = createJiti(import.meta.url, {
+    const jiti = createJiti(path.join(process.cwd(), "openclaw.mjs"), {
+      interopDefault: true,
       fsCache: false,
       moduleCache: false,
       tryNative: false,
+      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     });
 
     expect(jiti(runtimeApiPath)).toMatchObject({
