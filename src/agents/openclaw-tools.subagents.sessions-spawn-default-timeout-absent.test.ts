@@ -42,7 +42,7 @@ describe("sessions_spawn default runTimeoutSeconds (config absent)", () => {
     const gateway = setupSessionsSpawnGatewayMock({});
     const tool = await getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
 
-    const result = await tool.execute("call-1", { task: "hello" });
+    const result = await tool.execute("call-1", { task: "hello", agentId: "test" });
     expect(result.details).toMatchObject({ status: "accepted" });
     expect(readSpawnTimeout(gateway.calls)).toBe(0);
   });

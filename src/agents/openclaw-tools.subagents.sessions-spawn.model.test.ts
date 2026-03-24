@@ -82,6 +82,7 @@ async function expectSpawnUsesConfiguredModel(params: {
 
   const result = await tool.execute(params.callId, {
     task: "do thing",
+    agentId: "research",
   });
   expect(result.details).toMatchObject({
     status: "accepted",

@@ -35,6 +35,26 @@ let workspaceDirOverride = "";
 let configPathOverride = "";
 let previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
+// config.ts re-exports loadConfig from io.js. Vitest ESM module resolution may
+// bind subagent-spawn.ts's loadConfig directly from io.js, bypassing the barrel mock.
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+  };
+});
+
+// config.ts re-exports loadConfig from io.js. Vitest ESM module resolution may
+// bind subagent-spawn.ts's loadConfig directly from io.js, bypassing the barrel mock.
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+  };
+});
+
 vi.mock("./subagent-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry.js")>();
   return {
@@ -188,6 +208,7 @@ describe("spawnSubagentDirect filename validation", () => {
     return spawnSubagentDirect(
       {
         task: "test",
+        agentId: "main",
         attachments: [{ name, content: validContent, encoding: "base64" }],
       },
       ctx,
@@ -223,6 +244,7 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnSubagentDirect(
       {
         task: "test",
+        agentId: "main",
         attachments: [
           { name: "file.txt", content: validContent, encoding: "base64" },
           { name: "file.txt", content: validContent, encoding: "base64" },
@@ -258,6 +280,7 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnSubagentDirect(
       {
         task: "test",
+        agentId: "main",
         attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
       },
       ctx,

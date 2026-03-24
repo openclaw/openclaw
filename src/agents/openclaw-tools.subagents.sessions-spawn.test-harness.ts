@@ -174,3 +174,14 @@ vi.mock("../../config/config.js", async (importOriginal) => {
     resolveGatewayPort: () => 18789,
   };
 });
+
+// config.ts is a barrel re-exporting from io.js. Vitest ESM module resolution
+// can bind loadConfig directly from io.js, bypassing the barrel mock above.
+// Mocking io.js ensures the override propagates to all transitive consumers.
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
+  };
+});

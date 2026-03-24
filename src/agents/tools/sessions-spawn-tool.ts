@@ -24,7 +24,9 @@ const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
-  agentId: Type.Optional(Type.String()),
+  agentId: Type.String({
+    description: "The target agent ID to spawn. Use your own agent ID to spawn a copy of yourself.",
+  }),
   resumeSessionId: Type.Optional(
     Type.String({
       description:
@@ -96,7 +98,7 @@ export function createSessionsSpawnTool(
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
-      const requestedAgentId = readStringParam(params, "agentId");
+      const requestedAgentId = readStringParam(params, "agentId", { required: true });
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
