@@ -85,22 +85,26 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (current && !isProfileForProvider({ provider, profileId: current, store })) {
-    // Skip clearing auth profile when image model is temporarily switched.
+    // Skip persisting clear when image model is temporarily switched.
     // The provider mismatch is transient and should not clear saved credentials.
+    // However, we must clear the local variable so subsequent logic picks
+    // a correct profile for the image provider instead of returning the
+    // mismatched text-provider profile via the "user" source early return.
     if (!hasAppliedImageModelOverride) {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
-      current = undefined;
     }
+    current = undefined;
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
-    // Skip clearing when image model is temporarily switched.
+    // Skip persisting clear when image model is temporarily switched.
     // The current profile is for a different provider and won't be in this provider's order,
     // but we should preserve it for when the session returns to the original provider.
+    // Clear the local variable so subsequent logic picks a correct profile for the image provider.
     if (!hasAppliedImageModelOverride) {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
-      current = undefined;
     }
+    current = undefined;
   }
 
   if (order.length === 0) {
