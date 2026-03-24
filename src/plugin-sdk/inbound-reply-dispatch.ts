@@ -9,7 +9,11 @@ import type { GetReplyOptions } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
-import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
+import {
+  createNormalizedOutboundDeliverer,
+  resolveOutboundMediaUrls,
+  type OutboundReplyPayload,
+} from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
   Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
@@ -144,18 +148,32 @@ export async function recordInboundSessionAndDispatchReply(params: {
   const rawDeliver = createNormalizedOutboundDeliverer(params.deliver);
   const emitSentHook = (payload: unknown, success: boolean, error?: string): void => {
     try {
+      const p =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
+      // Extract text content — check both `text` and `content` fields since
+      // OutboundReplyPayload callers may use either.
+      const content = (() => {
+        if (!p) {
+          return "";
+        }
+        if (typeof p.text === "string") {
+          return p.text;
+        }
+        if (typeof p.content === "string") {
+          return p.content;
+        }
+        return "";
+      })();
+      // Flag media-only payloads so the policy layer can distinguish "empty
+      // content because media-only" from "empty content because error".
+      const hasMedia = p ? resolveOutboundMediaUrls(p as OutboundReplyPayload).length > 0 : false;
       triggerInternalHook(
         createInternalHookEvent("message", "sent", sessionKey, {
           to,
-          content: (() => {
-            if (payload && typeof payload === "object" && "text" in payload) {
-              const text = (payload as Record<string, unknown>).text;
-              return typeof text === "string" ? text : "";
-            }
-            return "";
-          })(),
+          content,
           success,
           ...(error ? { error } : {}),
+          ...(hasMedia ? { hasMedia } : {}),
           channelId,
           accountId,
           conversationId: to,
@@ -165,6 +183,8 @@ export async function recordInboundSessionAndDispatchReply(params: {
       // Internal hooks are non-critical — never disrupt delivery
     }
   };
+  // Note: `deliver` below intentionally shadows the outer `params.deliver` —
+  // the wrapped version is what gets passed to dispatchReplyWithBufferedBlockDispatcher.
   const deliver = async (payload: unknown): Promise<void> => {
     try {
       await rawDeliver(payload);
