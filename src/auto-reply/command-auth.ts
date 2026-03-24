@@ -56,6 +56,7 @@ function resolveProviderFromContext(
       return { providerId: normalized, hadResolutionError: false };
     }
   }
+  let droppedInferenceResolutionError = false;
   const configured = listChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = resolveProviderAllowFrom({
@@ -69,6 +70,12 @@ function resolveProviderFromContext(
         accountId: ctx.AccountId,
         allowFrom: resolvedAllowFrom.allowFrom,
       });
+      if (allowFrom.length === 0) {
+        if (resolvedAllowFrom.hadResolutionError) {
+          droppedInferenceResolutionError = true;
+        }
+        return null;
+      }
       return {
         providerId: plugin.id,
         allowFrom,
@@ -93,7 +100,8 @@ function resolveProviderFromContext(
   }
   return {
     providerId: undefined,
-    hadResolutionError: configured.some((entry) => entry.hadResolutionError),
+    hadResolutionError:
+      droppedInferenceResolutionError || configured.some((entry) => entry.hadResolutionError),
   };
 }
 
