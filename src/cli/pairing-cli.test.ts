@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listChannelPairingRequests = vi.fn();
 const approveChannelPairingCode = vi.fn();
@@ -47,9 +47,12 @@ vi.mock("../config/config.js", () => ({
 describe("pairing cli", () => {
   let registerPairingCli: typeof import("./pairing-cli.js").registerPairingCli;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ registerPairingCli } = await import("./pairing-cli.js"));
+  });
+
+  beforeEach(() => {
     listChannelPairingRequests.mockClear();
     listChannelPairingRequests.mockResolvedValue([]);
     approveChannelPairingCode.mockClear();
