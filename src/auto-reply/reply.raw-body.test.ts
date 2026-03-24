@@ -1,17 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const agentMocks = vi.hoisted(() => ({
+  runEmbeddedPiAgent: vi.fn(),
   loadModelCatalog: vi.fn(),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
+vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  runEmbeddedPiAgent: (...args: unknown[]) => agentMocks.runEmbeddedPiAgent(...args),
+  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: agentMocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/auth-profiles/session-override.js", () => ({
+  clearSessionAuthProfileOverride: vi.fn(),
+  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands-registry.runtime.js", () => ({
+  listChatCommands: () => [],
+}));
+
+vi.mock("../skill-commands.runtime.js", () => ({
+  listSkillCommandsForWorkspace: () => [],
 }));
 
 vi.mock("../../extensions/whatsapp/src/session.js", () => ({
@@ -19,19 +41,20 @@ vi.mock("../../extensions/whatsapp/src/session.js", () => ({
   getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
   readWebSelfId: agentMocks.readWebSelfId,
 }));
-
-import { getReplyFromConfig } from "./reply.js";
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
 const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-rawbody-" });
 
 describe("RawBody directive parsing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    runEmbeddedPiAgentMock.mockClear();
+    agentMocks.runEmbeddedPiAgent.mockClear();
     agentMocks.loadModelCatalog.mockClear();
     agentMocks.loadModelCatalog.mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
     ]);
+    ({ getReplyFromConfig } = await import("./reply.js"));
   });
 
   afterEach(() => {
@@ -40,7 +63,7 @@ describe("RawBody directive parsing", () => {
 
   it("handles directives and history in the prompt", async () => {
     await withTempHome(async (home) => {
-      runEmbeddedPiAgentMock.mockResolvedValue({
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 1,
@@ -70,10 +93,10 @@ describe("RawBody directive parsing", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const prompt =
-        (runEmbeddedPiAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined)?.prompt ??
-        "";
+        (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { prompt?: string } | undefined)
+          ?.prompt ?? "";
       expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
       expect(prompt).toContain('"sender": "Peter"');
       expect(prompt).toContain('"body": "hello"');

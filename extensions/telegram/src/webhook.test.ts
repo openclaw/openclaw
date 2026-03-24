@@ -22,6 +22,8 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
+const WEBHOOK_TEST_YIELD_MS = 0;
+const WEBHOOK_DRAIN_GUARD_MS = 5;
 
 function collectResponseBody(
   res: IncomingMessage,
@@ -263,12 +265,12 @@ async function postWebhookPayloadWithChunkPlan(params: {
         bytesQueued = offset;
         chunksQueued += 1;
         if (chunksQueued % 10 === 0) {
-          await sleep(1 + Math.floor(rng() * 3));
+          await sleep(WEBHOOK_TEST_YIELD_MS);
         }
         if (!canContinue) {
           // Windows CI occasionally stalls on waiting for drain indefinitely.
           // Bound the wait, then continue queuing this small (~1MB) payload.
-          await Promise.race([once(req, "drain"), sleep(25)]);
+          await Promise.race([once(req, "drain"), sleep(WEBHOOK_DRAIN_GUARD_MS)]);
         }
       }
       phase = "awaiting-response";
@@ -454,12 +456,23 @@ describe("startTelegramWebhook", () => {
         expect(setWebhookSpy).toHaveBeenCalledWith(
           expect.any(String),
           expect.objectContaining({
-            certificate: expect.objectContaining({
+            certificate: expect.anything(),
+          }),
+        );
+        const certificate = setWebhookSpy.mock.calls[0]?.[1]?.certificate as
+          | { path?: string; fileData?: string; filename?: string }
+          | undefined;
+        expect(certificate).toBeDefined();
+        if (certificate && "path" in certificate && typeof certificate.path === "string") {
+          expect(certificate.path).toBe("/path/to/cert.pem");
+        } else {
+          expect(certificate).toEqual(
+            expect.objectContaining({
               fileData: "/path/to/cert.pem",
               filename: "cert.pem",
             }),
-          }),
-        );
+          );
+        }
       },
     );
   });
@@ -557,7 +570,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable when callback delays body read", async () => {
     handlerSpy.mockImplementationOnce(async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(10);
+      await sleep(WEBHOOK_TEST_YIELD_MS);
       await reply(JSON.stringify(update));
     });
 
@@ -584,7 +597,7 @@ describe("startTelegramWebhook", () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(10);
+      await sleep(WEBHOOK_TEST_YIELD_MS);
       seenPayloads.push(JSON.stringify(update));
       await reply("ok");
     };
@@ -628,7 +641,7 @@ describe("startTelegramWebhook", () => {
           ) => {
             seenUpdates.push(update);
             void (async () => {
-              await sleep(10);
+              await sleep(WEBHOOK_TEST_YIELD_MS);
               await reply("ok");
             })();
           },
