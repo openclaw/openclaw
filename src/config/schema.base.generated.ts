@@ -5914,6 +5914,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                         },
                       },
+                      volumes: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                            },
+                            target: {
+                              type: "string",
+                            },
+                            strategy: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "ephemeral",
+                                },
+                                {
+                                  type: "string",
+                                  const: "named",
+                                },
+                                {
+                                  type: "string",
+                                  const: "bind",
+                                },
+                              ],
+                            },
+                            readOnly: {
+                              type: "boolean",
+                            },
+                          },
+                          required: ["target", "strategy"],
+                          additionalProperties: false,
+                        },
+                      },
                       dangerouslyAllowReservedContainerTargets: {
                         type: "boolean",
                       },
@@ -7661,6 +7696,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "array",
                           items: {
                             type: "string",
+                          },
+                        },
+                        volumes: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                              },
+                              target: {
+                                type: "string",
+                              },
+                              strategy: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                    const: "ephemeral",
+                                  },
+                                  {
+                                    type: "string",
+                                    const: "named",
+                                  },
+                                  {
+                                    type: "string",
+                                    const: "bind",
+                                  },
+                                ],
+                              },
+                              readOnly: {
+                                type: "boolean",
+                              },
+                            },
+                            required: ["target", "strategy"],
+                            additionalProperties: false,
                           },
                         },
                         dangerouslyAllowReservedContainerTargets: {
