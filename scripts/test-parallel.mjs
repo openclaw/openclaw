@@ -11,6 +11,7 @@ import {
 } from "./test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
+  formatCapturedOutputTail,
   hasFatalTestRunOutput,
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
@@ -1296,6 +1297,12 @@ const runOnce = (entry, extraArgs = []) =>
       children.delete(child);
       const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
       logMemoryTraceSummary();
+      if (resolvedCode !== 0) {
+        const failureTail = formatCapturedOutputTail(output);
+        if (failureTail) {
+          console.error(`[test-parallel] failure tail ${entry.name}\n${failureTail}`);
+        }
+      }
       console.log(
         `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
       );
