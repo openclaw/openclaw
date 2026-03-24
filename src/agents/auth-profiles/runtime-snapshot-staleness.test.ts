@@ -146,4 +146,63 @@ describe("runtime snapshot staleness detection", () => {
       );
     });
   });
+
+  it("clears stale mtime keys when agent is removed from runtime snapshots", async () => {
+    await withTempHome("runtime-snapshot-clear-stale-", async (home) => {
+      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(opsAgentDir, { recursive: true });
+
+      const mainAuthPath = path.join(mainAgentDir, "auth-profiles.json");
+      const opsAuthPath = path.join(opsAgentDir, "auth-profiles.json");
+
+      const mainStore = createAuthStore({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-main" },
+      });
+      const opsStore = createAuthStore({
+        "anthropic:ops": { type: "api_key", provider: "anthropic", key: "sk-ops" },
+      });
+
+      await fs.writeFile(mainAuthPath, JSON.stringify(mainStore, null, 2), "utf8");
+      await fs.writeFile(opsAuthPath, JSON.stringify(opsStore, null, 2), "utf8");
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir: undefined, store: mainStore },
+        { agentDir: opsAgentDir, store: opsStore },
+      ]);
+
+      expect(getApiKey(ensureAuthProfileStore(), "openai:default")).toBe("sk-main");
+      expect(getApiKey(ensureAuthProfileStore(opsAgentDir), "anthropic:ops")).toBe("sk-ops");
+
+      const newMainStore = createAuthStore({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-main-v2" },
+      });
+      await fs.writeFile(mainAuthPath, JSON.stringify(newMainStore, null, 2), "utf8");
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir: undefined, store: newMainStore },
+        // opsAgentDir removed - should not cause false positive staleness
+      ]);
+
+      const result = ensureAuthProfileStore();
+      expect(getApiKey(result, "openai:default")).toBe("sk-main-v2");
+    });
+  });
+
+  it("handles non-existent auth-profiles.json gracefully", async () => {
+    await withTempHome("runtime-snapshot-no-file-", async (home) => {
+      const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+
+      const initialStore = createAuthStore({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-test" },
+      });
+
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: undefined, store: initialStore }]);
+
+      const result = ensureAuthProfileStore();
+      expect(getApiKey(result, "openai:default")).toBe("sk-test");
+    });
+  });
 });
