@@ -1480,7 +1480,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
                     );
-                    const { blocks_deleted: _, ...writeRest } = writeResult;
+                    // Strip blocks_deleted from merged response (new doc has no deletions)
+                    const { blocks_deleted: omitted, ...writeRest } = writeResult;
+                    void omitted;
                     return json({ ...created, ...writeRest });
                   }
                   return json(created);
