@@ -1,5 +1,6 @@
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import { hasVoiceCallSecretInput, resolveVoiceCallSecretInputString } from "./secret-input.js";
 import { convertPcmToMulaw8k, resamplePcmTo8k, pcmToMulaw } from "./telephony-audio.js";
 
 export type TelephonyTtsRuntime = {
@@ -35,10 +36,16 @@ export type TelephonyTtsProvider = {
 async function* streamElevenLabsTelephony(
   text: string,
   config: NonNullable<VoiceCallTtsConfig>,
+  coreConfig: CoreConfig,
   signal?: AbortSignal,
 ): AsyncGenerator<Buffer, void, unknown> {
   const elevenlabs = config.elevenlabs;
-  const apiKey = typeof elevenlabs?.apiKey === "string" ? elevenlabs.apiKey : null;
+  const apiKey = await resolveVoiceCallSecretInputString({
+    coreConfig,
+    value: elevenlabs?.apiKey,
+    envVar: "ELEVENLABS_API_KEY",
+    path: "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
+  });
   if (!apiKey || !elevenlabs?.voiceId) {
     throw new Error("ElevenLabs API key and voice ID required for streaming TTS");
   }
@@ -140,11 +147,17 @@ async function* streamElevenLabsTelephony(
 async function* streamOpenAITelephony(
   text: string,
   config: NonNullable<VoiceCallTtsConfig>,
+  coreConfig: CoreConfig,
   signal?: AbortSignal,
 ): AsyncGenerator<Buffer, void, unknown> {
   const openai = config.openai;
   const apiKey =
-    (typeof openai?.apiKey === "string" ? openai.apiKey : null) || process.env.OPENAI_API_KEY || "";
+    (await resolveVoiceCallSecretInputString({
+      coreConfig,
+      value: openai?.apiKey,
+      envVar: "OPENAI_API_KEY",
+      path: "plugins.entries.voice-call.config.tts.openai.apiKey",
+    })) || "";
   if (!apiKey) {
     throw new Error("OpenAI API key required for streaming TTS");
   }
@@ -280,17 +293,24 @@ export function createTelephonyTtsProvider(params: {
     },
   };
 
-  // Check if direct streaming is available for the configured provider
+  // Check if direct streaming is available for the configured provider.
+  // SecretRef-backed API keys count as configured here; the actual string
+  // resolution happens inside the streaming provider before issuing requests.
   const ttsConfig = effectiveConfig.messages?.tts;
   const canStreamElevenLabs =
     ttsConfig?.provider === "elevenlabs" &&
-    typeof ttsConfig.elevenlabs?.apiKey === "string" &&
+    hasVoiceCallSecretInput({
+      value: ttsConfig.elevenlabs?.apiKey,
+      envVar: "ELEVENLABS_API_KEY",
+    }) &&
     !!ttsConfig.elevenlabs?.voiceId;
 
   const canStreamOpenAI =
     ttsConfig?.provider === "openai" &&
-    (typeof ttsConfig.openai?.apiKey === "string" ||
-      typeof process.env.OPENAI_API_KEY === "string");
+    hasVoiceCallSecretInput({
+      value: ttsConfig.openai?.apiKey,
+      envVar: "OPENAI_API_KEY",
+    });
 
   return {
     synthesizeForTelephony: async (text: string) => {
@@ -310,8 +330,8 @@ export function createTelephonyTtsProvider(params: {
     ...((canStreamElevenLabs || canStreamOpenAI) && {
       streamForTelephony: (text: string, signal?: AbortSignal) =>
         canStreamElevenLabs
-          ? streamElevenLabsTelephony(text, ttsConfig, signal)
-          : streamOpenAITelephony(text, ttsConfig, signal),
+          ? streamElevenLabsTelephony(text, ttsConfig, effectiveConfig, signal)
+          : streamOpenAITelephony(text, ttsConfig, effectiveConfig, signal),
     }),
   };
 }

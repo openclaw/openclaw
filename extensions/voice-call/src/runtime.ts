@@ -7,6 +7,10 @@ import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
+import {
+  normalizeResolvedVoiceCallSecretString,
+  resolveVoiceCallRuntimeSecrets,
+} from "./secret-input.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -87,22 +91,35 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
     (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
-    case "telnyx":
+    case "telnyx": {
+      const apiKey = normalizeResolvedVoiceCallSecretString({
+        value: config.telnyx?.apiKey,
+        path: "plugins.entries.voice-call.config.telnyx.apiKey",
+      });
+      const publicKey = normalizeResolvedVoiceCallSecretString({
+        value: config.telnyx?.publicKey,
+        path: "plugins.entries.voice-call.config.telnyx.publicKey",
+      });
       return new TelnyxProvider(
         {
-          apiKey: config.telnyx?.apiKey,
+          apiKey,
           connectionId: config.telnyx?.connectionId,
-          publicKey: config.telnyx?.publicKey,
+          publicKey,
         },
         {
           skipVerification: config.skipSignatureVerification,
         },
       );
-    case "twilio":
+    }
+    case "twilio": {
+      const authToken = normalizeResolvedVoiceCallSecretString({
+        value: config.twilio?.authToken,
+        path: "plugins.entries.voice-call.config.twilio.authToken",
+      });
       return new TwilioProvider(
         {
           accountSid: config.twilio?.accountSid,
-          authToken: config.twilio?.authToken,
+          authToken,
         },
         {
           allowNgrokFreeTierLoopbackBypass,
@@ -112,11 +129,16 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           webhookSecurity: config.webhookSecurity,
         },
       );
-    case "plivo":
+    }
+    case "plivo": {
+      const authToken = normalizeResolvedVoiceCallSecretString({
+        value: config.plivo?.authToken,
+        path: "plugins.entries.voice-call.config.plivo.authToken",
+      });
       return new PlivoProvider(
         {
           authId: config.plivo?.authId,
-          authToken: config.plivo?.authToken,
+          authToken,
         },
         {
           publicUrl: config.publicUrl,
@@ -125,6 +147,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           webhookSecurity: config.webhookSecurity,
         },
       );
+    }
     case "mock":
       return new MockProvider();
     default:
@@ -147,7 +170,10 @@ export async function createVoiceCallRuntime(params: {
     debug: console.debug,
   };
 
-  const config = resolveVoiceCallConfig(rawConfig);
+  const config = await resolveVoiceCallRuntimeSecrets({
+    config: resolveVoiceCallConfig(rawConfig),
+    coreConfig,
+  });
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
@@ -191,7 +217,10 @@ export async function createVoiceCallRuntime(params: {
           provider: config.tunnel.provider,
           port: config.serve.port,
           path: config.serve.path,
-          ngrokAuthToken: config.tunnel.ngrokAuthToken,
+          ngrokAuthToken: normalizeResolvedVoiceCallSecretString({
+            value: config.tunnel.ngrokAuthToken,
+            path: "plugins.entries.voice-call.config.tunnel.ngrokAuthToken",
+          }),
           ngrokDomain: config.tunnel.ngrokDomain,
         });
         lifecycle.setTunnelResult(nextTunnelResult);

@@ -19,6 +19,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { ElevenLabsScribeSTTProvider } from "./providers/stt-elevenlabs-scribe.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { normalizeResolvedVoiceCallSecretString } from "./secret-input.js";
 import { SilenceFiller } from "./silence-filler.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
@@ -167,8 +168,10 @@ export class VoiceCallWebhookServer {
       const configuredApiKey =
         this.config.streaming?.elevenlabsApiKey || this.config.tts?.elevenlabs?.apiKey;
       const apiKey =
-        (typeof configuredApiKey === "string" ? configuredApiKey : null) ||
-        process.env.ELEVENLABS_API_KEY;
+        normalizeResolvedVoiceCallSecretString({
+          value: configuredApiKey,
+          path: "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
+        }) || process.env.ELEVENLABS_API_KEY;
 
       if (!apiKey) {
         console.warn(
@@ -188,7 +191,11 @@ export class VoiceCallWebhookServer {
 
       console.log("[voice-call] Using ElevenLabs Scribe v2 for STT");
     } else {
-      const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+      const apiKey =
+        normalizeResolvedVoiceCallSecretString({
+          value: this.config.streaming?.openaiApiKey,
+          path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
+        }) || process.env.OPENAI_API_KEY;
 
       if (!apiKey) {
         console.warn("[voice-call] Streaming enabled but no OpenAI API key found");

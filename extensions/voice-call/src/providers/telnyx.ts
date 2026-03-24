@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import type { TelnyxConfig } from "../config.js";
+type TelnyxProviderConfig = {
+  apiKey?: string;
+  connectionId?: string;
+  publicKey?: string;
+};
 import type {
   EndReason,
   GetCallStatusInput,
@@ -41,7 +45,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly baseUrl = "https://api.telnyx.com/v2";
   private readonly apiHost = "api.telnyx.com";
 
-  constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
+  constructor(config: TelnyxProviderConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
       throw new Error("Telnyx API key is required");
     }

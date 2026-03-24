@@ -1,3 +1,4 @@
+import { buildOptionalSecretInputSchema, type SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -35,11 +36,11 @@ export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 export const TelnyxConfigSchema = z
   .object({
     /** Telnyx API v2 key */
-    apiKey: z.string().min(1).optional(),
+    apiKey: buildOptionalSecretInputSchema(),
     /** Telnyx connection ID (from Call Control app) */
     connectionId: z.string().min(1).optional(),
     /** Public key for webhook signature verification */
-    publicKey: z.string().min(1).optional(),
+    publicKey: buildOptionalSecretInputSchema(),
   })
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
@@ -49,7 +50,7 @@ export const TwilioConfigSchema = z
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
-    authToken: z.string().min(1).optional(),
+    authToken: buildOptionalSecretInputSchema(),
   })
   .strict();
 export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
@@ -59,7 +60,7 @@ export const PlivoConfigSchema = z
     /** Plivo Auth ID (starts with MA/SA) */
     authId: z.string().min(1).optional(),
     /** Plivo Auth Token */
-    authToken: z.string().min(1).optional(),
+    authToken: buildOptionalSecretInputSchema(),
   })
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
@@ -130,7 +131,7 @@ export const VoiceCallTunnelConfigSchema = z
      */
     provider: z.enum(["none", "ngrok", "tailscale-serve", "tailscale-funnel"]).default("none"),
     /** ngrok auth token (optional, enables longer sessions and more features) */
-    ngrokAuthToken: z.string().min(1).optional(),
+    ngrokAuthToken: buildOptionalSecretInputSchema(),
     /** ngrok custom domain (paid feature, e.g., "myapp.ngrok.io") */
     ngrokDomain: z.string().min(1).optional(),
     /**
@@ -206,9 +207,9 @@ export const VoiceCallStreamingConfigSchema = z
     /** STT provider for real-time transcription */
     sttProvider: z.enum(["openai-realtime", "elevenlabs-scribe"]).default("openai-realtime"),
     /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
-    openaiApiKey: z.string().min(1).optional(),
+    openaiApiKey: buildOptionalSecretInputSchema(),
     /** ElevenLabs API key for Scribe STT (uses ELEVENLABS_API_KEY env if not set) */
-    elevenlabsApiKey: z.string().min(1).optional(),
+    elevenlabsApiKey: buildOptionalSecretInputSchema(),
     /** ElevenLabs Scribe language code (default: auto-detect) */
     elevenlabsLanguageCode: z.string().min(1).optional(),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */
@@ -366,8 +367,9 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-type DeepPartial<T> =
-  T extends Array<infer U>
+type DeepPartial<T> = T extends SecretInput
+  ? T
+  : T extends Array<infer U>
     ? DeepPartial<U>[]
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }

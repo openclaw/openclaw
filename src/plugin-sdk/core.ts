@@ -69,6 +69,7 @@ export type {
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isSecretRef } from "../config/types.secrets.js";
+export { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export type {
   ChannelOutboundSessionRoute,
