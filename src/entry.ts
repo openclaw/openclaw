@@ -65,6 +65,8 @@ if (
     process.env.FORCE_COLOR = "0";
   }
 
+  console.error("[openclaw-fork] agencyenterprise fork build active");
+
   function ensureCliRespawnReady(): boolean {
     const plan = buildCliRespawnPlan();
     if (!plan) {
