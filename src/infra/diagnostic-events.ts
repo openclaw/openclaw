@@ -147,6 +147,30 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
+  type: "tool.call";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolCallId?: string;
+  toolName: string;
+  /** Human-readable summary of tool args (e.g. file path, command). */
+  summary?: string;
+};
+
+export type DiagnosticToolResultEvent = DiagnosticBaseEvent & {
+  type: "tool.result";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolCallId?: string;
+  toolName: string;
+  /** Human-readable summary of tool args (e.g. file path, command). */
+  summary?: string;
+  durationMs?: number;
+  success: boolean;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +184,9 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticToolCallEvent
+  | DiagnosticToolResultEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
