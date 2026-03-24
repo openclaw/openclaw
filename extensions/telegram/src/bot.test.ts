@@ -32,6 +32,8 @@ let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-regi
 let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
 let normalizeTelegramCommandName: typeof import("../../../src/config/telegram-custom-commands.js").normalizeTelegramCommandName;
+let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
+let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -48,6 +50,16 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
+      await import("../../../src/auto-reply/commands-registry.js"));
+    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
+    ({ normalizeTelegramCommandName } =
+      await import("../../../src/config/telegram-custom-commands.js"));
+    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot.js"));
+  });
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
@@ -68,16 +80,6 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
-  });
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-      await import("../../../src/auto-reply/commands-registry.js"));
-    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ normalizeTelegramCommandName } =
-      await import("../../../src/config/telegram-custom-commands.js"));
-    const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js");
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
