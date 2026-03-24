@@ -396,6 +396,47 @@ describe("devices cli local fallback", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });
 
+  it("falls back to local approve when the in-flight request sees raw gateway closed (1000): with an empty reason", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("gateway closed (1000): "))
+      .mockRejectedValueOnce(new Error("gateway closed (1000): "));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-latest", deviceId: "device-1", publicKey: "pk", ts: 2 }],
+      paired: [],
+    });
+    loadCurrentDeviceAuthStore.mockReturnValue({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "secret",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          updatedAtMs: 1,
+        },
+      },
+    });
+    verifyDeviceToken.mockResolvedValueOnce({ ok: true });
+    approveDevicePairing.mockResolvedValueOnce({
+      requestId: "req-latest",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk",
+        approvedAtMs: 1,
+        createdAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesApprove(["--latest"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
+      callerScopes: ["operator.pairing"],
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
   it("uses local approve fallback with caller scopes for a matching local operator token", async () => {
     callGateway
       .mockRejectedValueOnce(new Error("gateway closed (1000 normal closure): no close reason"))
