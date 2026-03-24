@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin as TelegramChannelPlugin } from "../../extensions/telegram/runtime-api.js";
 import type { HealthSummary } from "./health.js";
 
@@ -168,7 +168,7 @@ function createTelegramHealthPlugin(): Pick<
 }
 
 describe("getHealthSnapshot", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({
       buildTokenChannelStatusSummary,
       probeTelegram,
@@ -180,6 +180,9 @@ describe("getHealthSnapshot", () => {
       createTestRegistry,
       getHealthSnapshot,
     } = await loadFreshHealthModulesForTest());
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: createTelegramHealthPlugin(), source: "test" },
