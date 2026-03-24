@@ -53,6 +53,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { buildMemorySourceReport } from "../../memory-source-report.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1464,7 +1465,19 @@ export async function runEmbeddedAttempt(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
       ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+      : [];
+
+    workspaceNotes.push(
+      ...(await buildMemorySourceReport({
+        workspaceDir: effectiveWorkspace,
+        localMemoriaApiUrl: process.env.MEMORIA_API_URL ?? "http://127.0.0.1:8100",
+        localMemoriaApiKey: process.env.MEMORIA_MASTER_KEY,
+        localMemoriaUserId: process.env.MEMORIA_USER_ID,
+        cloudMemoriaApiUrl: process.env.CLOUD_MEMORIA_API_URL,
+        cloudMemoriaApiKey: process.env.CLOUD_MEMORIA_API_KEY,
+        cloudMemoriaUserId: process.env.CLOUD_MEMORIA_USER_ID,
+      })),
+    );
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 

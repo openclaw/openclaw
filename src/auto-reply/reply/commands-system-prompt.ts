@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { buildMemorySourceReport } from "../../agents/memory-source-report.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
@@ -109,6 +110,16 @@ export async function resolveCommandsSystemPromptBundle(
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
 
+  const workspaceNotes = await buildMemorySourceReport({
+    workspaceDir,
+    localMemoriaApiUrl: process.env.MEMORIA_API_URL ?? "http://127.0.0.1:8100",
+    localMemoriaApiKey: process.env.MEMORIA_MASTER_KEY,
+    localMemoriaUserId: process.env.MEMORIA_USER_ID,
+    cloudMemoriaApiUrl: process.env.CLOUD_MEMORIA_API_URL,
+    cloudMemoriaApiKey: process.env.CLOUD_MEMORIA_API_KEY,
+    cloudMemoriaUserId: process.env.CLOUD_MEMORIA_USER_ID,
+  });
+
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,
@@ -126,6 +137,7 @@ export async function resolveCommandsSystemPromptBundle(
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,
+    workspaceNotes,
     acpEnabled: params.cfg?.acp?.enabled !== false,
     runtimeInfo,
     sandboxInfo,
