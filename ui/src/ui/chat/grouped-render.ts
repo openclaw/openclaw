@@ -395,7 +395,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
 function renderTtsButton(group: MessageGroup) {
   return html`
     <button
-      class="chat-tts-btn"
+      class="btn btn--xs chat-tts-btn"
       type="button"
       title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
       aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
@@ -623,7 +623,7 @@ function jsonSummaryLabel(parsed: unknown): string {
 function renderExpandButton(markdown: string, onOpenSidebar: (content: string) => void) {
   return html`
     <button
-      class="chat-expand-btn"
+      class="btn btn--xs chat-expand-btn"
       type="button"
       title="Open in canvas"
       aria-label="Open in canvas"

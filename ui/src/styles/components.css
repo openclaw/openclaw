@@ -627,6 +627,48 @@
   font-size: 12px;
 }
 
+.btn--xs {
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.btn--icon {
+  padding: 8px;
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.btn--icon:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn--icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.btn--ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: transparent;
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1174,6 +1216,34 @@
 :root[data-theme-mode="light"] .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+:root[data-theme-mode="light"] .btn--icon {
+  background: #ffffff;
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  color: var(--muted);
+}
+
+:root[data-theme-mode="light"] .btn--icon:hover {
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+:root[data-theme-mode="light"] .chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
+}
+
+:root[data-theme-mode="light"] .btn--ghost {
+  background: transparent;
+}
+
+:root[data-theme-mode="light"] .btn--ghost:hover {
+  background: var(--bg-hover);
 }
 
 /* ===========================================
