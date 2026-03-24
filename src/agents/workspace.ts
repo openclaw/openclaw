@@ -654,6 +654,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_MEMORY_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_MEMORY_FILENAME),
     },
+    {
+      name: DEFAULT_TASTE_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_TASTE_FILENAME),
+    },
   ];
 
   const result: WorkspaceBootstrapFile[] = [];

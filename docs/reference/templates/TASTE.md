@@ -14,7 +14,7 @@ _Their taste -- preferences, sensibilities, and aesthetic judgments across all d
 
 ## How to Use This File
 
-This file captures **evaluative** preferences -- what your human considers good, bad, elegant, ugly, delightful, or annoying. It complements USER.md (who they are) and MEMORY.md (what happened). Taste is about *judgment*.
+This file captures **evaluative** preferences -- what your human considers good, bad, elegant, ugly, delightful, or annoying. It complements USER.md (who they are) and MEMORY.md (what happened). Taste is about _judgment_.
 
 ### Rules
 
