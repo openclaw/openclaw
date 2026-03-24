@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-evox-dir.js";
 import {
   isInboundPathAllowed,
   resolveIMessageRemoteAttachmentRoots,

@@ -85,7 +85,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Arm file upload for the next file chooser")
     .argument(
       "<paths...>",
-      "File paths to upload (must be within EVOX.sh temp uploads dir, e.g. /tmp/openclaw/uploads/file.pdf)",
+      "File paths to upload (must be within EVOX.sh temp uploads dir, e.g. /tmp/evox/uploads/file.pdf)",
     )
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
@@ -122,7 +122,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Wait for the next download (and save it)")
     .argument(
       "[path]",
-      "Save path within evox temp downloads dir (default: /tmp/openclaw/downloads/...; fallback: os.tmpdir()/openclaw/downloads/...)",
+      "Save path within evox temp downloads dir (default: /tmp/evox/downloads/...; fallback: os.tmpdir()/evox/downloads/...)",
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
@@ -145,7 +145,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .argument("<ref>", "Ref id from snapshot to click")
     .argument(
       "<path>",
-      "Save path within evox temp downloads dir (e.g. report.pdf or /tmp/openclaw/downloads/report.pdf)",
+      "Save path within evox temp downloads dir (e.g. report.pdf or /tmp/evox/downloads/report.pdf)",
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-evox-dir.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend.js";
 

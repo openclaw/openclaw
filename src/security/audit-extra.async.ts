@@ -498,7 +498,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
       detail:
         `Containers: ${missingHash.join(", ")}. ` +
         "These browser containers predate hash-based drift checks and may miss security remediations until recreated.",
-      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+      remediation: `${formatCliCommand("evox sandbox recreate --browser --all")} (add --force to skip prompt).`,
     });
   }
 
@@ -510,7 +510,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
       detail:
         `Containers: ${staleEpoch.join(", ")}. ` +
         `Expected openclaw.browserConfigEpoch=${SANDBOX_BROWSER_SECURITY_HASH_EPOCH}.`,
-      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+      remediation: `${formatCliCommand("evox sandbox recreate --browser --all")} (add --force to skip prompt).`,
     });
   }
 
@@ -523,7 +523,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
         `Containers: ${nonLoopbackPublished.join(", ")}. ` +
         "Sandbox browser observer/control ports should stay loopback-only to avoid unintended remote access.",
       remediation:
-        `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt), ` +
+        `${formatCliCommand("evox sandbox recreate --browser --all")} (add --force to skip prompt), ` +
         "then verify published ports are bound to 127.0.0.1.",
     });
   }

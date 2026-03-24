@@ -14,7 +14,7 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {

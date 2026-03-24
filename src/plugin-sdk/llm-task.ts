@@ -2,7 +2,7 @@
 // Keep this list additive and scoped to symbols used under extensions/llm-task.
 
 export { definePluginEntry } from "./plugin-entry.js";
-export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 export {
   formatThinkingLevels,
   formatXHighModelHint,

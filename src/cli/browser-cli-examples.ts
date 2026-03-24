@@ -24,7 +24,7 @@ export const browserActionExamples = [
   "evox browser hover 44",
   "evox browser drag 10 11",
   "evox browser select 9 OptionA OptionB",
-  "evox browser upload /tmp/openclaw/uploads/file.pdf",
+  "evox browser upload /tmp/evox/uploads/file.pdf",
   'evox browser fill --fields \'[{"ref":"1","value":"Ada"}]\'',
   "evox browser dialog --accept",
   'evox browser wait --text "Done"',

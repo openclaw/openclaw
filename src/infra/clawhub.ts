@@ -670,7 +670,7 @@ export async function downloadClawHubPackageArchive(params: {
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "evox-clawhub-package-"));
   const archivePath = path.join(tmpDir, `${params.name}.zip`);
   await fs.writeFile(archivePath, bytes);
   return {
@@ -708,7 +708,7 @@ export async function downloadClawHubSkillArchive(params: {
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-skill-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "evox-clawhub-skill-"));
   const archivePath = path.join(tmpDir, `${params.slug}.zip`);
   await fs.writeFile(archivePath, bytes);
   return {

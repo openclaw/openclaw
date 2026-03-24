@@ -23,7 +23,7 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,

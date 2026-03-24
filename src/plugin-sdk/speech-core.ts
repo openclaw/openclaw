@@ -13,5 +13,5 @@ export {
   parseTtsDirectives,
 } from "../tts/tts-core.js";
 
-export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 export { isVoiceCompatibleAudio } from "../media/audio.js";

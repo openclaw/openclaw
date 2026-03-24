@@ -4,9 +4,9 @@ import { Logger as TsLogger } from "tslog";
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  POSIX_OPENCLAW_TMP_DIR,
+  POSIX_EVOX_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
+} from "../infra/tmp-evox-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -32,13 +32,13 @@ function canUseNodeFs(): boolean {
 }
 
 function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_EVOX_TMP_DIR;
 }
 
 function resolveDefaultLogFile(defaultLogDir: string): string {
   return canUseNodeFs()
     ? path.join(defaultLogDir, "openclaw.log")
-    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+    : `${POSIX_EVOX_TMP_DIR}/openclaw.log`;
 }
 
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();

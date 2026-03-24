@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 
 export const DEFAULT_BROWSER_TMP_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
