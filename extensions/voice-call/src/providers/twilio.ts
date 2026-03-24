@@ -790,7 +790,6 @@ export class TwilioProvider implements VoiceCallProvider {
             totalBytesSent += chunk.length;
             await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
           }
-          return;
         } finally {
           if (abortListenerAttached) {
             signal.removeEventListener("abort", onAbort);
