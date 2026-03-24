@@ -96,7 +96,7 @@
 
 .sidebar-markdown pre {
   background: rgba(0, 0, 0, 0.12);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 12px;
   overflow-x: auto;
 }
