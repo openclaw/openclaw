@@ -212,6 +212,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-gemini-cli-auth/**"
+"extensions: jarvis":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/jarvis/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:

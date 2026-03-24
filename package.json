@@ -120,6 +120,10 @@
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
     },
+    "./plugin-sdk/jarvis": {
+      "types": "./dist/plugin-sdk/jarvis.d.ts",
+      "default": "./dist/plugin-sdk/jarvis.js"
+    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
