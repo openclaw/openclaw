@@ -11,12 +11,42 @@
     "reportFile": "Project-tasks/releases/sync-v2026.3.22-report.md",
     "notes": "Major release: plugin-sdk overhaul, channel-to-extensions migration complete, security hardening batch, image_generate tool, 9 breaking changes. 2521 total commits; ~525 planned cherry-picks.",
     "phases": {
-      "security": { "status": "pending", "branch": null, "pr": null, "commits": 24 },
-      "provider-refactor": { "status": "pending", "branch": null, "pr": null, "commits": 220 },
-      "bugfixes": { "status": "pending", "branch": null, "pr": null, "commits": 180 },
-      "features": { "status": "pending", "branch": null, "pr": null, "commits": 80 },
-      "review": { "status": "pending", "branch": null, "pr": null, "commits": 12 },
-      "ui-inspiration": { "status": "pending", "branch": null, "pr": null, "commits": 9 }
+      "security": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 24
+      },
+      "provider-refactor": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 220
+      },
+      "bugfixes": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 180
+      },
+      "features": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 80
+      },
+      "review": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 12
+      },
+      "ui-inspiration": {
+        "status": "pending",
+        "branch": null,
+        "pr": null,
+        "commits": 9
+      }
     }
   },
   "paperclip": {
@@ -33,12 +63,30 @@
       "syncedAt": "2026-03-17T00:00:00Z",
       "backupTag": "backup/pre-sync-v2026.3.13-beta.1-20260316",
       "phases": {
-        "security": { "commits": 26, "pr": 8 },
-        "core": { "commits": 655, "pr": 9 },
-        "features": { "commits": 6, "pr": 10 },
-        "integration": { "commits": 11, "pr": 11 },
-        "platform": { "commits": 21, "pr": 12 },
-        "ui-reference": { "commits": 5, "pr": 13 }
+        "security": {
+          "commits": 26,
+          "pr": 8
+        },
+        "core": {
+          "commits": 655,
+          "pr": 9
+        },
+        "features": {
+          "commits": 6,
+          "pr": 10
+        },
+        "integration": {
+          "commits": 11,
+          "pr": 11
+        },
+        "platform": {
+          "commits": 21,
+          "pr": 12
+        },
+        "ui-reference": {
+          "commits": 5,
+          "pr": 13
+        }
       },
       "notes": "First inclusive sync (take everything). 724 commits applied across 6 phases. Session store fix required post-merge due to SQLite vs JSON architectural divergence. Protected-files manifest updated with architectural divergence section."
     },
@@ -49,12 +97,30 @@
       "syncedAt": "2026-03-16T19:00:00Z",
       "backupTag": "backup/pre-sync-v2026.3.12-security-20260316",
       "phases": {
-        "security": { "commits": 34, "pr": 2 },
-        "bugfixes": { "commits": 83, "pr": 3 },
-        "features": { "commits": 11, "pr": 4 },
-        "provider-refactor": { "commits": 8, "pr": 5 },
-        "review": { "commits": 17, "pr": 6 },
-        "ui-inspiration": { "commits": 5, "pr": 7 }
+        "security": {
+          "commits": 34,
+          "pr": 2
+        },
+        "bugfixes": {
+          "commits": 83,
+          "pr": 3
+        },
+        "features": {
+          "commits": 11,
+          "pr": 4
+        },
+        "provider-refactor": {
+          "commits": 8,
+          "pr": 5
+        },
+        "review": {
+          "commits": 17,
+          "pr": 6
+        },
+        "ui-inspiration": {
+          "commits": 5,
+          "pr": 7
+        }
       },
       "notes": "First phased cherry-pick sync. 6 phases with per-category PRs. ~158 total commits adopted."
     },
@@ -66,7 +132,7 @@
       "commitsCount": 263,
       "conflictsResolved": 195,
       "backupTag": "backup/pre-sync-v2026.3.8",
-      "notes": "Large sync — memoryDashboardHandlers, clawhubHandlers, ~40 plugin-sdk exports silently dropped during conflict resolution. Required manual post-sync audit."
+      "notes": "Large sync \u2014 memoryDashboardHandlers, clawhubHandlers, ~40 plugin-sdk exports silently dropped during conflict resolution. Required manual post-sync audit."
     },
     {
       "type": "full-merge",
@@ -82,5 +148,25 @@
       "syncedAt": "2026-03-03T00:00:00Z",
       "backupTag": "backup/pre-sync-v2026.3.2"
     }
-  ]
+  ],
+  "preSync": {
+    "baselineTag": "backup/pre-sync-v2026.3.22",
+    "buildPasses": true,
+    "testFiles": {
+      "passed": 1026,
+      "failed": 56,
+      "skipped": 1
+    },
+    "tests": {
+      "passed": 8987,
+      "failed": 140,
+      "skipped": 4
+    },
+    "serverMethodsImports": 61,
+    "methodScopesLines": 412,
+    "pluginSdkExports": 137,
+    "orchestrationHandlers": 14,
+    "shimDirsExist": true,
+    "schemaCollisions": false
+  }
 }
