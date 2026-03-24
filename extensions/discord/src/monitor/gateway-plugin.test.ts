@@ -84,4 +84,22 @@ describe("wrapWebSocketWithErrorGuard", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(errorHandler).toHaveBeenCalled();
   });
+
+  it("swallows error when no error listeners are registered during setImmediate", async () => {
+    const ws = createMockWebSocket();
+    const wrapped = wrapWebSocketWithErrorGuard(ws);
+
+    wrapped.on("close", () => {
+      throw new Error("close error with no listeners");
+    });
+
+    // No error handler registered - should not throw
+    expect(() => wrapped.emit("close", 1006)).not.toThrow();
+
+    // Wait for setImmediate to fire - should swallow the error (log it)
+    // and not throw an uncaught exception
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // If we get here without an uncaught exception, the test passes
+  });
 });

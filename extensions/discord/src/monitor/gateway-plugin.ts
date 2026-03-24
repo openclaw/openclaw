@@ -225,6 +225,11 @@ function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: u
  * GatewayPlugin from crashing the process when it throws "Max reconnect attempts"
  * errors instead of emitting them.
  *
+ * Known limitation: if a close handler throws, remaining close listeners registered
+ * after it will be skipped (standard EventEmitter behavior). Carbon currently
+ * registers a single close handler, so this is not an issue, but should be
+ * revisited if Carbon's close handler count changes.
+ *
  * @see https://github.com/openclaw/openclaw/issues/53644
  */
 function wrapWebSocketWithErrorGuard(ws: WebSocket): WebSocket {
@@ -241,7 +246,16 @@ function wrapWebSocketWithErrorGuard(ws: WebSocket): WebSocket {
         // error handling in provider.lifecycle.ts can process it gracefully.
         // Use setImmediate to avoid re-entrancy issues with emit.
         setImmediate(() => {
-          originalEmit("error", error);
+          // Guard against missing error listeners: if Carbon cleaned up listeners
+          // before setImmediate fires, emitting 'error' with no listeners would
+          // throw an uncaught exception (Node.js EventEmitter contract).
+          if (emitter.listenerCount("error") > 0) {
+            originalEmit("error", error);
+          } else {
+            logVerbose(
+              `discord gateway: no error listeners, swallowing close error: ${String(error)}`,
+            );
+          }
         });
         return true;
       }
