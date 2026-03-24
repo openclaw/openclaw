@@ -776,6 +776,9 @@ export class TwilioProvider implements VoiceCallProvider {
             `[voice-call] Streaming TTS failed before audio was sent; falling back to buffered synthesis:`,
             err instanceof Error ? err.message : err,
           );
+          // Discard any partial pre-fallback stream residue so the final flush
+          // cannot append stale audio after the buffered response.
+          remainder = Buffer.alloc(0);
           const fallbackAudio = await ttsProvider.synthesizeForTelephony(text);
           const bufferedChunks = chunkAudio(fallbackAudio, CHUNK_SIZE);
           for (const chunk of bufferedChunks) {
