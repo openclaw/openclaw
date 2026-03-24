@@ -117,6 +117,6 @@ Keep the PR1 scope conservative:
 
 ## Example prompts
 
-- "Open https://example.com/pricing and extract every plan name and price."
-- "Go to https://example.com/contact, fill the public inquiry form, and summarize what happened."
-- "Visit https://example.com/search, switch the region to Canada, and extract the top five public listings."
+- "Open [example.com/pricing](https://example.com/pricing) and extract every plan name and price."
+- "Go to [example.com/contact](https://example.com/contact), fill the public inquiry form, and summarize what happened."
+- "Visit [example.com/search](https://example.com/search), switch the region to Canada, and extract the top five public listings."
