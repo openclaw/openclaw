@@ -72,6 +72,13 @@ struct VoiceWakeSettings: View {
                     binding: self.$state.voicePushToTalkEnabled)
                     .disabled(!voiceWakeSupported)
 
+                if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
+                    Text("Push-to-Talk is paused while Talk Mode is active. It resumes when Talk Mode is turned off.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 20)
+                }
+
                 SettingsToggleRow(
                     title: "Play phase-transition sounds",
                     subtitle: """
