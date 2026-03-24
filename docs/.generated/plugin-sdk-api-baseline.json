@@ -10,8 +10,8 @@
           "exportName": "buildFalImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 188,
-            "path": "src/image-generation/providers/fal.ts"
+            "line": 190,
+            "path": "extensions/fal/image-generation-provider.ts"
           }
         },
         {
@@ -19,8 +19,8 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 96,
-            "path": "src/image-generation/providers/google.ts"
+            "line": 95,
+            "path": "extensions/google/image-generation-provider.ts"
           }
         },
         {
@@ -28,8 +28,8 @@
           "exportName": "buildOpenAIImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 42,
-            "path": "src/image-generation/providers/openai.ts"
+            "line": 22,
+            "path": "extensions/openai/image-generation-provider.ts"
           }
         },
         {
@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 223,
+            "line": 229,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 152,
+            "line": 150,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -397,7 +397,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 950,
+            "line": 951,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1311,
+            "line": 1314,
             "path": "src/plugins/types.ts"
           }
         },
@@ -523,7 +523,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 932,
+            "line": 933,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1357,7 +1357,7 @@
           "kind": "function",
           "source": {
             "line": 17,
-            "path": "src/whatsapp/normalize.ts"
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1365,8 +1365,8 @@
           "exportName": "isWhatsAppUserTarget",
           "kind": "function",
           "source": {
-            "line": 33,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 30,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1455,8 +1455,8 @@
           "exportName": "normalizeWhatsAppTarget",
           "kind": "function",
           "source": {
-            "line": 55,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 47,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -2258,7 +2258,7 @@
           "exportName": "createTopLevelChannelDmPolicy",
           "kind": "function",
           "source": {
-            "line": 363,
+            "line": 411,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2276,7 +2276,7 @@
           "exportName": "setSetupChannelEnabled",
           "kind": "function",
           "source": {
-            "line": 765,
+            "line": 813,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2285,7 +2285,7 @@
           "exportName": "splitSetupEntries",
           "kind": "function",
           "source": {
-            "line": 76,
+            "line": 80,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 847,
+            "line": 961,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 856,
+            "line": 970,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2404,7 +2404,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 727,
+            "line": 841,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -3009,7 +3009,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 161,
+            "line": 162,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3018,7 +3018,7 @@
           "exportName": "channelTargetSchema",
           "kind": "function",
           "source": {
-            "line": 33,
+            "line": 38,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3027,7 +3027,7 @@
           "exportName": "channelTargetsSchema",
           "kind": "function",
           "source": {
-            "line": 39,
+            "line": 44,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3045,7 +3045,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 435,
+            "line": 436,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 412,
+            "line": 413,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 244,
+            "line": 245,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3081,7 +3081,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 275,
+            "line": 276,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3110,6 +3110,15 @@
           "source": {
             "line": 13,
             "path": "src/plugins/config-schema.ts"
+          }
+        },
+        {
+          "declaration": "export function enqueueKeyedTask<T>(params: { tails: Map<string, Promise<void>>; key: string; task: () => Promise<T>; hooks?: KeyedAsyncQueueHooks | undefined; }): Promise<...>;",
+          "exportName": "enqueueKeyedTask",
+          "kind": "function",
+          "source": {
+            "line": 7,
+            "path": "src/plugin-sdk/keyed-async-queue.ts"
           }
         },
         {
@@ -3189,7 +3198,7 @@
           "exportName": "optionalStringEnum",
           "kind": "function",
           "source": {
-            "line": 26,
+            "line": 31,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3261,7 +3270,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 141,
+            "line": 142,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3270,7 +3279,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 153,
+            "line": 154,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3342,7 +3351,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 136,
+            "line": 137,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3369,7 +3378,7 @@
           "exportName": "GatewayRequestHandlerOptions",
           "kind": "type",
           "source": {
-            "line": 111,
+            "line": 112,
             "path": "src/gateway/server-methods/types.ts"
           }
         },
@@ -3378,7 +3387,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 950,
+            "line": 951,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3396,7 +3405,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1311,
+            "line": 1314,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3405,7 +3414,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1065,
+            "line": 1068,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3423,7 +3432,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1293,
+            "line": 1296,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3432,7 +3441,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1282,
+            "line": 1285,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3441,7 +3450,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1274,
+            "line": 1277,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3468,7 +3477,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 965,
+            "line": 966,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3477,7 +3486,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1094,
+            "line": 1097,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3792,7 +3801,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 932,
+            "line": 933,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3830,6 +3839,15 @@
           "source": {
             "line": 1,
             "path": "src/infra/provider-usage.types.ts"
+          }
+        },
+        {
+          "declaration": "export class KeyedAsyncQueue",
+          "exportName": "KeyedAsyncQueue",
+          "kind": "class",
+          "source": {
+            "line": 34,
+            "path": "src/plugin-sdk/keyed-async-queue.ts"
           }
         }
       ],
@@ -3875,7 +3893,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 950,
+            "line": 951,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3893,7 +3911,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1311,
+            "line": 1314,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3902,7 +3920,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1065,
+            "line": 1068,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3920,7 +3938,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1293,
+            "line": 1296,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3929,7 +3947,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1282,
+            "line": 1285,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3938,7 +3956,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1274,
+            "line": 1277,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3947,7 +3965,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 965,
+            "line": 966,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3956,7 +3974,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1094,
+            "line": 1097,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4217,7 +4235,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 932,
+            "line": 933,
             "path": "src/plugins/types.ts"
           }
         }
@@ -4239,6 +4257,24 @@
           "source": {
             "line": 76,
             "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function applyCloudflareAiGatewayConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 85,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyCloudflareAiGatewayProviderConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 41,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
           }
         },
         {
@@ -4282,7 +4318,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 177,
+            "line": 230,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4291,7 +4327,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 202,
+            "line": 272,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4300,7 +4336,52 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 234,
+            "line": 304,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 27,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 8,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 213,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelsPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 255,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createModelCatalogPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 327,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4320,6 +4401,24 @@
           "source": {
             "line": 38,
             "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF: \"cloudflare-ai-gateway/claude-sonnet-4-5\";",
+          "exportName": "CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 5,
+            "path": "src/agents/cloudflare-ai-gateway.ts"
+          }
+        },
+        {
+          "declaration": "export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF: \"vercel-ai-gateway/anthropic/claude-opus-4.6\";",
+          "exportName": "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 6,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
           }
         },
         {
@@ -4365,6 +4464,15 @@
           "source": {
             "line": 32,
             "path": "src/config/types.openclaw.ts"
+          }
+        },
+        {
+          "declaration": "export type ProviderOnboardPresetAppliers = ProviderOnboardPresetAppliers<TArgs>;",
+          "exportName": "ProviderOnboardPresetAppliers",
+          "kind": "type",
+          "source": {
+            "line": 177,
+            "path": "src/plugins/provider-onboarding-config.ts"
           }
         }
       ],
@@ -4888,6 +4996,15 @@
           "source": {
             "line": 47,
             "path": "src/infra/http-body.ts"
+          }
+        },
+        {
+          "declaration": "export function normalizePluginHttpPath(path?: string | null | undefined, fallback?: string | null | undefined): string | null;",
+          "exportName": "normalizePluginHttpPath",
+          "kind": "function",
+          "source": {
+            "line": 1,
+            "path": "src/plugins/http-path.ts"
           }
         },
         {

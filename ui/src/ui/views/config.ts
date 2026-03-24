@@ -1,17 +1,27 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
+import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
   humanize,
+  isSensitiveConfigPath,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+
+const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
+  0: "None",
+  25: "Slight",
+  50: "Default",
+  75: "Round",
+  100: "Full",
+};
 
 export type ConfigProps = {
   raw: string;
@@ -281,6 +291,40 @@ const sidebarIcons = {
       <path d="m19.07 10.93-4.24 4.24"></path>
     </svg>
   `,
+  diagnostics: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+    </svg>
+  `,
+  cli: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `,
+  secrets: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path
+        d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"
+      ></path>
+    </svg>
+  `,
+  acp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </svg>
+  `,
+  mcp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+      <line x1="6" y1="6" x2="6.01" y2="6"></line>
+      <line x1="6" y1="18" x2="6.01" y2="18"></line>
+    </svg>
+  `,
   __appearance__: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="12" cy="12" r="5"></circle>
@@ -319,6 +363,9 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "update", label: "Updates" },
       { key: "meta", label: "Meta" },
       { key: "logging", label: "Logging" },
+      { key: "diagnostics", label: "Diagnostics" },
+      { key: "cli", label: "Cli" },
+      { key: "secrets", label: "Secrets" },
     ],
   },
   {
@@ -367,6 +414,8 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "canvasHost", label: "CanvasHost" },
       { key: "discovery", label: "Discovery" },
       { key: "media", label: "Media" },
+      { key: "acp", label: "Acp" },
+      { key: "mcp", label: "Mcp" },
     ],
   },
   {
@@ -506,13 +555,16 @@ function truncateValue(value: unknown, maxLen = 40): string {
 }
 
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
+  if (isSensitiveConfigPath(path) && value != null && truncateValue(value).trim() !== "") {
+    return REDACTED_PLACEHOLDER;
+  }
   return truncateValue(value);
 }
 
 type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
 const THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Blue contrast", icon: icons.link },
+  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
@@ -553,43 +605,23 @@ function renderAppearanceSection(props: ConfigProps) {
       <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Roundness</h3>
         <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
-        <div class="settings-slider">
-          <div class="settings-slider__header">
-            <span class="settings-slider__label">
-              <span class="settings-slider__key-swatch settings-slider__key-swatch--sharp"></span>
-              Square
-            </span>
-            <span class="settings-slider__value">${props.borderRadius}%</span>
-            <span class="settings-slider__label">
-              Round
-              <span class="settings-slider__key-swatch settings-slider__key-swatch--round"></span>
-            </span>
-          </div>
-          <input
-            type="range"
-            class="settings-slider__input"
-            min="0"
-            max="100"
-            step="1"
-            .value=${String(props.borderRadius)}
-            @input=${(e: Event) => {
-              const v = Number((e.target as HTMLInputElement).value);
-              props.setBorderRadius(v);
-            }}
-          />
-          <div class="settings-slider__preview">
-            <div
-              class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(10 * (props.borderRadius / 50))}px"
-            ></div>
-            <div
-              class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(14 * (props.borderRadius / 50))}px"
-            ></div>
-            <div
-              class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(20 * (props.borderRadius / 50))}px"
-            ></div>
+        <div class="settings-roundness">
+          <div class="settings-roundness__options">
+            ${BORDER_RADIUS_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-roundness__btn ${stop === props.borderRadius ? "active" : ""}"
+                  @click=${() => props.setBorderRadius(stop)}
+                >
+                  <span
+                    class="settings-roundness__swatch"
+                    style="border-radius: ${Math.round(10 * (stop / 50))}px"
+                  ></span>
+                  <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
+                </button>
+              `,
+            )}
           </div>
         </div>
       </div>
@@ -753,6 +785,28 @@ export function renderConfig(props: ConfigProps) {
         <div class="config-actions">
           <div class="config-actions__left">
             ${
+              showModeToggle
+                ? html`
+                    <div class="config-mode-toggle">
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                        ?disabled=${props.schemaLoading || !props.schema}
+                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                        @click=${() => props.onFormModeChange("form")}
+                      >
+                        Form
+                      </button>
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                        @click=${() => props.onFormModeChange("raw")}
+                      >
+                        Raw
+                      </button>
+                    </div>
+                  `
+                : nothing
+            }
+            ${
               hasChanges
                 ? html`
 	                  <span class="config-changes-badge"
@@ -871,30 +925,6 @@ export function renderConfig(props: ConfigProps) {
             )}
           </div>
 
-          <div class="config-top-tabs__right">
-            ${
-              showModeToggle
-                ? html`
-                    <div class="config-mode-toggle">
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                        ?disabled=${props.schemaLoading || !props.schema}
-                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
-                        @click=${() => props.onFormModeChange("form")}
-                      >
-                        Form
-                      </button>
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                        @click=${() => props.onFormModeChange("raw")}
-                      >
-                        Raw
-                      </button>
-                    </div>
-                  `
-                : nothing
-            }
-          </div>
         </div>
 
         ${

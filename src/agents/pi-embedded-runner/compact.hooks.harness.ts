@@ -280,6 +280,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("./lanes.js", () => ({
@@ -294,6 +295,21 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
     resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
+  }));
+
+  vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    createBundleMcpToolRuntime: vi.fn(async () => ({
+      tools: [],
+      dispose: vi.fn(async () => {}),
+    })),
+  }));
+
+  vi.doMock("../pi-bundle-lsp-runtime.js", () => ({
+    createBundleLspToolRuntime: vi.fn(async () => ({
+      tools: [],
+      sessions: [],
+      dispose: vi.fn(async () => {}),
+    })),
   }));
 
   vi.doMock("../docs-path.js", () => ({
@@ -317,6 +333,51 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./tool-split.js", () => ({
     splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+  }));
+
+  vi.doMock("./compaction-safety-timeout.js", () => ({
+    compactWithSafetyTimeout: vi.fn(
+      async (
+        compact: () => Promise<unknown>,
+        _timeoutMs?: number,
+        opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+      ) => {
+        const abortSignal = opts?.abortSignal;
+        if (!abortSignal) {
+          return await compact();
+        }
+        const cancelAndCreateError = () => {
+          opts?.onCancel?.();
+          const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
+          if (reason instanceof Error) {
+            return reason;
+          }
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          return err;
+        };
+        if (abortSignal.aborted) {
+          throw cancelAndCreateError();
+        }
+        return await Promise.race([
+          compact(),
+          new Promise<never>((_, reject) => {
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                reject(cancelAndCreateError());
+              },
+              { once: true },
+            );
+          }),
+        ]);
+      },
+    ),
+    resolveCompactionTimeoutMs: vi.fn(() => 30_000),
+  }));
+
+  vi.doMock("./wait-for-idle-before-flush.js", () => ({
+    flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
   }));
 
   vi.doMock("../transcript-policy.js", () => ({

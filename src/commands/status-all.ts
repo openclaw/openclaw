@@ -14,7 +14,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -124,10 +124,11 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
-    const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
-    const probeAuthResolution =
-      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
+    const probeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg,
+      mode: isRemoteMode && !remoteUrlMissing ? "remote" : "local",
+      env: process.env,
+    });
     const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
@@ -188,8 +189,8 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: localProbeAuthResolution.auth.token,
-          password: localProbeAuthResolution.auth.password,
+          token: probeAuthResolution.auth.token,
+          password: probeAuthResolution.auth.password,
         }
       : {};
 

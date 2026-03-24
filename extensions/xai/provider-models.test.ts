@@ -7,6 +7,7 @@ describe("xai provider models", () => {
     expect(resolveXaiCatalogEntry("grok-4-1-fast")).toMatchObject({
       id: "grok-4-1-fast",
       reasoning: true,
+      input: ["text", "image"],
       contextWindow: 2_000_000,
       maxTokens: 30_000,
     });
@@ -22,6 +23,7 @@ describe("xai provider models", () => {
     expect(resolveXaiCatalogEntry("grok-4.20-beta-latest-reasoning")).toMatchObject({
       id: "grok-4.20-beta-latest-reasoning",
       reasoning: true,
+      input: ["text", "image"],
       contextWindow: 2_000_000,
     });
     expect(resolveXaiCatalogEntry("grok-4.20-beta-latest-non-reasoning")).toMatchObject({
@@ -46,10 +48,25 @@ describe("xai provider models", () => {
     });
   });
 
+  it("publishes the remaining Grok 3 family that Pi still carries", () => {
+    expect(resolveXaiCatalogEntry("grok-3-mini-fast")).toMatchObject({
+      id: "grok-3-mini-fast",
+      reasoning: true,
+      contextWindow: 131_072,
+      maxTokens: 8_192,
+    });
+    expect(resolveXaiCatalogEntry("grok-3-fast")).toMatchObject({
+      id: "grok-3-fast",
+      reasoning: false,
+      contextWindow: 131_072,
+      maxTokens: 8_192,
+    });
+  });
+
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
     expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
     expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
-    expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
+    expect(isModernXaiModel("grok-3-mini-fast")).toBe(true);
     expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
   });
 
@@ -78,6 +95,18 @@ describe("xai provider models", () => {
         },
       },
     });
+    const grok3Mini = resolveXaiForwardCompatModel({
+      providerId: "xai",
+      ctx: {
+        provider: "xai",
+        modelId: "grok-3-mini-fast",
+        modelRegistry: { find: () => null } as never,
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://api.x.ai/v1",
+        },
+      },
+    });
 
     expect(grok41).toMatchObject({
       provider: "xai",
@@ -94,8 +123,18 @@ describe("xai provider models", () => {
       api: "openai-completions",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
+      input: ["text", "image"],
       contextWindow: 2_000_000,
       maxTokens: 30_000,
+    });
+    expect(grok3Mini).toMatchObject({
+      provider: "xai",
+      id: "grok-3-mini-fast",
+      api: "openai-completions",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      contextWindow: 131_072,
+      maxTokens: 8_192,
     });
   });
 
