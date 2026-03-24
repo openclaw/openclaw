@@ -174,16 +174,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const purpose = params.purpose === "status" ? "status" : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const statusOnly = params.purpose === "status";
-    const existing = INDEX_CACHE.get(key);
-    if (existing) {
-      return existing;
-    }
-    const pending = INDEX_CACHE_PENDING.get(key);
-    if (pending) {
-      return pending;
-    }
     if (statusOnly) {
-      const manager = new MemoryIndexManager({
+      return new MemoryIndexManager({
         cacheKey: key,
         cfg,
         agentId,
@@ -191,8 +183,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         settings,
         purpose: params.purpose,
       });
-      INDEX_CACHE.set(key, manager);
-      return manager;
+    }
+    const existing = INDEX_CACHE.get(key);
+    if (existing) {
+      return existing;
+    }
+    const pending = INDEX_CACHE_PENDING.get(key);
+    if (pending) {
+      return pending;
     }
     const createPromise = (async () => {
       const providerResult = await MemoryIndexManager.loadProviderResult({
