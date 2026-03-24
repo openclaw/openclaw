@@ -101,6 +101,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
     implicitMention: boolean;
+    debounceBatched?: boolean;
   };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
@@ -483,8 +484,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
 
     // Fetch thread context from Graph API for channel thread replies.
+    // Skip when debounce-batched: the batched text already includes recent messages,
+    // and we only have the last activity.id so earlier debounced replies would be duplicated.
     let threadContextBody = "";
-    if (isChannel && conversationMessageId && teamId) {
+    if (isChannel && conversationMessageId && teamId && !params.debounceBatched) {
       try {
         const graphToken = await resolveGraphToken(cfg);
         // channelData.team.id is a conversation ID (19:xxx@thread.tacv2), NOT the Azure AD group ID.
@@ -779,6 +782,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         attachments: [],
         wasMentioned,
         implicitMention,
+        debounceBatched: true,
       });
     },
     onError: (err) => {
