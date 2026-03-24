@@ -108,7 +108,7 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     await loadSkills(state);
     setSkillMessage(state, skillKey, {
       kind: "success",
-      message: "API key saved",
+      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
     });
   } catch (err) {
     const message = getErrorMessage(err);

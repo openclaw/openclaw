@@ -656,13 +656,14 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       <input
         type="text"
         placeholder="Search messages..."
+        aria-label="Search messages"
         .value=${vs.searchQuery}
         @input=${(e: Event) => {
           vs.searchQuery = (e.target as HTMLInputElement).value;
           requestUpdate();
         }}
       />
-      <button class="btn btn--ghost" @click=${() => {
+      <button class="btn btn--ghost" aria-label="Close search" @click=${() => {
         vs.searchOpen = false;
         vs.searchQuery = "";
         requestUpdate();
@@ -739,13 +740,15 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu">
+      <div class="slash-menu" role="listbox" aria-label="Command arguments">
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">/${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}</div>
           ${vs.slashMenuArgItems.map(
             (arg, i) => html`
               <div
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
+                role="option"
+                aria-selected=${i === vs.slashMenuIndex}
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
                   vs.slashMenuIndex = i;
@@ -798,6 +801,8 @@ function renderSlashMenu(
           ({ cmd, globalIdx }) => html`
             <div
               class="slash-menu-item ${globalIdx === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
+              role="option"
+              aria-selected=${globalIdx === vs.slashMenuIndex}
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
                 vs.slashMenuIndex = globalIdx;
@@ -825,7 +830,7 @@ function renderSlashMenu(
   }
 
   return html`
-    <div class="slash-menu">
+    <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
       <div class="slash-menu-footer">
         <kbd>↑↓</kbd> navigate
@@ -1254,6 +1259,7 @@ export function renderChat(props: ChatProps) {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
               title="Attach file"
+              aria-label="Attach file"
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1332,14 +1338,14 @@ export function renderChat(props: ChatProps) {
                     </button>
                   `
             }
-            <button class="btn btn--ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
+            <button class="btn btn--ghost" @click=${() => exportMarkdown(props)} title="Export" aria-label="Export chat" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
 
             ${
               canAbort && (isBusy || props.sending)
                 ? html`
-                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
+                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop" aria-label="Stop generating">
                     ${icons.stop}
                   </button>
                 `
@@ -1354,6 +1360,7 @@ export function renderChat(props: ChatProps) {
                     }}
                     ?disabled=${!props.connected || props.sending}
                     title=${isBusy ? "Queue" : "Send"}
+                    aria-label=${isBusy ? "Queue message" : "Send message"}
                   >
                     ${icons.send}
                   </button>

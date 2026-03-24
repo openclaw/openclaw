@@ -645,7 +645,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "document">;
 };
 
 export type ToolCatalogProfile =

@@ -103,8 +103,8 @@
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: var(--radius-full);
   background: var(--bg-hover);
@@ -867,6 +867,21 @@
   border-radius: var(--radius-md);
   background: var(--danger-subtle);
   border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.cfg-field--error .cfg-input,
+.cfg-field--error .cfg-textarea,
+.cfg-field--error .cfg-select,
+.cfg-field--error .cfg-number {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.cfg-field--error .cfg-input:focus,
+.cfg-field--error .cfg-textarea:focus,
+.cfg-field--error .cfg-select:focus {
+  border-color: var(--border);
+  box-shadow: none;
 }
 
 .cfg-field__label {
