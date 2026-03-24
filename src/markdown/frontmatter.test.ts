@@ -21,7 +21,7 @@ description: |
 name: session-memory
 metadata:
   {
-    "openclaw":
+    "evox":
       {
         "emoji": "disk",
         "events": ["command:new"],
@@ -39,11 +39,11 @@ metadata:
   it("preserves inline JSON values", () => {
     const content = `---
 name: inline-json
-metadata: {"openclaw": {"events": ["test"]}}
+metadata: {"evox": {"events": ["test"]}}
 ---
 `;
     const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
+    expect(result.metadata).toBe('{"evox": {"events": ["test"]}}');
   });
 
   it("stringifies YAML objects and arrays", () => {
@@ -55,7 +55,7 @@ tags:
   - alpha
   - beta
 metadata:
-  openclaw:
+  evox:
     events:
       - command:new
 ---
@@ -91,10 +91,10 @@ description: |-
     const content = `---
 name: sample-skill
 metadata:
-  openclaw: true
+  evox: true
 ---`;
     const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw":true}');
+    expect(result.metadata).toBe('{"evox":true}');
   });
 
   it("returns empty when frontmatter is missing", () => {

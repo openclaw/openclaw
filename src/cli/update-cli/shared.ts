@@ -53,14 +53,14 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
   return timeoutMs;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const OPENCLAW_REPO_URL = "https://github.com/sonpiaz/evox-sh.git";
 const MAX_LOG_CHARS = 8000;
 
-export const DEFAULT_PACKAGE_NAME = "openclaw";
+export const DEFAULT_PACKAGE_NAME = "evox";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, ["evox", DEFAULT_PACKAGE_NAME]);
 }
 
 export function normalizeVersionTag(tag: string): string | null {
@@ -121,7 +121,7 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  return path.join(os.homedir(), "openclaw");
+  return path.join(os.homedir(), "evox");
 }
 
 export function resolveNodeRunner(): string {
@@ -210,7 +210,7 @@ export async function ensureGitCheckout(params: {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
       throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an evox checkout.`,
       );
     }
 
@@ -254,7 +254,7 @@ export async function resolveGlobalManager(params: {
 }
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = path.join(root, "evox.mjs");
   if (!(await pathExists(binPath))) {
     return;
   }

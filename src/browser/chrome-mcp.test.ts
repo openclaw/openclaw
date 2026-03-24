@@ -29,7 +29,7 @@ function createFakeSession(): ChromeMcpSession {
             text: [
               "## Pages",
               "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session [selected]",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
+              "2: https://github.com/sonpiaz/evox-sh/pull/45318",
             ].join("\n"),
           },
         ],
@@ -43,7 +43,7 @@ function createFakeSession(): ChromeMcpSession {
             text: [
               "## Pages",
               "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
+              "2: https://github.com/sonpiaz/evox-sh/pull/45318",
               "3: https://example.com/ [selected]",
             ].join("\n"),
           },
@@ -98,7 +98,7 @@ describe("chrome MCP page parsing", () => {
       {
         targetId: "2",
         title: "",
-        url: "https://github.com/openclaw/openclaw/pull/45318",
+        url: "https://github.com/sonpiaz/evox-sh/pull/45318",
         type: "page",
       },
     ]);

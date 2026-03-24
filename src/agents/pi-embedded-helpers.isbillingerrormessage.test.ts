@@ -31,7 +31,7 @@ const ANTHROPIC_OVERLOADED_PAYLOAD =
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
-// https://github.com/openclaw/openclaw/issues/23440
+// https://github.com/sonpiaz/evox-sh/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}'; // pragma: allowlist secret
 // Together AI error code examples: https://docs.together.ai/docs/error-codes

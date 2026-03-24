@@ -334,7 +334,7 @@ describe("update-cli", () => {
       killed: false,
       termination: "exit",
     });
-    readPackageName.mockResolvedValue("openclaw");
+    readPackageName.mockResolvedValue("evox");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     serviceLoaded.mockResolvedValue(false);
@@ -430,7 +430,7 @@ describe("update-cli", () => {
         options: { json: false },
         assert: () => {
           const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-          expect(logs.join("\n")).toContain("OpenClaw update status");
+          expect(logs.join("\n")).toContain("EVOX.sh update status");
         },
       },
       {
@@ -454,7 +454,7 @@ describe("update-cli", () => {
 
   it("parses update status --json as the subcommand option", async () => {
     const program = new Command();
-    program.name("openclaw");
+    program.name("evox");
     program.enablePositionalOptions();
     let seenJson = false;
     const update = program.command("update").option("--json", "", false);
@@ -465,7 +465,7 @@ describe("update-cli", () => {
         seenJson = Boolean(opts.json);
       });
 
-    await program.parseAsync(["node", "openclaw", "update", "status", "--json"]);
+    await program.parseAsync(["node", "evox", "update", "status", "--json"]);
 
     expect(seenJson).toBe(true);
   });
@@ -529,7 +529,7 @@ describe("update-cli", () => {
       } else {
         expect(runGatewayUpdate).not.toHaveBeenCalled();
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
-          ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+          ["npm", "i", "-g", "evox@latest", "--no-fund", "--no-audit", "--loglevel=error"],
           expect.any(Object),
         );
       }
@@ -560,7 +560,7 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      ["npm", "i", "-g", "evox@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
   });
@@ -573,7 +573,7 @@ describe("update-cli", () => {
           mockPackageInstallStatus(createCaseDir("openclaw-update"));
           await updateCommand({ tag: "next" });
         },
-        expectedSpec: "openclaw@next",
+        expectedSpec: "evox@next",
       },
       {
         name: "main shorthand",
@@ -606,7 +606,7 @@ describe("update-cli", () => {
       },
     ]) {
       vi.clearAllMocks();
-      readPackageName.mockResolvedValue("openclaw");
+      readPackageName.mockResolvedValue("evox");
       readPackageVersion.mockResolvedValue("1.0.0");
       resolveGlobalManager.mockResolvedValue("npm");
       vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
@@ -621,7 +621,7 @@ describe("update-cli", () => {
     const localAppData = createCaseDir("openclaw-localappdata");
     const portableGitMingw = path.join(
       localAppData,
-      "OpenClaw",
+      "EVOX.sh",
       "deps",
       "portable-git",
       "mingw64",
@@ -629,7 +629,7 @@ describe("update-cli", () => {
     );
     const portableGitUsr = path.join(
       localAppData,
-      "OpenClaw",
+      "EVOX.sh",
       "deps",
       "portable-git",
       "usr",

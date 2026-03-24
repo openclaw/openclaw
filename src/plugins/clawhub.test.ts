@@ -157,7 +157,7 @@ describe("installPluginFromClawHub", () => {
     await expect(installPluginFromClawHub({ spec: "clawhub:calendar" })).resolves.toMatchObject({
       ok: false,
       code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-      error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+      error: '"calendar" is a skill. Use "evox skills install calendar" instead.',
     });
   });
 

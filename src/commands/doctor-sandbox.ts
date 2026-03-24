@@ -210,7 +210,7 @@ export async function maybeRepairSandboxImages(
       "",
       "Options:",
       "- Install Docker and restart the gateway",
-      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+      "- Disable sandbox mode: evox config set agents.defaults.sandbox.mode off",
     ];
     note(lines.join("\n"), "Sandbox");
     return cfg;

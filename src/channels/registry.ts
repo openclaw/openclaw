@@ -6,7 +6,7 @@ export type { ChatChannelId } from "./ids.js";
 
 export type ChatChannelMeta = ChannelMeta;
 
-const WEBSITE_URL = "https://openclaw.ai";
+const WEBSITE_URL = "https://evox.sh";
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type RegisteredChannelPluginEntry = {

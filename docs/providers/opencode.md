@@ -1,5 +1,5 @@
 ---
-summary: "Use OpenCode Zen and Go catalogs with OpenClaw"
+summary: "Use OpenCode Zen and Go catalogs with EVOX.sh"
 read_when:
   - You want OpenCode-hosted model access
   - You want to pick between the Zen and Go catalogs
@@ -8,12 +8,12 @@ title: "OpenCode"
 
 # OpenCode
 
-OpenCode exposes two hosted catalogs in OpenClaw:
+OpenCode exposes two hosted catalogs in EVOX.sh:
 
 - `opencode/...` for the **Zen** catalog
 - `opencode-go/...` for the **Go** catalog
 
-Both catalogs use the same OpenCode API key. OpenClaw keeps the runtime provider ids
+Both catalogs use the same OpenCode API key. EVOX.sh keeps the runtime provider ids
 split so upstream per-model routing stays correct, but onboarding and docs treat them
 as one OpenCode setup.
 
@@ -22,15 +22,15 @@ as one OpenCode setup.
 ### Zen catalog
 
 ```bash
-openclaw onboard --auth-choice opencode-zen
-openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+evox onboard --auth-choice opencode-zen
+evox onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
 ### Go catalog
 
 ```bash
-openclaw onboard --auth-choice opencode-go
-openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+evox onboard --auth-choice opencode-go
+evox onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet

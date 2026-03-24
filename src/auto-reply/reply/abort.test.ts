@@ -221,8 +221,8 @@ describe("abort detection", () => {
       "wait",
       "exit",
       "interrupt",
-      "stop openclaw",
-      "openclaw stop",
+      "stop evox",
+      "evox stop",
       "stop action",
       "stop current action",
       "stop run",
@@ -237,7 +237,7 @@ describe("abort detection", () => {
       "please stop",
       "stop please",
       "STOP OPENCLAW",
-      "stop openclaw!!!",
+      "stop evox!!!",
       "stop don’t do anything",
       "detente",
       "detén",
@@ -278,7 +278,7 @@ describe("abort detection", () => {
     expect(isAbortRequestText("Stop")).toBe(true);
     expect(isAbortRequestText("STOP")).toBe(true);
     expect(isAbortRequestText("stop action")).toBe(true);
-    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText("stop evox!!!")).toBe(true);
     expect(isAbortRequestText("やめて")).toBe(true);
     expect(isAbortRequestText("остановись")).toBe(true);
     expect(isAbortRequestText("halt")).toBe(true);

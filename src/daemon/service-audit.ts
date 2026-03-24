@@ -217,7 +217,7 @@ function auditGatewayToken(
   issues.push({
     code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
     message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
-    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
+    detail: "Run `evox gateway install --force` to remove embedded service token.",
     level: "recommended",
   });
   const expectedToken = expectedGatewayToken?.trim();
@@ -391,7 +391,7 @@ export function checkTokenDrift(params: {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
         "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
+      detail: "Run `evox gateway install --force` to sync the token.",
       level: "recommended",
     };
   }

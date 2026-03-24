@@ -1,5 +1,5 @@
 ---
-summary: "Optional Docker-based setup and onboarding for OpenClaw"
+summary: "Optional Docker-based setup and onboarding for EVOX.sh"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
@@ -12,7 +12,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
 ## Is Docker right for me?
 
-- **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.
+- **Yes**: you want an isolated, throwaway gateway environment or to run EVOX.sh on a host without local installs.
 - **No**: you are running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
 - **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
 
@@ -43,7 +43,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ```
 
     Pre-built images are published at the
-    [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
+    [GitHub Container Registry](https://github.com/sonpiaz/evox-sh/pkgs/container/openclaw).
     Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
 
   </Step>
@@ -93,7 +93,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 If you prefer to run each step yourself instead of using the setup script:
 
 ```bash
-docker build -t openclaw:local -f Dockerfile .
+docker build -t evox:local -f Dockerfile .
 docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
@@ -174,7 +174,7 @@ echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 
 Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run
 `clawdock-help` for all commands.
-See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md).
+See the [`ClawDock` Helper README](https://github.com/sonpiaz/evox-sh/blob/main/scripts/shell-helpers/README.md).
 
 <AccordionGroup>
   <Accordion title="Enable agent sandbox for Docker gateway">
@@ -329,7 +329,7 @@ scripts/sandbox-setup.sh
 <AccordionGroup>
   <Accordion title="Image missing or sandbox container not starting">
     Build the sandbox image with
-    [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh)
+    [`scripts/sandbox-setup.sh`](https://github.com/sonpiaz/evox-sh/blob/main/scripts/sandbox-setup.sh)
     or set `agents.defaults.sandbox.docker.image` to your custom image.
     Containers are auto-created per session on demand.
   </Accordion>
@@ -340,7 +340,7 @@ scripts/sandbox-setup.sh
   </Accordion>
 
   <Accordion title="Custom tools not found in sandbox">
-    OpenClaw runs commands with `sh -lc` (login shell), which sources
+    EVOX.sh runs commands with `sh -lc` (login shell), which sources
     `/etc/profile` and may reset PATH. Set `docker.env.PATH` to prepend your
     custom tool paths, or add a script under `/etc/profile.d/` in your Dockerfile.
   </Accordion>

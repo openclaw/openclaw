@@ -65,7 +65,7 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "docs",
-    description: "Search the live OpenClaw docs",
+    description: "Search the live EVOX.sh docs",
     hasSubcommands: false,
   },
   {
@@ -95,7 +95,7 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
+    description: "Manage EVOX.sh plugins and extensions",
     hasSubcommands: true,
   },
   {
@@ -125,7 +125,7 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "update",
-    description: "Update OpenClaw and inspect update channel status",
+    description: "Update EVOX.sh and inspect update channel status",
     hasSubcommands: true,
   },
   {

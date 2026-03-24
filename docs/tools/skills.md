@@ -6,15 +6,15 @@ read_when:
 title: "Skills"
 ---
 
-# Skills (OpenClaw)
+# Skills (EVOX.sh)
 
-OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
+EVOX.sh uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. EVOX.sh loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
 
 Skills are loaded from **three** places:
 
-1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
+1. **Bundled skills**: shipped with the install (npm package or EVOX.sh.app)
 2. **Managed/local skills**: `~/.openclaw/skills`
 3. **Workspace skills**: `<workspace>/skills`
 
@@ -49,8 +49,8 @@ tool surface those skills teach.
 
 ## ClawHub (install + sync)
 
-ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+ClawHub is the public skills registry for EVOX.sh. Browse at
+[https://clawhub.com](https://clawhub.com). Use native `evox skills`
 commands to discover/install/update skills, or the separate `clawhub` CLI when
 you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
@@ -58,16 +58,16 @@ Full guide: [ClawHub](/tools/clawhub).
 Common flows:
 
 - Install a skill into your workspace:
-  - `openclaw skills install <skill-slug>`
+  - `evox skills install <skill-slug>`
 - Update all installed skills:
-  - `openclaw skills update --all`
+  - `evox skills update --all`
 - Sync (scan + publish updates):
   - `clawhub sync --all`
 
-Native `openclaw skills install` installs into the active workspace `skills/`
+Native `evox skills install` installs into the active workspace `skills/`
 directory. The separate `clawhub` CLI also installs into `./skills` under your
-current working directory (or falls back to the configured OpenClaw workspace).
-OpenClaw picks that up as `<workspace>/skills` on the next session.
+current working directory (or falls back to the configured EVOX.sh workspace).
+EVOX.sh picks that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
@@ -108,7 +108,7 @@ Notes:
 
 ## Gating (load-time filters)
 
-OpenClaw **filters skills at load time** using `metadata` (single-line JSON):
+EVOX.sh **filters skills at load time** using `metadata` (single-line JSON):
 
 ```markdown
 ---
@@ -116,7 +116,7 @@ name: image-lab
 description: Generate or edit images via a provider-backed image workflow
 metadata:
   {
-    "openclaw":
+    "evox":
       {
         "requires": { "bins": ["uv"], "env": ["GEMINI_API_KEY"], "config": ["browser.enabled"] },
         "primaryEnv": "GEMINI_API_KEY",
@@ -156,7 +156,7 @@ name: gemini
 description: Use Gemini CLI for coding assistance and Google search lookups.
 metadata:
   {
-    "openclaw":
+    "evox":
       {
         "emoji": "♊️",
         "requires": { "bins": ["gemini"] },
@@ -178,7 +178,7 @@ metadata:
 Notes:
 
 - If multiple installers are listed, the gateway picks a **single** preferred option (brew when available, otherwise node).
-- If all installers are `download`, OpenClaw lists each entry so you can see the available artifacts.
+- If all installers are `download`, EVOX.sh lists each entry so you can see the available artifacts.
 - Installer specs can include `os: ["darwin"|"linux"|"win32"]` to filter options by platform.
 - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun).
   This only affects **skill installs**; the Gateway runtime should still be Node
@@ -217,7 +217,7 @@ Bundled/managed skills can be toggled and supplied with env values:
 
 Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted keys).
 
-If you want stock image generation/editing inside OpenClaw itself, use the core
+If you want stock image generation/editing inside EVOX.sh itself, use the core
 `image_generate` tool with `agents.defaults.imageGenerationModel` instead of a
 bundled skill. Skill examples here are for custom or third-party workflows.
 
@@ -242,7 +242,7 @@ Rules:
 
 ## Environment injection (per agent run)
 
-When an agent run starts, OpenClaw:
+When an agent run starts, EVOX.sh:
 
 1. Reads skill metadata.
 2. Applies any `skills.entries.<key>.env` or `skills.entries.<key>.apiKey` to
@@ -254,19 +254,19 @@ This is **scoped to the agent run**, not a global shell environment.
 
 ## Session snapshot (performance)
 
-OpenClaw snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
+EVOX.sh snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
 
 Skills can also refresh mid-session when the skills watcher is enabled or when a new eligible remote node appears (see below). Think of this as a **hot reload**: the refreshed list is picked up on the next agent turn.
 
 ## Remote macOS nodes (Linux gateway)
 
-If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
+If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), EVOX.sh can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
 
 This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
 
 ## Skills watcher (auto-refresh)
 
-By default, OpenClaw watches skill folders and bumps the skills snapshot when `SKILL.md` files change. Configure this under `skills.load`:
+By default, EVOX.sh watches skill folders and bumps the skills snapshot when `SKILL.md` files change. Configure this under `skills.load`:
 
 ```json5
 {
@@ -281,7 +281,7 @@ By default, OpenClaw watches skill folders and bumps the skills snapshot when `S
 
 ## Token impact (skills list)
 
-When skills are eligible, OpenClaw injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
+When skills are eligible, EVOX.sh injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
 
 - **Base overhead (only when ≥1 skill):** 195 characters.
 - **Per skill:** 97 characters + the length of the XML-escaped `<name>`, `<description>`, and `<location>` values.
@@ -299,8 +299,8 @@ Notes:
 
 ## Managed skills lifecycle
 
-OpenClaw ships a baseline set of skills as **bundled skills** as part of the
-install (npm package or OpenClaw.app). `~/.openclaw/skills` exists for local
+EVOX.sh ships a baseline set of skills as **bundled skills** as part of the
+install (npm package or EVOX.sh.app). `~/.openclaw/skills` exists for local
 overrides (for example, pinning/patching a skill without changing the bundled
 copy). Workspace skills are user-owned and override both on name conflicts.
 

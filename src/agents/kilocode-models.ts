@@ -54,10 +54,10 @@ interface GatewayModelsResponse {
 
 /**
  * Convert per-token price (as returned by the gateway) to per-1M-token price
- * (as stored in OpenClaw's ModelDefinitionConfig.cost).
+ * (as stored in EVOX.sh's ModelDefinitionConfig.cost).
  *
  * Gateway/OpenRouter prices are per-token strings like "0.000005".
- * OpenClaw costs are per-1M-token numbers like 5.0.
+ * EVOX.sh costs are per-1M-token numbers like 5.0.
  */
 function toPricePerMillion(perToken: string | undefined): number {
   if (!perToken) {

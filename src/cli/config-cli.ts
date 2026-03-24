@@ -73,16 +73,16 @@ const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
-  "openclaw config set gateway.port 19001 --strict-json",
+  "evox config set gateway.port 19001 --strict-json",
 );
 const CONFIG_SET_EXAMPLE_REF = formatCliCommand(
-  "openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
+  "evox config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
 );
 const CONFIG_SET_EXAMPLE_PROVIDER = formatCliCommand(
-  "openclaw config set secrets.providers.vault --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json",
+  "evox config set secrets.providers.vault --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json",
 );
 const CONFIG_SET_EXAMPLE_BATCH = formatCliCommand(
-  "openclaw config set --batch-file ./config-set.batch.json --dry-run",
+  "evox config set --batch-file ./config-set.batch.json --dry-run",
 );
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
@@ -178,7 +178,7 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
 }
 
 function formatDoctorHint(message: string): string {
-  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+  return `Run \`${formatCliCommand("evox doctor")}\` ${message}`;
 }
 
 function validatePathSegments(path: PathSegment[]): void {
@@ -1255,7 +1255,7 @@ export function registerConfigCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/config", "docs.openclaw.ai/cli/config")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/config", "docs.evox.sh/cli/config")}\n`,
     )
     .option(
       "--section <section>",

@@ -73,7 +73,7 @@ Behavior:
 
 - `includeTools=false` filters `role: "toolResult"` messages.
 - Returns messages array in the raw transcript format.
-- When given a `sessionId`, OpenClaw resolves it to the corresponding session key (missing ids error).
+- When given a `sessionId`, EVOX.sh resolves it to the corresponding session key (missing ids error).
 
 ## Gateway session history and live transcript APIs
 
@@ -114,11 +114,11 @@ Behavior:
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
 - Inter-session messages are persisted with `message.provenance.kind = "inter_session"` so transcript readers can distinguish routed agent instructions from external user input.
-- After the primary run completes, OpenClaw runs a **reply-back loop**:
+- After the primary run completes, EVOX.sh runs a **reply-back loop**:
   - Round 2+ alternates between requester and target agents.
   - Reply exactly `REPLY_SKIP` to stop the ping‑pong.
   - Max turns is `session.agentToAgent.maxPingPongTurns` (0–5, default 5).
-- Once the loop ends, OpenClaw runs the **agent‑to‑agent announce step** (target agent only):
+- Once the loop ends, EVOX.sh runs the **agent‑to‑agent announce step** (target agent only):
   - Reply exactly `ANNOUNCE_SKIP` to stay silent.
   - Any other reply is sent to the target channel.
   - Announce step includes the original request + round‑1 reply + latest ping‑pong reply.
@@ -164,7 +164,7 @@ Enforcement points:
 
 Spawn an isolated delegated session.
 
-- Default runtime: OpenClaw sub-agent (`runtime: "subagent"`).
+- Default runtime: EVOX.sh sub-agent (`runtime: "subagent"`).
 - ACP harness sessions use `runtime: "acp"` and follow ACP-specific targeting/policy rules.
 - This section focuses on sub-agent behavior unless noted otherwise. For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
@@ -174,7 +174,7 @@ Parameters:
 - `runtime?` (`subagent|acp`; defaults to `subagent`)
 - `label?` (optional; used for logs/UI)
 - `agentId?` (optional)
-  - `runtime: "subagent"`: target another OpenClaw agent id if allowed by `subagents.allowAgents`
+  - `runtime: "subagent"`: target another EVOX.sh agent id if allowed by `subagents.allowAgents`
   - `runtime: "acp"`: target an ACP harness id if allowed by `acp.allowedAgents`
 - `model?` (optional; overrides the sub-agent model; invalid values error)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
@@ -188,7 +188,7 @@ Parameters:
 
 Allowlist:
 
-- `runtime: "subagent"`: `agents.list[].subagents.allowAgents` controls which OpenClaw agent ids are allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `runtime: "subagent"`: `agents.list[].subagents.allowAgents` controls which EVOX.sh agent ids are allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 - `runtime: "acp"`: `acp.allowedAgents` controls which ACP harness ids are allowed. This is a separate policy from `subagents.allowAgents`.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
@@ -204,7 +204,7 @@ Behavior:
 - Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
 - With `thread=true`, channel plugins can bind delivery/routing to a thread target (Discord support is controlled by `session.threadBindings.*` and `channels.discord.threadBindings.*`).
-- After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
+- After completion, EVOX.sh runs a sub-agent **announce step** and posts the result to the requester chat channel.
   - If the assistant final reply is empty, the latest `toolResult` from sub-agent history is included as `Result`.
 - Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
 - Announce replies are normalized to `Status`/`Result`/`Notes`; `Status` comes from runtime outcome (not model text).
@@ -248,4 +248,4 @@ Notes:
 - `tree`: current session + sessions spawned by the current session.
 - `agent`: any session belonging to the current agent id.
 - `all`: any session (cross-agent access still requires `tools.agentToAgent`).
-- When a session is sandboxed and `sessionToolsVisibility="spawned"`, OpenClaw clamps visibility to `tree` even if you set `tools.sessions.visibility="all"`.
+- When a session is sandboxed and `sessionToolsVisibility="spawned"`, EVOX.sh clamps visibility to `tree` even if you set `tools.sessions.visibility="all"`.

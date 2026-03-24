@@ -287,11 +287,11 @@ describe("buildServiceEnvironment", () => {
     }
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-    expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
+    expect(env.OPENCLAW_SERVICE_MARKER).toBe("evox");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("EVOX.sh Gateway");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
     }
@@ -319,7 +319,7 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway (work)");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("EVOX.sh Gateway (work)");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
@@ -356,7 +356,7 @@ describe("buildServiceEnvironment", () => {
     });
 
     expect(env).not.toHaveProperty("PATH");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("EVOX.sh Gateway");
   });
 
   it("prepends extra runtime directories to the gateway service PATH", () => {
@@ -510,8 +510,8 @@ describe("resolveGatewayStateDir", () => {
   });
 
   it("preserves Windows absolute paths without HOME", () => {
-    const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
-    expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
+    const env = { OPENCLAW_STATE_DIR: "C:\\State\\evox" };
+    expect(resolveGatewayStateDir(env)).toBe("C:\\State\\evox");
   });
 });
 

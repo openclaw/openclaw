@@ -1,7 +1,7 @@
 ---
 summary: "DeepSeek setup (auth + model selection)"
 read_when:
-  - You want to use DeepSeek with OpenClaw
+  - You want to use DeepSeek with EVOX.sh
   - You need the API key env var or CLI auth choice
 ---
 
@@ -18,7 +18,7 @@ read_when:
 Set the API key (recommended: store it for the Gateway):
 
 ```bash
-openclaw onboard --auth-choice deepseek-api-key
+evox onboard --auth-choice deepseek-api-key
 ```
 
 This will prompt for your API key and set `deepseek/deepseek-chat` as the default model.
@@ -26,7 +26,7 @@ This will prompt for your API key and set `deepseek/deepseek-chat` as the defaul
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+evox onboard --non-interactive \
   --mode local \
   --auth-choice deepseek-api-key \
   --deepseek-api-key "$DEEPSEEK_API_KEY" \

@@ -82,7 +82,7 @@ function createEnv(
     DOCKER_STUB_LOG: sandbox.logPath,
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
-    OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "openclaw"),
+    OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "evox"),
   };
 
   for (const [key, value] of Object.entries(overrides)) {

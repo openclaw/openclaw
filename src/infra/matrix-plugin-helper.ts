@@ -18,7 +18,7 @@ const MATRIX_HELPER_CANDIDATES = [
 ] as const;
 
 export const MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE =
-  "Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so OpenClaw can inspect the old rust crypto store before upgrading.";
+  "Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so EVOX.sh can inspect the old rust crypto store before upgrading.";
 
 type MatrixLegacyCryptoInspectorParams = {
   cryptoRootDir: string;

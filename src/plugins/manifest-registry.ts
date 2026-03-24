@@ -165,7 +165,7 @@ function buildRecord(params: {
       normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
-    format: params.candidate.format ?? "openclaw",
+    format: params.candidate.format ?? "evox",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
@@ -335,7 +335,7 @@ export function loadPluginManifestRegistry(
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
-    const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
+    const isBundleRecord = (candidate.format ?? "evox") === "bundle";
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>
       | ReturnType<typeof loadBundleManifest>
@@ -379,8 +379,8 @@ export function loadPluginManifestRegistry(
           minHostVersionCheck.kind === "invalid"
             ? `plugin manifest invalid | ${minHostVersionCheck.error}`
             : minHostVersionCheck.kind === "unknown_host_version"
-              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+              ? `plugin requires EVOX.sh >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+              : `plugin requires EVOX.sh >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
       });
       continue;
     }

@@ -65,7 +65,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
     s.once("error", reject);
   }).catch((err) => {
-    logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
+    logServer.error(`evox browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });
 

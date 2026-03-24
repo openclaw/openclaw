@@ -134,7 +134,7 @@ function loadBundledMemoryPluginRegistry(options?: {
           name: options.packageMeta.name,
           version: options.packageMeta.version,
           description: options.packageMeta.description,
-          openclaw: { extensions: [`./${pluginFilename}`] },
+          evox: { extensions: [`./${pluginFilename}`] },
         },
         null,
         2,
@@ -369,7 +369,7 @@ function createSetupEntryChannelPluginFixture(params: {
     JSON.stringify(
       {
         name: params.packageName,
-        openclaw: {
+        evox: {
           extensions: ["./index.cjs"],
           setupEntry: "./setup-entry.cjs",
           ...(params.startupDeferConfiguredChannelFullLoadUntilAfterListen

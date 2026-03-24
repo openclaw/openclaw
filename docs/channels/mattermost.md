@@ -1,5 +1,5 @@
 ---
-summary: "Mattermost bot setup and OpenClaw config"
+summary: "Mattermost bot setup and EVOX.sh config"
 read_when:
   - Setting up Mattermost
   - Debugging Mattermost routing
@@ -19,17 +19,17 @@ Mattermost ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-openclaw plugins install @openclaw/mattermost
+evox plugins install @openclaw/mattermost
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/mattermost
+evox plugins install ./extensions/mattermost
 ```
 
 If you choose Mattermost during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
+EVOX.sh will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
@@ -38,7 +38,7 @@ Details: [Plugins](/tools/plugin)
 1. Install the Mattermost plugin.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
-4. Configure OpenClaw and start the gateway.
+4. Configure EVOX.sh and start the gateway.
 
 Minimal config:
 
@@ -57,7 +57,7 @@ Minimal config:
 
 ## Native slash commands
 
-Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands via
+Native slash commands are opt-in. When enabled, EVOX.sh registers `oc_*` slash commands via
 the Mattermost API and receives callback POSTs on the gateway HTTP server.
 
 ```json5
@@ -79,14 +79,14 @@ the Mattermost API and receives callback POSTs on the gateway HTTP server.
 Notes:
 
 - `native: "auto"` defaults to disabled for Mattermost. Set `native: true` to enable.
-- If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
+- If `callbackUrl` is omitted, EVOX.sh derives one from gateway host/port + `callbackPath`.
 - For multi-account setups, `commands` can be set at the top level or under
   `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
 - Command callbacks are validated with per-command tokens and fail closed when token checks fail.
 - Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
-  - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
-  - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
-  - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from OpenClaw, not `404`.
+  - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as EVOX.sh.
+  - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to EVOX.sh.
+  - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from EVOX.sh, not `404`.
 - Mattermost egress allowlist requirement:
   - If your callback targets private/tailnet/internal addresses, set Mattermost
     `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
@@ -162,8 +162,8 @@ Notes:
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
 - Approve via:
-  - `openclaw pairing list mattermost`
-  - `openclaw pairing approve mattermost <CODE>`
+  - `evox pairing list mattermost`
+  - `evox pairing approve mattermost <CODE>`
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
 
 ## Channels (groups)
@@ -176,7 +176,7 @@ Notes:
 
 ## Targets for outbound delivery
 
-Use these target formats with `openclaw message send` or cron/webhooks:
+Use these target formats with `evox message send` or cron/webhooks:
 
 - `channel:<id>` for a channel
 - `user:<id>` for a DM
@@ -184,16 +184,16 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
 
-OpenClaw resolves them **user-first**:
+EVOX.sh resolves them **user-first**:
 
-- If the ID exists as a user (`GET /api/v4/users/<id>` succeeds), OpenClaw sends a **DM** by resolving the direct channel via `/api/v4/channels/direct`.
+- If the ID exists as a user (`GET /api/v4/users/<id>` succeeds), EVOX.sh sends a **DM** by resolving the direct channel via `/api/v4/channels/direct`.
 - Otherwise the ID is treated as a **channel ID**.
 
 If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
 
 ## DM channel retry
 
-When OpenClaw sends to a Mattermost DM target and needs to resolve the direct channel first, it
+When EVOX.sh sends to a Mattermost DM target and needs to resolve the direct channel first, it
 retries transient direct-channel creation failures by default.
 
 Use `channels.mattermost.dmChannelRetry` to tune that behavior globally for the Mattermost plugin,
@@ -291,10 +291,10 @@ Config:
   reach the gateway at its bind host directly.
 - In multi-account setups, you can also set the same field under
   `channels.mattermost.accounts.<id>.interactions.callbackBaseUrl`.
-- If `interactions.callbackBaseUrl` is omitted, OpenClaw derives the callback URL from
+- If `interactions.callbackBaseUrl` is omitted, EVOX.sh derives the callback URL from
   `gateway.customBindHost` + `gateway.port`, then falls back to `http://localhost:<port>`.
 - Reachability rule: the button callback URL must be reachable from the Mattermost server.
-  `localhost` only works when Mattermost and OpenClaw run on the same host/network namespace.
+  `localhost` only works when Mattermost and EVOX.sh run on the same host/network namespace.
 - If your callback target is private/tailnet/internal, add its host/domain to Mattermost
   `ServiceSettings.AllowedUntrustedInternalConnections`.
 
@@ -392,7 +392,7 @@ Common HMAC pitfalls:
 
 The Mattermost plugin includes a directory adapter that resolves channel and user names
 via the Mattermost API. This enables `#channel-name` and `@username` targets in
-`openclaw message send` and cron/webhook deliveries.
+`evox message send` and cron/webhook deliveries.
 
 No configuration is needed — the adapter uses the bot token from the account config.
 

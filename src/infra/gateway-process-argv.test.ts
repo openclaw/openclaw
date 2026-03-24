@@ -23,14 +23,14 @@ describe("isGatewayArgv", () => {
   });
 
   it("matches known entrypoints across slash and case variants", () => {
-    expect(isGatewayArgv(["NODE", "C:\\OpenClaw\\DIST\\ENTRY.JS", "gateway"])).toBe(true);
+    expect(isGatewayArgv(["NODE", "C:\\EVOX.sh\\DIST\\ENTRY.JS", "gateway"])).toBe(true);
     expect(isGatewayArgv(["bun", "/srv/openclaw/scripts/run-node.mjs", "gateway"])).toBe(true);
-    expect(isGatewayArgv(["node", "/srv/openclaw/openclaw.mjs", "gateway"])).toBe(true);
+    expect(isGatewayArgv(["node", "/srv/openclaw/evox.mjs", "gateway"])).toBe(true);
     expect(isGatewayArgv(["tsx", "/srv/openclaw/src/entry.ts", "gateway"])).toBe(true);
     expect(isGatewayArgv(["tsx", "/srv/openclaw/src/index.ts", "gateway"])).toBe(true);
   });
 
-  it("matches the openclaw executable but gates the gateway binary behind the opt-in flag", () => {
+  it("matches the evox executable but gates the gateway binary behind the opt-in flag", () => {
     expect(isGatewayArgv(["C:\\bin\\openclaw.cmd", "gateway"])).toBe(true);
     expect(isGatewayArgv(["/usr/local/bin/openclaw-gateway", "gateway"])).toBe(false);
     expect(

@@ -40,7 +40,7 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
       defaults: {
         model: { primary: "openai/gpt-5.4" },
         models: { "openai/gpt-5.4": {} },
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
       },
     },
     session: { store: storePath, mainKey: "main" },

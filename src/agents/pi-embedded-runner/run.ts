@@ -203,7 +203,7 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   // The accumulated cacheRead/cacheWrite inflate context size because each tool-call
   // round-trip reports cacheRead ≈ current_context_size, and summing N calls gives
   // N × context_size which gets clamped to contextWindow (e.g. 200k).
-  // See: https://github.com/openclaw/openclaw/issues/13698
+  // See: https://github.com/sonpiaz/evox-sh/issues/13698
   //
   // We use lastInput/lastCacheRead/lastCacheWrite (from the most recent API call) for
   // cache-related fields, but keep accumulated output (total generated text this turn).

@@ -2,14 +2,14 @@
 title: "Groq"
 summary: "Groq setup (auth + model selection)"
 read_when:
-  - You want to use Groq with OpenClaw
+  - You want to use Groq with EVOX.sh
   - You need the API key env var or CLI auth choice
 ---
 
 # Groq
 
 [Groq](https://groq.com) provides ultra-fast inference on open-source models
-(Llama, Gemma, Mistral, and more) using custom LPU hardware. OpenClaw connects
+(Llama, Gemma, Mistral, and more) using custom LPU hardware. EVOX.sh connects
 to Groq through its OpenAI-compatible API.
 
 - Provider: `groq`
@@ -54,7 +54,7 @@ export GROQ_API_KEY="gsk_..."
 ## Audio transcription
 
 Groq also provides fast Whisper-based audio transcription. When configured as a
-media-understanding provider, OpenClaw uses Groq's `whisper-large-v3-turbo`
+media-understanding provider, EVOX.sh uses Groq's `whisper-large-v3-turbo`
 model to transcribe voice messages.
 
 ```json5
@@ -77,7 +77,7 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Available models
 
-Groq's model catalog changes frequently. Run `openclaw models list | grep groq`
+Groq's model catalog changes frequently. Run `evox models list | grep groq`
 to see currently available models, or check
 [console.groq.com/docs/models](https://console.groq.com/docs/models).
 

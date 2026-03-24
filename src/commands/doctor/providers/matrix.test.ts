@@ -100,8 +100,8 @@ describe("doctor matrix provider helpers", () => {
 
     expect(warnings[0]).toContain("custom path that no longer exists");
     expect(warnings[0]).toContain(missingPath);
-    expect(warnings[1]).toContain("openclaw plugins install @openclaw/matrix");
-    expect(warnings[2]).toContain("openclaw plugins install ./extensions/matrix");
+    expect(warnings[1]).toContain("evox plugins install @openclaw/matrix");
+    expect(warnings[2]).toContain("evox plugins install ./extensions/matrix");
   });
 
   it("summarizes matrix repair messaging", async () => {

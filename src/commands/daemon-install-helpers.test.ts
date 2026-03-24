@@ -44,7 +44,7 @@ afterEach(() => {
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
-    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\openclaw\\src\\cli\\index.ts"])).toBe(
+    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\evox\\src\\cli\\index.ts"])).toBe(
       true,
     );
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"])).toBe(false);
@@ -427,7 +427,7 @@ describe("gatewayInstallErrorHint", () => {
     expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
     expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
     expect(gatewayInstallErrorHint("linux")).toMatch(
-      /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
+      /(?:evox|evox)( --profile isolated)? gateway install/,
     );
   });
 });

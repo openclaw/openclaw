@@ -1,5 +1,5 @@
 ---
-summary: "Advanced setup and development workflows for OpenClaw"
+summary: "Advanced setup and development workflows for EVOX.sh"
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
@@ -35,45 +35,45 @@ If you want “100% tailored to me” _and_ easy updates, keep your customizatio
 Bootstrap once:
 
 ```bash
-openclaw setup
+evox setup
 ```
 
 From inside this repo, use the local CLI entry:
 
 ```bash
-openclaw setup
+evox setup
 ```
 
-If you don’t have a global install yet, run it via `pnpm openclaw setup`.
+If you don’t have a global install yet, run it via `pnpm evox setup`.
 
 ## Run the Gateway from this repo
 
 After `pnpm build`, you can run the packaged CLI directly:
 
 ```bash
-node openclaw.mjs gateway --port 18789 --verbose
+node evox.mjs gateway --port 18789 --verbose
 ```
 
 ## Stable workflow (macOS app first)
 
-1. Install + launch **OpenClaw.app** (menu bar).
+1. Install + launch **EVOX.sh.app** (menu bar).
 2. Complete the onboarding/permissions checklist (TCC prompts).
 3. Ensure Gateway is **Local** and running (the app manages it).
 4. Link surfaces (example: WhatsApp):
 
 ```bash
-openclaw channels login
+evox channels login
 ```
 
 5. Sanity check:
 
 ```bash
-openclaw health
+evox health
 ```
 
 If onboarding is not available in your build:
 
-- Run `openclaw setup`, then `openclaw channels login`, then start the Gateway manually (`openclaw gateway`).
+- Run `evox setup`, then `evox channels login`, then start the Gateway manually (`evox gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
 
@@ -99,7 +99,7 @@ config, and bundled-plugin metadata changes.
 
 ### 2) Point the macOS app at your running Gateway
 
-In **OpenClaw.app**:
+In **EVOX.sh.app**:
 
 - Connection Mode: **Local**
   The app will attach to the running gateway on the configured port.
@@ -110,7 +110,7 @@ In **OpenClaw.app**:
 - Or via CLI:
 
 ```bash
-openclaw health
+evox health
 ```
 
 ### Common footguns
@@ -139,7 +139,7 @@ Use this when debugging auth or deciding what to back up:
 
 ## Updating (without wrecking your setup)
 
-- Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
+- Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `evox` repo.
 - Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)
@@ -160,5 +160,5 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 - [Gateway runbook](/gateway) (flags, supervision, ports)
 - [Gateway configuration](/gateway/configuration) (config schema + examples)
 - [Discord](/channels/discord) and [Telegram](/channels/telegram) (reply tags + replyToMode settings)
-- [OpenClaw assistant setup](/start/openclaw)
+- [EVOX.sh assistant setup](/start/openclaw)
 - [macOS app](/platforms/macos) (gateway lifecycle)

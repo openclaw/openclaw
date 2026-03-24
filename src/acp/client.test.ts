@@ -50,12 +50,12 @@ describe("resolveAcpClientSpawnEnv", () => {
   it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
     const env = resolveAcpClientSpawnEnv({
       PATH: "/usr/bin",
-      USER: "openclaw",
+      USER: "evox",
     });
 
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
     expect(env.PATH).toBe("/usr/bin");
-    expect(env.USER).toBe("openclaw");
+    expect(env.USER).toBe("evox");
   });
 
   it("overrides pre-existing OPENCLAW_SHELL to acp-client", () => {
@@ -113,7 +113,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
   });
 
-  it("strips provider auth env vars for the default OpenClaw bridge", () => {
+  it("strips provider auth env vars for the default EVOX.sh bridge", () => {
     const stripKeys = new Set(["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"]);
     const env = resolveAcpClientSpawnEnv(
       {
@@ -171,9 +171,9 @@ describe("shouldStripProviderAuthEnvVarsForAcpServer", () => {
     expect(shouldStripProviderAuthEnvVarsForAcpServer()).toBe(true);
     expect(
       shouldStripProviderAuthEnvVarsForAcpServer({
-        serverCommand: "openclaw",
+        serverCommand: "evox",
         serverArgs: ["acp"],
-        defaultServerCommand: "openclaw",
+        defaultServerCommand: "evox",
         defaultServerArgs: ["acp"],
       }),
     ).toBe(true);
@@ -184,7 +184,7 @@ describe("shouldStripProviderAuthEnvVarsForAcpServer", () => {
       shouldStripProviderAuthEnvVarsForAcpServer({
         serverCommand: "custom-acp-server",
         serverArgs: ["serve"],
-        defaultServerCommand: "openclaw",
+        defaultServerCommand: "evox",
         defaultServerArgs: ["acp"],
       }),
     ).toBe(false);
@@ -231,7 +231,7 @@ describe("buildAcpClientStripKeys", () => {
 describe("resolveAcpClientSpawnInvocation", () => {
   it("keeps non-windows invocation unchanged", () => {
     const resolved = resolveAcpClientSpawnInvocation(
-      { serverCommand: "openclaw", serverArgs: ["acp", "--verbose"] },
+      { serverCommand: "evox", serverArgs: ["acp", "--verbose"] },
       {
         platform: "darwin",
         env: {},
@@ -239,7 +239,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
       },
     );
     expect(resolved).toEqual({
-      command: "openclaw",
+      command: "evox",
       args: ["acp", "--verbose"],
       shell: undefined,
       windowsHide: undefined,
@@ -248,11 +248,11 @@ describe("resolveAcpClientSpawnInvocation", () => {
 
   it("unwraps .cmd shim entrypoint on windows", async () => {
     const dir = await createTempDir();
-    const scriptPath = path.join(dir, "openclaw", "dist", "entry.js");
+    const scriptPath = path.join(dir, "evox", "dist", "entry.js");
     const shimPath = path.join(dir, "openclaw.cmd");
     await mkdir(path.dirname(scriptPath), { recursive: true });
     await writeFile(scriptPath, "console.log('ok')\n", "utf8");
-    await writeFile(shimPath, `@ECHO off\r\n"%~dp0\\openclaw\\dist\\entry.js" %*\r\n`, "utf8");
+    await writeFile(shimPath, `@ECHO off\r\n"%~dp0\\evox\\dist\\entry.js" %*\r\n`, "utf8");
 
     const resolved = resolveAcpClientSpawnInvocation(
       { serverCommand: shimPath, serverArgs: ["acp", "--verbose"] },

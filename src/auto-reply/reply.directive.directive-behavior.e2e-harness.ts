@@ -78,7 +78,7 @@ export function makeWhatsAppDirectiveConfig(
   return {
     agents: {
       defaults: {
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
         ...defaults,
       },
     },
@@ -149,7 +149,7 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
       },
       list: [
         {

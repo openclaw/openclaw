@@ -65,7 +65,7 @@ export async function promptRemoteGatewayConfig(
     await prompter.note(
       [
         "Bonjour discovery requires dns-sd (macOS) or avahi-browse (Linux).",
-        "Docs: https://docs.openclaw.ai/gateway/discovery",
+        "Docs: https://docs.evox.sh/gateway/discovery",
       ].join("\n"),
       "Discovery",
     );
@@ -127,7 +127,7 @@ export async function promptRemoteGatewayConfig(
           [
             "Start a tunnel before using the CLI:",
             `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
-            "Docs: https://docs.openclaw.ai/gateway/remote",
+            "Docs: https://docs.evox.sh/gateway/remote",
           ].join("\n"),
           "SSH tunnel",
         );
@@ -160,7 +160,7 @@ export async function promptRemoteGatewayConfig(
       copy: {
         modeMessage: "How do you want to provide this gateway token?",
         plaintextLabel: "Enter token now",
-        plaintextHint: "Stores the token directly in OpenClaw config",
+        plaintextHint: "Stores the token directly in EVOX.sh config",
       },
     });
     if (selectedMode === "ref") {
@@ -192,7 +192,7 @@ export async function promptRemoteGatewayConfig(
       copy: {
         modeMessage: "How do you want to provide this gateway password?",
         plaintextLabel: "Enter password now",
-        plaintextHint: "Stores the password directly in OpenClaw config",
+        plaintextHint: "Stores the password directly in EVOX.sh config",
       },
     });
     if (selectedMode === "ref") {

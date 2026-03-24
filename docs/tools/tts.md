@@ -9,8 +9,8 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
-It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
+EVOX.sh can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
+It works anywhere EVOX.sh can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
@@ -39,7 +39,7 @@ If you want OpenAI or ElevenLabs:
 - `OPENAI_API_KEY`
 
 Microsoft speech does **not** require an API key. If no API keys are found,
-OpenClaw defaults to Microsoft (unless disabled via
+EVOX.sh defaults to Microsoft (unless disabled via
 `messages.tts.microsoft.enabled=false` or `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -208,7 +208,7 @@ Then run:
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, or `"openai"` (fallback is automatic).
-- If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
+- If `provider` is **unset**, EVOX.sh prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `microsoft`.
 - Legacy `provider: "edge"` still works and is normalized to `microsoft`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -328,13 +328,13 @@ These override `messages.tts.*` for that host.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
     guaranteed Opus voice notes. citeturn1search1
-  - If the configured Microsoft output format fails, OpenClaw retries with MP3.
+  - If the configured Microsoft output format fails, EVOX.sh retries with MP3.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
-When enabled, OpenClaw:
+When enabled, EVOX.sh:
 
 - skips TTS if the reply already contains media or a `MEDIA:` directive.
 - skips very short replies (< 10 chars).
@@ -365,7 +365,7 @@ Reply -> TTS enabled?
 There is a single command: `/tts`.
 See [Slash commands](/tools/slash-commands) for enablement details.
 
-Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
+Discord note: `/tts` is a built-in Discord command, so EVOX.sh registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
@@ -377,7 +377,7 @@ Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 /tts provider openai
 /tts limit 2000
 /tts summary off
-/tts audio Hello from OpenClaw
+/tts audio Hello from EVOX.sh
 ```
 
 Notes:
@@ -391,7 +391,7 @@ Notes:
 ## Agent tool
 
 The `tts` tool converts text to speech and returns an audio attachment for
-reply delivery. When the result is Telegram-compatible, OpenClaw marks it for
+reply delivery. When the result is Telegram-compatible, EVOX.sh marks it for
 voice-bubble delivery.
 
 ## Gateway RPC

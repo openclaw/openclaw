@@ -28,7 +28,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
   </Step>
   <Step title="Configure">
     ```bash
-    openclaw configure --section web
+    evox configure --section web
     ```
     This stores the key and sets the provider. You can also set an env var
     (e.g. `BRAVE_API_KEY`) and skip this step.
@@ -37,7 +37,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
     The agent can now call `web_search`:
 
     ```javascript
-    await web_search({ query: "OpenClaw plugin SDK" });
+    await web_search({ query: "EVOX.sh plugin SDK" });
     ```
 
   </Step>
@@ -94,7 +94,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
 separate precedence order:
 
-If no `provider` is set, OpenClaw checks for API keys in this order and uses
+If no `provider` is set, EVOX.sh checks for API keys in this order and uses
 the first one found:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
@@ -110,7 +110,7 @@ prompting you to configure one).
 
 <Note>
   All provider key fields support SecretRef objects. In auto-detect mode,
-  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
+  EVOX.sh resolves only the selected provider key -- non-selected SecretRefs
   stay inactive.
 </Note>
 
@@ -140,7 +140,7 @@ examples.
 
 <Tabs>
   <Tab title="Config file">
-    Run `openclaw configure --section web` or set the key directly:
+    Run `evox configure --section web` or set the key directly:
 
     ```json5
     {
@@ -199,7 +199,7 @@ examples.
 
 ```javascript
 // Basic search
-await web_search({ query: "OpenClaw plugin SDK" });
+await web_search({ query: "EVOX.sh plugin SDK" });
 
 // German-specific search
 await web_search({ query: "TV online schauen", country: "DE", language: "de" });

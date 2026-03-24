@@ -105,7 +105,7 @@ describe("usage-format", () => {
     ).toBeUndefined();
   });
 
-  it("prefers models.json pricing over openclaw config and cached pricing", async () => {
+  it("prefers models.json pricing over evox config and cached pricing", async () => {
     const config = {
       models: {
         providers: {
@@ -164,7 +164,7 @@ describe("usage-format", () => {
     });
   });
 
-  it("falls back to openclaw config pricing when models.json is absent", () => {
+  it("falls back to evox config pricing when models.json is absent", () => {
     const config = {
       models: {
         providers: {

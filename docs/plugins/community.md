@@ -1,29 +1,29 @@
 ---
-summary: "Community-maintained OpenClaw plugins: browse, install, and submit your own"
+summary: "Community-maintained EVOX.sh plugins: browse, install, and submit your own"
 read_when:
-  - You want to find third-party OpenClaw plugins
+  - You want to find third-party EVOX.sh plugins
   - You want to publish or list your own plugin
 title: "Community Plugins"
 ---
 
 # Community Plugins
 
-Community plugins are third-party packages that extend OpenClaw with new
+Community plugins are third-party packages that extend EVOX.sh with new
 channels, tools, providers, or other capabilities. They are built and maintained
 by the community, published on [ClawHub](/tools/clawhub) or npm, and
 installable with a single command.
 
 ```bash
-openclaw plugins install <package-name>
+evox plugins install <package-name>
 ```
 
-OpenClaw checks ClawHub first and falls back to npm automatically.
+EVOX.sh checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
 ### Codex App Server Bridge
 
-Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
+Independent EVOX.sh bridge for Codex App Server conversations. Bind a chat to
 a Codex thread, talk to it with plain text, and control it with chat-native
 commands for resume, planning, review, model selection, compaction, and more.
 
@@ -31,7 +31,7 @@ commands for resume, planning, review, model selection, compaction, and more.
 - **repo:** [github.com/pwrdrvr/openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server)
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+evox plugins install openclaw-codex-app-server
 ```
 
 ### DingTalk
@@ -43,12 +43,12 @@ file messages via any DingTalk client.
 - **repo:** [github.com/largezhou/openclaw-dingtalk](https://github.com/largezhou/openclaw-dingtalk)
 
 ```bash
-openclaw plugins install @largezhou/ddingtalk
+evox plugins install @largezhou/ddingtalk
 ```
 
 ### Lossless Claw (LCM)
 
-Lossless Context Management plugin for OpenClaw. DAG-based conversation
+Lossless Context Management plugin for EVOX.sh. DAG-based conversation
 summarization with incremental compaction — preserves full context fidelity
 while reducing token usage.
 
@@ -56,7 +56,7 @@ while reducing token usage.
 - **repo:** [github.com/Martian-Engineering/lossless-claw](https://github.com/Martian-Engineering/lossless-claw)
 
 ```bash
-openclaw plugins install @martian-engineering/lossless-claw
+evox plugins install @martian-engineering/lossless-claw
 ```
 
 ### Opik
@@ -68,12 +68,12 @@ cost, tokens, errors, and more.
 - **repo:** [github.com/comet-ml/opik-openclaw](https://github.com/comet-ml/opik-openclaw)
 
 ```bash
-openclaw plugins install @opik/opik-openclaw
+evox plugins install @opik/opik-openclaw
 ```
 
 ### QQbot
 
-Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
+Connect EVOX.sh to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
 
@@ -81,12 +81,12 @@ and files.
 - **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
 
 ```bash
-openclaw plugins install @sliverp/qqbot
+evox plugins install @sliverp/qqbot
 ```
 
 ### wecom
 
-OpenClaw Enterprise WeCom Channel Plugin.
+EVOX.sh Enterprise WeCom Channel Plugin.
 A bot plugin powered by WeCom AI Bot WebSocket persistent connections,
 supports direct messages & group chats, streaming replies, and proactive messaging.
 
@@ -94,7 +94,7 @@ supports direct messages & group chats, streaming replies, and proactive messagi
 - **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
 
 ```bash
-openclaw plugins install @wecom/wecom-openclaw-plugin
+evox plugins install @wecom/wecom-openclaw-plugin
 ```
 
 ## Submit your plugin
@@ -103,7 +103,7 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
 <Steps>
   <Step title="Publish to ClawHub or npm">
-    Your plugin must be installable via `openclaw plugins install \<package-name\>`.
+    Your plugin must be installable via `evox plugins install \<package-name\>`.
     Publish to [ClawHub](/tools/clawhub) (preferred) or npm.
     See [Building Plugins](/plugins/building-plugins) for the full guide.
 
@@ -131,7 +131,7 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
 | Requirement                 | Why                                           |
 | --------------------------- | --------------------------------------------- |
-| Published on ClawHub or npm | Users need `openclaw plugins install` to work |
+| Published on ClawHub or npm | Users need `evox plugins install` to work |
 | Public GitHub repo          | Source review, issue tracking, transparency   |
 | Setup and usage docs        | Users need to know how to configure it        |
 | Active maintenance          | Recent updates or responsive issue handling   |

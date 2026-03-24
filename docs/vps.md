@@ -1,16 +1,16 @@
 ---
-summary: "Run OpenClaw on a Linux server or cloud VPS — provider picker, architecture, and tuning"
+summary: "Run EVOX.sh on a Linux server or cloud VPS — provider picker, architecture, and tuning"
 read_when:
   - You want to run the Gateway on a Linux server or cloud VPS
   - You need a quick map of hosting guides
-  - You want generic Linux server tuning for OpenClaw
+  - You want generic Linux server tuning for EVOX.sh
 title: "Linux Server"
 sidebarTitle: "Linux Server"
 ---
 
 # Linux Server
 
-Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
+Run the EVOX.sh Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux
 tuning that applies everywhere.
 
@@ -96,7 +96,7 @@ For VM hosts using `systemd`, consider:
 Example:
 
 ```bash
-sudo systemctl edit openclaw
+sudo systemctl edit evox
 ```
 
 ```ini

@@ -2339,7 +2339,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("falls back to OpenClaw once per startup when a bound plugin is missing", async () => {
+  it("falls back to EVOX.sh once per startup when a bound plugin is missing", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -2368,7 +2368,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     } satisfies SessionBindingRecord);
 
-    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async () => ({ text: "evox fallback" }) satisfies ReplyPayload);
 
     const firstDispatcher = createDispatcher();
     await dispatchReplyFromConfig({
@@ -2392,7 +2392,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const firstNotice = (firstDispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(firstNotice?.text).toContain("Routing this message to OpenClaw instead.");
+    expect(firstNotice?.text).toContain("Routing this message to EVOX.sh instead.");
     expect(firstNotice?.text).toContain("/codex_detach");
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
@@ -2425,7 +2425,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
   });
 
-  it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
+  it("falls back to EVOX.sh when the bound plugin is loaded but has no inbound_claim handler", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -2454,7 +2454,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     } satisfies SessionBindingRecord);
     const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async () => ({ text: "evox fallback" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -2478,7 +2478,7 @@ describe("dispatchReplyFromConfig", () => {
     const notice = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
       | ReplyPayload
       | undefined;
-    expect(notice?.text).toContain("Routing this message to OpenClaw instead.");
+    expect(notice?.text).toContain("Routing this message to EVOX.sh instead.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
   });

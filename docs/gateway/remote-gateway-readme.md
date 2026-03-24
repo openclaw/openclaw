@@ -1,12 +1,12 @@
 ---
-summary: "SSH tunnel setup for OpenClaw.app connecting to a remote gateway"
+summary: "SSH tunnel setup for EVOX.sh.app connecting to a remote gateway"
 read_when: "Connecting the macOS app to a remote gateway over SSH"
 title: "Remote Gateway Setup"
 ---
 
-# Running OpenClaw.app with a Remote Gateway
+# Running EVOX.sh.app with a Remote Gateway
 
-OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
+EVOX.sh.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
 
 ## Overview
 
@@ -14,7 +14,7 @@ OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows
 flowchart TB
     subgraph Client["Client Machine"]
         direction TB
-        A["OpenClaw.app"]
+        A["EVOX.sh.app"]
         B["ws://127.0.0.1:18789\n(local port)"]
         T["SSH Tunnel"]
 
@@ -67,11 +67,11 @@ launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
 ssh -N remote-gateway &
 ```
 
-### Step 5: Restart OpenClaw.app
+### Step 5: Restart EVOX.sh.app
 
 ```bash
-# Quit OpenClaw.app (⌘Q), then reopen:
-open /path/to/OpenClaw.app
+# Quit EVOX.sh.app (⌘Q), then reopen:
+open /path/to/EVOX.sh.app
 ```
 
 The app will now connect to the remote gateway through the SSH tunnel.
@@ -155,4 +155,4 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 | `KeepAlive`                          | Automatically restarts tunnel if it crashes                  |
 | `RunAtLoad`                          | Starts tunnel when the agent loads                           |
 
-OpenClaw.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+EVOX.sh.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.

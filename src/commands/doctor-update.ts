@@ -45,7 +45,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   const git = await detectOpenClawGitCheckout(params.root);
   if (git === "git") {
     const shouldUpdate = await params.confirm({
-      message: "Update OpenClaw from git before running doctor?",
+      message: "Update EVOX.sh from git before running doctor?",
       initialValue: true,
     });
     if (!shouldUpdate) {
@@ -78,7 +78,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     note(
       [
         "This install is not a git checkout.",
-        `Run \`${formatCliCommand("openclaw update")}\` to update via your package manager (npm/pnpm), then rerun doctor.`,
+        `Run \`${formatCliCommand("evox update")}\` to update via your package manager (npm/pnpm), then rerun doctor.`,
       ].join("\n"),
       "Update",
     );

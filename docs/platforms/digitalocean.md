@@ -1,16 +1,16 @@
 ---
-summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
+summary: "EVOX.sh on DigitalOcean (simple paid VPS option)"
 read_when:
-  - Setting up OpenClaw on DigitalOcean
-  - Looking for cheap VPS hosting for OpenClaw
+  - Setting up EVOX.sh on DigitalOcean
+  - Looking for cheap VPS hosting for EVOX.sh
 title: "DigitalOcean (Platform)"
 ---
 
-# OpenClaw on DigitalOcean
+# EVOX.sh on DigitalOcean
 
 ## Goal
 
-Run a persistent OpenClaw Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
+Run a persistent EVOX.sh Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
 If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
@@ -60,7 +60,7 @@ Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install OpenClaw
+## 3) Install EVOX.sh
 
 ```bash
 # Update system
@@ -70,17 +70,17 @@ apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt install -y nodejs
 
-# Install OpenClaw
-curl -fsSL https://openclaw.ai/install.sh | bash
+# Install EVOX.sh
+curl -fsSL https://evox.sh/install.sh | bash
 
 # Verify
-openclaw --version
+evox --version
 ```
 
 ## 4) Run Onboarding
 
 ```bash
-openclaw onboard --install-daemon
+evox onboard --install-daemon
 ```
 
 The wizard will walk you through:
@@ -94,7 +94,7 @@ The wizard will walk you through:
 
 ```bash
 # Check status
-openclaw status
+evox status
 
 # Check service
 systemctl --user status openclaw-gateway.service
@@ -124,8 +124,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
 # Configure Gateway to use Tailscale Serve
-openclaw config set gateway.tailscale.mode serve
-openclaw gateway restart
+evox config set gateway.tailscale.mode serve
+evox gateway restart
 ```
 
 Open: `https://<magicdns>/`
@@ -138,8 +138,8 @@ Notes:
 **Option C: Tailnet bind (no Serve)**
 
 ```bash
-openclaw config set gateway.bind tailnet
-openclaw gateway restart
+evox config set gateway.bind tailnet
+evox gateway restart
 ```
 
 Open: `http://<tailscale-ip>:18789` (token required).
@@ -149,14 +149,14 @@ Open: `http://<tailscale-ip>:18789` (token required).
 ### Telegram
 
 ```bash
-openclaw pairing list telegram
-openclaw pairing approve telegram <CODE>
+evox pairing list telegram
+evox pairing approve telegram <CODE>
 ```
 
 ### WhatsApp
 
 ```bash
-openclaw channels login whatsapp
+evox channels login whatsapp
 # Scan QR code
 ```
 
@@ -234,9 +234,9 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 ### Gateway will not start
 
 ```bash
-openclaw gateway status
-openclaw doctor --non-interactive
-journalctl -u openclaw --no-pager -n 50
+evox gateway status
+evox doctor --non-interactive
+journalctl -u evox --no-pager -n 50
 ```
 
 ### Port already in use

@@ -77,7 +77,7 @@ const ImageGenerateToolSchema = Type.Object({
   filename: Type.Optional(
     Type.String({
       description:
-        "Optional output filename hint. OpenClaw preserves the basename and saves under its managed media directory.",
+        "Optional output filename hint. EVOX.sh preserves the basename and saves under its managed media directory.",
     }),
   ),
   size: Type.Optional(

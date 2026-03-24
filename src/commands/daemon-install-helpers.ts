@@ -133,5 +133,5 @@ export async function buildGatewayInstallPlan(params: {
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
-    : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
+    : `Tip: rerun \`${formatCliCommand("evox gateway install")}\` after fixing the error.`;
 }

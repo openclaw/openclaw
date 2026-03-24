@@ -70,7 +70,7 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
     if (!label) {
       if (spec.kind === "bundled") {
-        label = "Bundled with OpenClaw";
+        label = "Bundled with EVOX.sh";
       } else if (spec.kind === "npm" && spec.package) {
         label = `Install ${spec.package} (npm)`;
       } else if (spec.kind === "git" && spec.repository) {

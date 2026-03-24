@@ -25,13 +25,13 @@ describe("doctor config flow steps", () => {
         fixHints: [],
       },
       shouldRepair: false,
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
     expect(result.changeLines).not.toEqual([]);
     expect(result.state.fixHints).toContain(
-      'Run "openclaw doctor --fix" to apply compatibility migrations.',
+      'Run "evox doctor --fix" to apply compatibility migrations.',
     );
   });
 
@@ -44,11 +44,11 @@ describe("doctor config flow steps", () => {
         fixHints: [],
       },
       shouldRepair: false,
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(result.removed).toEqual(["bogus"]);
     expect(result.state.candidate).toEqual({});
-    expect(result.state.fixHints).toContain('Run "openclaw doctor --fix" to remove these keys.');
+    expect(result.state.fixHints).toContain('Run "evox doctor --fix" to remove these keys.');
   });
 });

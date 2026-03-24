@@ -8,44 +8,44 @@ title: "Doctor"
 
 # Doctor
 
-`openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
+`evox doctor` is the repair + migration tool for EVOX.sh. It fixes stale
 config/state, checks health, and provides actionable repair steps.
 
 ## Quick start
 
 ```bash
-openclaw doctor
+evox doctor
 ```
 
 ### Headless / automation
 
 ```bash
-openclaw doctor --yes
+evox doctor --yes
 ```
 
 Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
 ```bash
-openclaw doctor --repair
+evox doctor --repair
 ```
 
 Apply recommended repairs without prompting (repairs + restarts where safe).
 
 ```bash
-openclaw doctor --repair --force
+evox doctor --repair --force
 ```
 
 Apply aggressive repairs too (overwrites custom supervisor configs).
 
 ```bash
-openclaw doctor --non-interactive
+evox doctor --non-interactive
 ```
 
 Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
 Legacy state migrations run automatically when detected.
 
 ```bash
-openclaw doctor --deep
+evox doctor --deep
 ```
 
 Scan system services for extra gateway installs (launchd/systemd/schtasks).
@@ -100,7 +100,7 @@ schema.
 ### 2) Legacy config key migrations
 
 When the config contains deprecated keys, other commands refuse to run and ask
-you to run `openclaw doctor`.
+you to run `evox doctor`.
 
 Doctor will:
 
@@ -189,7 +189,7 @@ These migrations are best-effort and idempotent; doctor will emit warnings when
 it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates
 the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
-migrated via `openclaw doctor`.
+migrated via `evox doctor`.
 
 ### 3b) Legacy cron store migrations
 
@@ -268,9 +268,9 @@ switch to legacy names if the current image is missing.
 ### 8) Gateway service migrations and cleanup hints
 
 Doctor detects legacy gateway services (launchd/systemd/schtasks) and
-offers to remove them and install the OpenClaw service using the current gateway
+offers to remove them and install the EVOX.sh service using the current gateway
 port. It can also scan for extra gateway-like services and print cleanup hints.
-Profile-named OpenClaw gateway services are considered first-class and are not
+Profile-named EVOX.sh gateway services are considered first-class and are not
 flagged as "extra."
 
 ### 9) Security warnings
@@ -294,13 +294,13 @@ Doctor checks local gateway token auth readiness.
 
 - If token mode needs a token and no token source exists, doctor offers to generate one.
 - If `gateway.auth.token` is SecretRef-managed but unavailable, doctor warns and does not overwrite it with plaintext.
-- `openclaw doctor --generate-gateway-token` forces generation only when no token SecretRef is configured.
+- `evox doctor --generate-gateway-token` forces generation only when no token SecretRef is configured.
 
 ### 12b) Read-only SecretRef-aware repairs
 
 Some repair flows need to inspect configured credentials without weakening runtime fail-fast behavior.
 
-- `openclaw doctor --fix` now uses the same read-only SecretRef summary model as status-family commands for targeted config repairs.
+- `evox doctor --fix` now uses the same read-only SecretRef summary model as status-family commands for targeted config repairs.
 - Example: Telegram `allowFrom` / `groupAllowFrom` `@username` repair tries to use configured bot credentials when available.
 - If the Telegram bot token is configured via SecretRef but unavailable in the current command path, doctor reports that the credential is configured-but-unavailable and skips auto-resolution instead of crashing or misreporting the token as missing.
 
@@ -323,15 +323,15 @@ rewrite the service file/task to the current defaults.
 
 Notes:
 
-- `openclaw doctor` prompts before rewriting supervisor config.
-- `openclaw doctor --yes` accepts the default repair prompts.
-- `openclaw doctor --repair` applies recommended fixes without prompts.
-- `openclaw doctor --repair --force` overwrites custom supervisor configs.
+- `evox doctor` prompts before rewriting supervisor config.
+- `evox doctor --yes` accepts the default repair prompts.
+- `evox doctor --repair` applies recommended fixes without prompts.
+- `evox doctor --repair --force` overwrites custom supervisor configs.
 - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, doctor blocks the install/repair path with actionable guidance.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
 - For Linux user-systemd units, doctor token drift checks now include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
-- You can always force a full rewrite via `openclaw gateway install --force`.
+- You can always force a full rewrite via `evox gateway install --force`.
 
 ### 16) Gateway runtime + port diagnostics
 

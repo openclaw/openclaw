@@ -1,7 +1,7 @@
 ---
-summary: "OpenClaw tools and plugins overview: what the agent can do and how to extend it"
+summary: "EVOX.sh tools and plugins overview: what the agent can do and how to extend it"
 read_when:
-  - You want to understand what tools OpenClaw provides
+  - You want to understand what tools EVOX.sh provides
   - You need to configure, allow, or deny tools
   - You are deciding between built-in tools, skills, and plugins
 title: "Tools and Plugins"
@@ -15,12 +15,12 @@ messages, and interacts with devices.
 
 ## Tools, skills, and plugins
 
-OpenClaw has three layers that work together:
+EVOX.sh has three layers that work together:
 
 <Steps>
   <Step title="Tools are what the agent calls">
     A tool is a typed function the agent can invoke (e.g. `exec`, `browser`,
-    `web_search`, `message`). OpenClaw ships a set of **built-in tools** and
+    `web_search`, `message`). EVOX.sh ships a set of **built-in tools** and
     plugins can register additional ones.
 
     The agent sees tools as structured function definitions sent to the model API.
@@ -40,7 +40,7 @@ OpenClaw has three layers that work together:
   <Step title="Plugins package everything together">
     A plugin is a package that can register any combination of capabilities:
     channels, model providers, tools, skills, speech, image generation, and more.
-    Some plugins are **core** (shipped with OpenClaw), others are **external**
+    Some plugins are **core** (shipped with EVOX.sh), others are **external**
     (published on npm by the community).
 
     [Install and configure plugins](/tools/plugin) | [Build your own](/plugins/building-plugins)
@@ -50,7 +50,7 @@ OpenClaw has three layers that work together:
 
 ## Built-in tools
 
-These tools ship with OpenClaw and are available without installing any plugins:
+These tools ship with EVOX.sh and are available without installing any plugins:
 
 | Tool                         | What it does                                             | Page                              |
 | ---------------------------- | -------------------------------------------------------- | --------------------------------- |
@@ -120,7 +120,7 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:automation` | cron, gateway                                                                                             |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |
-| `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
+| `group:evox`   | All built-in EVOX.sh tools (excludes plugin tools)                                                       |
 
 ### Provider-specific restrictions
 

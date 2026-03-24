@@ -22,7 +22,7 @@ Examples:
 
 ```
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
+/debug set messages.responsePrefix="[evox]"
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -66,10 +66,10 @@ Recommended flow (dev profile + dev bootstrap):
 
 ```bash
 pnpm gateway:dev
-OPENCLAW_PROFILE=dev openclaw tui
+OPENCLAW_PROFILE=dev evox tui
 ```
 
-If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
+If you don’t have a global install yet, run the CLI via `pnpm evox ...`.
 
 What this does:
 
@@ -98,7 +98,7 @@ Note: `--dev` is a **global** profile flag and gets eaten by some runners.
 If you need to spell it out, use the env var form:
 
 ```bash
-OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
+OPENCLAW_PROFILE=dev evox gateway --dev --reset
 ```
 
 `--reset` wipes config, credentials, sessions, and the dev workspace (using
@@ -107,12 +107,12 @@ OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
 Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
 
 ```bash
-openclaw gateway stop
+evox gateway stop
 ```
 
-## Raw stream logging (OpenClaw)
+## Raw stream logging (EVOX.sh)
 
-OpenClaw can log the **raw assistant stream** before any filtering/formatting.
+EVOX.sh can log the **raw assistant stream** before any filtering/formatting.
 This is the best way to see whether reasoning is arriving as plain text deltas
 (or as separate thinking blocks).
 

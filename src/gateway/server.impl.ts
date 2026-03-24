@@ -249,7 +249,7 @@ function assertValidGatewayStartupConfigSnapshot(
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
   const doctorHint = options.includeDoctorHint
-    ? `\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`
+    ? `\nRun "${formatCliCommand("evox doctor")}" to repair, then retry.`
     : "";
   throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
 }
@@ -505,7 +505,7 @@ export async function startGatewayServer(
       );
     } else {
       log.warn(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `evox config set gateway.auth.mode token` and `evox config set gateway.auth.token <token>`.",
       );
     }
   }
@@ -537,8 +537,8 @@ export async function startGatewayServer(
     const lines = formatPluginInstallPathIssue({
       issue: matrixInstallPathIssue,
       pluginLabel: "Matrix",
-      defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+      defaultInstallCommand: "evox plugins install @openclaw/matrix",
+      repoInstallCommand: "evox plugins install ./extensions/matrix",
       formatCommand: formatCliCommand,
     });
     log.warn(

@@ -232,7 +232,7 @@ describe("matrix migration snapshots", () => {
         });
         expect(detection.plans).toHaveLength(1);
         expect(detection.warnings).toContain(
-          "Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so OpenClaw can inspect the old rust crypto store before upgrading.",
+          "Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so EVOX.sh can inspect the old rust crypto store before upgrading.",
         );
         expect(
           hasActionableMatrixMigration({

@@ -53,11 +53,11 @@ function hasTrustedOpenClawRootIndicator(params: {
   const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof params.packageJson.bin === "string" &&
-      params.packageJson.bin.toLowerCase().includes("openclaw")) ||
+      params.packageJson.bin.toLowerCase().includes("evox")) ||
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
-  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
+  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "evox.mjs"));
   return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
 }
 

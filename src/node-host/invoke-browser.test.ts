@@ -22,7 +22,7 @@ const configMocks = vi.hoisted(() => ({
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
-    defaultProfile: "openclaw",
+    defaultProfile: "evox",
   })),
 }));
 
@@ -54,7 +54,7 @@ describe("runBrowserProxyCommand", () => {
     });
     browserConfigMocks.resolveBrowserConfig.mockReset().mockReturnValue({
       enabled: true,
-      defaultProfile: "openclaw",
+      defaultProfile: "evox",
     });
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
     configMocks.loadConfig.mockReturnValue({
@@ -63,7 +63,7 @@ describe("runBrowserProxyCommand", () => {
     });
     browserConfigMocks.resolveBrowserConfig.mockReturnValue({
       enabled: true,
-      defaultProfile: "openclaw",
+      defaultProfile: "evox",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
   });
@@ -89,12 +89,12 @@ describe("runBrowserProxyCommand", () => {
         JSON.stringify({
           method: "GET",
           path: "/snapshot",
-          profile: "openclaw",
+          profile: "evox",
           timeoutMs: 5,
         }),
       ),
     ).rejects.toThrow(
-      /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=openclaw; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=http:\/\/127\.0\.0\.1:18792\)/,
+      /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=evox; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=http:\/\/127\.0\.0\.1:18792\)/,
     );
     await vi.advanceTimersByTimeAsync(10);
     await result;
@@ -177,7 +177,7 @@ describe("runBrowserProxyCommand", () => {
         JSON.stringify({
           method: "POST",
           path: "/act",
-          profile: "openclaw",
+          profile: "evox",
           timeoutMs: 50,
         }),
       ),
@@ -187,7 +187,7 @@ describe("runBrowserProxyCommand", () => {
   it("rejects unauthorized query.profile when allowProfiles is configured", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["evox"] } },
     });
 
     await expect(
@@ -206,7 +206,7 @@ describe("runBrowserProxyCommand", () => {
   it("rejects unauthorized body.profile when allowProfiles is configured", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["evox"] } },
     });
 
     await expect(
@@ -225,7 +225,7 @@ describe("runBrowserProxyCommand", () => {
   it("rejects persistent profile creation when allowProfiles is configured", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["evox"] } },
     });
 
     await expect(
@@ -246,7 +246,7 @@ describe("runBrowserProxyCommand", () => {
   it("rejects persistent profile deletion when allowProfiles is configured", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["evox"] } },
     });
 
     await expect(
@@ -266,7 +266,7 @@ describe("runBrowserProxyCommand", () => {
   it("canonicalizes an allowlisted body profile into the dispatched query", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["evox"] } },
     });
     dispatcherMocks.dispatch.mockResolvedValue({
       status: 200,
@@ -277,7 +277,7 @@ describe("runBrowserProxyCommand", () => {
       JSON.stringify({
         method: "POST",
         path: "/stop",
-        body: { profile: "openclaw" },
+        body: { profile: "evox" },
         timeoutMs: 50,
       }),
     );
@@ -285,7 +285,7 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/stop",
-        query: { profile: "openclaw" },
+        query: { profile: "evox" },
       }),
     );
   });

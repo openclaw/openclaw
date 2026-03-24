@@ -210,7 +210,7 @@ describe("registerQrCli", () => {
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
-    expect(output).toContain("openclaw devices approve <requestId>");
+    expect(output).toContain("evox devices approve <requestId>");
   });
 
   it("accepts --token override when config has no auth", async () => {

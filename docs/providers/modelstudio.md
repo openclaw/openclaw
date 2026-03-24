@@ -2,7 +2,7 @@
 title: "Model Studio"
 summary: "Alibaba Cloud Model Studio setup (Coding Plan, dual region endpoints)"
 read_when:
-  - You want to use Alibaba Cloud Model Studio with OpenClaw
+  - You want to use Alibaba Cloud Model Studio with EVOX.sh
   - You need the API key env var for Model Studio
 ---
 
@@ -20,7 +20,7 @@ including Qwen and third-party models hosted on the platform.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice modelstudio-api-key
+evox onboard --auth-choice modelstudio-api-key
 ```
 
 2. Set a default model:

@@ -48,7 +48,7 @@ describe("installGatewayDaemonNonInteractive", () => {
       warnings: [],
     });
     buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+      programArguments: ["evox", "gateway", "run"],
       workingDirectory: "/tmp",
       environment: {},
     });

@@ -9,6 +9,6 @@ export type McpServerConfig = {
 };
 
 export type McpConfig = {
-  /** Named MCP server definitions managed by OpenClaw. */
+  /** Named MCP server definitions managed by EVOX.sh. */
   servers?: Record<string, McpServerConfig>;
 };

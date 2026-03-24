@@ -96,8 +96,8 @@ function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
     .trim()
     .toLowerCase();
   return (
-    entryBasename === "openclaw" ||
-    entryBasename === "openclaw.mjs" ||
+    entryBasename === "evox" ||
+    entryBasename === "evox.mjs" ||
     entryBasename === "entry.js" ||
     entryBasename === "entry.mjs"
   );
@@ -145,7 +145,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
 ]);
 
 function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
-  // Keep this gate tied to the real OpenClaw CLI entrypoints.
+  // Keep this gate tied to the real EVOX.sh CLI entrypoints.
   //
   // This module can also land inside shared dist chunks that are imported from
   // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do

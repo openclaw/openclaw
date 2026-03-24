@@ -1,20 +1,20 @@
 ---
-summary: "Install and use Codex, Claude, and Cursor bundles as OpenClaw plugins"
+summary: "Install and use Codex, Claude, and Cursor bundles as EVOX.sh plugins"
 read_when:
   - You want to install a Codex, Claude, or Cursor-compatible bundle
-  - You need to understand how OpenClaw maps bundle content into native features
+  - You need to understand how EVOX.sh maps bundle content into native features
   - You are debugging bundle detection or missing capabilities
 title: "Plugin Bundles"
 ---
 
 # Plugin Bundles
 
-OpenClaw can install plugins from three external ecosystems: **Codex**, **Claude**,
+EVOX.sh can install plugins from three external ecosystems: **Codex**, **Claude**,
 and **Cursor**. These are called **bundles** — content and metadata packs that
-OpenClaw maps into native features like skills, hooks, and MCP tools.
+EVOX.sh maps into native features like skills, hooks, and MCP tools.
 
 <Info>
-  Bundles are **not** the same as native OpenClaw plugins. Native plugins run
+  Bundles are **not** the same as native EVOX.sh plugins. Native plugins run
   in-process and can register any capability. Bundles are content packs with
   selective feature mapping and a narrower trust boundary.
 </Info>
@@ -22,7 +22,7 @@ OpenClaw maps into native features like skills, hooks, and MCP tools.
 ## Why bundles exist
 
 Many useful plugins are published in Codex, Claude, or Cursor format. Instead
-of requiring authors to rewrite them as native OpenClaw plugins, OpenClaw
+of requiring authors to rewrite them as native EVOX.sh plugins, EVOX.sh
 detects these formats and maps their supported content into the native feature
 set. This means you can install a Claude command pack or a Codex skill bundle
 and use it immediately.
@@ -33,22 +33,22 @@ and use it immediately.
   <Step title="Install from a directory, archive, or marketplace">
     ```bash
     # Local directory
-    openclaw plugins install ./my-bundle
+    evox plugins install ./my-bundle
 
     # Archive
-    openclaw plugins install ./my-bundle.tgz
+    evox plugins install ./my-bundle.tgz
 
     # Claude marketplace
-    openclaw plugins marketplace list <marketplace-name>
-    openclaw plugins install <plugin-name>@<marketplace-name>
+    evox plugins marketplace list <marketplace-name>
+    evox plugins install <plugin-name>@<marketplace-name>
     ```
 
   </Step>
 
   <Step title="Verify detection">
     ```bash
-    openclaw plugins list
-    openclaw plugins inspect <id>
+    evox plugins list
+    evox plugins inspect <id>
     ```
 
     Bundles show as `Format: bundle` with a subtype of `codex`, `claude`, or `cursor`.
@@ -57,7 +57,7 @@ and use it immediately.
 
   <Step title="Restart and use">
     ```bash
-    openclaw gateway restart
+    evox gateway restart
     ```
 
     Mapped features (skills, hooks, MCP tools) are available in the next session.
@@ -65,24 +65,24 @@ and use it immediately.
   </Step>
 </Steps>
 
-## What OpenClaw maps from bundles
+## What EVOX.sh maps from bundles
 
-Not every bundle feature runs in OpenClaw today. Here is what works and what
+Not every bundle feature runs in EVOX.sh today. Here is what works and what
 is detected but not yet wired.
 
 ### Supported now
 
 | Feature       | How it maps                                                                                          | Applies to     |
 | ------------- | ---------------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal OpenClaw skills                                                    | All formats    |
+| Skill content | Bundle skill roots load as normal EVOX.sh skills                                                    | All formats    |
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                           | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                      | Codex          |
+| Hook packs    | EVOX.sh-style `HOOK.md` + `handler.ts` layouts                                                      | Codex          |
 | MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio servers launched as subprocesses | All formats    |
 | Settings      | Claude `settings.json` imported as embedded Pi defaults                                              | Claude         |
 
 ### Detected but not executed
 
-These are recognized and shown in diagnostics, but OpenClaw does not run them:
+These are recognized and shown in diagnostics, but EVOX.sh does not run them:
 
 - Claude `agents`, `hooks.json` automation, `lspServers`, `outputStyles`
 - Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
@@ -96,7 +96,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 
     Optional content: `skills/`, `hooks/`, `.mcp.json`, `.app.json`
 
-    Codex bundles fit OpenClaw best when they use skill roots and OpenClaw-style
+    Codex bundles fit EVOX.sh best when they use skill roots and EVOX.sh-style
     hook-pack directories (`HOOK.md` + `handler.ts`).
 
   </Accordion>
@@ -130,19 +130,19 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 
 ## Detection precedence
 
-OpenClaw checks for native plugin format first:
+EVOX.sh checks for native plugin format first:
 
 1. `openclaw.plugin.json` or valid `package.json` with `openclaw.extensions` — treated as **native plugin**
 2. Bundle markers (`.codex-plugin/`, `.claude-plugin/`, or default Claude/Cursor layout) — treated as **bundle**
 
-If a directory contains both, OpenClaw uses the native path. This prevents
+If a directory contains both, EVOX.sh uses the native path. This prevents
 dual-format packages from being partially installed as bundles.
 
 ## Security
 
 Bundles have a narrower trust boundary than native plugins:
 
-- OpenClaw does **not** load arbitrary bundle runtime modules in-process
+- EVOX.sh does **not** load arbitrary bundle runtime modules in-process
 - Skills and hook-pack paths must stay inside the plugin root (boundary-checked)
 - Settings files are read with the same boundary checks
 - Supported stdio MCP servers may be launched as subprocesses
@@ -154,7 +154,7 @@ bundles as trusted content for the features they do expose.
 
 <AccordionGroup>
   <Accordion title="Bundle is detected but capabilities do not run">
-    Run `openclaw plugins inspect <id>`. If a capability is listed but marked as
+    Run `evox plugins inspect <id>`. If a capability is listed but marked as
     not wired, that is a product limit — not a broken install.
   </Accordion>
 
@@ -164,13 +164,13 @@ bundles as trusted content for the features they do expose.
   </Accordion>
 
   <Accordion title="Claude settings do not apply">
-    Only embedded Pi settings from `settings.json` are supported. OpenClaw does
+    Only embedded Pi settings from `settings.json` are supported. EVOX.sh does
     not treat bundle settings as raw config patches.
   </Accordion>
 
   <Accordion title="Claude hooks do not execute">
     `hooks/hooks.json` is detect-only. If you need runnable hooks, use the
-    OpenClaw hook-pack layout or ship a native plugin.
+    EVOX.sh hook-pack layout or ship a native plugin.
   </Accordion>
 </AccordionGroup>
 

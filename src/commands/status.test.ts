@@ -549,7 +549,7 @@ describe("statusCommand", () => {
     ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
-      "OpenClaw status",
+      "EVOX.sh status",
       "Overview",
       "Security audit",
       "Summary:",
@@ -578,8 +578,8 @@ describe("statusCommand", () => {
     expect(
       logs.some(
         (line) =>
-          line.includes("openclaw status --all") ||
-          line.includes("openclaw --profile isolated status --all"),
+          line.includes("evox status --all") ||
+          line.includes("evox --profile isolated status --all"),
       ),
     ).toBe(true);
   });

@@ -26,7 +26,7 @@ const ensureSupportedNodeVersion = () => {
   }
 
   process.stderr.write(
-    `openclaw: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
+    `evox: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
       "If you use nvm, run:\n" +
       `  nvm install ${MIN_NODE_MAJOR}\n` +
       `  nvm use ${MIN_NODE_MAJOR}\n` +
@@ -110,7 +110,7 @@ const exists = async (specifier) => {
 };
 
 const buildMissingEntryErrorMessage = async () => {
-  const lines = ["openclaw: missing dist/entry.(m)js (build output)."];
+  const lines = ["evox: missing dist/entry.(m)js (build output)."];
   if (!(await exists("./src/entry.ts"))) {
     return lines.join("\n");
   }
@@ -122,7 +122,7 @@ const buildMissingEntryErrorMessage = async () => {
   lines.push(
     "For pinned GitHub installs, use `npm install -g github:openclaw/openclaw#<ref>` instead of a raw `/archive/<ref>.tar.gz` URL.",
   );
-  lines.push("For releases, use `npm install -g openclaw@latest`.");
+  lines.push("For releases, use `npm install -g evox@latest`.");
   return lines.join("\n");
 };
 

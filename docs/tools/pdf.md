@@ -19,7 +19,7 @@ Quick behavior:
 
 ## Availability
 
-The tool is only registered when OpenClaw can resolve a PDF-capable model config for the agent:
+The tool is only registered when EVOX.sh can resolve a PDF-capable model config for the agent:
 
 1. `agents.defaults.pdfModel`
 2. fallback to `agents.defaults.imageModel`

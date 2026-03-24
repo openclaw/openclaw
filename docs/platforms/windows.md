@@ -1,7 +1,7 @@
 ---
 summary: "Windows support: native and WSL2 install paths, daemon, and current caveats"
 read_when:
-  - Installing OpenClaw on Windows
+  - Installing EVOX.sh on Windows
   - Choosing between native Windows and WSL2
   - Looking for Windows companion app status
 title: "Windows"
@@ -9,7 +9,7 @@ title: "Windows"
 
 # Windows
 
-OpenClaw supports both **native Windows** and **WSL2**. WSL2 is the more
+EVOX.sh supports both **native Windows** and **WSL2**. WSL2 is the more
 stable path and recommended for the full experience — the CLI, Gateway, and
 tooling run inside Linux with full compatibility. Native Windows works for
 core CLI and Gateway use, with some caveats noted below.
@@ -29,33 +29,33 @@ Native Windows CLI flows are improving, but WSL2 is still the recommended path.
 What works well on native Windows today:
 
 - website installer via `install.ps1`
-- local CLI use such as `openclaw --version`, `openclaw doctor`, and `openclaw plugins list --json`
+- local CLI use such as `evox --version`, `evox doctor`, and `evox plugins list --json`
 - embedded local-agent/provider smoke such as:
 
 ```powershell
-openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOWS-HATCH-OK."
+evox agent --local --agent main --thinking low -m "Reply with exactly WINDOWS-HATCH-OK."
 ```
 
 Current caveats:
 
-- `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
-- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
-- if Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately
-- if `schtasks` itself wedges or stops responding, OpenClaw now aborts that path quickly and falls back instead of hanging forever
+- `evox onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
+- `evox onboard --non-interactive --install-daemon` and `evox gateway install` try Windows Scheduled Tasks first
+- if Scheduled Task creation is denied, EVOX.sh falls back to a per-user Startup-folder login item and starts the gateway immediately
+- if `schtasks` itself wedges or stops responding, EVOX.sh now aborts that path quickly and falls back instead of hanging forever
 - Scheduled Tasks are still preferred when available because they provide better supervisor status
 
 If you want the native CLI only, without gateway service install, use one of these:
 
 ```powershell
-openclaw onboard --non-interactive --skip-health
-openclaw gateway run
+evox onboard --non-interactive --skip-health
+evox gateway run
 ```
 
 If you do want managed startup on native Windows:
 
 ```powershell
-openclaw gateway install
-openclaw gateway status --json
+evox gateway install
+evox gateway status --json
 ```
 
 If Scheduled Task creation is blocked, the fallback service mode still auto-starts after login through the current user's Startup folder.
@@ -70,19 +70,19 @@ If Scheduled Task creation is blocked, the fallback service mode still auto-star
 Inside WSL2:
 
 ```
-openclaw onboard --install-daemon
+evox onboard --install-daemon
 ```
 
 Or:
 
 ```
-openclaw gateway install
+evox gateway install
 ```
 
 Or:
 
 ```
-openclaw configure
+evox configure
 ```
 
 Select **Gateway service** when prompted.
@@ -90,7 +90,7 @@ Select **Gateway service** when prompted.
 Repair/migrate:
 
 ```
-openclaw doctor
+evox doctor
 ```
 
 ## Gateway auto-start before Windows login
@@ -106,12 +106,12 @@ Inside WSL:
 sudo loginctl enable-linger "$(whoami)"
 ```
 
-### 2) Install the OpenClaw gateway user service
+### 2) Install the EVOX.sh gateway user service
 
 Inside WSL:
 
 ```bash
-openclaw gateway install
+evox gateway install
 ```
 
 ### 3) Start WSL automatically at Windows boot
@@ -177,7 +177,7 @@ Notes:
 
 - SSH from another machine targets the **Windows host IP** (example: `ssh user@windows-host -p 2222`).
 - Remote nodes must point at a **reachable** Gateway URL (not `127.0.0.1`); use
-  `openclaw status --all` to confirm.
+  `evox status --all` to confirm.
 - Use `listenaddress=0.0.0.0` for LAN access; `127.0.0.1` keeps it local only.
 - If you want this automatic, register a Scheduled Task to run the refresh
   step at login.
@@ -220,17 +220,17 @@ Re-open Ubuntu, then verify:
 systemctl --user status
 ```
 
-### 3) Install OpenClaw (inside WSL)
+### 3) Install EVOX.sh (inside WSL)
 
 Follow the Linux Getting Started flow inside WSL:
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/sonpiaz/evox-sh.git
+cd evox
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-openclaw onboard
+evox onboard
 ```
 
 Full guide: [Getting Started](/start/getting-started)

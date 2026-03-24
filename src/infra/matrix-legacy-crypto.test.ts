@@ -379,7 +379,7 @@ describe("matrix legacy encrypted-state migration", () => {
       expect(detection.warnings).toContain(
         "Legacy Matrix encrypted state detected at " +
           path.join(stateDir, "matrix", "crypto") +
-          ', but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set. Set "channels.matrix.defaultAccount" to the intended target account before rerunning "openclaw doctor --fix" or restarting the gateway.',
+          ', but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set. Set "channels.matrix.defaultAccount" to the intended target account before rerunning "evox doctor --fix" or restarting the gateway.',
       );
     });
   });
@@ -402,7 +402,7 @@ describe("matrix legacy encrypted-state migration", () => {
       const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
       expect(detection.plans).toHaveLength(0);
       expect(detection.warnings).toContain(
-        `Legacy Matrix encrypted state path exists but is not a directory: ${path.join(stateDir, "matrix", "crypto")}. OpenClaw skipped automatic crypto migration for that path.`,
+        `Legacy Matrix encrypted state path exists but is not a directory: ${path.join(stateDir, "matrix", "crypto")}. EVOX.sh skipped automatic crypto migration for that path.`,
       );
     });
   });

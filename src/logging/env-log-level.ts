@@ -16,7 +16,7 @@ export function resolveEnvLogLevelOverride(): LogLevel | undefined {
   if (loggingState.invalidEnvLogLevelValue !== trimmed) {
     loggingState.invalidEnvLogLevelValue = trimmed;
     process.stderr.write(
-      `[openclaw] Ignoring invalid OPENCLAW_LOG_LEVEL="${trimmed}" (allowed: ${ALLOWED_LOG_LEVELS.join("|")}).\n`,
+      `[evox] Ignoring invalid OPENCLAW_LOG_LEVEL="${trimmed}" (allowed: ${ALLOWED_LOG_LEVELS.join("|")}).\n`,
     );
   }
   return undefined;

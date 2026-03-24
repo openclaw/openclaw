@@ -2,7 +2,7 @@
 title: "Volcengine (Doubao)"
 summary: "Volcano Engine setup (Doubao models, general + coding endpoints)"
 read_when:
-  - You want to use Volcano Engine or Doubao models with OpenClaw
+  - You want to use Volcano Engine or Doubao models with EVOX.sh
   - You need the Volcengine API key setup
 ---
 
@@ -21,7 +21,7 @@ workloads.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice volcengine-api-key
+evox onboard --auth-choice volcengine-api-key
 ```
 
 2. Set a default model:
@@ -39,7 +39,7 @@ openclaw onboard --auth-choice volcengine-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+evox onboard --non-interactive \
   --mode local \
   --auth-choice volcengine-api-key \
   --volcengine-api-key "$VOLCANO_ENGINE_API_KEY"

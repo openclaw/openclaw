@@ -1,9 +1,9 @@
 ---
-summary: "Schema-accurate configuration examples for common OpenClaw setups"
+summary: "Schema-accurate configuration examples for common EVOX.sh setups"
 read_when:
-  - Learning how to configure OpenClaw
+  - Learning how to configure EVOX.sh
   - Looking for configuration examples
-  - Setting up OpenClaw for the first time
+  - Setting up EVOX.sh for the first time
 title: "Configuration Examples"
 ---
 
@@ -101,7 +101,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
   // Message formatting
   messages: {
-    messagePrefix: "[openclaw]",
+    messagePrefix: "[evox]",
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
@@ -110,7 +110,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Routing + queue
   routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
+      mentionPatterns: ["@openclaw", "evox"],
       historyLimit: 50,
     },
     queue: {
@@ -225,7 +225,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       dm: { enabled: true, allowFrom: ["U123"] },
       slashCommand: {
         enabled: true,
-        name: "openclaw",
+        name: "evox",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
@@ -408,7 +408,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
     ],
     gmail: {
-      account: "openclaw@gmail.com",
+      account: "evox@gmail.com",
       label: "INBOX",
       topic: "projects/<project-id>/topics/gog-gmail-watch",
       subscription: "gog-gmail-watch-push",

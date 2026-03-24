@@ -111,7 +111,7 @@ function mockConfig(
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
         models: { "anthropic/claude-opus-4-5": {} },
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
         ...agentOverrides,
       },
       list: agentsList,
@@ -315,7 +315,7 @@ describe("agentCommand", () => {
           defaults: {
             model: { primary: "anthropic/claude-opus-4-5" },
             models: { "anthropic/claude-opus-4-5": {} },
-            workspace: path.join(home, "openclaw"),
+            workspace: path.join(home, "evox"),
           },
         },
         session: { store, mainKey: "main" },

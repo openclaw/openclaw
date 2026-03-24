@@ -133,7 +133,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("disables approval forwarding only");
     expect(message).toContain("exec-approvals.json");
-    expect(message).toContain("openclaw approvals get --gateway");
+    expect(message).toContain("evox approvals get --gateway");
   });
 
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
@@ -196,7 +196,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("[secrets]");
     expect(message).toContain("failed to resolve account");
-    expect(message).toContain("Run: openclaw security audit --deep");
+    expect(message).toContain("Run: evox security audit --deep");
   });
 
   it("skips heartbeat directPolicy warning when delivery is internal-only or explicit", async () => {

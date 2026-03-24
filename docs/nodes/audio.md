@@ -9,7 +9,7 @@ title: "Audio and Voice Notes"
 
 ## What works
 
-- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), OpenClaw:
+- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), EVOX.sh:
   1. Locates the first audio attachment (local path or URL) and downloads it if needed.
   2. Enforces `maxBytes` before sending to each model entry.
   3. Runs the first eligible model entry in order (provider or CLI).
@@ -21,7 +21,7 @@ title: "Audio and Voice Notes"
 ## Auto-detection (default)
 
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
-OpenClaw auto-detects in this order and stops at the first working option:
+EVOX.sh auto-detects in this order and stops at the first working option:
 
 1. **Local CLIs** (if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
@@ -152,15 +152,15 @@ Provider-based audio transcription honors standard outbound proxy env vars:
 - `https_proxy`
 - `http_proxy`
 
-If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
+If no proxy env vars are set, direct egress is used. If proxy config is malformed, EVOX.sh logs a warning and falls back to direct fetch.
 
 ## Mention Detection in Groups
 
-When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
+When `requireMention: true` is set for a group chat, EVOX.sh now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
 
 **How it works:**
 
-1. If a voice message has no text body and the group requires mentions, OpenClaw performs a "preflight" transcription.
+1. If a voice message has no text body and the group requires mentions, EVOX.sh performs a "preflight" transcription.
 2. The transcript is checked for mention patterns (e.g., `@BotName`, emoji triggers).
 3. If a mention is found, the message proceeds through the full reply pipeline.
 4. The transcript is used for mention detection so voice notes can pass the mention gate.
@@ -182,6 +182,6 @@ When `requireMention: true` is set for a group chat, OpenClaw now transcribes au
 
 - Scope rules use first-match wins. `chatType` is normalized to `direct`, `group`, or `room`.
 - Ensure your CLI exits 0 and prints plain text; JSON needs to be massaged via `jq -r .text`.
-- For `parakeet-mlx`, if you pass `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when `--output-format` is `txt` (or omitted); non-`txt` output formats fall back to stdout parsing.
+- For `parakeet-mlx`, if you pass `--output-dir`, EVOX.sh reads `<output-dir>/<media-basename>.txt` when `--output-format` is `txt` (or omitted); non-`txt` output formats fall back to stdout parsing.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
 - Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio is processed during the main media understanding phase.

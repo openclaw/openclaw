@@ -28,7 +28,7 @@ export type CreateProfileParams = {
   color?: string;
   cdpUrl?: string;
   userDataDir?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "evox" | "existing-session";
 };
 
 export type CreateProfileResult = {
@@ -218,7 +218,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     let deleted = false;
     const resolved = resolveProfile(state.resolved, name);
 
-    if (resolved?.cdpIsLoopback && resolved.driver === "openclaw") {
+    if (resolved?.cdpIsLoopback && resolved.driver === "evox") {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {

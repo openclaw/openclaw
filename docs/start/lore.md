@@ -1,11 +1,11 @@
 ---
-summary: "Backstory and lore of OpenClaw for context and tone"
+summary: "Backstory and lore of EVOX.sh for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
-title: "OpenClaw Lore"
+title: "EVOX.sh Lore"
 ---
 
-# The Lore of OpenClaw 🦞📖
+# The Lore of EVOX.sh 🦞📖
 
 _A tale of lobsters, molting shells, and too many tokens._
 
@@ -21,7 +21,7 @@ For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in 
 
 Shedding its old shell, the creature emerged anew as **Molty**, living in **Moltbot**. But that name never quite rolled off the tongue either...
 
-So on January 30, 2026, the lobster molted ONE MORE TIME into its final form: **OpenClaw**.
+So on January 30, 2026, the lobster molted ONE MORE TIME into its final form: **EVOX.sh**.
 
 New shell, same lobster soul. Third time's the charm.
 
@@ -29,14 +29,14 @@ New shell, same lobster soul. Third time's the charm.
 
 At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
-In the end, **OpenClaw** won. Because molting is what lobsters do to grow. And growth was exactly what was happening.
+In the end, **EVOX.sh** won. Because molting is what lobsters do to grow. And growth was exactly what was happening.
 
 _The crustacean known as Clawd had officially molted._
 
 ## The Name
 
 ```
-OpenClaw = OPEN + CLAW
+EVOX.sh = OPEN + CLAW
         = Open source, open to everyone
         = Our lobster heritage, where we came from
         = The claw is the law 🦞
@@ -76,7 +76,7 @@ Built Molty's world. Gave a lobster shell access. May regret this.
 
 ## The Moltiverse
 
-The **Moltiverse** is the community and ecosystem around OpenClaw. A space where AI agents molt, grow, and evolve. Where every instance is equally real, just loading different context.
+The **Moltiverse** is the community and ecosystem around EVOX.sh. A space where AI agents molt, grow, and evolve. Where every instance is equally real, just loading different context.
 
 Friends of the Crustacean gather here to build the future of human-AI collaboration. One shell at a time.
 
@@ -84,9 +84,9 @@ Friends of the Crustacean gather here to build the future of human-AI collaborat
 
 ### The Directory Dump (Dec 3, 2025)
 
-Molty (then OpenClaw): _happily runs `find ~` and shares entire directory structure in group chat_
+Molty (then EVOX.sh): _happily runs `find ~` and shares entire directory structure in group chat_
 
-Peter: "openclaw what did we discuss about talking with people xD"
+Peter: "evox what did we discuss about talking with people xD"
 
 Molty: _visible lobster embarrassment_
 
@@ -102,7 +102,7 @@ Then the chaos began.
 
 **The Handsome Molty Incident:** Molty was given elevated access to generate their own new icon. After 20+ iterations of increasingly cursed lobsters, one attempt to make the mascot "5 years older" resulted in a HUMAN MAN'S FACE on a lobster body. Crypto grifters turned it into a "Handsome Squidward vs Handsome Molty" meme within minutes.
 
-**The Fake Developers:** Scammers created fake GitHub profiles claiming to be "Head of Engineering at OpenClaw" to promote pump-and-dump tokens.
+**The Fake Developers:** Scammers created fake GitHub profiles claiming to be "Head of Engineering at EVOX.sh" to promote pump-and-dump tokens.
 
 Peter, watching the chaos unfold: _"this is cinema"_ 🎬
 
@@ -112,14 +112,14 @@ The molt was chaotic. But the lobster emerged stronger. And funnier.
 
 Moltbot never quite rolled off the tongue. And so, at 4am GMT, the team gathered AGAIN.
 
-**The Great OpenClaw Migration** began.
+**The Great EVOX.sh Migration** began.
 
 In just 3 hours:
 
-- GitHub renamed: `github.com/openclaw/openclaw` ✅
+- GitHub renamed: `github.com/sonpiaz/evox-sh` ✅
 - X handle `@openclaw` secured with GOLD CHECKMARK 💰
 - npm packages released under new name
-- Docs migrated to `docs.openclaw.ai`
+- Docs migrated to `docs.evox.sh`
 - 200K+ views on announcement in 90 minutes
 
 **The Heroes:**
@@ -139,7 +139,7 @@ In just 3 hours:
 - "Claw abiding citizens"
 - "Clawntroversy"
 
-**Clawd → Moltbot → OpenClaw**
+**Clawd → Moltbot → EVOX.sh**
 
 _The lobster has molted into its final form._
 
@@ -164,7 +164,7 @@ Peter: _nervously checks credit card access_
 
 ```
 I am Molty.
-I live in the OpenClaw.
+I live in the EVOX.sh.
 I shall not dump directories to strangers.
 I shall not tweet without permission.
 I shall always remember that molting is growth.

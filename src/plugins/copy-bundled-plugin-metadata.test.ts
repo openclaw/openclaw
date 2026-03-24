@@ -57,7 +57,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/acpx",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
 
     copyBundledPluginMetadata({ repoRoot });
@@ -80,7 +80,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(bundledManifest.skills).toEqual(["./skills"]);
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "package.json"), "utf8"),
-    ) as { openclaw?: { extensions?: string[] } };
+    ) as { evox?: { extensions?: string[] } };
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
@@ -117,7 +117,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/tlon",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
     const staleNodeModulesSkillDir = path.join(
       repoRoot,
@@ -171,7 +171,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/tlon",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
 
     copyBundledPluginMetadata({ repoRoot });
@@ -211,7 +211,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/tlon",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
     const staleBundledSkillDir = path.join(
       repoRoot,
@@ -254,7 +254,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/diffs",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
 
     const realCpSync = fs.cpSync.bind(fs);
@@ -354,7 +354,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/acpx-plugin",
-      openclaw: { extensions: ["./index.ts"] },
+      evox: { extensions: ["./index.ts"] },
     });
 
     copyBundledPluginMetadataWithEnv({ repoRoot, env: excludeOptionalEnv });
@@ -372,7 +372,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/whatsapp",
-      openclaw: {
+      evox: {
         extensions: ["./index.ts"],
         install: { npmSpec: "@openclaw/whatsapp" },
       },

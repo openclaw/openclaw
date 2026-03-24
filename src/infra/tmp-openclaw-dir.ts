@@ -67,7 +67,7 @@ export function resolvePreferredOpenClawTmpDir(
 
   const fallback = (): string => {
     const base = tmpdir();
-    const suffix = uid === undefined ? "openclaw" : `openclaw-${uid}`;
+    const suffix = uid === undefined ? "evox" : `openclaw-${uid}`;
     return path.join(base, suffix);
   };
 
@@ -109,7 +109,7 @@ export function resolvePreferredOpenClawTmpDir(
         return false;
       }
       chmodSync(candidatePath, 0o700);
-      warn(`[openclaw] tightened permissions on temp dir: ${candidatePath}`);
+      warn(`[evox] tightened permissions on temp dir: ${candidatePath}`);
       return resolveDirState(candidatePath) === "available";
     } catch {
       return false;
@@ -126,16 +126,16 @@ export function resolvePreferredOpenClawTmpDir(
       if (tryRepairWritableBits(fallbackPath)) {
         return fallbackPath;
       }
-      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(`Unsafe fallback EVOX.sh temp dir: ${fallbackPath}`);
     }
     try {
       mkdirSync(fallbackPath, { recursive: true, mode: 0o700 });
       chmodSync(fallbackPath, 0o700);
     } catch {
-      throw new Error(`Unable to create fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(`Unable to create fallback EVOX.sh temp dir: ${fallbackPath}`);
     }
     if (resolveDirState(fallbackPath) !== "available" && !tryRepairWritableBits(fallbackPath)) {
-      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(`Unsafe fallback EVOX.sh temp dir: ${fallbackPath}`);
     }
     return fallbackPath;
   };

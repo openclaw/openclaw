@@ -125,12 +125,12 @@ describe("doctor telegram provider warnings", () => {
   it("formats allowFrom username warnings", () => {
     const warnings = collectTelegramAllowFromUsernameWarnings({
       hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining("Telegram allowFrom contains 1 non-numeric entries"),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      expect.stringContaining('Run "evox doctor --fix"'),
     ]);
   });
 });

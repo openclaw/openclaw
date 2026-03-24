@@ -1,14 +1,14 @@
 ---
-summary: "Host OpenClaw on a DigitalOcean Droplet"
+summary: "Host EVOX.sh on a DigitalOcean Droplet"
 read_when:
-  - Setting up OpenClaw on DigitalOcean
-  - Looking for a simple paid VPS for OpenClaw
+  - Setting up EVOX.sh on DigitalOcean
+  - Looking for a simple paid VPS for EVOX.sh
 title: "DigitalOcean"
 ---
 
 # DigitalOcean
 
-Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
+Run a persistent EVOX.sh Gateway on a DigitalOcean Droplet.
 
 ## Prerequisites
 
@@ -45,16 +45,16 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
-    openclaw --version
+    # Install EVOX.sh
+    curl -fsSL https://evox.sh/install.sh | bash
+    evox --version
     ```
 
   </Step>
 
   <Step title="Run onboarding">
     ```bash
-    openclaw onboard --install-daemon
+    evox onboard --install-daemon
     ```
 
     The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd).
@@ -73,7 +73,7 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
   <Step title="Verify the gateway">
     ```bash
-    openclaw status
+    evox status
     systemctl --user status openclaw-gateway.service
     journalctl --user -u openclaw-gateway.service -f
     ```
@@ -96,8 +96,8 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
     ```bash
     curl -fsSL https://tailscale.com/install.sh | sh
     tailscale up
-    openclaw config set gateway.tailscale.mode serve
-    openclaw gateway restart
+    evox config set gateway.tailscale.mode serve
+    evox gateway restart
     ```
 
     Then open `https://<magicdns>/` from any device on your tailnet.
@@ -105,8 +105,8 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
     **Option C: Tailnet bind (no Serve)**
 
     ```bash
-    openclaw config set gateway.bind tailnet
-    openclaw gateway restart
+    evox config set gateway.bind tailnet
+    evox gateway restart
     ```
 
     Then open `http://<tailscale-ip>:18789` (token required).
@@ -116,7 +116,7 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
 ## Troubleshooting
 
-**Gateway will not start** -- Run `openclaw doctor --non-interactive` and check logs with `journalctl --user -u openclaw-gateway.service -n 50`.
+**Gateway will not start** -- Run `evox doctor --non-interactive` and check logs with `journalctl --user -u openclaw-gateway.service -n 50`.
 
 **Port already in use** -- Run `lsof -i :18789` to find the process, then stop it.
 
@@ -126,4 +126,4 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
-- [Updating](/install/updating) -- keep OpenClaw up to date
+- [Updating](/install/updating) -- keep EVOX.sh up to date

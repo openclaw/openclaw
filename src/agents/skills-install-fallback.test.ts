@@ -47,7 +47,7 @@ async function writeSkillWithInstallers(
     `---
 name: ${name}
 description: test skill
-metadata: ${JSON.stringify({ openclaw: { install: installSpecs } })}
+metadata: ${JSON.stringify({ evox: { install: installSpecs } })}
 ---
 
 # ${name}

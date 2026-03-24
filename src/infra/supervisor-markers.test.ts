@@ -28,12 +28,12 @@ describe("detectRespawnSupervisor", () => {
 
   it("detects scheduled-task supervision on Windows from either hint family", () => {
     expect(
-      detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32"),
+      detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "EVOX.sh Gateway" }, "win32"),
     ).toBe("schtasks");
     expect(
       detectRespawnSupervisor(
         {
-          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_MARKER: "evox",
           OPENCLAW_SERVICE_KIND: "gateway",
         },
         "win32",
@@ -42,7 +42,7 @@ describe("detectRespawnSupervisor", () => {
     expect(
       detectRespawnSupervisor(
         {
-          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_MARKER: "evox",
           OPENCLAW_SERVICE_KIND: "worker",
         },
         "win32",
@@ -54,7 +54,7 @@ describe("detectRespawnSupervisor", () => {
     expect(
       detectRespawnSupervisor(
         {
-          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_MARKER: "evox",
           OPENCLAW_SERVICE_KIND: "gateway",
         },
         "linux",

@@ -1,7 +1,7 @@
 import "@mariozechner/pi-agent-core";
 
 declare module "@mariozechner/pi-agent-core" {
-  // OpenClaw persists compaction markers alongside normal agent history.
+  // EVOX.sh persists compaction markers alongside normal agent history.
   interface CustomAgentMessages {
     compactionSummary: {
       role: "compactionSummary";

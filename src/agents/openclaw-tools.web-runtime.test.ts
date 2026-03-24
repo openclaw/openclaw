@@ -43,7 +43,7 @@ async function prepareAndActivate(params: { config: OpenClawConfig; env?: NodeJS
   return snapshot;
 }
 
-describe("openclaw tools runtime web metadata wiring", () => {
+describe("evox tools runtime web metadata wiring", () => {
   const priorFetch = global.fetch;
 
   afterEach(() => {

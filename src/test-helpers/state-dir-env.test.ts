@@ -9,12 +9,12 @@ import {
 } from "./state-dir-env.js";
 
 type EnvSnapshot = {
-  openclaw?: string;
+  evox?: string;
 };
 
 function snapshotCurrentStateDirVars(): EnvSnapshot {
   return {
-    openclaw: process.env.OPENCLAW_STATE_DIR,
+    evox: process.env.OPENCLAW_STATE_DIR,
   };
 }
 

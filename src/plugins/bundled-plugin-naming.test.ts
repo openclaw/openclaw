@@ -8,7 +8,7 @@ type PluginManifestShape = {
 
 type OpenClawPackageShape = {
   name?: unknown;
-  openclaw?: {
+  evox?: {
     install?: {
       npmSpec?: unknown;
     };

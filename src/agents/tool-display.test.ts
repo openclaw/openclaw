@@ -81,11 +81,11 @@ describe("tool display details", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "web_search",
-        args: { query: "OpenClaw docs", count: 3 },
+        args: { query: "EVOX.sh docs", count: 3 },
       }),
     );
 
-    expect(detail).toBe('for "OpenClaw docs" (top 3)');
+    expect(detail).toBe('for "EVOX.sh docs" (top 3)');
   });
 
   it("summarizes exec commands with context", () => {

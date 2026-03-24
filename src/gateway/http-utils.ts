@@ -41,7 +41,7 @@ export function resolveAgentIdFromModel(model: string | undefined): string | und
   }
 
   const m =
-    raw.match(/^openclaw[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
+    raw.match(/^evox[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
     raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
   const agentId = m?.groups?.agentId;
   if (!agentId) {

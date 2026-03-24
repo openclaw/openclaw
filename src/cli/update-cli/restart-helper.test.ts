@@ -125,8 +125,8 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".bat")).toBe(true);
       expect(content).toContain("@echo off");
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
+      expect(content).toContain('schtasks /End /TN "EVOX.sh Gateway"');
+      expect(content).toContain('schtasks /Run /TN "EVOX.sh Gateway"');
       expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
@@ -138,10 +138,10 @@ describe("restart-helper", () => {
 
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
+        OPENCLAW_WINDOWS_TASK_NAME: "EVOX.sh Gateway (custom)",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
+      expect(content).toContain('schtasks /End /TN "EVOX.sh Gateway (custom)"');
+      expect(content).toContain('schtasks /Run /TN "EVOX.sh Gateway (custom)"');
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
@@ -190,7 +190,7 @@ describe("restart-helper", () => {
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "production",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (production)"');
+      expect(content).toContain('schtasks /End /TN "EVOX.sh Gateway (production)"');
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });

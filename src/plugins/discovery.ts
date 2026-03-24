@@ -406,7 +406,7 @@ function addCandidate(params: {
     setupSource: params.setupSource,
     rootDir: resolvedRoot,
     origin: params.origin,
-    format: params.format ?? "openclaw",
+    format: params.format ?? "evox",
     bundleFormat: params.bundleFormat,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
@@ -825,8 +825,8 @@ function discoverBundledMetadataInDirectory(params: {
         ...(!packageManifest?.description && entry.packageDescription
           ? { description: entry.packageDescription }
           : {}),
-        ...(!packageManifest?.openclaw && entry.packageManifest
-          ? { openclaw: entry.packageManifest }
+        ...(!packageManifest?.evox && entry.packageManifest
+          ? { evox: entry.packageManifest }
           : {}),
       },
       packageDir: rootDir,

@@ -18,7 +18,7 @@ export async function requireValidConfigSnapshot(
         ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
         : "Unknown validation issue.";
     runtime.error(`Config invalid:\n${issues}`);
-    runtime.error(`Fix the config or run ${formatCliCommand("openclaw doctor")}.`);
+    runtime.error(`Fix the config or run ${formatCliCommand("evox doctor")}.`);
     runtime.exit(1);
     return null;
   }
@@ -34,7 +34,7 @@ export async function requireValidConfigSnapshot(
           .slice(0, 3)
           .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
         ...(compatibility.length > 3 ? [`- ... +${compatibility.length - 3} more`] : []),
-        `Review: ${formatCliCommand("openclaw doctor")}`,
+        `Review: ${formatCliCommand("evox doctor")}`,
       ].join("\n"),
     );
   }

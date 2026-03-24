@@ -7,7 +7,7 @@ title: "Channel Routing"
 
 # Channels & routing
 
-OpenClaw routes replies **back to the channel where a message came from**. The
+EVOX.sh routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
 host configuration.
 
@@ -46,13 +46,13 @@ Examples:
 
 When `session.dmScope` is `main`, direct messages may share one main session.
 To prevent the session’s `lastRoute` from being overwritten by non-owner DMs,
-OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
+EVOX.sh infers a pinned owner from `allowFrom` when all of these are true:
 
 - `allowFrom` has exactly one non-wildcard entry.
 - The entry can be normalized to a concrete sender ID for that channel.
 - The inbound DM sender does not match that pinned owner.
 
-In that mismatch case, OpenClaw still records inbound session metadata, but it
+In that mismatch case, EVOX.sh still records inbound session metadata, but it
 skips updating the main session `lastRoute`.
 
 ## Routing rules (how an agent is chosen)
@@ -74,7 +74,7 @@ The matched agent determines which workspace and session store are used.
 
 ## Broadcast groups (run multiple agents)
 
-Broadcast groups let you run **multiple agents** for the same peer **when OpenClaw would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
+Broadcast groups let you run **multiple agents** for the same peer **when EVOX.sh would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
 
 Config:
 

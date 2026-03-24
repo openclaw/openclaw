@@ -286,7 +286,7 @@ function buildCoreToolGroupMap() {
     (tool) => tool.id,
   );
   return {
-    "group:openclaw": openclawTools,
+    "group:evox": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };
 }

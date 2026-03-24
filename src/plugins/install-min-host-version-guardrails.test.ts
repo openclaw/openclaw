@@ -28,7 +28,7 @@ const PLUGIN_MANIFEST_PATHS_REQUIRING_MIN_HOST_VERSION = [
 ] as const;
 
 type PackageJsonLike = {
-  openclaw?: {
+  evox?: {
     install?: {
       minHostVersion?: string;
     };
@@ -65,7 +65,7 @@ describe("install minHostVersion guardrails", () => {
       }
       expect(
         isAtLeast(minimum, baseline),
-        `${relativePath} should require at least OpenClaw ${MIN_HOST_VERSION_BASELINE}`,
+        `${relativePath} should require at least EVOX.sh ${MIN_HOST_VERSION_BASELINE}`,
       ).toBe(true);
     }
   });

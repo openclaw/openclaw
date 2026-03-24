@@ -136,7 +136,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@openclaw/demo-channel",
-            openclaw: {
+            evox: {
               channel: {
                 id: "demo-channel",
                 label: "Demo Channel",
@@ -168,7 +168,7 @@ describe("channel plugin catalog", () => {
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@vendor/demo-channel-plugin",
-        openclaw: {
+        evox: {
           extensions: ["./index.js"],
           channel: {
             id: "demo-channel",
@@ -212,7 +212,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@openclaw/env-demo-channel",
-            openclaw: {
+            evox: {
               channel: {
                 id: "env-demo-channel",
                 label: "Env Demo Channel",
@@ -251,7 +251,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@openclaw/default-env-demo",
-            openclaw: {
+            evox: {
               channel: {
                 id: "default-env-demo",
                 label: "Default Env Demo",
@@ -284,14 +284,14 @@ describe("channel plugin catalog", () => {
     fs.mkdirSync(bundledDir, { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw" }),
+      JSON.stringify({ name: "evox" }),
       "utf8",
     );
     fs.writeFileSync(
       path.join(bundledDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/whatsapp",
-        openclaw: {
+        evox: {
           extensions: ["./index.js"],
           channel: {
             id: "whatsapp",
@@ -335,7 +335,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@openclaw/whatsapp",
-            openclaw: {
+            evox: {
               channel: {
                 id: "whatsapp",
                 label: "WhatsApp",
@@ -376,7 +376,7 @@ describe("channel plugin catalog", () => {
       path.join(bundledDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/whatsapp",
-        openclaw: {
+        evox: {
           channel: {
             id: "whatsapp",
             label: "WhatsApp Bundled",
@@ -397,7 +397,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@openclaw/whatsapp",
-            openclaw: {
+            evox: {
               channel: {
                 id: "whatsapp",
                 label: "WhatsApp Official",
@@ -420,7 +420,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@vendor/whatsapp-fork",
-            openclaw: {
+            evox: {
               channel: {
                 id: "whatsapp",
                 label: "WhatsApp Fork",
@@ -461,7 +461,7 @@ describe("channel plugin catalog", () => {
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@vendor/demo-channel-plugin",
-        openclaw: {
+        evox: {
           extensions: ["./index.js"],
           channel: {
             id: "demo-channel",
@@ -492,7 +492,7 @@ describe("channel plugin catalog", () => {
         entries: [
           {
             name: "@vendor/demo-channel-catalog",
-            openclaw: {
+            evox: {
               channel: {
                 id: "demo-channel",
                 label: "Demo Channel Catalog",

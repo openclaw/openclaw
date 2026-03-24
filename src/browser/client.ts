@@ -5,7 +5,7 @@ export type BrowserTransport = "cdp" | "chrome-mcp";
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "evox" | "existing-session";
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -31,7 +31,7 @@ export type ProfileStatus = {
   cdpPort: number | null;
   cdpUrl: string | null;
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "evox" | "existing-session";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
@@ -174,7 +174,7 @@ export async function browserCreateProfile(
     color?: string;
     cdpUrl?: string;
     userDataDir?: string;
-    driver?: "openclaw" | "existing-session";
+    driver?: "evox" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(

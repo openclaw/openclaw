@@ -13,7 +13,7 @@ A **node** is a companion device (macOS/iOS/Android/headless) that connects to t
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `evox nodes …` works against this Mac).
 
 Notes:
 
@@ -29,21 +29,21 @@ creates a device pairing request for `role: node`. Approve via the devices CLI (
 Quick CLI:
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
+evox devices list
+evox devices approve <requestId>
+evox devices reject <requestId>
+evox nodes status
+evox nodes describe --node <idOrNameOrIp>
 ```
 
 If a node retries with changed auth details (role/scopes/public key), the prior
 pending request is superseded and a new `requestId` is created. Re-run
-`openclaw devices list` before approving.
+`evox devices list` before approving.
 
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
+- `node.pair.*` (CLI: `evox nodes pending/approve/reject`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
 
 ## Remote node host (system.run)
@@ -61,9 +61,9 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 Approval note:
 
 - Approval-backed node runs bind exact request context.
-- For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local
+- For direct shell/runtime file executions, EVOX.sh also best-effort binds one concrete local
   file operand and denies the run if that file changes before execution.
-- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command,
+- If EVOX.sh cannot identify exactly one concrete local file for an interpreter/runtime command,
   approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing,
   separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
@@ -72,7 +72,7 @@ Approval note:
 On the node machine:
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
+evox node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
 ### Remote gateway via SSH tunnel (loopback bind)
@@ -89,12 +89,12 @@ ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
 
 # Terminal B: export the gateway token and connect through the tunnel
 export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+evox node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 ```
 
 Notes:
 
-- `openclaw node run` supports token or password auth.
+- `evox node run` supports token or password auth.
 - Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
 - Config fallback is `gateway.auth.token` / `gateway.auth.password`.
 - In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
@@ -105,8 +105,8 @@ Notes:
 ### Start a node host (service)
 
 ```bash
-openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
-openclaw node restart
+evox node install --host <gateway-host> --port 18789 --display-name "Build Node"
+evox node restart
 ```
 
 ### Pair + name
@@ -114,26 +114,26 @@ openclaw node restart
 On the gateway host:
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw nodes status
+evox devices list
+evox devices approve <requestId>
+evox nodes status
 ```
 
-If the node retries with changed auth details, re-run `openclaw devices list`
+If the node retries with changed auth details, re-run `evox devices list`
 and approve the current `requestId`.
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node).
-- `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+- `--display-name` on `evox node run` / `evox node install` (persists in `~/.openclaw/node.json` on the node).
+- `evox nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Allowlist the commands
 
 Exec approvals are **per node host**. Add allowlist entries from the gateway:
 
 ```bash
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
+evox approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
+evox approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 ```
 
 Approvals live on the node host at `~/.openclaw/exec-approvals.json`.
@@ -143,9 +143,9 @@ Approvals live on the node host at `~/.openclaw/exec-approvals.json`.
 Configure defaults (gateway config):
 
 ```bash
-openclaw config set tools.exec.host node
-openclaw config set tools.exec.security allowlist
-openclaw config set tools.exec.node "<id-or-name>"
+evox config set tools.exec.host node
+evox config set tools.exec.security allowlist
+evox config set tools.exec.node "<id-or-name>"
 ```
 
 Or per session:
@@ -168,7 +168,7 @@ Related:
 Low-level (raw RPC):
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+evox nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
@@ -180,17 +180,17 @@ If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format
 CLI helper (writes to a temp file and prints `MEDIA:<path>`):
 
 ```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
+evox nodes canvas snapshot --node <idOrNameOrIp> --format png
+evox nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
 ### Canvas controls
 
 ```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
-openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+evox nodes canvas present --node <idOrNameOrIp> --target https://example.com
+evox nodes canvas hide --node <idOrNameOrIp>
+evox nodes canvas navigate https://example.com --node <idOrNameOrIp>
+evox nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ```
 
 Notes:
@@ -201,9 +201,9 @@ Notes:
 ### A2UI (Canvas)
 
 ```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
+evox nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
+evox nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
+evox nodes canvas a2ui reset --node <idOrNameOrIp>
 ```
 
 Notes:
@@ -215,16 +215,16 @@ Notes:
 Photos (`jpg`):
 
 ```bash
-openclaw nodes camera list --node <idOrNameOrIp>
-openclaw nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
-openclaw nodes camera snap --node <idOrNameOrIp> --facing front
+evox nodes camera list --node <idOrNameOrIp>
+evox nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
+evox nodes camera snap --node <idOrNameOrIp> --facing front
 ```
 
 Video clips (`mp4`):
 
 ```bash
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 10s
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
+evox nodes camera clip --node <idOrNameOrIp> --duration 10s
+evox nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 Notes:
@@ -238,8 +238,8 @@ Notes:
 Supported nodes expose `screen.record` (mp4). Example:
 
 ```bash
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
+evox nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
+evox nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
 ```
 
 Notes:
@@ -256,8 +256,8 @@ Nodes expose `location.get` when Location is enabled in settings.
 CLI helper:
 
 ```bash
-openclaw nodes location get --node <idOrNameOrIp>
-openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+evox nodes location get --node <idOrNameOrIp>
+evox nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
 ```
 
 Notes:
@@ -273,7 +273,7 @@ Android nodes can expose `sms.send` when the user grants **SMS** permission and 
 Low-level invoke:
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from OpenClaw"}'
+evox nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from EVOX.sh"}'
 ```
 
 Notes:
@@ -299,9 +299,9 @@ Available families:
 Example invokes:
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command device.status --params '{}'
-openclaw nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
-openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
+evox nodes invoke --node <idOrNameOrIp> --command device.status --params '{}'
+evox nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
+evox nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
 ```
 
 Notes:
@@ -316,8 +316,8 @@ The headless node host exposes `system.run`, `system.which`, and `system.execApp
 Examples:
 
 ```bash
-openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+evox nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+evox nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
 ```
 
 Notes:
@@ -343,21 +343,21 @@ This sets the default node for `exec host=node` (and can be overridden per agent
 Global default:
 
 ```bash
-openclaw config set tools.exec.node "node-id-or-name"
+evox config set tools.exec.node "node-id-or-name"
 ```
 
 Per-agent override:
 
 ```bash
-openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+evox config get agents.list
+evox config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Unset to allow any node:
 
 ```bash
-openclaw config unset tools.exec.node
-openclaw config unset agents.list[0].tools.exec.node
+evox config unset tools.exec.node
+evox config unset agents.list[0].tools.exec.node
 ```
 
 ## Permissions map
@@ -366,14 +366,14 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 
 ## Headless node host (cross-platform)
 
-OpenClaw can run a **headless node host** (no UI) that connects to the Gateway
+EVOX.sh can run a **headless node host** (no UI) that connects to the Gateway
 WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
 or for running a minimal node alongside a server.
 
 Start it:
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789
+evox node run --host <gateway-host> --port 18789
 ```
 
 Notes:
@@ -389,5 +389,5 @@ Notes:
 
 ## Mac node mode
 
-- The macOS menubar app connects to the Gateway WS server as a node (so `openclaw nodes …` works against this Mac).
+- The macOS menubar app connects to the Gateway WS server as a node (so `evox nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.

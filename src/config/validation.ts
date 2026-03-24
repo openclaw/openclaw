@@ -333,7 +333,7 @@ function validateConfigObjectWithPluginsBase(
     path,
     message:
       `${path} is deprecated for web search provider config. ` +
-      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
+      "Move it under plugins.entries.<plugin>.config.webSearch.*; EVOX.sh mapped it automatically for compatibility.",
   }));
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
@@ -650,7 +650,7 @@ function validateConfigObjectWithPluginsBase(
           }
         }
       } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
+        // Compatible bundles currently expose no native EVOX.sh config schema.
         // Treat them as schema-less capability packs rather than failing validation.
       } else {
         issues.push({

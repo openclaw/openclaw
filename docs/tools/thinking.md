@@ -22,7 +22,7 @@ title: "Thinking Levels"
 - Provider notes:
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
-  - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+  - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; EVOX.sh normalizes incompatible values to `auto`.
 
 ## Resolution order
 
@@ -48,16 +48,16 @@ title: "Thinking Levels"
 - Levels: `on|off`.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
-- OpenClaw resolves fast mode in this order:
+- EVOX.sh resolves fast mode in this order:
   1. Inline/directive-only `/fast on|off`
   2. Session override
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`
 - For `openai/*`, fast mode applies the OpenAI fast profile: `service_tier=priority` when supported, plus low reasoning effort and low text verbosity.
-- For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. EVOX.sh keeps one shared `/fast` toggle across both auth paths.
 - For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
-- Anthropic fast mode is API-key only. OpenClaw skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
+- Anthropic fast mode is API-key only. EVOX.sh skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
 
 ## Verbose directives (/verbose or /v)
 

@@ -874,7 +874,7 @@ function createAlertPayload(params: { nodeId: string; title: string; body: strin
       },
       sound: "default",
     },
-    openclaw: toPushMetadata({
+    evox: toPushMetadata({
       kind: "push.test",
       nodeId: params.nodeId,
     }),
@@ -886,7 +886,7 @@ function createBackgroundPayload(params: { nodeId: string; wakeReason?: string }
     aps: {
       "content-available": 1,
     },
-    openclaw: toPushMetadata({
+    evox: toPushMetadata({
       kind: "node.wake",
       reason: params.wakeReason ?? "node.invoke",
       nodeId: params.nodeId,

@@ -8,7 +8,7 @@ title: "Kimi Search"
 
 # Kimi Search
 
-OpenClaw supports Kimi as a `web_search` provider, using Moonshot web search
+EVOX.sh supports Kimi as a `web_search` provider, using Moonshot web search
 to produce AI-synthesized answers with citations.
 
 ## Get an API key
@@ -22,7 +22,7 @@ to produce AI-synthesized answers with citations.
     configure via:
 
     ```bash
-    openclaw configure --section web
+    evox configure --section web
     ```
 
   </Step>

@@ -10,7 +10,7 @@ function createPluginSourceRoots() {
     "homebrew",
     "lib",
     "node_modules",
-    "openclaw",
+    "evox",
     "extensions",
   );
   const globalRoot = path.resolve(path.sep, "Users", "x", ".openclaw", "extensions");

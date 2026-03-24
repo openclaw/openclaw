@@ -7,7 +7,7 @@ title: "Session Management"
 
 # Session Management
 
-OpenClaw treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
+EVOX.sh treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
 
 Use `session.dmScope` to control how **direct messages** are grouped:
 
@@ -52,11 +52,11 @@ Notes:
 - Local CLI onboarding writes `session.dmScope: "per-channel-peer"` by default when unset (existing explicit values are preserved).
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
-- You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
+- You can verify your DM settings with `evox security audit` (see [security](/cli/security)).
 
 ## Gateway is the source of truth
 
-All session state is **owned by the gateway** (the “master” OpenClaw). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
+All session state is **owned by the gateway** (the “master” EVOX.sh). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
 
 - In **remote mode**, the session store you care about lives on the remote gateway host, not your Mac.
 - Token counts shown in UIs come from the gateway’s store fields (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Clients do not parse JSONL transcripts to “fix up” totals.
@@ -69,11 +69,11 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
 - Group entries may include `displayName`, `channel`, `subject`, `room`, and `space` to label sessions in UIs.
 - Session entries include `origin` metadata (label + routing hints) so UIs can explain where a session came from.
-- OpenClaw does **not** read legacy Pi/Tau session folders.
+- EVOX.sh does **not** read legacy Pi/Tau session folders.
 
 ## Maintenance
 
-OpenClaw applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.
+EVOX.sh applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.
 
 ### Defaults
 
@@ -87,7 +87,7 @@ OpenClaw applies session-store maintenance to keep `sessions.json` and transcrip
 
 ### How it works
 
-Maintenance runs during session-store writes, and you can trigger it on demand with `openclaw sessions cleanup`.
+Maintenance runs during session-store writes, and you can trigger it on demand with `evox sessions cleanup`.
 
 - `mode: "warn"`: reports what would be evicted but does not mutate entries/transcripts.
 - `mode: "enforce"`: applies cleanup in this order:
@@ -115,7 +115,7 @@ What to do:
 - set both time and count limits (`pruneAfter` + `maxEntries`), not just one
 - set `maxDiskBytes` + `highWaterBytes` for hard upper bounds in large deployments
 - keep `highWaterBytes` meaningfully below `maxDiskBytes` (default is 80%)
-- run `openclaw sessions cleanup --dry-run --json` after config changes to verify projected impact before enforcing
+- run `evox sessions cleanup --dry-run --json` after config changes to verify projected impact before enforcing
 - for frequent active sessions, pass `--active-key` when running manual cleanup
 
 ### Customize examples
@@ -170,18 +170,18 @@ Tune for larger installs (example):
 Preview or force maintenance from CLI:
 
 ```bash
-openclaw sessions cleanup --dry-run
-openclaw sessions cleanup --enforce
+evox sessions cleanup --dry-run
+evox sessions cleanup --enforce
 ```
 
 ## Session pruning
 
-OpenClaw trims **old tool results** from the in-memory context right before LLM calls by default.
+EVOX.sh trims **old tool results** from the in-memory context right before LLM calls by default.
 This does **not** rewrite JSONL history. See [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Pre-compaction memory flush
 
-When a session nears auto-compaction, OpenClaw can run a **silent memory flush**
+When a session nears auto-compaction, EVOX.sh can run a **silent memory flush**
 turn that reminds the model to write durable notes to disk. This only runs when
 the workspace is writable. See [Memory](/concepts/memory) and
 [Compaction](/concepts/compaction).
@@ -209,10 +209,10 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Reset policy: sessions are reused until they expire, and expiry is evaluated on the next inbound message.
 - Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
 - Idle reset (optional): `idleMinutes` adds a sliding idle window. When both daily and idle resets are configured, **whichever expires first** forces a new session.
-- Legacy idle-only: if you set `session.idleMinutes` without any `session.reset`/`resetByType` config, OpenClaw stays in idle-only mode for backward compatibility.
+- Legacy idle-only: if you set `session.idleMinutes` without any `session.reset`/`resetByType` config, EVOX.sh stays in idle-only mode for backward compatibility.
 - Per-type overrides (optional): `resetByType` lets you override the policy for `direct`, `group`, and `thread` sessions (thread = Slack/Discord threads, Telegram topics, Matrix threads when provided by the connector).
 - Per-channel overrides (optional): `resetByChannel` overrides the reset policy for a channel (applies to all session types for that channel and takes precedence over `reset`/`resetByType`).
-- Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. `/new <model>` accepts a model alias, `provider/model`, or provider name (fuzzy match) to set the new session model. If `/new` or `/reset` is sent alone, OpenClaw runs a short “hello” greeting turn to confirm the reset.
+- Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. `/new <model>` accepts a model alias, `provider/model`, or provider name (fuzzy match) to set the new session model. If `/new` or `/reset` is sent alone, EVOX.sh runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
 - Isolated cron jobs always mint a fresh `sessionId` per run (no idle reuse).
 
@@ -278,12 +278,12 @@ Runtime override (owner only):
 
 ## Inspecting
 
-- `openclaw status` — shows store path and recent sessions.
-- `openclaw sessions --json` — dumps every entry (filter with `--active <minutes>`).
-- `openclaw gateway call sessions.list --params '{}'` — fetch sessions from the running gateway (use `--url`/`--token` for remote gateway access).
+- `evox status` — shows store path and recent sessions.
+- `evox sessions --json` — dumps every entry (filter with `--active <minutes>`).
+- `evox gateway call sessions.list --params '{}'` — fetch sessions from the running gateway (use `--url`/`--token` for remote gateway access).
 - Send `/status` as a standalone message in chat to see whether the agent is reachable, how much of the session context is used, current thinking/fast/verbose toggles, and when your WhatsApp web creds were last refreshed (helps spot relink needs).
 - Send `/context list` or `/context detail` to see what’s in the system prompt and injected workspace files (and the biggest context contributors).
-- Send `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`) to abort the current run, clear queued followups for that session, and stop any sub-agent runs spawned from it (the reply includes the stopped count).
+- Send `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop evox`) to abort the current run, clear queued followups for that session, and stop any sub-agent runs spawned from it (the reply includes the stopped count).
 - Send `/compact` (optional instructions) as a standalone message to summarize older context and free up window space. See [/concepts/compaction](/concepts/compaction).
 - JSONL transcripts can be opened directly to review full turns.
 

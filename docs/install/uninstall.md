@@ -1,7 +1,7 @@
 ---
-summary: "Uninstall OpenClaw completely (CLI, service, state, workspace)"
+summary: "Uninstall EVOX.sh completely (CLI, service, state, workspace)"
 read_when:
-  - You want to remove OpenClaw from a machine
+  - You want to remove EVOX.sh from a machine
   - The gateway service is still running after uninstall
 title: "Uninstall"
 ---
@@ -10,7 +10,7 @@ title: "Uninstall"
 
 Two paths:
 
-- **Easy path** if `openclaw` is still installed.
+- **Easy path** if `evox` is still installed.
 - **Manual service removal** if the CLI is gone but the service is still running.
 
 ## Easy path (CLI still installed)
@@ -18,14 +18,14 @@ Two paths:
 Recommended: use the built-in uninstaller:
 
 ```bash
-openclaw uninstall
+evox uninstall
 ```
 
 Non-interactive (automation / npx):
 
 ```bash
-openclaw uninstall --all --yes --non-interactive
-npx -y openclaw uninstall --all --yes --non-interactive
+evox uninstall --all --yes --non-interactive
+npx -y evox uninstall --all --yes --non-interactive
 ```
 
 Manual steps (same result):
@@ -33,13 +33,13 @@ Manual steps (same result):
 1. Stop the gateway service:
 
 ```bash
-openclaw gateway stop
+evox gateway stop
 ```
 
 2. Uninstall the gateway service (launchd/systemd/schtasks):
 
 ```bash
-openclaw gateway uninstall
+evox gateway uninstall
 ```
 
 3. Delete state + config:
@@ -59,15 +59,15 @@ rm -rf ~/.openclaw/workspace
 5. Remove the CLI install (pick the one you used):
 
 ```bash
-npm rm -g openclaw
-pnpm remove -g openclaw
-bun remove -g openclaw
+npm rm -g evox
+pnpm remove -g evox
+bun remove -g evox
 ```
 
 6. If you installed the macOS app:
 
 ```bash
-rm -rf /Applications/OpenClaw.app
+rm -rf /Applications/EVOX.sh.app
 ```
 
 Notes:
@@ -77,7 +77,7 @@ Notes:
 
 ## Manual service removal (CLI not installed)
 
-Use this if the gateway service keeps running but `openclaw` is missing.
+Use this if the gateway service keeps running but `evox` is missing.
 
 ### macOS (launchd)
 
@@ -102,11 +102,11 @@ systemctl --user daemon-reload
 
 ### Windows (Scheduled Task)
 
-Default task name is `OpenClaw Gateway` (or `OpenClaw Gateway (<profile>)`).
+Default task name is `EVOX.sh Gateway` (or `EVOX.sh Gateway (<profile>)`).
 The task script lives under your state dir.
 
 ```powershell
-schtasks /Delete /F /TN "OpenClaw Gateway"
+schtasks /Delete /F /TN "EVOX.sh Gateway"
 Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 ```
 
@@ -116,12 +116,12 @@ If you used a profile, delete the matching task name and `~\.openclaw-<profile>\
 
 ### Normal install (install.sh / npm / pnpm / bun)
 
-If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
-Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
+If you used `https://evox.sh/install.sh` or `install.ps1`, the CLI was installed with `npm install -g evox@latest`.
+Remove it with `npm rm -g evox` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)
 
-If you run from a repo checkout (`git clone` + `openclaw ...` / `bun run openclaw ...`):
+If you run from a repo checkout (`git clone` + `evox ...` / `bun run evox ...`):
 
 1. Uninstall the gateway service **before** deleting the repo (use the easy path above or manual service removal).
 2. Delete the repo directory.

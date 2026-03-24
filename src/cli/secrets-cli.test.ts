@@ -147,7 +147,7 @@ describe("secrets CLI", () => {
         version: 1,
         protocolVersion: 1,
         generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
+        generatedBy: "evox secrets configure",
         targets: [
           {
             type: "skills.entries.apiKey",
@@ -214,7 +214,7 @@ describe("secrets CLI", () => {
         version: 1,
         protocolVersion: 1,
         generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
+        generatedBy: "evox secrets configure",
         targets: [],
       },
       preflight: {
@@ -374,7 +374,7 @@ describe("secrets CLI", () => {
         version: 1,
         protocolVersion: 1,
         generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
+        generatedBy: "evox secrets configure",
         targets: [],
       },
       preflight: {
@@ -403,7 +403,7 @@ describe("secrets CLI", () => {
         version: 1,
         protocolVersion: 1,
         generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
+        generatedBy: "evox secrets configure",
         targets: [],
       },
       preflight: {

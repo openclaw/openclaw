@@ -1,30 +1,30 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/unset/file/validate)"
+summary: "CLI reference for `evox config` (get/set/unset/file/validate)"
 read_when:
   - You want to read or edit config non-interactively
 title: "config"
 ---
 
-# `openclaw config`
+# `evox config`
 
 Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/validate
 values by path and print the active config file. Run without a subcommand to
-open the configure wizard (same as `openclaw configure`).
+open the configure wizard (same as `evox configure`).
 
 ## Examples
 
 ```bash
-openclaw config file
-openclaw config get browser.executablePath
-openclaw config set browser.executablePath "/usr/bin/google-chrome"
-openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
-openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
-openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
-openclaw config unset plugins.entries.brave.config.webSearch.apiKey
-openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
-openclaw config validate
-openclaw config validate --json
+evox config file
+evox config get browser.executablePath
+evox config set browser.executablePath "/usr/bin/google-chrome"
+evox config set agents.defaults.heartbeat.every "2h"
+evox config set agents.list[0].tools.exec.node "node-id-or-name"
+evox config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
+evox config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
+evox config unset plugins.entries.brave.config.webSearch.apiKey
+evox config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
+evox config validate
+evox config validate --json
 ```
 
 ## Paths
@@ -32,15 +32,15 @@ openclaw config validate --json
 Paths use dot or bracket notation:
 
 ```bash
-openclaw config get agents.defaults.workspace
-openclaw config get agents.list[0].id
+evox config get agents.defaults.workspace
+evox config get agents.list[0].id
 ```
 
 Use the agent list index to target a specific agent:
 
 ```bash
-openclaw config get agents.list
-openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
+evox config get agents.list
+evox config set agents.list[1].tools.exec.node "node-id-or-name"
 ```
 
 ## Values
@@ -49,20 +49,20 @@ Values are parsed as JSON5 when possible; otherwise they are treated as strings.
 Use `--strict-json` to require JSON5 parsing. `--json` remains supported as a legacy alias.
 
 ```bash
-openclaw config set agents.defaults.heartbeat.every "0m"
-openclaw config set gateway.port 19001 --strict-json
-openclaw config set channels.whatsapp.groups '["*"]' --strict-json
+evox config set agents.defaults.heartbeat.every "0m"
+evox config set gateway.port 19001 --strict-json
+evox config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
 ## `config set` modes
 
-`openclaw config set` supports four assignment styles:
+`evox config set` supports four assignment styles:
 
-1. Value mode: `openclaw config set <path> <value>`
+1. Value mode: `evox config set <path> <value>`
 2. SecretRef builder mode:
 
 ```bash
-openclaw config set channels.discord.token \
+evox config set channels.discord.token \
   --ref-provider default \
   --ref-source env \
   --ref-id DISCORD_BOT_TOKEN
@@ -71,7 +71,7 @@ openclaw config set channels.discord.token \
 3. Provider builder mode (`secrets.providers.<alias>` path only):
 
 ```bash
-openclaw config set secrets.providers.vault \
+evox config set secrets.providers.vault \
   --provider-source exec \
   --provider-command /usr/local/bin/openclaw-vault \
   --provider-arg read \
@@ -82,7 +82,7 @@ openclaw config set secrets.providers.vault \
 4. Batch mode (`--batch-json` or `--batch-file`):
 
 ```bash
-openclaw config set --batch-json '[
+evox config set --batch-json '[
   {
     "path": "secrets.providers.default",
     "provider": { "source": "env" }
@@ -95,7 +95,7 @@ openclaw config set --batch-json '[
 ```
 
 ```bash
-openclaw config set --batch-file ./config-set.batch.json --dry-run
+evox config set --batch-file ./config-set.batch.json --dry-run
 ```
 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth.
@@ -104,11 +104,11 @@ Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as t
 JSON path/value mode remains supported for both SecretRefs and providers:
 
 ```bash
-openclaw config set channels.discord.token \
+evox config set channels.discord.token \
   '{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}' \
   --strict-json
 
-openclaw config set secrets.providers.vaultfile \
+evox config set secrets.providers.vaultfile \
   '{"source":"file","path":"/etc/openclaw/secrets.json","mode":"json"}' \
   --strict-json
 ```
@@ -148,7 +148,7 @@ Exec provider (`--provider-source exec`):
 Hardened exec provider example:
 
 ```bash
-openclaw config set secrets.providers.vault \
+evox config set secrets.providers.vault \
   --provider-source exec \
   --provider-command /usr/local/bin/openclaw-vault \
   --provider-arg read \
@@ -164,20 +164,20 @@ openclaw config set secrets.providers.vault \
 Use `--dry-run` to validate changes without writing `openclaw.json`.
 
 ```bash
-openclaw config set channels.discord.token \
+evox config set channels.discord.token \
   --ref-provider default \
   --ref-source env \
   --ref-id DISCORD_BOT_TOKEN \
   --dry-run
 
-openclaw config set channels.discord.token \
+evox config set channels.discord.token \
   --ref-provider default \
   --ref-source env \
   --ref-id DISCORD_BOT_TOKEN \
   --dry-run \
   --json
 
-openclaw config set channels.discord.token \
+evox config set channels.discord.token \
   --ref-provider vault \
   --ref-source exec \
   --ref-id discord/token \
@@ -290,6 +290,6 @@ Validate the current config against the active schema without starting the
 gateway.
 
 ```bash
-openclaw config validate
-openclaw config validate --json
+evox config validate
+evox config validate --json
 ```

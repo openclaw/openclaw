@@ -48,8 +48,8 @@ describe("findExtraGatewayServices (win32)", () => {
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName: OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "TaskName: EVOX.sh Gateway",
+        "Task To Run: C:\\Program Files\\EVOX.sh\\openclaw.exe gateway run",
         "",
         "TaskName: Clawdbot Legacy",
         "Task To Run: C:\\clawdbot\\clawdbot.exe run",

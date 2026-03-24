@@ -30,12 +30,12 @@ export async function scanBundleInstallSourceRuntime(params: {
     }
     if (scanSummary.warn > 0) {
       params.logger.warn?.(
-        `Bundle "${params.pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+        `Bundle "${params.pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "evox security audit --deep" for details.`,
       );
     }
   } catch (err) {
     params.logger.warn?.(
-      `Bundle "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      `Bundle "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "evox security audit --deep" after install.`,
     );
   }
 }
@@ -75,12 +75,12 @@ export async function scanPackageInstallSourceRuntime(params: {
     }
     if (scanSummary.warn > 0) {
       params.logger.warn?.(
-        `Plugin "${params.pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+        `Plugin "${params.pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "evox security audit --deep" for details.`,
       );
     }
   } catch (err) {
     params.logger.warn?.(
-      `Plugin "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      `Plugin "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "evox security audit --deep" after install.`,
     );
   }
 }

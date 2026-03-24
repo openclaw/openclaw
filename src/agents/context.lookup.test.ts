@@ -99,24 +99,24 @@ describe("lookupContextTokens", () => {
     );
   });
 
-  it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
+  it("only warms eagerly for real evox startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
     try {
       for (const scenario of [
         {
-          argv: ["node", "openclaw", "chat"],
+          argv: ["node", "evox", "chat"],
           expectedCalls: 1,
         },
         {
-          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
+          argv: ["node", "evox", "--profile", "--", "config", "validate"],
           expectedCalls: 0,
         },
         {
-          argv: ["node", "openclaw", "logs", "--limit", "5"],
+          argv: ["node", "evox", "logs", "--limit", "5"],
           expectedCalls: 0,
         },
         {
-          argv: ["node", "openclaw", "status", "--json"],
+          argv: ["node", "evox", "status", "--json"],
           expectedCalls: 0,
         },
         {

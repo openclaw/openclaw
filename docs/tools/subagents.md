@@ -42,7 +42,7 @@ These commands work on channels that support persistent thread bindings. See **T
 - The spawn command is non-blocking; it returns a run id immediately.
 - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
 - For manual spawns, delivery is resilient:
-  - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
+  - EVOX.sh tries direct `agent` delivery first with a stable idempotency key.
   - If direct delivery fails, it falls back to queue routing.
   - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
@@ -74,7 +74,7 @@ Use `sessions_spawn`:
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
-- Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, EVOX.sh uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
 Tool params:
 
@@ -104,7 +104,7 @@ When thread bindings are enabled for a channel, a sub-agent can stay bound to a 
 Quick flow:
 
 1. Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"`).
-2. OpenClaw creates or binds a thread to that session target in the active channel.
+2. EVOX.sh creates or binds a thread to that session target in the active channel.
 3. Replies and follow-up messages in that thread route to the bound session.
 4. Use `/session idle` to inspect/update inactivity auto-unfocus and `/session max-age` to control the hard cap.
 5. Use `/unfocus` to detach manually.
@@ -218,7 +218,7 @@ Sub-agents report back via an announce step:
 - Otherwise delivery depends on requester depth:
   - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
   - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
-  - if a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available
+  - if a nested requester subagent session is gone, EVOX.sh falls back to that session's requester when available
 - Child completion aggregation is scoped to the current requester run when building nested completion findings, preventing stale prior-run child outputs from leaking into the current announce.
 - Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce context is normalized to a stable internal event block:

@@ -1,5 +1,5 @@
 ---
-summary: "Run OpenClaw Gateway on exe.dev (VM + HTTPS proxy) for remote access"
+summary: "Run EVOX.sh Gateway on exe.dev (VM + HTTPS proxy) for remote access"
 read_when:
   - You want a cheap always-on Linux host for the Gateway
   - You want remote Control UI access without running your own VPS
@@ -8,7 +8,7 @@ title: "exe.dev"
 
 # exe.dev
 
-Goal: OpenClaw Gateway running on an exe.dev VM, reachable from your laptop via: `https://<vm-name>.exe.xyz`
+Goal: EVOX.sh Gateway running on an exe.dev VM, reachable from your laptop via: `https://<vm-name>.exe.xyz`
 
 This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
 
@@ -18,7 +18,7 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 2. Fill in your auth key/token as needed
 3. Click on "Agent" next to your VM and wait for Shelley to finish provisioning
 4. Open `https://<vm-name>.exe.xyz/` and paste your gateway token to authenticate
-5. Approve any pending device pairing requests with `openclaw devices approve <requestId>`
+5. Approve any pending device pairing requests with `evox devices approve <requestId>`
 
 ## What you need
 
@@ -27,11 +27,11 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 
 ## Automated Install with Shelley
 
-Shelley, [exe.dev](https://exe.dev)'s agent, can install OpenClaw instantly with our
+Shelley, [exe.dev](https://exe.dev)'s agent, can install EVOX.sh instantly with our
 prompt. The prompt used is as below:
 
 ```
-Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw devices approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
+Set up EVOX.sh (https://docs.evox.sh/install) on this VM. Use the non-interactive and accept-risk flags for evox onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "evox devices list" and "evox devices approve <request id>". Make sure the dashboard shows that EVOX.sh's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
 ```
 
 ## Manual installation
@@ -50,7 +50,7 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
+Tip: keep this VM **stateful**. EVOX.sh stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
 
 ## 2) Install prerequisites (on the VM)
 
@@ -59,15 +59,15 @@ sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) Install OpenClaw
+## 3) Install EVOX.sh
 
-Run the OpenClaw install script:
+Run the EVOX.sh install script:
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://evox.sh/install.sh | bash
 ```
 
-## 4) Setup nginx to proxy OpenClaw to port 8000
+## 4) Setup nginx to proxy EVOX.sh to port 8000
 
 Edit `/etc/nginx/sites-enabled/default` with
 
@@ -101,12 +101,12 @@ server {
 }
 ```
 
-## 5) Access OpenClaw and grant privileges
+## 5) Access EVOX.sh and grant privileges
 
 Access `https://<vm-name>.exe.xyz/` (see the Control UI output from onboarding). If it prompts for auth, paste the
-token from `gateway.auth.token` on the VM (retrieve with `openclaw config get gateway.auth.token`, or generate one
-with `openclaw doctor --generate-gateway-token`). Approve devices with `openclaw devices list` and
-`openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
+token from `gateway.auth.token` on the VM (retrieve with `evox config get gateway.auth.token`, or generate one
+with `evox doctor --generate-gateway-token`). Approve devices with `evox devices list` and
+`evox devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
 ## Remote Access
 
@@ -117,10 +117,10 @@ with email auth.
 ## Updating
 
 ```bash
-npm i -g openclaw@latest
-openclaw doctor
-openclaw gateway restart
-openclaw health
+npm i -g evox@latest
+evox doctor
+evox gateway restart
+evox health
 ```
 
 Guide: [Updating](/install/updating)

@@ -37,7 +37,7 @@ export function resolveAgentDeliveryPlan(params: {
    * overrides session-level `lastChannel` to prevent cross-channel reply
    * routing in shared sessions (dmScope="main").
    *
-   * @see https://github.com/openclaw/openclaw/issues/24152
+   * @see https://github.com/sonpiaz/evox-sh/issues/24152
    */
   turnSourceChannel?: string;
   /** Turn-source `to` — paired with `turnSourceChannel`. */

@@ -55,7 +55,7 @@ async function writeEnvSkill(workspaceDir: string) {
     dir: skillDir,
     name: "env-skill",
     description: "Needs env",
-    metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+    metadata: '{"evox":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
   });
 }
 
@@ -155,7 +155,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
-  it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
+  it("includes enabled Claude bundle markdown commands as native EVOX.sh slash commands", async () => {
     const workspaceDir = await makeWorkspace();
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
     await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
@@ -378,7 +378,7 @@ describe("applySkillEnvOverrides", () => {
       name: "unsafe-env-skill",
       description: "Needs env",
       metadata:
-        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
+        '{"evox":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
@@ -418,7 +418,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "dangerous-env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
+      metadata: '{"evox":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
@@ -458,7 +458,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "snapshot-env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]}}}',
+      metadata: '{"evox":{"requires":{"env":["OPENAI_API_KEY"]}}}',
     });
 
     const config = {

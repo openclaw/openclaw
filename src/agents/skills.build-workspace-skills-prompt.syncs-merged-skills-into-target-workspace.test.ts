@@ -206,7 +206,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       name: "image-lab",
       description: "Generates images",
       metadata:
-        '{"openclaw":{"requires":{"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY"}}',
+        '{"evox":{"requires":{"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY"}}',
       body: "# Image Lab\n",
     });
 

@@ -41,7 +41,7 @@ name: session-memory
 description: "Save session context"
 metadata:
   {
-    "openclaw": {
+    "evox": {
       "emoji": "💾",
       "events": ["command:new"]
     }
@@ -68,7 +68,7 @@ name: command-logger
 description: "Log all command events"
 metadata:
   {
-    "openclaw":
+    "evox":
       {
         "emoji": "📝",
         "events": ["command"],
@@ -92,12 +92,12 @@ metadata:
   it("handles single-line metadata (inline JSON)", () => {
     const content = `---
 name: simple-hook
-metadata: {"openclaw": {"events": ["test"]}}
+metadata: {"evox": {"events": ["test"]}}
 ---
 `;
     const result = parseFrontmatter(content);
     expect(result.name).toBe("simple-hook");
-    expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
+    expect(result.metadata).toBe('{"evox": {"events": ["test"]}}');
   });
 
   it("handles mixed single-line and multi-line values", () => {
@@ -107,7 +107,7 @@ description: "A hook with mixed values"
 homepage: https://example.com
 metadata:
   {
-    "openclaw": {
+    "evox": {
       "events": ["command:new"]
     }
   }
@@ -149,11 +149,11 @@ description: 'single-quoted'
 });
 
 describe("resolveOpenClawMetadata", () => {
-  it("extracts openclaw metadata from parsed frontmatter", () => {
+  it("extracts evox metadata from parsed frontmatter", () => {
     const frontmatter = {
       name: "test-hook",
       metadata: JSON.stringify({
-        openclaw: {
+        evox: {
           emoji: "🔥",
           events: ["command:new", "command:reset"],
           requires: {
@@ -178,7 +178,7 @@ describe("resolveOpenClawMetadata", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns undefined when openclaw key is missing", () => {
+  it("returns undefined when evox key is missing", () => {
     const frontmatter = {
       metadata: JSON.stringify({ other: "data" }),
     };
@@ -197,10 +197,10 @@ describe("resolveOpenClawMetadata", () => {
   it("handles install specs", () => {
     const frontmatter = {
       metadata: JSON.stringify({
-        openclaw: {
+        evox: {
           events: ["command"],
           install: [
-            { id: "bundled", kind: "bundled", label: "Bundled with OpenClaw" },
+            { id: "bundled", kind: "bundled", label: "Bundled with EVOX.sh" },
             { id: "npm", kind: "npm", package: "@openclaw/hook" },
           ],
         },
@@ -217,7 +217,7 @@ describe("resolveOpenClawMetadata", () => {
   it("handles os restrictions", () => {
     const frontmatter = {
       metadata: JSON.stringify({
-        openclaw: {
+        evox: {
           events: ["command"],
           os: ["darwin", "linux"],
         },
@@ -233,15 +233,15 @@ describe("resolveOpenClawMetadata", () => {
     const content = `---
 name: session-memory
 description: "Save session context to memory when /new or /reset command is issued"
-homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+homepage: https://docs.evox.sh/automation/hooks#session-memory
 metadata:
   {
-    "openclaw":
+    "evox":
       {
         "emoji": "💾",
         "events": ["command:new", "command:reset"],
         "requires": { "config": ["workspace.dir"] },
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with EVOX.sh" }],
       },
   }
 ---
@@ -253,28 +253,28 @@ metadata:
     expect(frontmatter.name).toBe("session-memory");
     expect(frontmatter.metadata).toBeDefined();
 
-    const openclaw = resolveOpenClawMetadata(frontmatter);
-    expect(openclaw).toBeDefined();
-    expect(openclaw?.emoji).toBe("💾");
-    expect(openclaw?.events).toEqual(["command:new", "command:reset"]);
-    expect(openclaw?.requires?.config).toEqual(["workspace.dir"]);
-    expect(openclaw?.install?.[0].kind).toBe("bundled");
+    const evox = resolveOpenClawMetadata(frontmatter);
+    expect(evox).toBeDefined();
+    expect(evox?.emoji).toBe("💾");
+    expect(evox?.events).toEqual(["command:new", "command:reset"]);
+    expect(evox?.requires?.config).toEqual(["workspace.dir"]);
+    expect(evox?.install?.[0].kind).toBe("bundled");
   });
 
   it("parses YAML metadata map", () => {
     const content = `---
 name: yaml-metadata
 metadata:
-  openclaw:
+  evox:
     emoji: disk
     events:
       - command:new
 ---
 `;
     const frontmatter = parseFrontmatter(content);
-    const openclaw = resolveOpenClawMetadata(frontmatter);
-    expect(openclaw?.emoji).toBe("disk");
-    expect(openclaw?.events).toEqual(["command:new"]);
+    const evox = resolveOpenClawMetadata(frontmatter);
+    expect(evox?.emoji).toBe("disk");
+    expect(evox?.events).toEqual(["command:new"]);
   });
 });
 

@@ -52,7 +52,7 @@ function createReplyConfig(home: string, streamMode?: "block"): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
       },
     },
     channels: { telegram: { allowFrom: ["*"], streamMode } },
@@ -211,7 +211,7 @@ describe("block streaming", () => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0]).toMatchObject({
         text: "Result",
-        mediaUrls: [path.join(home, "openclaw", "image.png")],
+        mediaUrls: [path.join(home, "evox", "image.png")],
       });
     });
   });

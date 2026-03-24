@@ -88,7 +88,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         resolveConfigPathCandidate(
           envWith({ OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined }),
         ),
-      ).toMatch(/\.openclaw[\\/]openclaw\.json$/);
+      ).toMatch(/\.openclaw[\\/]evox\.json$/);
     });
 
     it("CONFIG_PATH respects OPENCLAW_CONFIG_PATH override", () => {

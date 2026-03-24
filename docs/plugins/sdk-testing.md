@@ -1,7 +1,7 @@
 ---
 title: "Plugin Testing"
 sidebarTitle: "Testing"
-summary: "Testing utilities and patterns for OpenClaw plugins"
+summary: "Testing utilities and patterns for EVOX.sh plugins"
 read_when:
   - You are writing tests for a plugin
   - You need test utilities from the plugin SDK
@@ -10,7 +10,7 @@ read_when:
 
 # Plugin Testing
 
-Reference for test utilities, patterns, and lint enforcement for OpenClaw
+Reference for test utilities, patterns, and lint enforcement for EVOX.sh
 plugins.
 
 <Tip>
@@ -233,7 +233,7 @@ patterns is recommended.
 
 ## Test configuration
 
-OpenClaw uses Vitest with V8 coverage thresholds. For plugin tests:
+EVOX.sh uses Vitest with V8 coverage thresholds. For plugin tests:
 
 ```bash
 # Run all tests

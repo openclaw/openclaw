@@ -15,7 +15,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 describe("gateway tool defaults", () => {
   const envSnapshot = {
-    openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
+    evox: process.env.OPENCLAW_GATEWAY_TOKEN,
   };
 
   beforeEach(() => {

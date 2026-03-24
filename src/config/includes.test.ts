@@ -13,7 +13,7 @@ import {
 
 const ROOT_DIR = path.parse(process.cwd()).root;
 const CONFIG_DIR = path.join(ROOT_DIR, "config");
-const ETC_OPENCLAW_DIR = path.join(ROOT_DIR, "etc", "openclaw");
+const ETC_OPENCLAW_DIR = path.join(ROOT_DIR, "etc", "evox");
 const SHARED_DIR = path.join(ROOT_DIR, "shared");
 
 const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "openclaw.json");

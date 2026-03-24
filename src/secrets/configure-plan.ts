@@ -53,7 +53,7 @@ function configureCandidateSortKey(candidate: ConfigureCandidate): string {
     const agentId = candidate.agentId ?? "";
     return `auth-profiles:${agentId}:${candidate.path}`;
   }
-  return `openclaw:${candidate.path}`;
+  return `evox:${candidate.path}`;
 }
 
 function resolveAuthProfileProvider(
@@ -233,7 +233,7 @@ export function buildSecretsConfigurePlan(params: {
     version: 1,
     protocolVersion: 1,
     generatedAt: params.generatedAt ?? new Date().toISOString(),
-    generatedBy: "openclaw secrets configure",
+    generatedBy: "evox secrets configure",
     targets: [...params.selectedTargets.values()].map((entry) => ({
       type: entry.type,
       path: entry.path,

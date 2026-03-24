@@ -28,7 +28,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "backup",
-    description: "Create and verify local backup archives for OpenClaw state",
+    description: "Create and verify local backup archives for EVOX.sh state",
     hasSubcommands: true,
   },
   {
@@ -88,7 +88,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "browser",
-    description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+    description: "Manage EVOX.sh's dedicated browser (Chrome/Chromium)",
     hasSubcommands: true,
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;

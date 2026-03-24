@@ -2,8 +2,8 @@
 title: "Trusted Proxy Auth"
 summary: "Delegate gateway authentication to a trusted reverse proxy (Pomerium, Caddy, nginx + OAuth)"
 read_when:
-  - Running OpenClaw behind an identity-aware proxy
-  - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
+  - Running EVOX.sh behind an identity-aware proxy
+  - Setting up Pomerium, Caddy, or nginx with OAuth in front of EVOX.sh
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
   - Deciding where to set HSTS and other HTTP hardening headers
 ---
@@ -16,7 +16,7 @@ read_when:
 
 Use `trusted-proxy` auth mode when:
 
-- You run OpenClaw behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
+- You run EVOX.sh behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
 - Your proxy handles all authentication and passes user identity via headers
 - You're in a Kubernetes or container environment where the proxy is the only path to the Gateway
 - You're hitting WebSocket `1008 unauthorized` errors because browsers can't pass tokens in WS payloads
@@ -32,8 +32,8 @@ Use `trusted-proxy` auth mode when:
 
 1. Your reverse proxy authenticates users (OAuth, OIDC, SAML, etc.)
 2. Proxy adds a header with the authenticated user identity (e.g., `x-forwarded-user: nick@example.com`)
-3. OpenClaw checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
-4. OpenClaw extracts the user identity from the configured header
+3. EVOX.sh checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
+4. EVOX.sh extracts the user identity from the configured header
 5. If everything checks out, the request is authorized
 
 ## Control UI Pairing Behavior
@@ -100,7 +100,7 @@ When your reverse proxy handles HTTPS for `https://control.example.com`, set
 
 - Good fit for internet-facing deployments.
 - Keeps certificate + HTTP hardening policy in one place.
-- OpenClaw can stay on loopback HTTP behind the proxy.
+- EVOX.sh can stay on loopback HTTP behind the proxy.
 
 Example header value:
 
@@ -110,7 +110,7 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 
 ### Gateway TLS termination
 
-If OpenClaw itself serves HTTPS directly (no TLS-terminating proxy), set:
+If EVOX.sh itself serves HTTPS directly (no TLS-terminating proxy), set:
 
 ```json5
 {
@@ -197,7 +197,7 @@ openclaw.example.com {
     authenticate with oauth2_provider
     authorize with policy1
 
-    reverse_proxy openclaw:18789 {
+    reverse_proxy evox:18789 {
         header_up X-Forwarded-User {http.auth.user.email}
     }
 }
@@ -266,7 +266,7 @@ Before enabling trusted-proxy auth, verify:
 
 ## Security Audit
 
-`openclaw security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
+`evox security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
 
 The audit checks for:
 
@@ -317,10 +317,10 @@ If you're moving from token auth to trusted-proxy:
 
 1. Configure your proxy to authenticate users and pass headers
 2. Test the proxy setup independently (curl with headers)
-3. Update OpenClaw config with trusted-proxy auth
+3. Update EVOX.sh config with trusted-proxy auth
 4. Restart the Gateway
 5. Test WebSocket connections from the Control UI
-6. Run `openclaw security audit` and review findings
+6. Run `evox security audit` and review findings
 
 ## Related
 

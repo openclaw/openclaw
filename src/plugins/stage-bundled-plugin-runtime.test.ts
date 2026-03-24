@@ -191,7 +191,7 @@ describe("stageBundledPluginRuntime", () => {
     fs.writeFileSync(
       path.join(distPluginDir, "package.json"),
       JSON.stringify(
-        { name: "@openclaw/diffs", openclaw: { extensions: ["./index.js"] } },
+        { name: "@openclaw/diffs", evox: { extensions: ["./index.js"] } },
         null,
         2,
       ),
@@ -243,7 +243,7 @@ describe("stageBundledPluginRuntime", () => {
       JSON.stringify(
         {
           name: "@openclaw/demo",
-          openclaw: {
+          evox: {
             extensions: ["./main.js"],
             setupEntry: "./setup.js",
             startup: {

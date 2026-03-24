@@ -1,12 +1,12 @@
 ---
-summary: "Deploy OpenClaw on Render with Infrastructure-as-Code"
+summary: "Deploy EVOX.sh on Render with Infrastructure-as-Code"
 read_when:
-  - Deploying OpenClaw to Render
+  - Deploying EVOX.sh to Render
   - You want a declarative cloud deploy with Render Blueprints
 title: "Render"
 ---
 
-Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy EVOX.sh on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yam
 
 ## Deploy with a Render Blueprint
 
-[Deploy to Render](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/sonpiaz/evox-sh)
 
 Clicking this link will:
 
@@ -27,12 +27,12 @@ Once deployed, your service URL follows the pattern `https://<service-name>.onre
 ## Understanding the Blueprint
 
 Render Blueprints are YAML files that define your infrastructure. The `render.yaml` in this
-repository configures everything needed to run OpenClaw:
+repository configures everything needed to run EVOX.sh:
 
 ```yaml
 services:
   - type: web
-    name: openclaw
+    name: evox
     runtime: docker
     plan: starter
     healthCheckPath: /health
@@ -99,7 +99,7 @@ Modify variables in **Dashboard → your service → Environment**. Changes trig
 
 ### Auto-deploy
 
-If you use the original OpenClaw repository, Render will not auto-deploy your OpenClaw. To update it, run a manual Blueprint sync from the dashboard.
+If you use the original EVOX.sh repository, Render will not auto-deploy your EVOX.sh. To update it, run a manual Blueprint sync from the dashboard.
 
 ## Custom domain
 
@@ -115,17 +115,17 @@ Render supports horizontal and vertical scaling:
 - **Vertical**: Change the plan to get more CPU/RAM
 - **Horizontal**: Increase instance count (Standard plan and above)
 
-For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
+For EVOX.sh, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
 
 ## Backups and migration
 
 Export your configuration and workspace at any time using the shell access in the Render Dashboard:
 
 ```bash
-openclaw backup create
+evox backup create
 ```
 
-This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
+This creates a portable backup archive you can restore on any EVOX.sh host. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
 
@@ -143,7 +143,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export your config via `openclaw backup create` in the Render shell.
+regularly export your config via `evox backup create` in the Render shell.
 
 ### Health check failures
 
@@ -156,4 +156,4 @@ Render expects a 200 response from `/health` within 30 seconds. If builds succee
 
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
-- Keep OpenClaw up to date: [Updating](/install/updating)
+- Keep EVOX.sh up to date: [Updating](/install/updating)

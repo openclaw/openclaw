@@ -87,14 +87,14 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
   if (process.platform !== "darwin") {
     return;
   }
-  await removePath("/Applications/OpenClaw.app", runtime, {
+  await removePath("/Applications/EVOX.sh.app", runtime, {
     dryRun,
-    label: "/Applications/OpenClaw.app",
+    label: "/Applications/EVOX.sh.app",
   });
 }
 
 function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
+  runtime.log(`Recommended first: ${formatCliCommand("evox backup create")}`);
 }
 
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
@@ -125,7 +125,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
         {
           value: "app",
           label: "macOS app",
-          hint: "/Applications/OpenClaw.app",
+          hint: "/Applications/EVOX.sh.app",
         },
       ],
       initialValues: ["service", "state", "workspace"],

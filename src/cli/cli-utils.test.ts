@@ -21,8 +21,8 @@ describe("waitForever", () => {
 describe("shouldSkipRespawnForArgv", () => {
   it("skips respawn for help/version calls", () => {
     const cases = [
-      ["node", "openclaw", "--help"],
-      ["node", "openclaw", "-V"],
+      ["node", "evox", "--help"],
+      ["node", "evox", "-V"],
     ] as const;
     for (const argv of cases) {
       expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
@@ -30,7 +30,7 @@ describe("shouldSkipRespawnForArgv", () => {
   });
 
   it("keeps respawn path for normal commands", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "status"])).toBe(false);
+    expect(shouldSkipRespawnForArgv(["node", "evox", "status"])).toBe(false);
   });
 });
 
