@@ -70,6 +70,7 @@ describe("isSameOpenClawStableFamily", () => {
 describe("shouldWarnOnTouchedVersion", () => {
   it("skips same-base stable families", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.23-1")).toBe(false);
+    expect(shouldWarnOnTouchedVersion("2026.3.23-1", "2026.3.23-2")).toBe(false);
   });
 
   it("skips same-base prerelease configs when current is newer", () => {
@@ -79,5 +80,6 @@ describe("shouldWarnOnTouchedVersion", () => {
   it("warns when the touched config is newer", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23")).toBe(true);
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.24")).toBe(true);
+    expect(shouldWarnOnTouchedVersion("2026.3.23", "2027.1.1")).toBe(true);
   });
 });
