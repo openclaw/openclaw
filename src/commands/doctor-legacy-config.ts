@@ -12,6 +12,7 @@ import {
 } from "../config/discord-preview-streaming.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { DEFAULT_TALK_PROVIDER, normalizeTalkSection } from "../config/talk.js";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -580,7 +581,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     if (!hasGoogleApiKey && legacyApiKey) {
       rawGoogle.apiKey = legacyApiKey;
       if (!rawGoogle.baseUrl) {
-        rawGoogle.baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+        rawGoogle.baseUrl = DEFAULT_GOOGLE_API_BASE_URL;
       }
       if (!Array.isArray(rawGoogle.models)) {
         rawGoogle.models = [];
