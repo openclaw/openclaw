@@ -277,6 +277,11 @@ describe("executeSlashCommand directives", () => {
           },
         };
       }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-5-mini", provider: "openai" }],
+        };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
 
@@ -287,10 +292,11 @@ describe("executeSlashCommand directives", () => {
       "gpt-5-mini",
     );
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
       key: "main",
       model: "gpt-5-mini",
     });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",
       value: "openai/gpt-5-mini",
