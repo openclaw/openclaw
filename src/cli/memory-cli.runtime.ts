@@ -473,7 +473,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       }
     }
     if (status.fallback) {
-      lines.push(`${label("Fallback")} ${warn(`${status.fallback.from} — ${status.fallback.reason}`)}`);
+      lines.push(
+        `${label("Fallback")} ${warn(`${status.fallback.from} — ${status.fallback.reason}`)}`,
+      );
     }
     if (providerUnavailableReason) {
       lines.push(`${label("Provider issue")} ${warn(providerUnavailableReason)}`);
