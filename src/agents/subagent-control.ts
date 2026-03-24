@@ -29,6 +29,7 @@ import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
+  getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -523,7 +524,7 @@ export async function killControlledSubagentRun(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
@@ -814,7 +815,7 @@ export async function sendControlledSubagentMessage(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
