@@ -160,6 +160,29 @@ describe("tinyfish automation tool", () => {
     expect(fetchWithGuard).not.toHaveBeenCalled();
   });
 
+  it("rejects TinyFish base URLs with embedded credentials", async () => {
+    const fetchWithGuard = vi.fn();
+    const tool = createTinyFishTool(
+      createApi({
+        apiKey: "config-key",
+        baseUrl: "https://user:pass@proxy.example/api",
+      }),
+      {
+        fetchWithGuard,
+        env: {},
+        resolveHostname: allowPublicHostname(),
+      },
+    );
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://example.com",
+        goal: "Collect the pricing table",
+      }),
+    ).rejects.toThrow(/embedded credentials/);
+    expect(fetchWithGuard).not.toHaveBeenCalled();
+  });
+
   it("points missing-key errors at plugins.entries.tinyfish.config.apiKey", async () => {
     const tool = createTinyFishTool(createApi(), {
       fetchWithGuard: vi.fn(),

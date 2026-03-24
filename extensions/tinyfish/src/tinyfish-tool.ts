@@ -87,6 +87,11 @@ function buildBaseUrl(rawBaseUrl: unknown): string {
       "TinyFish base URL must use http or https. Check plugins.entries.tinyfish.config.baseUrl.",
     );
   }
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "TinyFish base URL must not include embedded credentials. Check plugins.entries.tinyfish.config.baseUrl.",
+    );
+  }
   if (parsed.search || parsed.hash) {
     throw new Error(
       "TinyFish base URL must not include query parameters or fragments. Check plugins.entries.tinyfish.config.baseUrl.",
