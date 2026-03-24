@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 95,
+            "line": 98,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
