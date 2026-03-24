@@ -900,8 +900,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       action: "patch",
       sessionKey: target.canonicalKey ?? key,
       context: {
-        sessionEntry: applied.entry,
-        patch: p,
+        sessionEntry: { ...applied.entry },
+        patch: { ...p },
         cfg,
       },
       timestamp: new Date(),
