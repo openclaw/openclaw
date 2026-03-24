@@ -534,7 +534,7 @@ function stemFromRelativePath(relativePath) {
 function describeSeamKinds(relativePath, source) {
   const seamKinds = [];
   const isReplyDeliveryPath =
-    /reply-delivery|reply-dispatcher|reply\/.*delivery|monitor\/(?:replies|deliver)|outbound\/deliver|outbound\/message/.test(
+    /reply-delivery|reply-dispatcher|deliver-reply|reply\/.*delivery|monitor\/(?:replies|deliver)|outbound\/deliver|outbound\/message/.test(
       relativePath,
     );
   const isChannelMediaAdapterPath =
@@ -604,6 +604,18 @@ function escapeForRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function hasExecutableImportReference(source, importPath) {
+  const escapedImportPath = escapeForRegExp(importPath);
+  const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
+  const patterns = [
+    new RegExp(String.raw`\bfrom\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\bimport\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\brequire\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]\s*\)`),
+    new RegExp(String.raw`\bimport\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]\s*\)`),
+  ];
+  return patterns.some((pattern) => pattern.test(source));
+}
+
 function matchQualityRank(quality) {
   switch (quality) {
     case "exact-stem":
@@ -640,10 +652,7 @@ function findRelatedTests(relativePath, testIndex) {
         : path.posix.relative(entryDir, stem).startsWith(".")
           ? path.posix.relative(entryDir, stem)
           : `./${path.posix.relative(entryDir, stem)}`;
-    const directImportPattern = new RegExp(
-      `["'\`]${escapeForRegExp(importPath)}(?:\\.[^"'\\\`]+)?["'\`]`,
-    );
-    if (directImportPattern.test(entry.source)) {
+    if (hasExecutableImportReference(entry.source, importPath)) {
       return [{ file: entry.relativePath, matchQuality: "direct-import" }];
     }
     if (entryDir === normalizedDir && baseTokens.size > 0) {
