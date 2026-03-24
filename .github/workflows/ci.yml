@@ -110,6 +110,8 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
+    env:
+      PRE_COMMIT_CACHE_KEY_SUFFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -157,7 +159,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.PRE_COMMIT_CACHE_KEY_SUFFIX }}
+          restore-keys: |
+            pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-
 
       - name: Install pre-commit
         run: |
@@ -287,11 +291,10 @@ jobs:
             task: extensions
             command: pnpm test:extensions
           - runtime: node
-            task: contracts
-            command: pnpm test:contracts
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
+            task: contracts-protocol
+            command: |
+              pnpm test:contracts
+              pnpm protocol:check
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -442,7 +445,8 @@ jobs:
   # Types, lint, and format check.
   check:
     name: "check"
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: [scope]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -452,57 +456,22 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Detect docs-only changes
-        id: docs_scope
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          FETCH_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$BASE_SHA" ] && ! [[ "$BASE_SHA" =~ ^0+$ ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
-            if [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]] && git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
-              git fetch --no-tags origin -- "$FETCH_REF" || true
-            fi
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || echo "UNKNOWN")
-          if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          NON_DOCS=$(echo "$CHANGED" | grep -vE '^docs/|\.md$|\.mdx$' || true)
-          if [ -z "$NON_DOCS" ]; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-            echo "Docs-only change detected; skipping heavy checks."
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
-        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pnpm check
 
       - name: Strict TS build smoke
-        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pnpm build:strict-smoke
-
-      - name: Skip docs-only change
-        if: steps.docs_scope.outputs.docs_only == 'true'
-        run: echo "Docs-only change detected; skipping check job payload."
 
   check-additional:
     name: "check-additional"
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: [scope]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -512,37 +481,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Detect docs-only changes
-        id: docs_scope
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          FETCH_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$BASE_SHA" ] && ! [[ "$BASE_SHA" =~ ^0+$ ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
-            if [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]] && git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
-              git fetch --no-tags origin -- "$FETCH_REF" || true
-            fi
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || echo "UNKNOWN")
-          if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          NON_DOCS=$(echo "$CHANGED" | grep -vE '^docs/|\.md$|\.mdx$' || true)
-          if [ -z "$NON_DOCS" ]; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-            echo "Docs-only change detected; skipping heavy checks."
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
@@ -550,54 +489,46 @@ jobs:
 
       - name: Run plugin extension boundary guard
         id: plugin_extension_boundary
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:plugins:no-extension-imports
 
       - name: Run web search provider boundary guard
         id: web_search_provider_boundary
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:web-search-provider-boundaries
 
       - name: Run extension src boundary guard
         id: extension_src_outside_plugin_sdk_boundary
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:extensions:no-src-outside-plugin-sdk
 
       - name: Run extension plugin-sdk-internal guard
         id: extension_plugin_sdk_internal_boundary
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:extensions:no-plugin-sdk-internal
 
       - name: Enforce safe external URL opening policy
         id: no_raw_window_open
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Run gateway watch regression harness
         id: gateway_watch_regression
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm test:gateway:watch-regression
 
       - name: Check config docs drift statefile
         id: config_docs_drift
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm config:docs:check
 
       - name: Check plugin SDK API baseline drift
         id: plugin_sdk_api_drift
-        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm plugin-sdk:api:check
 
       - name: Upload gateway watch regression artifacts
-        if: always() && steps.docs_scope.outputs.docs_only != 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: gateway-watch-regression
@@ -605,7 +536,7 @@ jobs:
           retention-days: 7
 
       - name: Fail if any additional check failed
-        if: always() && steps.docs_scope.outputs.docs_only != 'true'
+        if: always()
         env:
           PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
           WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
@@ -635,10 +566,6 @@ jobs:
           done
 
           exit "$failures"
-
-      - name: Skip docs-only change
-        if: steps.docs_scope.outputs.docs_only == 'true'
-        run: echo "Docs-only change detected; skipping check-additional job payload."
 
   build-smoke:
     name: "build-smoke"
