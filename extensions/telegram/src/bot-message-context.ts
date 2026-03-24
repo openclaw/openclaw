@@ -307,6 +307,17 @@ export const buildTelegramMessageContext = async ({
       mainSessionKey: route.mainSessionKey,
     }),
   };
+  if (!isGroup) {
+    logger.info(
+      {
+        chatId,
+        senderId,
+        agentId: route.agentId,
+        sessionKey,
+      },
+      "telegram dm routed",
+    );
+  }
   // Compute requireMention after access checks and final route selection.
   const activationOverride = resolveGroupActivation({
     chatId,

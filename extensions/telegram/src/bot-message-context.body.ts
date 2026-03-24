@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../../../src/agents/agent-scope.js";
 import {
   buildMentionRegexes,
   formatLocationText,
@@ -38,6 +41,74 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+
+const MESSAGE_ARCHIVE_NON_ALNUM_RE = /[^a-z0-9._+-]+/g;
+
+function sanitizeMessageArchiveSlug(value: string): string {
+  const slug = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(MESSAGE_ARCHIVE_NON_ALNUM_RE, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "unknown";
+}
+
+async function appendSkippedGroupMessageArchive(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  chatId: number | string;
+  resolvedThreadId?: number;
+  msg: TelegramContext["message"];
+  senderId: string;
+  rawBody: string;
+}): Promise<void> {
+  const workspaceDir =
+    resolveAgentWorkspaceDir(params.cfg, params.agentId ?? "main") ??
+    params.cfg.agents?.defaults?.workspace;
+  if (!workspaceDir) {
+    return;
+  }
+  const peerId = buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId);
+  const archiveDir = path.join(
+    workspaceDir,
+    "logs",
+    "message-archive-raw",
+    "telegram",
+    "group",
+    sanitizeMessageArchiveSlug(peerId),
+  );
+  await fs.mkdir(archiveDir, { recursive: true });
+  const timestampMs =
+    typeof params.msg.date === "number" && Number.isFinite(params.msg.date)
+      ? params.msg.date * 1000
+      : Date.now();
+  const timestamp = new Date(timestampMs);
+  const entry = {
+    source: "mention-skip",
+    timestamp_utc: timestamp.toISOString(),
+    timestamp_local: timestamp.toISOString(),
+    local_date: timestamp.toLocaleDateString("en-CA"),
+    local_time: timestamp.toTimeString().slice(0, 8),
+    workspace: workspaceDir,
+    agent_id: params.agentId ?? "main",
+    channel: "telegram",
+    chat_type: "group",
+    peer_id: peerId,
+    conversation_label: params.msg.chat.title ?? peerId,
+    conversation_slug: sanitizeMessageArchiveSlug(peerId),
+    message_id:
+      typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+    role: "user",
+    speaker_name: buildSenderLabel(params.msg, params.senderId || params.chatId),
+    speaker_id: params.senderId || undefined,
+    text: params.rawBody,
+  };
+  await fs.appendFile(
+    path.join(archiveDir, `${entry.local_date}.jsonl`),
+    `${JSON.stringify(entry)}\n`,
+    "utf8",
+  );
+}
 
 export type TelegramInboundBodyResult = {
   bodyText: string;
@@ -247,6 +318,17 @@ export async function resolveTelegramInboundBody(params: {
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+    await appendSkippedGroupMessageArchive({
+      cfg,
+      agentId: routeAgentId,
+      chatId,
+      resolvedThreadId,
+      msg,
+      senderId,
+      rawBody,
+    }).catch((err) => {
+      logVerbose(`telegram: failed to archive skipped group message: ${String(err)}`);
+    });
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,
       historyKey: historyKey ?? "",

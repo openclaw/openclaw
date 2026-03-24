@@ -87,6 +87,9 @@ type PendingOutboundMessageId = {
 
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
+const STALE_MESSAGE_MAX_AGE_MS = 5 * 60 * 1000;
+const DUPLICATE_GUID_TTL_MS = 10 * 60 * 1000;
+const recentInboundMessageKeys = new Map<string, number>();
 
 function trimOrUndefined(value?: string | null): string | undefined {
   const trimmed = value?.trim();
@@ -245,6 +248,44 @@ function prunePendingOutboundMessageIds(now = Date.now()): void {
       pendingOutboundMessageIds.splice(i, 1);
     }
   }
+}
+
+function pruneRecentInboundMessageKeys(now = Date.now()): void {
+  const cutoff = now - DUPLICATE_GUID_TTL_MS;
+  for (const [key, seenAt] of recentInboundMessageKeys.entries()) {
+    if (seenAt < cutoff) {
+      recentInboundMessageKeys.delete(key);
+    }
+  }
+}
+
+function _isStaleMessage(message: NormalizedWebhookMessage, now = Date.now()): boolean {
+  const timestamp = typeof message.timestamp === "number" ? message.timestamp : undefined;
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return false;
+  }
+  return now - timestamp > STALE_MESSAGE_MAX_AGE_MS;
+}
+
+function _isDuplicateGuid(message: NormalizedWebhookMessage, now = Date.now()): boolean {
+  const messageId = message.messageId?.trim();
+  const chatGuid = message.chatGuid?.trim();
+  const chatIdentifier = message.chatIdentifier?.trim();
+  const chatId = typeof message.chatId === "number" ? String(message.chatId) : "";
+  const timestamp = typeof message.timestamp === "number" ? String(message.timestamp) : "";
+  const senderId = message.senderId?.trim() ?? "";
+  const fingerprint = [messageId, chatGuid, chatIdentifier, chatId, timestamp, senderId]
+    .filter(Boolean)
+    .join("|");
+  if (!fingerprint) {
+    return false;
+  }
+  pruneRecentInboundMessageKeys(now);
+  if (recentInboundMessageKeys.has(fingerprint)) {
+    return true;
+  }
+  recentInboundMessageKeys.set(fingerprint, now);
+  return false;
 }
 
 function rememberPendingOutboundMessageId(entry: {
@@ -679,6 +720,23 @@ export async function processMessage(
         });
       }
     }
+    return;
+  }
+
+  if (_isStaleMessage(message)) {
+    logVerbose(
+      core,
+      runtime,
+      `drop: stale inbound message sender=${message.senderId} messageId=${message.messageId ?? ""}`,
+    );
+    return;
+  }
+  if (_isDuplicateGuid(message)) {
+    logVerbose(
+      core,
+      runtime,
+      `drop: duplicate inbound message sender=${message.senderId} messageId=${message.messageId ?? ""}`,
+    );
     return;
   }
 

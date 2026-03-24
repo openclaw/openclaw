@@ -21,6 +21,9 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
+const RECENT_COLLECT_BATCH_KEYS = new Map<string, number>();
+const RECENT_COLLECT_BATCH_TTL_MS = 10 * 60 * 1000;
+const RECENT_COLLECT_BATCH_MAX = 128;
 
 export function rememberFollowupDrainCallback(
   key: string,
@@ -75,6 +78,36 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   };
 }
 
+function pruneRecentCollectBatchKeys(now = Date.now()): void {
+  const cutoff = now - RECENT_COLLECT_BATCH_TTL_MS;
+  for (const [key, seenAt] of RECENT_COLLECT_BATCH_KEYS.entries()) {
+    if (seenAt < cutoff) {
+      RECENT_COLLECT_BATCH_KEYS.delete(key);
+    }
+  }
+  while (RECENT_COLLECT_BATCH_KEYS.size > RECENT_COLLECT_BATCH_MAX) {
+    const first = RECENT_COLLECT_BATCH_KEYS.keys().next();
+    if (first.done) {
+      break;
+    }
+    RECENT_COLLECT_BATCH_KEYS.delete(first.value);
+  }
+}
+
+function buildRecentCollectBatchKey(items: FollowupRun[]): string {
+  return items
+    .map((item) =>
+      [
+        item.prompt ?? "",
+        item.originatingChannel ?? "",
+        item.originatingTo ?? "",
+        item.originatingAccountId ?? "",
+        item.originatingThreadId ?? "",
+      ].join("|"),
+    )
+    .join("\n---\n");
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -120,6 +153,15 @@ export function scheduleFollowupDrain(
           if (!run) {
             break;
           }
+          const collectBatchKey = buildRecentCollectBatchKey(items);
+          pruneRecentCollectBatchKeys();
+          if (collectBatchKey && RECENT_COLLECT_BATCH_KEYS.has(collectBatchKey)) {
+            queue.items.splice(0, items.length);
+            if (summary) {
+              clearQueueSummaryState(queue);
+            }
+            continue;
+          }
 
           const routing = resolveOriginRoutingMetadata(items);
 
@@ -135,6 +177,9 @@ export function scheduleFollowupDrain(
             enqueuedAt: Date.now(),
             ...routing,
           });
+          if (collectBatchKey) {
+            RECENT_COLLECT_BATCH_KEYS.set(collectBatchKey, Date.now());
+          }
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);

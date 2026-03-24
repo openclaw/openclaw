@@ -909,6 +909,18 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning,
       oversizeLogMessage,
     } = params;
+    const isGroupChat = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+    const effectiveRequireMention =
+      (topicConfig as { requireMention?: boolean } | undefined)?.requireMention ??
+      (groupConfig as { requireMention?: boolean } | undefined)?.requireMention;
+    const inboundText = getTelegramTextParts(msg).text.trim();
+    if (!isGroupChat) {
+      runtime.log?.(
+        `telegram dm ingress chat=${chatId} sender=${msg.from?.id ?? "unknown"} message=${msg.message_id}`,
+      );
+    }
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
@@ -1005,6 +1017,17 @@ export const registerTelegramHandlers = ({
         };
         mediaGroupBuffer.set(mediaGroupId, entry);
       }
+      return;
+    }
+
+    if (
+      isGroupChat &&
+      effectiveRequireMention === true &&
+      !inboundText &&
+      hasInboundMedia(msg) &&
+      !hasReplyTargetMedia(msg)
+    ) {
+      logVerbose("telegram: early skip media-only msg in requireMention group");
       return;
     }
 
