@@ -353,6 +353,8 @@ export function chunkMarkdown(
   let currentChars = 0;
   // Heading stack for carrying parent headings into subsections (fix #7)
   let headingStack: string[] = [];
+  // Track the line number of each heading for 1-indexed line metadata
+  const headingLineNos = new Map<string, number>();
 
   const flush = () => {
     if (current.length === 0) {
@@ -375,7 +377,7 @@ export function chunkMarkdown(
     });
   };
 
-  const carryOverlap = (prependHeading?: string) => {
+  const carryOverlap = (prependHeading?: string, prependLineNo?: number) => {
     if (overlapChars <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
@@ -396,7 +398,7 @@ export function chunkMarkdown(
     }
     // Fix #8: prepend heading line to overlap for oversized section sub-chunks
     if (prependHeading) {
-      kept.unshift({ line: prependHeading, lineNo: 0 });
+      kept.unshift({ line: prependHeading, lineNo: prependLineNo ?? 1 });
     }
     current = kept;
     currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
@@ -426,13 +428,15 @@ export function chunkMarkdown(
       // Always update heading stack for parent tracking (fix #7)
       const headingLevel = (line.match(/^#+/) ?? [""])[0].length;
       headingStack = headingStack.slice(0, headingLevel - 1);
-      headingStack.push(line.trim());
+      const trimmedHeading = line.trim();
+      headingStack.push(trimmedHeading);
+      headingLineNos.set(trimmedHeading, lineNo);
 
       if (current.length > 0) {
         flush();
         // Fix #6: do NOT carry overlap on heading-triggered flush (avoids defeating heading boundary)
         // Fix #7: prepend parent headings to next chunk
-        current = headingStack.map((h) => ({ line: h, lineNo: 0 }));
+        current = headingStack.map((h) => ({ line: h, lineNo: headingLineNos.get(h) ?? 1 }));
         currentChars = current.reduce((sum, entry) => sum + entry.line.length + 1, 0);
         // Skip normal segment processing — heading already added via stack
         continue;
@@ -457,7 +461,10 @@ export function chunkMarkdown(
         const headingToPrepend = headingAware && headingStack.length > 0
           ? headingStack[headingStack.length - 1]
           : undefined;
-        carryOverlap(headingToPrepend);
+        const headingLineNoToPrepend = headingToPrepend
+          ? headingLineNos.get(headingToPrepend)
+          : undefined;
+        carryOverlap(headingToPrepend, headingLineNoToPrepend);
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;
