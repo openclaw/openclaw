@@ -73,6 +73,9 @@ describe("sandbox explain command", () => {
       const parsed = JSON.parse(out);
       // The session key should have been normalized to agent-scoped format.
       expect(parsed.sessionKey).toBe("agent:main:telegram:slash:200");
+      // Core bug: channel must be inferred correctly and config must allow it.
+      expect(parsed.elevated.channel).toBe("telegram");
+      expect(parsed.elevated.allowedByConfig).toBe(true);
     },
   );
 
