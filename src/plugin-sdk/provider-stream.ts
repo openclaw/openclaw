@@ -143,6 +143,7 @@ export function buildProviderStreamFamilyHooks(
 
 // Public stream-wrapper helpers for provider plugins.
 
+export { createAepHeadersWrapper } from "../agents/pi-embedded-runner/aep-stream-wrapper.js";
 export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
