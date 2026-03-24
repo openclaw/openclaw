@@ -109,6 +109,19 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
+        name: "migrate",
+        description: "Export and import OpenClaw state for cross-device migration",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.migrate.js");
+      mod.registerMigrateCommand(program);
+    },
+  },
+  {
+    commands: [
+      {
         name: "doctor",
         description: "Health checks + quick fixes for the gateway and channels",
         hasSubcommands: false,
