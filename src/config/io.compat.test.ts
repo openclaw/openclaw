@@ -196,7 +196,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("still warns for same-base prerelease configs", async () => {
+  it("does not warn for same-base prerelease configs when current version is newer", async () => {
     const parsedVersion = parseOpenClawVersion(VERSION);
     if (!parsedVersion) {
       throw new Error(`Unable to parse VERSION: ${VERSION}`);
@@ -225,8 +225,8 @@ describe("config io paths", () => {
 
       io.loadConfig();
 
-      expect(logger.warn).toHaveBeenCalledWith(
-        `Config was last written by a newer OpenClaw (${touchedVersion}); current version is ${VERSION}.`,
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("Config was last written by a newer OpenClaw"),
       );
       expect(io.configPath).toBe(configPath);
     });
