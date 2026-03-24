@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.fn();
 const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
@@ -75,11 +75,14 @@ function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGrou
 }
 
 describe("buildTelegramMessageContext audio transcript body", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    transcribeFirstAudioMock.mockReset();
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
+  });
+
+  beforeEach(() => {
+    transcribeFirstAudioMock.mockReset();
   });
 
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {

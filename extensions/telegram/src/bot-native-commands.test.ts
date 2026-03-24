@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
@@ -86,9 +86,12 @@ function resolveDeliverRepliesCalls() {
 }
 
 describe("registerTelegramNativeCommands", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+  });
+
+  beforeEach(() => {
     skillCommandMocks.listSkillCommandsForAgents.mockClear();
     skillCommandMocks.listSkillCommandsForAgents.mockReturnValue([]);
     deliveryMocks.deliverReplies.mockClear();
