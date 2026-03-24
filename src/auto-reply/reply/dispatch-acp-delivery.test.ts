@@ -42,6 +42,26 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
+  it("bypasses TTS when skipTts is requested", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello" });
+  });
+
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
     const coordinator = createCoordinator(onReplyStart);
