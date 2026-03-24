@@ -273,6 +273,8 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+const USER_ATTACHED_IMAGE_PLACEHOLDER = "[user attached an image]";
+
 function stringifyUserMessageContentForPrompt(message: AgentMessage): string {
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -296,7 +298,7 @@ function stringifyUserMessageContentForPrompt(message: AgentMessage): string {
       continue;
     }
     if (typedBlock.type === "image") {
-      chunks.push("[user attached an image]");
+      chunks.push(USER_ATTACHED_IMAGE_PLACEHOLDER);
     }
   }
 
@@ -333,6 +335,28 @@ function dedupeImageContents(images: ImageContent[]): ImageContent[] {
     deduped.push(image);
   }
   return deduped;
+}
+
+function normalizeRetryPromptEchoText(text: string | undefined): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== USER_ATTACHED_IMAGE_PLACEHOLDER)
+    .join("\n")
+    .trim();
+}
+
+export function mergeRecoveredPromptImages(
+  currentImages: ImageContent[] | undefined,
+  recoveredImages: ImageContent[],
+): ImageContent[] | undefined {
+  if (recoveredImages.length === 0) {
+    return currentImages;
+  }
+  return dedupeImageContents([...recoveredImages, ...(currentImages ?? [])]);
 }
 
 type SessionLeafEntryLike = {
@@ -394,11 +418,11 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
   }
 
   const normalizedPromptCandidates = new Set<string>();
-  const normalizedPrompt = params.prompt.trim();
+  const normalizedPrompt = normalizeRetryPromptEchoText(params.prompt);
   if (normalizedPrompt) {
     normalizedPromptCandidates.add(normalizedPrompt);
   }
-  const normalizedRawPrompt = params.rawPrompt?.trim();
+  const normalizedRawPrompt = normalizeRetryPromptEchoText(params.rawPrompt);
   if (normalizedRawPrompt) {
     normalizedPromptCandidates.add(normalizedRawPrompt);
   }
@@ -407,7 +431,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   if (normalizedPromptCandidates.size > 0) {
-    const newestRecoveredEntry = orphanedUserCarryForward[0]?.trim();
+    const newestRecoveredEntry = normalizeRetryPromptEchoText(orphanedUserCarryForward[0]);
     // Only strip a prompt echo when the newest orphaned turn is the same message
     // the user is currently retrying. Older matching turns are real history.
     if (newestRecoveredEntry && normalizedPromptCandidates.has(newestRecoveredEntry)) {
@@ -1595,10 +1619,7 @@ export async function runEmbeddedAttempt(
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
-            existingImages:
-              recoveredPromptImages.length > 0
-                ? dedupeImageContents([...(params.images ?? []), ...recoveredPromptImages])
-                : params.images,
+            existingImages: mergeRecoveredPromptImages(params.images, recoveredPromptImages),
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,

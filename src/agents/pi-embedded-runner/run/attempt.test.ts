@@ -10,6 +10,7 @@ import {
   buildAfterTurnRuntimeContext,
   buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
+  mergeRecoveredPromptImages,
   persistSessionsYieldContextMessage,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
@@ -569,6 +570,62 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     expect(result.recoveredImages).toEqual([
       { type: "image", data: "older", mimeType: "image/png" },
       { type: "image", data: "newer", mimeType: "image/png" },
+    ]);
+  });
+
+  it("treats image placeholder retries as the same newest orphaned prompt", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "image", data: "img-1", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "describe this",
+      replaceMessages: vi.fn(),
+    });
+
+    expect(result).toEqual({
+      prompt: "describe this",
+      recoveredCount: 1,
+      mergedCount: 0,
+      recoveredImages: [{ type: "image", data: "img-1", mimeType: "image/png" }],
+    });
+  });
+
+  it("prepends recovered prompt images ahead of current retry images", () => {
+    const result = mergeRecoveredPromptImages(
+      [{ type: "image", data: "current", mimeType: "image/png" }],
+      [
+        { type: "image", data: "older", mimeType: "image/png" },
+        { type: "image", data: "current", mimeType: "image/png" },
+      ],
+    );
+
+    expect(result).toEqual([
+      { type: "image", data: "older", mimeType: "image/png" },
+      { type: "image", data: "current", mimeType: "image/png" },
     ]);
   });
 
