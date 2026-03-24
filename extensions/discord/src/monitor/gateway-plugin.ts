@@ -1,8 +1,9 @@
+import type { EventEmitter } from "node:events";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
@@ -218,6 +219,39 @@ function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: u
   };
 }
 
+/**
+ * Wraps a WebSocket to catch errors thrown by event handlers (particularly the
+ * 'close' event) and convert them to 'error' events. This prevents Carbon's
+ * GatewayPlugin from crashing the process when it throws "Max reconnect attempts"
+ * errors instead of emitting them.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/53644
+ */
+function wrapWebSocketWithErrorGuard(ws: WebSocket): WebSocket {
+  const emitter = ws as EventEmitter;
+  const originalEmit = emitter.emit.bind(emitter);
+
+  emitter.emit = function wrappedEmit(eventName: string | symbol, ...args: unknown[]) {
+    if (eventName === "close") {
+      try {
+        return originalEmit(eventName, ...args);
+      } catch (error) {
+        logVerbose(`discord gateway: caught thrown error during WebSocket close: ${String(error)}`);
+        // Convert the thrown error to an emitted 'error' event so existing
+        // error handling in provider.lifecycle.ts can process it gracefully.
+        // Use setImmediate to avoid re-entrancy issues with emit.
+        setImmediate(() => {
+          originalEmit("error", error);
+        });
+        return true;
+      }
+    }
+    return originalEmit(eventName, ...args);
+  } as typeof emitter.emit;
+
+  return ws;
+}
+
 function createGatewayPlugin(params: {
   options: {
     reconnect: { maxAttempts: number };
@@ -255,10 +289,10 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!params.wsAgent) {
-        return super.createWebSocket(url);
-      }
-      return new WebSocket(url, { agent: params.wsAgent });
+      const ws = params.wsAgent
+        ? new WebSocket(url, { agent: params.wsAgent })
+        : super.createWebSocket(url);
+      return wrapWebSocketWithErrorGuard(ws as WebSocket);
     }
   }
 
@@ -307,3 +341,7 @@ export function createDiscordGatewayPlugin(params: {
     });
   }
 }
+
+export const __gatewayPluginTesting = {
+  wrapWebSocketWithErrorGuard,
+};
