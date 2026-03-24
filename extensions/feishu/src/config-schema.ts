@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { ToolPolicySchema as SharedToolPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
@@ -31,7 +32,10 @@ const ToolPolicySchema = z
 
 const DmConfigSchema = z
   .object({
+    historyLimit: z.number().int().min(0).optional(),
     enabled: z.boolean().optional(),
+    tools: SharedToolPolicySchema,
+    toolsBySender: z.record(z.string(), SharedToolPolicySchema).optional(),
     systemPrompt: z.string().optional(),
   })
   .strict()

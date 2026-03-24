@@ -1,3 +1,4 @@
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -405,7 +406,7 @@ export function resolveChannelGroupToolsPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  if (groupSenderPolicy) {
+  if (groupSenderPolicy && pickSandboxToolPolicy(groupSenderPolicy)) {
     return groupSenderPolicy;
   }
   if (groupConfig?.tools) {
@@ -418,7 +419,7 @@ export function resolveChannelGroupToolsPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  if (defaultSenderPolicy) {
+  if (defaultSenderPolicy && pickSandboxToolPolicy(defaultSenderPolicy)) {
     return defaultSenderPolicy;
   }
   if (defaultConfig?.tools) {

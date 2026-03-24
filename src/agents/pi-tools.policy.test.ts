@@ -7,6 +7,7 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
@@ -270,5 +271,311 @@ describe("resolveEffectiveToolPolicy", () => {
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
+});
+
+describe("resolveGroupToolPolicy", () => {
+  it("applies exact direct-message tool policies before wildcard dm policies", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-owner",
+        messageProvider: "feishu",
+        senderId: "ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-member",
+        messageProvider: "feishu",
+        senderId: "ou-member",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("uses the session directId for dm entry matching and senderId for sender overrides", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-shared": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-shared",
+        messageProvider: "feishu",
+        senderId: "ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-shared",
+        messageProvider: "feishu",
+        senderId: "ou-member",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("falls back from thread directIds to the parent directId", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+        messageProvider: "feishu",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("resolves account-scoped dm session keys from the session key itself", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            ops: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("treats empty account-scoped dms as an explicit override over top-level wildcard dms", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            ops: {
+              dms: {},
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prefers account-scoped dm candidates when account ids are ambiguous with scope kinds", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "direct:ou-owner": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("uses messageProvider or spawnedBy channel hints for per-peer direct session keys", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:direct:ou-owner",
+        messageProvider: "feishu",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:direct:ou-owner",
+        spawnedBy: "agent:main:feishu:direct:ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("keeps explicit Feishu group matches ahead of ambiguous direct fallbacks", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "DIRECT:ABC": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            group: {
+              dms: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:direct:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("falls back to direct policy for ambiguous group keys when only wildcard group rules exist", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            group: {
+              dms: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:direct:abc",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("does not cross over from direct parsing into unrelated group policies", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              groups: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:group:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 });

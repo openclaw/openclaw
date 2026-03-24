@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupToolsPolicy,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -264,5 +268,34 @@ describe("resolveToolsBySender", () => {
     expect(warningSpy.mock.calls[0]?.[1]).toMatchObject({
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
     });
+  });
+});
+
+describe("resolveChannelGroupToolsPolicy", () => {
+  it("falls through to group tools when sender override is empty", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": {},
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "feishu",
+        groupId: "oc_group_1",
+        groupIdCaseInsensitive: true,
+        senderId: "ou-owner",
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 });
