@@ -263,6 +263,7 @@ describe("noteMemorySearchHealth", () => {
     // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
   });
 

@@ -170,7 +170,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -224,7 +224,7 @@ export function collectPublishablePluginPackages(
     const parsedVersion = parseReleaseVersion(version);
     if (parsedVersion === null) {
       validationErrors.push(
-        `${dir.name}: package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${version}".`,
+        `${dir.name}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
       );
       continue;
     }

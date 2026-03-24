@@ -222,7 +222,7 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "channel:dev" });
+    expect(target).toEqual({ channel: "discord", to: "group:dev" });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -274,6 +274,24 @@ describe("sessions_list gating", () => {
     expect(result.details).toMatchObject({
       count: 1,
       sessions: [{ key: MAIN_AGENT_SESSION_KEY }],
+    });
+  });
+
+  it("keeps literal current keys for message previews", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock
+      .mockResolvedValueOnce({
+        path: "/tmp/sessions.json",
+        sessions: [{ key: "current", kind: "direct" }],
+      })
+      .mockResolvedValueOnce({ sessions: [{ key: "current" }] })
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
+
+    await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
+
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "current", limit: 1 },
     });
   });
 });
