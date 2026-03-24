@@ -1069,16 +1069,15 @@ export async function startGatewayServer(
       if (reloadMode === "off" || reloadMode === "restart") {
         return;
       }
+      const snapshot = await readConfigFileSnapshot();
+      if (snapshot.exists && snapshot.valid) {
+        await activateRuntimeSecrets(snapshot.resolved, { reason: "reload", activate: true });
+        return;
+      }
       const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
       if (runtimeSourceConfig) {
         await activateRuntimeSecrets(runtimeSourceConfig, { reason: "reload", activate: true });
-        return;
       }
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.exists || !snapshot.valid) {
-        return;
-      }
-      await activateRuntimeSecrets(snapshot.resolved, { reason: "reload", activate: true });
     };
 
   const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {

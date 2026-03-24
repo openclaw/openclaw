@@ -166,15 +166,22 @@ async function waitForAgentReady(params: {
       typeof params.refreshRuntimeConfigFromDisk === "function"
     ) {
       lastRefreshAtMs = now;
+      const refreshPromise = params.refreshRuntimeConfigFromDisk();
       try {
         await Promise.race([
-          params.refreshRuntimeConfigFromDisk(),
+          refreshPromise,
           delayMs(remainingMsBeforeRefresh).then(() => {
             throw AGENT_READY_TIMEOUT;
           }),
         ]);
       } catch (error) {
         if (error === AGENT_READY_TIMEOUT) {
+          try {
+            await refreshPromise;
+          } catch {
+            // Best-effort: if the refresh itself fails, report the timeout once
+            // the in-flight activation has settled so we don't leave it queued.
+          }
           return { ok: false };
         }
         // Best-effort: transient refresh failures should not prevent retries.

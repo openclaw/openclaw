@@ -699,6 +699,56 @@ describe("agents.create", () => {
       }
     }
   });
+
+  it("waits for an in-flight readiness refresh to settle before timing out", async () => {
+    const previousTimeout = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+    const previousPoll = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = "20";
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = "5";
+    mocks.state.runtimeConfig = null;
+    const refreshControl: { release: (() => void) | null } = { release: null };
+    mocks.refreshRuntimeConfigFromDisk.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          refreshControl.release = resolve;
+        }),
+    );
+    try {
+      const { respond, promise } = makeCall("agents.create", {
+        name: "Slow Refresh Agent",
+        workspace: "/tmp/ws",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(respond).not.toHaveBeenCalled();
+
+      const release = refreshControl.release;
+      if (typeof release !== "function") {
+        throw new Error("expected readiness refresh to start");
+      }
+      release();
+      await promise;
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("created but not yet resolvable"),
+        }),
+      );
+      expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = previousTimeout;
+      }
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = previousPoll;
+      }
+    }
+  });
 });
 
 describe("agents.update", () => {
