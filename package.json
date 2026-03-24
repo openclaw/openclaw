@@ -821,7 +821,7 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.16.2"
+    "node-llama-cpp": "3.18.1"
   },
   "peerDependenciesMeta": {
     "node-llama-cpp": {
