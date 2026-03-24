@@ -18,10 +18,11 @@ vi.mock("./consolidate.js", () => {
   return {
     clusterBySimilarity: vi.fn(),
     mergeFacts: vi.fn(),
+    mergeFactsBatch: vi.fn().mockResolvedValue([]),
   };
 });
 
-import { clusterBySimilarity, mergeFacts } from "./consolidate.js";
+import { clusterBySimilarity, mergeFacts, mergeFactsBatch } from "./consolidate.js";
 
 describe("DreamService (Safe Pulsing Brain)", () => {
   let dreamService: DreamService;
@@ -100,12 +101,7 @@ describe("DreamService (Safe Pulsing Brain)", () => {
     const promptCall = (mockChat.complete as any).mock.calls[0][0][0].content;
 
     // Ensure the prompt string is safely limited.
-    // In GREEN phase we will implement proper chunking, right now it just brutally slices at 10000.
-    // The prompt length should be well under 12k.
     expect(promptCall.length).toBeLessThan(12000);
-
-    // The test to ensure facts are fully extracted without slicing in the middle of a sentence
-    // will be verified implicitly by verifying our new logic groups facts.
   });
 
   test("Anti-Hallucination Guard: refuses to merge distinct graph entities", async () => {
@@ -117,11 +113,11 @@ describe("DreamService (Safe Pulsing Brain)", () => {
     const pads = [1, 2, 3].map((i) => ({ id: `p${i}`, text: `pad ${i}`, category: "other" }));
     mockDb.listAll.mockResolvedValue([fact1, fact2, ...pads]);
 
-    // Mock the clusterer to group them (they are extremely semantically similar)
+    // Mock the clusterer to group them
     (clusterBySimilarity as any).mockReturnValue([[fact1, fact2]]);
-    (mergeFacts as any).mockResolvedValue("Vova and Ivan's favorite pizza is pepperoni");
+    (mergeFactsBatch as any).mockResolvedValue(["Vova and Ivan's favorite pizza is pepperoni"]);
 
-    // Mock GraphDB returning completely distinct entities for each text so there is no overlap at all!
+    // Mock GraphDB returning completely distinct entities
     mockGraph.findEdgesForTexts.mockImplementation((texts: string[]) => {
       if (texts.includes(fact1.text)) return [{ source: "vova", target: "pizza_1" }];
       if (texts.includes(fact2.text)) return [{ source: "ivan", target: "pizza_2" }];
@@ -130,11 +126,7 @@ describe("DreamService (Safe Pulsing Brain)", () => {
 
     await (dreamService as any).tick();
 
-    // The guard inside `consolidateKnowledge` should prevent merging because distinct entities are > 1 (Wait, the original logic checks if size > 5. This test will FAIL, ensuring RED phase highlights the weakness).
-    // In the RED phase, if we expect "Hallucinated Join Guard" to work for 2 entities, we must assert it.
-    // The expectation: mergeFacts is NOT called because they involve distinct entities without shared contextual link, or we strict the size limit.
-    // Let's assert merge is NOT called if there are 2 distinct primary subjects.
-    expect(mergeFacts).not.toHaveBeenCalled();
+    expect(mergeFactsBatch).not.toHaveBeenCalled();
   });
 
   test("Consolidates identical or highly compatible memories successfully", async () => {
@@ -142,25 +134,22 @@ describe("DreamService (Safe Pulsing Brain)", () => {
 
     const fact1 = { id: "1", text: "Vova loves coding in TypeScript", category: "fact" };
     const fact2 = { id: "2", text: "Vova likes programming using TS", category: "fact" };
-    // Add 3 padding facts to pass `all.length < 5`
     const pads = [1, 2, 3].map((i) => ({ id: `p${i}`, text: `pad ${i}`, category: "other" }));
 
     mockDb.listAll.mockResolvedValue([fact1, fact2, ...pads]);
     (clusterBySimilarity as any).mockReturnValue([[fact1, fact2]]);
-    (mergeFacts as any).mockResolvedValue("Vova loves programming in TypeScript");
+    (mergeFactsBatch as any).mockResolvedValue(["Vova loves programming in TypeScript"]);
 
-    mockChat.complete.mockResolvedValue("YES"); // LLM double-check passes
+    mockChat.complete.mockResolvedValue("YES");
 
-    // Mock same entity graph completely overlapping
     mockGraph.findEdgesForTexts.mockImplementation(() => [
       { source: "vova", target: "typescript" },
     ]);
 
     await (dreamService as any).tick();
 
-    expect(mergeFacts).toHaveBeenCalled();
-    expect(mockChat.complete).toHaveBeenCalled(); // verified
-    expect(mockDb.store).toHaveBeenCalled(); // stored combined fact
-    expect(mockDb.delete).toHaveBeenCalledTimes(2); // deleted old facts
+    expect(mergeFactsBatch).toHaveBeenCalled();
+    expect(mockDb.store).toHaveBeenCalled();
+    expect(mockDb.delete).toHaveBeenCalledTimes(2);
   });
 });

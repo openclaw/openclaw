@@ -3,7 +3,7 @@ import { MemoryDB } from "./index.js";
 
 describe("MemoryDB Result Limit", () => {
   test("should respect the limit parameter in search", async () => {
-    // Mock enough data and mock LanceDB calls
+    // Mock enough data
     const mockData = Array.from({ length: 15 }).map((_, i) => ({
       id: `id-1234-abcd-${i}`,
       text: `Mock memory number ${i}`,
@@ -14,23 +14,22 @@ describe("MemoryDB Result Limit", () => {
       recallCount: 0,
     }));
 
+    // Create results object that implements chaining
+    const mockResults = {
+      limit: vi.fn().mockImplementation((n) => ({
+        toArray: vi
+          .fn()
+          .mockResolvedValue(mockData.slice(0, n).map((d) => ({ ...d, _distance: 0.1 }))),
+      })),
+    };
+
     const mockTable = {
-      vectorSearch: vi.fn().mockReturnValue({
-        limit: vi.fn().mockReturnValue({
-          toArray: vi.fn().mockResolvedValue(mockData.map((d) => ({ ...d, _distance: 0.1 }))),
-        }),
-      }),
+      vectorSearch: vi.fn().mockReturnValue(mockResults),
       query: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            toArray: vi.fn().mockResolvedValue(mockData),
-          }),
-        }),
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            toArray: vi.fn().mockResolvedValue(mockData),
-          }),
-        }),
+        select: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockImplementation((n) => ({
+          toArray: vi.fn().mockResolvedValue(mockData.slice(0, n)),
+        })),
       }),
       countRows: vi.fn().mockResolvedValue(15),
     } as any;

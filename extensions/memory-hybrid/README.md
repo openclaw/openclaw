@@ -48,6 +48,7 @@ Standard RAG (Retrieval-Augmented Generation) systems use simple vector similari
 | JSONL Observability Tracer       | ❌             | ✅ (Deep Monitoring) |
 | Prompt injection protection      | ✅             | ✅                   |
 | GDPR-compliant forget            | ✅             | ✅                   |
+| **Background Orchestration**     | ❌             | ✅ (429 Optimizer)   |
 | **Batch Summarization**          | ❌             | ✅ (RPM Optimizer)   |
 
 ### 🧠 7-Channel Hybrid Recall Scoring
@@ -140,7 +141,7 @@ As an open-source `OpenClaw` plugin, installation is simple:
         "config": {
           "embedding": {
             "apiKey": "${GEMINI_API_KEY}",
-            "model": "gemini-embedding-001"
+            "model": "gemini-embedding-002"
           },
           "autoRecall": true,
           "autoCapture": true,
@@ -167,16 +168,16 @@ As an open-source `OpenClaw` plugin, installation is simple:
 
 ### All Config Options
 
-| Option             | Default                      | Description                                                                         |
-| ------------------ | ---------------------------- | ----------------------------------------------------------------------------------- |
-| `embedding.apiKey` | _required_                   | API key (OpenAI or Google)                                                          |
-| `embedding.model`  | `gemini-embedding-001`       | Embedding model (Google, 1K RPD free)                                               |
-| `chatModel`        | auto                         | LLM for graph/capture (auto: `gemma-3-27b-it` for Google, `gpt-4o-mini` for OpenAI) |
-| `dbPath`           | `~/.openclaw/memory/lancedb` | Database path                                                                       |
-| `autoCapture`      | `false`                      | Auto-capture from conversations                                                     |
-| `autoRecall`       | `true`                       | Auto-inject memories into context                                                   |
-| `smartCapture`     | `false`                      | Use LLM for intelligent fact extraction                                             |
-| `captureMaxChars`  | `500`                        | Max message length for capture                                                      |
+| Option             | Default                      | Description                                                            |
+| ------------------ | ---------------------------- | ---------------------------------------------------------------------- |
+| `embedding.apiKey` | _required_                   | API key (OpenAI or Google)                                             |
+| `embedding.model`  | `gemini-embedding-002`       | Latest Google embedding model (768/3072 dims)                          |
+| `chatModel`        | auto                         | LLM for graph/capture (auto: `gemini-3.1-flash-lite` or `gpt-4o-mini`) |
+| `dbPath`           | `~/.openclaw/memory/lancedb` | Database path                                                          |
+| `autoCapture`      | `true`                       | Auto-capture from conversations                                        |
+| `autoRecall`       | `true`                       | Auto-inject memories into context                                      |
+| `smartCapture`     | `true`                       | Use LLM for intelligent fact extraction                                |
+| `captureMaxChars`  | `500`                        | Max message length for capture                                         |
 
 ## Tools
 
@@ -231,7 +232,7 @@ It provides:
 ### 🧊 Dream Service (Background Maintenance)
 
 The `DreamService` runs periodic maintenance (Cleanup, Emotional Profiling, Proactive Questions).
-**SOTA Protection:** Includes atomic guards to prevent multiple instances from running even during plugin restarts, preserving your API quota.
+**Protection:** Includes atomic guards to prevent multiple instances from running even during plugin restarts, preserving your API quota.
 
 ### ⛓️ Candidate Pool Preservation
 
@@ -257,6 +258,6 @@ Unlike standard RAG, BrainClaw preserves a pool of **50-70 candidates** through 
 ## Testing
 
 ```bash
-# Run all 121 SOTA tests
+# Run all core extension tests
 pnpm exec vitest run extensions/memory-hybrid/ --config vitest.extensions.config.ts
 ```
