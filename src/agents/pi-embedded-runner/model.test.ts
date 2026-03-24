@@ -743,6 +743,73 @@ describe("resolveModel", () => {
     });
   });
 
+  it("aligns native Ollama contextWindow with configured num_ctx when unset", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen 3.5 9B",
+                api: "ollama",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 2048,
+                options: {
+                  num_ctx: 32768,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "ollama",
+      contextWindow: 32768,
+    });
+  });
+
+  it("uses the native Ollama request budget when contextWindow is unset", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen 3.5 9B",
+                api: "ollama",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "ollama",
+      contextWindow: 65536,
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.4", () => {
     mockOpenAICodexTemplateModel();
 

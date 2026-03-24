@@ -619,6 +619,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       async (fetchMock) => {
         const streamFn = createConfiguredOllamaStreamFn({
           model: {
+            id: "qwen3:32b",
             options: {
               num_ctx: 32768,
               repeat_penalty: 1.05,
@@ -666,6 +667,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       async (fetchMock) => {
         const streamFn = createConfiguredOllamaStreamFn({
           model: {
+            id: "qwen3:32b",
             options: {
               num_ctx: 32768,
               repeat_penalty: 1.05,
@@ -711,6 +713,54 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 
+  it("does not reuse factory defaults for a different model without options", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {
+            id: "qwen3:32b",
+            options: {
+              num_ctx: 32768,
+              repeat_penalty: 1.05,
+            },
+          },
+          providerBaseUrl: "http://provider-host:11434/v1",
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "llama3.2:3b",
+              api: "ollama",
+              provider: "custom-ollama",
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            undefined as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestBody = JSON.parse(requestInit.body as string) as {
+          options: {
+            num_ctx?: number;
+            repeat_penalty?: number;
+          };
+        };
+
+        expect(requestBody.options).toMatchObject({
+          num_ctx: 65536,
+        });
+        expect(requestBody.options).not.toHaveProperty("repeat_penalty");
+      },
+    );
+  });
+
   it("caps num_ctx and drops unsupported configured options", async () => {
     await withMockNdjsonFetch(
       [
@@ -720,6 +770,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       async (fetchMock) => {
         const streamFn = createConfiguredOllamaStreamFn({
           model: {
+            id: "qwen3:32b",
             options: {
               num_ctx: 999999,
               repeat_penalty: 1.05,
