@@ -616,6 +616,16 @@ function hasExecutableImportReference(source, importPath) {
   return patterns.some((pattern) => pattern.test(source));
 }
 
+function hasModuleMockReference(source, importPath) {
+  const escapedImportPath = escapeForRegExp(importPath);
+  const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
+  const patterns = [
+    new RegExp(String.raw`\bvi\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\bjest\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+  ];
+  return patterns.some((pattern) => pattern.test(source));
+}
+
 function matchQualityRank(quality) {
   switch (quality) {
     case "exact-stem":
@@ -652,7 +662,10 @@ function findRelatedTests(relativePath, testIndex) {
         : path.posix.relative(entryDir, stem).startsWith(".")
           ? path.posix.relative(entryDir, stem)
           : `./${path.posix.relative(entryDir, stem)}`;
-    if (hasExecutableImportReference(entry.source, importPath)) {
+    if (
+      hasExecutableImportReference(entry.source, importPath) &&
+      !hasModuleMockReference(entry.source, importPath)
+    ) {
       return [{ file: entry.relativePath, matchQuality: "direct-import" }];
     }
     if (entryDir === normalizedDir && baseTokens.size > 0) {
