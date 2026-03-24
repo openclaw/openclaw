@@ -1001,6 +1001,63 @@ export function attachGatewayUpgradeHandler(opts: {
       }
 
       const url = new URL(req.url ?? "/", "http://localhost");
+
+      const debugBrowserMatch = url.pathname.match(/^\/api\/debug-browser-(\d+)$/);
+      if (debugBrowserMatch) {
+        // Transparent TCP proxy to Chrome's CDP port based on path.
+        // E.g. /api/debug-browser-18800 proxies to 127.0.0.1:18800
+        const cdpPort = parseInt(debugBrowserMatch[1], 10);
+        try {
+          const cdpHost = "127.0.0.1";
+
+          // Get the actual browser debugger WS path from Chrome
+          const versionRes = await globalThis.fetch(`http://${cdpHost}:${cdpPort}/json/version`);
+          if (!versionRes.ok) {
+            socket.destroy();
+            return;
+          }
+          const versionInfo = (await versionRes.json()) as { webSocketDebuggerUrl?: string };
+          const debuggerUrl = versionInfo.webSocketDebuggerUrl;
+          if (!debuggerUrl) {
+            socket.destroy();
+            return;
+          }
+          // Extract just the path portion (e.g. /devtools/browser/UUID)
+          const wsPath = new URL(debuggerUrl).pathname;
+
+          const net = await import("node:net");
+          const cdpSocket = net.connect(cdpPort, cdpHost, () => {
+            // Rebuild the HTTP upgrade request to forward to Chrome
+            const rawHeaders: string[] = [];
+            for (let i = 0; i < req.rawHeaders.length; i += 2) {
+              const key = req.rawHeaders[i];
+              const val = req.rawHeaders[i + 1];
+              if (key.toLowerCase() === "host") {
+                rawHeaders.push(`Host: ${cdpHost}:${cdpPort}`);
+              } else {
+                rawHeaders.push(`${key}: ${val}`);
+              }
+            }
+            const upgradeRequest = `GET ${wsPath} HTTP/1.1\r\n${rawHeaders.join("\r\n")}\r\n\r\n`;
+            cdpSocket.write(upgradeRequest);
+            if (head.length > 0) {
+              cdpSocket.write(head);
+            }
+            // Bi-directional pipe
+            socket.pipe(cdpSocket);
+            cdpSocket.pipe(socket);
+          });
+
+          cdpSocket.on("error", () => socket.destroy());
+          socket.on("error", () => cdpSocket.destroy());
+          socket.on("close", () => cdpSocket.destroy());
+          cdpSocket.on("close", () => socket.destroy());
+        } catch {
+          socket.destroy();
+        }
+        return;
+      }
+
       if (url.pathname === "/api/debug-vnc") {
         const target = url.searchParams.get("target");
         let host = process.env.OPENCLAW_VNC_HOST || "localhost";
