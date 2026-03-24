@@ -7,6 +7,7 @@ import * as sessions from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
+  killControlledSubagentRun,
   killSubagentRunAdmin,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
@@ -216,6 +217,82 @@ describe("killSubagentRunAdmin", () => {
     } finally {
       updateSessionStoreSpy.mockRestore();
     }
+  });
+});
+
+describe("killControlledSubagentRun", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("does not mutate the live session when the caller passes a stale run entry", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killControlledSubagentRun({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 9_000,
+        startedAt: Date.now() - 8_000,
+      },
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale",
+      sessionKey: childSessionKey,
+      label: "stale task",
+      text: "stale task is already finished.",
+    });
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
+    expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
   });
 });
 
