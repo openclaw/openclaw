@@ -19,7 +19,8 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -35,7 +36,8 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe(expectedMessageId);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
       client: {
@@ -49,6 +51,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       receiveId: "ou_target",
       receiveIdType: "open_id",
     });
+    ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
   });
 
   it("falls back to create for withdrawn post replies", async () => {

@@ -472,6 +472,12 @@ const unitThreadEntries =
     ? [
         {
           name: "unit-threads",
+          env: {
+            OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+              "vitest-unit-threads-include",
+              unitThreadPinnedFiles,
+            ),
+          },
           args: [
             "vitest",
             "run",
@@ -479,7 +485,6 @@ const unitThreadEntries =
             "vitest.unit.config.ts",
             "--pool=threads",
             ...noIsolateArgs,
-            ...unitThreadPinnedFiles,
           ],
         },
       ]

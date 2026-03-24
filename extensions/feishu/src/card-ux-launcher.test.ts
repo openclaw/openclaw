@@ -1,9 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import {
-  createQuickActionLauncherCard,
-  isFeishuQuickActionMenuEventKey,
-  maybeHandleFeishuQuickActionMenu,
-} from "./card-ux-launcher.js";
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -11,9 +6,19 @@ vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
 }));
 
+let createQuickActionLauncherCard: typeof import("./card-ux-launcher.js").createQuickActionLauncherCard;
+let isFeishuQuickActionMenuEventKey: typeof import("./card-ux-launcher.js").isFeishuQuickActionMenuEventKey;
+let maybeHandleFeishuQuickActionMenu: typeof import("./card-ux-launcher.js").maybeHandleFeishuQuickActionMenu;
+
 describe("feishu quick-action launcher", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({
+      createQuickActionLauncherCard,
+      isFeishuQuickActionMenuEventKey,
+      maybeHandleFeishuQuickActionMenu,
+    } = await import("./card-ux-launcher.js"));
   });
 
   it("recognizes the quick-actions bot menu key", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   normalizeMessageContent: vi.fn((msg: unknown) => msg),
@@ -10,7 +10,7 @@ vi.mock("@whiskeysockets/baileys", () => ({
   downloadMediaMessage,
 }));
 
-import { downloadInboundMedia } from "./media.js";
+let downloadInboundMedia: typeof import("./media.js").downloadInboundMedia;
 
 const mockSock = {
   updateMediaMessage: vi.fn(),
@@ -24,6 +24,11 @@ async function expectMimetype(message: Record<string, unknown>, expected: string
 }
 
 describe("downloadInboundMedia", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ downloadInboundMedia } = await import("./media.js"));
+  });
+
   it("returns undefined for messages without media", async () => {
     const msg = { message: { conversation: "hello" } } as never;
     const result = await downloadInboundMedia(msg, mockSock);

@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 223,
+            "line": 229,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 152,
+            "line": 150,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -2400,6 +2400,15 @@
           }
         },
         {
+          "declaration": "export function buildConfiguredModelsProviderData(cfg: OpenClawConfig, agentId?: string | undefined): ModelsProviderData;",
+          "exportName": "buildConfiguredModelsProviderData",
+          "kind": "function",
+          "source": {
+            "line": 100,
+            "path": "src/auto-reply/reply/commands-models.ts"
+          }
+        },
+        {
           "declaration": "export function buildHelpMessage(cfg?: OpenClawConfig | undefined): string;",
           "exportName": "buildHelpMessage",
           "kind": "function",
@@ -2413,7 +2422,7 @@
           "exportName": "buildModelsProviderData",
           "kind": "function",
           "source": {
-            "line": 37,
+            "line": 120,
             "path": "src/auto-reply/reply/commands-models.ts"
           }
         },
@@ -2440,7 +2449,7 @@
           "exportName": "formatModelsAvailableHeader",
           "kind": "function",
           "source": {
-            "line": 204,
+            "line": 227,
             "path": "src/auto-reply/reply/commands-models.ts"
           }
         },
@@ -2647,7 +2656,7 @@
           "exportName": "resolveDirectDmAuthorizationOutcome",
           "kind": "function",
           "source": {
-            "line": 120,
+            "line": 121,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2674,7 +2683,7 @@
           "exportName": "resolveModelsCommandReply",
           "kind": "function",
           "source": {
-            "line": 220,
+            "line": 243,
             "path": "src/auto-reply/reply/commands-models.ts"
           }
         },
@@ -2692,7 +2701,7 @@
           "exportName": "resolveSenderCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 149,
+            "line": 150,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2701,7 +2710,7 @@
           "exportName": "resolveSenderCommandAuthorizationWithRuntime",
           "kind": "function",
           "source": {
-            "line": 138,
+            "line": 139,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2827,7 +2836,7 @@
           "exportName": "CommandAuthorizationRuntime",
           "kind": "type",
           "source": {
-            "line": 104,
+            "line": 105,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2935,7 +2944,7 @@
           "exportName": "ResolveSenderCommandAuthorizationParams",
           "kind": "type",
           "source": {
-            "line": 87,
+            "line": 88,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2944,7 +2953,7 @@
           "exportName": "ResolveSenderCommandAuthorizationWithRuntimeParams",
           "kind": "type",
           "source": {
-            "line": 112,
+            "line": 113,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -4255,7 +4264,7 @@
           "exportName": "applyAgentDefaultModelPrimary",
           "kind": "function",
           "source": {
-            "line": 76,
+            "line": 78,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4282,7 +4291,7 @@
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
           "source": {
-            "line": 53,
+            "line": 54,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4291,7 +4300,7 @@
           "exportName": "applyProviderConfigWithDefaultModel",
           "kind": "function",
           "source": {
-            "line": 131,
+            "line": 125,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4300,7 +4309,7 @@
           "exportName": "applyProviderConfigWithDefaultModelPreset",
           "kind": "function",
           "source": {
-            "line": 152,
+            "line": 146,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4309,7 +4318,7 @@
           "exportName": "applyProviderConfigWithDefaultModels",
           "kind": "function",
           "source": {
-            "line": 96,
+            "line": 98,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4318,7 +4327,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 230,
+            "line": 224,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4327,7 +4336,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 272,
+            "line": 266,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4336,7 +4345,7 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 304,
+            "line": 298,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4363,7 +4372,7 @@
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 213,
+            "line": 207,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4372,7 +4381,7 @@
           "exportName": "createDefaultModelsPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 255,
+            "line": 249,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4381,7 +4390,7 @@
           "exportName": "createModelCatalogPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 327,
+            "line": 321,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4399,7 +4408,7 @@
           "exportName": "withAgentModelAliases",
           "kind": "function",
           "source": {
-            "line": 38,
+            "line": 39,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4426,7 +4435,7 @@
           "exportName": "AgentModelAliasEntry",
           "kind": "type",
           "source": {
-            "line": 21,
+            "line": 22,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4471,7 +4480,7 @@
           "exportName": "ProviderOnboardPresetAppliers",
           "kind": "type",
           "source": {
-            "line": 177,
+            "line": 171,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         }

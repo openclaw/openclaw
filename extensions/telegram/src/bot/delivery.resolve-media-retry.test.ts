@@ -33,7 +33,7 @@ vi.mock("../sticker-cache.js", () => ({
   describeStickerImage: async () => null,
 }));
 
-import { resolveMedia } from "./delivery.js";
+let resolveMedia: typeof import("./delivery.js").resolveMedia;
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -168,10 +168,12 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
+    vi.resetModules();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
+    ({ resolveMedia } = await import("./delivery.js"));
   });
 
   afterEach(() => {
@@ -391,10 +393,12 @@ describe("resolveMedia getFile retry", () => {
 });
 
 describe("resolveMedia original filename preservation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
+    vi.resetModules();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
+    ({ resolveMedia } = await import("./delivery.js"));
   });
 
   afterEach(() => {

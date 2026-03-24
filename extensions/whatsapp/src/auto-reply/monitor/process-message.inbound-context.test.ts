@@ -83,14 +83,20 @@ function createWhatsAppDirectStreamingArgs(params?: {
   });
 }
 
-vi.mock("../../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  // oxlint-disable-next-line typescript/no-explicit-any
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
-    capturedDispatchParams = params;
-    capturedCtx = params.ctx;
-    return { queuedFinal: false };
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return {
+    ...actual,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
+      capturedDispatchParams = params;
+      capturedCtx = params.ctx;
+      return { queuedFinal: false };
+    }),
+  };
+});
 
 vi.mock("./last-route.js", () => ({
   trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {

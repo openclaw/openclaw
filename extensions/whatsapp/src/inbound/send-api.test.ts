@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivity = vi.fn();
-vi.mock("../../../../src/infra/channel-activity.js", () => ({
-  recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+  };
+});
 
 import { createWebSendApi } from "./send-api.js";
 
