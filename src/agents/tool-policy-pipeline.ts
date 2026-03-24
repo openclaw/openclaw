@@ -9,6 +9,8 @@ import {
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
+const seenToolPolicyWarnings = new Set<string>();
+
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
@@ -101,9 +103,11 @@ export function applyToolPolicyPipeline(params: {
           hasGatedCoreEntries: gatedCoreEntries.length > 0,
           hasOtherEntries: otherEntries.length > 0,
         });
-        params.warn(
-          `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`,
-        );
+        const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
+        if (!seenToolPolicyWarnings.has(warning)) {
+          seenToolPolicyWarnings.add(warning);
+          params.warn(warning);
+        }
       }
       policy = resolved.policy;
     }
@@ -129,4 +133,8 @@ function describeUnknownAllowlistSuffix(params: {
         ? "These entries are shipped core tools but unavailable in the current runtime/provider/model/config."
         : "These entries won't match any tool unless the plugin is enabled.";
   return preface ? `${preface} ${detail}` : detail;
+}
+
+export function resetToolPolicyWarningCacheForTest(): void {
+  seenToolPolicyWarnings.clear();
 }
