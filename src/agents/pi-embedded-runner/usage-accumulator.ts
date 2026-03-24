@@ -63,6 +63,25 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
  *
  * See: https://github.com/openclaw/openclaw/issues/53734
  */
+/**
+ * Extract a context-size snapshot from the accumulator using the last API
+ * call's prompt-side fields. Use this as a fallback `lastCallUsage` when the
+ * raw `lastAssistant` object is unavailable (e.g. retry-limit error paths).
+ */
+export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
+  const hasValues = usage.lastInput > 0 || usage.lastCacheRead > 0 || usage.lastCacheWrite > 0;
+  if (!hasValues && usage.output <= 0) {
+    return undefined;
+  }
+  return {
+    input: usage.lastInput || undefined,
+    output: usage.output || undefined,
+    cacheRead: usage.lastCacheRead || undefined,
+    cacheWrite: usage.lastCacheWrite || undefined,
+    total: usage.lastInput + usage.lastCacheRead + usage.lastCacheWrite + usage.output || undefined,
+  };
+};
+
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
     usage.input > 0 ||

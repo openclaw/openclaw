@@ -84,6 +84,7 @@ import {
   type UsageAccumulator,
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
+  toLastCallUsage,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
 import { describeUnknownError } from "./utils.js";
@@ -175,9 +176,12 @@ function buildErrorAgentMeta(params: {
   if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
+  // Prefer the raw last-assistant snapshot; fall back to the accumulator's
+  // last-call fields so session persistence always has a context-size snapshot
+  // even on retry-limit paths where lastAssistant may be undefined.
   const lastCallUsage = params.lastAssistant
     ? normalizeUsage(params.lastAssistant.usage as UsageLike)
-    : undefined;
+    : toLastCallUsage(params.usageAccumulator);
   const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
   return {
     sessionId: params.sessionId,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
+  toLastCallUsage,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
 
@@ -103,6 +104,38 @@ describe("UsageAccumulator", () => {
       expect(usage!.output).toBe(50);
       expect(usage!.cacheRead).toBeUndefined();
       expect(usage!.cacheWrite).toBeUndefined();
+    });
+  });
+
+  describe("toLastCallUsage", () => {
+    it("returns last-call snapshot for context-size fallback", () => {
+      const acc = createUsageAccumulator();
+
+      mergeUsageIntoAccumulator(acc, {
+        input: 100,
+        output: 50,
+        cacheRead: 80_000,
+        cacheWrite: 5_000,
+      });
+      mergeUsageIntoAccumulator(acc, {
+        input: 150,
+        output: 40,
+        cacheRead: 84_000,
+        cacheWrite: 0,
+      });
+
+      const snapshot = toLastCallUsage(acc);
+      expect(snapshot).toBeDefined();
+      // Should reflect only the last API call's prompt-side fields.
+      expect(snapshot!.input).toBe(150);
+      expect(snapshot!.cacheRead).toBe(84_000);
+      expect(snapshot!.cacheWrite).toBeUndefined(); // last call had 0
+      // Output is accumulated (total generated text in the turn).
+      expect(snapshot!.output).toBe(90);
+    });
+
+    it("returns undefined for a zero accumulator", () => {
+      expect(toLastCallUsage(createUsageAccumulator())).toBeUndefined();
     });
   });
 });
