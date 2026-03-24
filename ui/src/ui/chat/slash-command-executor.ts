@@ -157,13 +157,10 @@ async function executeModel(
   }
 
   try {
-    const [patched, models] = await Promise.all([
-      client.request<SessionsPatchResult>("sessions.patch", {
-        key: sessionKey,
-        model: args.trim(),
-      }),
-      client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
-    ]);
+    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      model: args.trim(),
+    });
     const patchedModel = patched.resolved?.model ?? args.trim();
     const rawOverride = createChatModelOverride(patchedModel.trim());
     const resolvedValue = rawOverride
