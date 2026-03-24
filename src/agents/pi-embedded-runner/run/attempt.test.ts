@@ -573,6 +573,45 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     ]);
   });
 
+  it("preserves image order within each recovered user turn", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "image", data: "img-1", mimeType: "image/png" },
+              { type: "image", data: "img-2", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry",
+      replaceMessages: vi.fn(),
+    });
+
+    expect(result.recoveredImages).toEqual([
+      { type: "image", data: "img-1", mimeType: "image/png" },
+      { type: "image", data: "img-2", mimeType: "image/png" },
+    ]);
+  });
+
   it("treats image placeholder retries as the same newest orphaned prompt", () => {
     const sessionManager = createSessionManager(
       [
