@@ -81,7 +81,6 @@ beforeEach(async () => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ discordPlugin } = await import("./channel.js"));
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
