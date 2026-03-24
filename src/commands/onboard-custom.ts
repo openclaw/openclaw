@@ -690,7 +690,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         reasoning: false,
       };
   const shouldUpgradeNonAzureVisionInput = (model: ModelDefinitionConfig): boolean => {
-    if (isAzure || !isLikelyVisionCapableModel || model.id !== modelId) {
+    if (isAzure || !isLikelyVisionCapableModel) {
       return false;
     }
     if (!Array.isArray(model.input) || model.input.length !== 1 || model.input[0] !== "text") {
