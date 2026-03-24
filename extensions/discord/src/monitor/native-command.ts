@@ -81,6 +81,13 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
+const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
+
+function truncateDiscordCommandDescription(value: string): string {
+  return value.length > DISCORD_COMMAND_DESCRIPTION_MAX
+    ? value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX)
+    : value;
+}
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
@@ -133,7 +140,7 @@ function buildDiscordCommandOptions(params: {
     if (arg.type === "number") {
       return {
         name: arg.name,
-        description: arg.description,
+        description: truncateDiscordCommandDescription(arg.description),
         type: ApplicationCommandOptionType.Number,
         required,
       };
@@ -141,7 +148,7 @@ function buildDiscordCommandOptions(params: {
     if (arg.type === "boolean") {
       return {
         name: arg.name,
-        description: arg.description,
+        description: truncateDiscordCommandDescription(arg.description),
         type: ApplicationCommandOptionType.Boolean,
         required,
       };
@@ -192,7 +199,7 @@ function buildDiscordCommandOptions(params: {
         : undefined;
     return {
       name: arg.name,
-      description: arg.description,
+      description: truncateDiscordCommandDescription(arg.description),
       type: ApplicationCommandOptionType.String,
       required,
       choices,
@@ -517,7 +524,7 @@ export function createDiscordNativeCommand(params: {
 
   return new (class extends Command {
     name = command.name;
-    description = command.description;
+    description = truncateDiscordCommandDescription(command.description);
     defer = true;
     ephemeral = ephemeralDefault;
     options = options;

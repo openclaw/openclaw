@@ -37,6 +37,7 @@ const {
 } = getProviderMonitorTestMocks();
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
+let providerTesting: typeof import("./provider.js").__testing;
 
 function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -129,7 +130,7 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    ({ monitorDiscordProvider } = await import("./provider.js"));
+    ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
   beforeEach(() => {
@@ -550,6 +551,35 @@ describe("monitorDiscordProvider", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("native command deploy skipped"),
     );
+  });
+
+  it("formats rejected Discord deploy entries with command details", () => {
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      status: 400,
+      rawBody: {
+        63: ["description"],
+        65: ["description"],
+        66: ["description"],
+        67: ["description"],
+      },
+      deployRequestBody: Array.from({ length: 68 }, (_entry, index) => ({
+        name: `command-${index}`,
+        description: `description-${index}`,
+      })),
+    });
+
+    expect(details).toContain("status=400");
+    expect(details).toContain("rejected=");
+    expect(details).toContain(
+      '#63 fields=description name=command-63 description="description-63"',
+    );
+    expect(details).toContain(
+      '#65 fields=description name=command-65 description="description-65"',
+    );
+    expect(details).toContain(
+      '#66 fields=description name=command-66 description="description-66"',
+    );
+    expect(details).not.toContain("command-67");
   });
 
   it("configures Carbon native deploy by default", async () => {

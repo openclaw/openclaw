@@ -168,4 +168,36 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     expect(respond).toHaveBeenCalledWith([]);
   });
+
+  it("truncates Discord command and option descriptions to Discord's limit", () => {
+    const longDescription = "x".repeat(140);
+    const cfg = {} as ReturnType<typeof loadConfig>;
+    const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "longdesc",
+        description: longDescription,
+        acceptsArgs: true,
+        args: [
+          {
+            name: "input",
+            description: longDescription,
+            type: "string",
+            required: false,
+          },
+        ],
+      },
+      cfg,
+      discordConfig,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    expect(command.description).toHaveLength(100);
+    expect(command.description).toBe("x".repeat(100));
+    expect(requireOption(command, "input").description).toHaveLength(100);
+    expect(requireOption(command, "input").description).toBe("x".repeat(100));
+  });
 });
