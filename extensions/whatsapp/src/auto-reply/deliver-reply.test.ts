@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../../../src/globals.js";
 import { loadWebMedia } from "../media.js";
 import type { WebInboundMsg } from "./types.js";
@@ -96,6 +96,7 @@ describe("deliverWebReply", () => {
     vi.resetModules();
     ({ deliverWebReply, resolveDisconnectRetryStrategy } = await import("./deliver-reply.js"));
     vi.clearAllMocks();
+    sleepWithAbortMock.mockReset();
     sleepWithAbortMock.mockImplementation(async () => undefined);
   });
 

@@ -145,6 +145,13 @@ export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessa
 export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 
+export function getMonitorWebInbox(): MonitorWebInbox {
+  if (!monitorWebInbox) {
+    throw new Error("monitorWebInbox not initialized");
+  }
+  return monitorWebInbox;
+}
+
 export async function settleInboundWork() {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }

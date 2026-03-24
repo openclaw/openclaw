@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { killSubagentRunAdmin, sendControlledSubagentMessage } from "./subagent-control.js";
+import * as sessions from "../config/sessions.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
+import {
+  __testing,
+  killAllControlledSubagentRuns,
+  killControlledSubagentRun,
+  killSubagentRunAdmin,
+  sendControlledSubagentMessage,
+  steerControlledSubagentRun,
+} from "./subagent-control.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -11,6 +20,11 @@ import {
 } from "./subagent-registry.js";
 
 describe("sendControlledSubagentMessage", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
   it("rejects runs controlled by another session", async () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
@@ -43,11 +57,172 @@ describe("sendControlledSubagentMessage", () => {
       error: "Subagents can only control runs spawned from their own session.",
     });
   });
+
+  it("returns a structured error when the gateway send fails", async () => {
+    addSubagentRunForTests({
+      runId: "run-owned",
+      childSessionKey: "agent:main:subagent:owned",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent") {
+          throw new Error("gateway unavailable");
+        }
+        return {} as T;
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-owned",
+        childSessionKey: "agent:main:subagent:owned",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "continue work",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      runId: expect.any(String),
+      error: "gateway unavailable",
+    });
+  });
+
+  it("does not send to a newer live run when the caller passes a stale run entry", async () => {
+    addSubagentRunForTests({
+      runId: "run-current-send",
+      childSessionKey: "agent:main:subagent:send-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale-send",
+        childSessionKey: "agent:main:subagent:send-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 9_000,
+        startedAt: Date.now() - 8_000,
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale-send",
+      text: "stale task is already finished.",
+    });
+  });
+
+  it("sends follow-up messages to the exact finished current run", async () => {
+    addSubagentRunForTests({
+      runId: "run-finished-send",
+      childSessionKey: "agent:main:subagent:finished-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finished task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent") {
+          return { runId: "run-followup-send" } as T;
+        }
+        if (request.method === "agent.wait") {
+          return { status: "done" } as T;
+        }
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-finished-send",
+        childSessionKey: "agent:main:subagent:finished-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "finished task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      runId: "run-followup-send",
+      replyText: undefined,
+    });
+  });
 });
 
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
@@ -107,5 +282,402 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toEqual({ found: false, killed: false });
+  });
+
+  it("still terminates the run when session store persistence fails during kill", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:worker-store-fail";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            sessionId: "sess-worker-store-fail",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-worker-store-fail",
+      childSessionKey,
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: "agent:main:other-requester",
+      requesterDisplayKey: "other-requester",
+      task: "do the work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const updateSessionStoreSpy = vi
+      .spyOn(sessions, "updateSessionStore")
+      .mockRejectedValueOnce(new Error("session store unavailable"));
+
+    try {
+      const result = await killSubagentRunAdmin({
+        cfg: {
+          session: { store: storePath },
+        } as OpenClawConfig,
+        sessionKey: childSessionKey,
+      });
+
+      expect(result).toMatchObject({
+        found: true,
+        killed: true,
+        runId: "run-worker-store-fail",
+        sessionKey: childSessionKey,
+      });
+      expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+    } finally {
+      updateSessionStoreSpy.mockRestore();
+    }
+  });
+});
+
+describe("killControlledSubagentRun", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("does not mutate the live session when the caller passes a stale run entry", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killControlledSubagentRun({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 9_000,
+        startedAt: Date.now() - 8_000,
+      },
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale",
+      sessionKey: childSessionKey,
+      label: "stale task",
+      text: "stale task is already finished.",
+    });
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
+    expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
+  });
+});
+
+describe("killAllControlledSubagentRuns", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("ignores stale run snapshots in bulk kill requests", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current-bulk",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current bulk task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-stale-bulk",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "stale bulk task",
+          cleanup: "keep",
+          createdAt: Date.now() - 9_000,
+          startedAt: Date.now() - 8_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 0,
+      labels: [],
+    });
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
+    expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current-bulk");
+  });
+
+  it("does not let a stale bulk entry suppress the current live entry for the same child key", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-shadow-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current-shadow",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current shadow task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-stale-shadow",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "stale shadow task",
+          cleanup: "keep",
+          createdAt: Date.now() - 9_000,
+          startedAt: Date.now() - 8_000,
+        },
+        {
+          runId: "run-current-shadow",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "current shadow task",
+          cleanup: "keep",
+          createdAt: Date.now() - 4_000,
+          startedAt: Date.now() - 3_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 1,
+      labels: ["current shadow task"],
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
+});
+
+describe("steerControlledSubagentRun", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("returns an error and clears the restart marker when run remap fails", async () => {
+    addSubagentRunForTests({
+      runId: "run-steer-old",
+      childSessionKey: "agent:main:subagent:steer-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const replaceSpy = vi
+      .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
+      .mockReturnValue(false);
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-steer-new" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    try {
+      const result = await steerControlledSubagentRun({
+        cfg: {} as OpenClawConfig,
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry: {
+          runId: "run-steer-old",
+          childSessionKey: "agent:main:subagent:steer-worker",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "initial task",
+          cleanup: "keep",
+          createdAt: Date.now() - 5_000,
+          startedAt: Date.now() - 4_000,
+        },
+        message: "updated direction",
+      });
+
+      expect(result).toEqual({
+        status: "error",
+        runId: "run-steer-new",
+        sessionKey: "agent:main:subagent:steer-worker",
+        sessionId: undefined,
+        error: "failed to replace steered subagent run",
+      });
+      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
+        runId: "run-steer-old",
+        suppressAnnounceReason: undefined,
+      });
+    } finally {
+      replaceSpy.mockRestore();
+    }
+  });
+
+  it("rejects steering runs that are no longer tracked in the registry", async () => {
+    __testing.setDepsForTest({
+      callGateway: async () => {
+        throw new Error("gateway should not be called");
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale",
+        childSessionKey: "agent:main:subagent:stale-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "updated direction",
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale",
+      sessionKey: "agent:main:subagent:stale-worker",
+      text: "stale task is already finished.",
+    });
   });
 });

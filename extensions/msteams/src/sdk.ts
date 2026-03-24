@@ -24,6 +24,24 @@ export type MSTeamsTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
 
+type MSTeamsBotIdentity = {
+  id?: string;
+  name?: string;
+};
+
+type MSTeamsSendContext = {
+  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
+  updateActivity: (activityUpdate: object) => Promise<{ id?: string } | void>;
+  deleteActivity: (activityId: string) => Promise<void>;
+};
+
+type MSTeamsProcessContext = MSTeamsSendContext & {
+  activity: Record<string, unknown> | undefined;
+  sendActivities: (
+    activities: Array<{ type: string } & Record<string, unknown>>,
+  ) => Promise<unknown[]>;
+};
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
   const [appsModule, apiModule] = await Promise.all([
     import("@microsoft/teams.apps"),
@@ -66,6 +84,157 @@ export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvide
         app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
       ).getBotToken();
       return token ? String(token) : "";
+    },
+  };
+}
+
+function createBotTokenGetter(app: MSTeamsApp): () => Promise<string | undefined> {
+  return async () => {
+    const token = await (
+      app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
+    ).getBotToken();
+    return token ? String(token) : undefined;
+  };
+}
+
+function createApiClient(
+  sdk: MSTeamsTeamsSdk,
+  serviceUrl: string,
+  getToken: () => Promise<string | undefined>,
+) {
+  return new sdk.Client(serviceUrl, {
+    token: async () => (await getToken()) || undefined,
+    headers: { "User-Agent": buildUserAgent() },
+  } as Record<string, unknown>);
+}
+
+function normalizeOutboundActivity(textOrActivity: string | object): Record<string, unknown> {
+  return typeof textOrActivity === "string"
+    ? ({ type: "message", text: textOrActivity } as Record<string, unknown>)
+    : (textOrActivity as Record<string, unknown>);
+}
+
+function createSendContext(params: {
+  sdk: MSTeamsTeamsSdk;
+  serviceUrl?: string;
+  conversationId?: string;
+  conversationType?: string;
+  bot?: MSTeamsBotIdentity;
+  replyToActivityId?: string;
+  getToken: () => Promise<string | undefined>;
+  treatInvokeResponseAsNoop?: boolean;
+}): MSTeamsSendContext {
+  const apiClient =
+    params.serviceUrl && params.conversationId
+      ? createApiClient(params.sdk, params.serviceUrl, params.getToken)
+      : undefined;
+
+  return {
+    async sendActivity(textOrActivity: string | object): Promise<unknown> {
+      const msg = normalizeOutboundActivity(textOrActivity);
+      if (params.treatInvokeResponseAsNoop && msg.type === "invokeResponse") {
+        return { id: "invokeResponse" };
+      }
+      if (!apiClient || !params.conversationId) {
+        return { id: "unknown" };
+      }
+
+      return await apiClient.conversations.activities(params.conversationId).create({
+        type: "message",
+        ...msg,
+        from: params.bot?.id
+          ? { id: params.bot.id, name: params.bot.name ?? "", role: "bot" }
+          : undefined,
+        conversation: {
+          id: params.conversationId,
+          conversationType: params.conversationType ?? "personal",
+        },
+        ...(params.replyToActivityId && !msg.replyToId
+          ? { replyToId: params.replyToActivityId }
+          : {}),
+      } as Parameters<
+        typeof apiClient.conversations.activities extends (id: string) => {
+          create: (a: infer T) => unknown;
+        }
+          ? never
+          : never
+      >[0]);
+    },
+
+    async updateActivity(activityUpdate: object): Promise<{ id?: string } | void> {
+      const nextActivity = activityUpdate as { id?: string } & Record<string, unknown>;
+      const activityId = nextActivity.id;
+      if (!activityId) {
+        throw new Error("updateActivity requires an activity id");
+      }
+      if (!params.serviceUrl || !params.conversationId) {
+        return { id: "unknown" };
+      }
+      return await updateActivityViaRest({
+        serviceUrl: params.serviceUrl,
+        conversationId: params.conversationId,
+        activityId,
+        activity: nextActivity,
+        token: await params.getToken(),
+      });
+    },
+
+    async deleteActivity(activityId: string): Promise<void> {
+      if (!activityId) {
+        throw new Error("deleteActivity requires an activity id");
+      }
+      if (!params.serviceUrl || !params.conversationId) {
+        return;
+      }
+      await deleteActivityViaRest({
+        serviceUrl: params.serviceUrl,
+        conversationId: params.conversationId,
+        activityId,
+        token: await params.getToken(),
+      });
+    },
+  };
+}
+
+function createProcessContext(params: {
+  sdk: MSTeamsTeamsSdk;
+  activity: Record<string, unknown> | undefined;
+  getToken: () => Promise<string | undefined>;
+}): MSTeamsProcessContext {
+  const serviceUrl = params.activity?.serviceUrl as string | undefined;
+  const conversationId = (params.activity?.conversation as Record<string, unknown>)?.id as
+    | string
+    | undefined;
+  const conversationType = (params.activity?.conversation as Record<string, unknown>)
+    ?.conversationType as string | undefined;
+  const replyToActivityId = params.activity?.id as string | undefined;
+  const bot: MSTeamsBotIdentity | undefined =
+    params.activity?.recipient && typeof params.activity.recipient === "object"
+      ? {
+          id: (params.activity.recipient as Record<string, unknown>).id as string | undefined,
+          name: (params.activity.recipient as Record<string, unknown>).name as string | undefined,
+        }
+      : undefined;
+  const sendContext = createSendContext({
+    sdk: params.sdk,
+    serviceUrl,
+    conversationId,
+    conversationType,
+    bot,
+    replyToActivityId,
+    getToken: params.getToken,
+    treatInvokeResponseAsNoop: true,
+  });
+
+  return {
+    activity: params.activity,
+    ...sendContext,
+    async sendActivities(activities: Array<{ type: string } & Record<string, unknown>>) {
+      const results = [];
+      for (const activity of activities) {
+        results.push(await sendContext.sendActivity(activity));
+      }
+      return results;
     },
   };
 }
@@ -168,76 +337,14 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         throw new Error("Missing conversation.id in conversation reference");
       }
 
-      // Fetch a fresh token for each call via a token factory.
-      // The SDK's App manages token caching/refresh internally.
-      const getToken = async () => {
-        const token = await (
-          app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
-        ).getBotToken();
-        return token ? String(token) : undefined;
-      };
-
-      // Build a send context that uses the Bot Framework REST API.
-      // Pass a token factory (not a cached value) so each request gets a fresh token.
-      const apiClient = new sdk.Client(serviceUrl, {
-        token: async () => (await getToken()) || undefined,
-        headers: { "User-Agent": buildUserAgent() },
-      } as Record<string, unknown>);
-
-      const sendContext = {
-        async sendActivity(textOrActivity: string | object): Promise<unknown> {
-          const activity =
-            typeof textOrActivity === "string"
-              ? ({ type: "message", text: textOrActivity } as Record<string, unknown>)
-              : (textOrActivity as Record<string, unknown>);
-
-          const response = await apiClient.conversations.activities(conversationId).create({
-            type: "message",
-            ...activity,
-            from: reference.agent
-              ? { id: reference.agent.id, name: reference.agent.name ?? "", role: "bot" }
-              : undefined,
-            conversation: {
-              id: conversationId,
-              conversationType: reference.conversation?.conversationType ?? "personal",
-            },
-          } as Parameters<
-            typeof apiClient.conversations.activities extends (id: string) => {
-              create: (a: infer T) => unknown;
-            }
-              ? never
-              : never
-          >[0]);
-
-          return response;
-        },
-        async updateActivity(activityUpdate: object): Promise<{ id?: string } | void> {
-          const nextActivity = activityUpdate as { id?: string } & Record<string, unknown>;
-          const activityId = nextActivity.id;
-          if (!activityId) {
-            throw new Error("updateActivity requires an activity id");
-          }
-          // Bot Framework REST API: PUT /v3/conversations/{conversationId}/activities/{activityId}
-          return await updateActivityViaRest({
-            serviceUrl,
-            conversationId,
-            activityId,
-            activity: nextActivity,
-            token: await getToken(),
-          });
-        },
-        async deleteActivity(activityId: string): Promise<void> {
-          if (!activityId) {
-            throw new Error("deleteActivity requires an activity id");
-          }
-          await deleteActivityViaRest({
-            serviceUrl,
-            conversationId,
-            activityId,
-            token: await getToken(),
-          });
-        },
-      };
+      const sendContext = createSendContext({
+        sdk,
+        serviceUrl,
+        conversationId,
+        conversationType: reference.conversation?.conversationType,
+        bot: reference.agent ?? undefined,
+        getToken: createBotTokenGetter(app),
+      });
 
       await logic(sendContext);
     },
@@ -252,105 +359,11 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
       const isInvoke = (activity as Record<string, unknown>)?.type === "invoke";
 
       try {
-        const serviceUrl = activity?.serviceUrl as string | undefined;
-
-        // Token factory — fetches a fresh token for each API call.
-        const getToken = async () => {
-          const token = await (
-            app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
-          ).getBotToken();
-          return token ? String(token) : undefined;
-        };
-
-        const context = {
+        const context = createProcessContext({
+          sdk,
           activity,
-          async sendActivity(textOrActivity: string | object): Promise<unknown> {
-            const msg =
-              typeof textOrActivity === "string"
-                ? ({ type: "message", text: textOrActivity } as Record<string, unknown>)
-                : (textOrActivity as Record<string, unknown>);
-
-            // invokeResponse is handled by the HTTP response from process(),
-            // not by posting a new activity to Bot Framework.
-            if (msg.type === "invokeResponse") {
-              return { id: "invokeResponse" };
-            }
-
-            if (!serviceUrl) {
-              return { id: "unknown" };
-            }
-
-            const convId = (activity?.conversation as Record<string, unknown>)?.id as
-              | string
-              | undefined;
-            if (!convId) {
-              return { id: "unknown" };
-            }
-
-            const apiClient = new sdk.Client(serviceUrl, {
-              token: async () => (await getToken()) || undefined,
-              headers: { "User-Agent": buildUserAgent() },
-            } as Record<string, unknown>);
-
-            const botId = (activity?.recipient as Record<string, unknown>)?.id as
-              | string
-              | undefined;
-            const botName = (activity?.recipient as Record<string, unknown>)?.name as
-              | string
-              | undefined;
-            const convType = (activity?.conversation as Record<string, unknown>)
-              ?.conversationType as string | undefined;
-
-            // Preserve replyToId for threaded replies (replyStyle: "thread")
-            const inboundActivityId = (activity as Record<string, unknown>)?.id as
-              | string
-              | undefined;
-
-            return await apiClient.conversations.activities(convId).create({
-              type: "message",
-              ...msg,
-              from: botId ? { id: botId, name: botName ?? "", role: "bot" } : undefined,
-              conversation: { id: convId, conversationType: convType ?? "personal" },
-              ...(inboundActivityId && !msg.replyToId ? { replyToId: inboundActivityId } : {}),
-            } as Parameters<
-              typeof apiClient.conversations.activities extends (id: string) => {
-                create: (a: infer T) => unknown;
-              }
-                ? never
-                : never
-            >[0]);
-          },
-          async sendActivities(
-            activities: Array<{ type: string } & Record<string, unknown>>,
-          ): Promise<unknown> {
-            const results = [];
-            for (const act of activities) {
-              results.push(await context.sendActivity(act));
-            }
-            return results;
-          },
-          async updateActivity(
-            activityUpdate: { id: string } & Record<string, unknown>,
-          ): Promise<unknown> {
-            const activityId = activityUpdate.id;
-            if (!activityId || !serviceUrl) {
-              return { id: "unknown" };
-            }
-            const convId = (activity?.conversation as Record<string, unknown>)?.id as
-              | string
-              | undefined;
-            if (!convId) {
-              return { id: "unknown" };
-            }
-            return await updateActivityViaRest({
-              serviceUrl,
-              conversationId: convId,
-              activityId,
-              activity: activityUpdate,
-              token: await getToken(),
-            });
-          },
-        };
+          getToken: createBotTokenGetter(app),
+        });
 
         // For invoke activities, send HTTP 200 immediately before running
         // handler logic so slow operations (file uploads, reflections) don't

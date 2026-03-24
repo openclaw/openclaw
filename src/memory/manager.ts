@@ -174,6 +174,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const purpose = params.purpose === "status" ? "status" : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const statusOnly = params.purpose === "status";
+    if (statusOnly) {
+      return new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        workspaceDir,
+        settings,
+        purpose: params.purpose,
+      });
+    }
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
@@ -182,24 +192,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pending) {
       return pending;
     }
-    if (statusOnly) {
-      const manager = new MemoryIndexManager({
-        cacheKey: key,
-        cfg,
-        agentId,
-        workspaceDir,
-        settings,
-        purpose: params.purpose,
-      });
-      INDEX_CACHE.set(key, manager);
-      return manager;
-    }
     const createPromise = (async () => {
-      const providerResult = await MemoryIndexManager.loadProviderResult({
-        cfg,
-        agentId,
-        settings,
-      });
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
         return refreshed;
@@ -210,7 +203,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         agentId,
         workspaceDir,
         settings,
-        providerResult,
         purpose: params.purpose,
       });
       INDEX_CACHE.set(key, manager);
@@ -336,17 +328,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
-    await this.ensureProviderInitialized();
+    const cleaned = query.trim();
+    if (!cleaned) {
+      return [];
+    }
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
       });
     }
-    const cleaned = query.trim();
-    if (!cleaned) {
+    const hasIndexedContent = this.hasIndexedContent();
+    if (!hasIndexedContent) {
       return [];
     }
+    await this.ensureProviderInitialized();
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const hybrid = this.settings.query.hybrid;
@@ -437,6 +433,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           entry.score >= relaxedMinScore,
       )
       .slice(0, maxResults);
+  }
+
+  private hasIndexedContent(): boolean {
+    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+      | {
+          found?: number;
+        }
+      | undefined;
+    if (chunkRow?.found === 1) {
+      return true;
+    }
+    if (!this.fts.enabled || !this.fts.available) {
+      return false;
+    }
+    const ftsRow = this.db.prepare(`SELECT 1 as found FROM ${FTS_TABLE} LIMIT 1`).get() as
+      | {
+          found?: number;
+        }
+      | undefined;
+    return ftsRow?.found === 1;
   }
 
   private async searchVector(

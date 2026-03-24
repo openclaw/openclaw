@@ -93,16 +93,14 @@ describe("memory manager cache hydration", () => {
 
     expect(managers).toHaveLength(12);
     expect(new Set(managers).size).toBe(1);
-    expect(hoisted.providerCreateCalls).toBe(1);
+    expect(hoisted.providerCreateCalls).toBe(0);
 
     await managers[0].close();
   });
 
-  it("drains in-flight manager creation during global teardown", async () => {
+  it("evicts cached managers during global teardown", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
     const cfg = createMemoryConcurrencyConfig(indexPath);
-
-    hoisted.providerDelayMs = 100;
 
     const pendingResult = RawMemoryIndexManager.get({ cfg, agentId: "main" });
     await closeAllMemoryIndexManagers();
@@ -113,12 +111,12 @@ describe("memory manager cache hydration", () => {
     expect(firstManager).toBeTruthy();
     expect(secondManager).toBeTruthy();
     expect(Object.is(secondManager, firstManager)).toBe(false);
-    expect(hoisted.providerCreateCalls).toBe(2);
+    expect(hoisted.providerCreateCalls).toBe(0);
 
     await secondManager?.close?.();
   });
 
-  it("caches status-only managers separately from full managers", async () => {
+  it("does not identity-cache status-only managers", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
     const cfg = createMemoryConcurrencyConfig(indexPath);
 
@@ -127,9 +125,10 @@ describe("memory manager cache hydration", () => {
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
-    expect(Object.is(second, first)).toBe(true);
+    expect(Object.is(second, first)).toBe(false);
     expect(hoisted.providerCreateCalls).toBe(0);
 
     await first?.close?.();
+    await second?.close?.();
   });
 });
