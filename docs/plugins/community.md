@@ -59,6 +59,18 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### LobsterMail
+
+Email for AI agents. Create real `@lobstermail.ai` inboxes, receive email in
+real-time, and send email — no API keys, no human signup, no configuration.
+
+- **npm:** `@lobsterkit/openclaw-lobstermail`
+- **repo:** [github.com/lobster-kit/openclaw-lobstermail](https://github.com/lobster-kit/openclaw-lobstermail)
+
+```bash
+openclaw plugins install @lobsterkit/openclaw-lobstermail
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
