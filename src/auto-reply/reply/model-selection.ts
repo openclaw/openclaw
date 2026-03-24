@@ -129,15 +129,23 @@ function collectImageModelKeys(
  * 2. Raw model string (providerless IDs added by collectImageModelKeys)
  * 3. Any provider-qualified key in the set that matches the model name
  *    (for stored overrides where provider differs from imageModel config)
+ * 4. Provider-qualified stored model against providerless imageModel entries
+ *    (e.g., stored "openai/gpt-4.1" vs imageModel fallback "gpt-4.1")
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
-  const key = modelKey(provider, model);
+  // Handle provider-qualified model strings (e.g., "openai/gpt-4.1")
+  // by extracting the pure model name and effective provider
+  const modelSlash = model.indexOf("/");
+  const pureModel = modelSlash > 0 ? model.slice(modelSlash + 1) : model;
+  const effectiveProvider = modelSlash > 0 ? model.slice(0, modelSlash) : provider;
+
+  const key = modelKey(effectiveProvider, pureModel);
   // Check "provider/model" format
   if (imageModelKeys.has(key)) {
     return true;
   }
   // Check raw model string (providerless IDs added by collectImageModelKeys)
-  if (imageModelKeys.has(model)) {
+  if (imageModelKeys.has(pureModel)) {
     return true;
   }
   // Check if any provider-qualified key in the set matches the model name.
@@ -145,7 +153,7 @@ function isImageModel(provider: string, model: string, imageModelKeys: Set<strin
   // e.g., stored override "gpt-4.1" (defaults to provider X) vs imageModel "openai/gpt-4.1"
   for (const entry of imageModelKeys) {
     const slash = entry.indexOf("/");
-    if (slash > 0 && entry.slice(slash + 1) === model) {
+    if (slash > 0 && entry.slice(slash + 1) === pureModel) {
       return true;
     }
   }

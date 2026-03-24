@@ -325,9 +325,11 @@ export async function getReplyFromConfig(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
 
-  // Check if channel model is already a vision model (skip image model switch if so)
+  // Check if channel model is already a vision model (skip image model switch if so).
+  // Only compute when image model override was actually applied, since the result
+  // is only consumed when hasAppliedImageModelOverride is true.
   let channelModelIsVisionModel = false;
-  if (channelModelOverride) {
+  if (channelModelOverride && hasAppliedImageModelOverride) {
     // Use the active default provider when building the alias index so that
     // aliases defined on providerless model keys resolve correctly to the
     // agent's default provider. This ensures channel model aliases that point
