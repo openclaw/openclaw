@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
 
@@ -69,10 +69,13 @@ let startBrowserControlServerFromConfig: typeof import("./server.js").startBrows
 let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
 
 describe("browser control evaluate gating", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
       await import("./server.js"));
+  });
+
+  beforeEach(async () => {
     testPort = await getFreePort();
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
@@ -107,7 +110,6 @@ describe("browser control evaluate gating", () => {
     }
 
     await stopBrowserControlServer();
-    vi.resetModules();
   });
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
