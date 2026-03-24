@@ -70,31 +70,52 @@ describe("exec denyPatterns", () => {
       }),
     ).rejects.toThrow(/exec denied/);
   });
+
+  it("blocks commands with leading whitespace via trim", async () => {
+    const tool = createExecTool({
+      ...BASE_DEFAULTS,
+      denyPatterns: ["^claude\\s"],
+    });
+    await expect(tool.execute("t7", { command: "  claude --print hi" })).rejects.toThrow(
+      /exec denied/,
+    );
+  });
 });
 
-describe("resolveExecConfig denyPatterns merge", () => {
-  // Import resolveExecConfig indirectly by testing the merge behavior
-  // through createExecTool, since resolveExecConfig is not exported.
-  // Instead, test the merge semantics directly.
-
-  it("agent patterns merge with global patterns (both present in result)", () => {
-    const globalPatterns = ["^claude\\s"];
-    const agentPatterns = ["^codex\\s"];
-    const merged = [...globalPatterns, ...agentPatterns];
-    expect(merged).toEqual(["^claude\\s", "^codex\\s"]);
+describe("denyPatterns merge semantics via createExecTool", () => {
+  it("merged patterns from both sources block their respective commands", async () => {
+    // Simulates the output of resolveExecConfig additive merge:
+    // global ["^claude\\s"] + agent ["^codex\\s"] = both enforced
+    const tool = createExecTool({
+      ...BASE_DEFAULTS,
+      denyPatterns: ["^claude\\s", "^codex\\s"],
+    });
+    await expect(tool.execute("m1", { command: "claude --print hi" })).rejects.toThrow(
+      /exec denied/,
+    );
+    await expect(tool.execute("m2", { command: "codex --print hi" })).rejects.toThrow(
+      /exec denied/,
+    );
   });
 
-  it("agent patterns cannot remove global patterns", () => {
-    const globalPatterns = ["^claude\\s", "^codex\\s"];
-    const agentPatterns: string[] = [];
-    const merged = [...globalPatterns, ...agentPatterns];
-    expect(merged).toEqual(["^claude\\s", "^codex\\s"]);
+  it("empty agent patterns do not remove global patterns", async () => {
+    // global ["^claude\\s"] + agent [] = global still enforced
+    const tool = createExecTool({
+      ...BASE_DEFAULTS,
+      denyPatterns: ["^claude\\s"],
+    });
+    await expect(tool.execute("m3", { command: "claude --print hi" })).rejects.toThrow(
+      /exec denied/,
+    );
   });
 
-  it("global only when agent has no denyPatterns", () => {
-    const globalPatterns = ["^claude\\s"];
-    const agentPatterns = undefined;
-    const merged = [...globalPatterns, ...(agentPatterns ?? [])];
-    expect(merged).toEqual(["^claude\\s"]);
+  it("unrelated commands pass through merged patterns", async () => {
+    const tool = createExecTool({
+      ...BASE_DEFAULTS,
+      allowBackground: false,
+      denyPatterns: ["^claude\\s", "^codex\\s"],
+    });
+    const result = await tool.execute("m4", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
   });
 });

@@ -425,7 +425,7 @@ export function createOpenClawCodingTools(options?: {
     strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
     safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
     safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
-    denyPatterns: options?.exec?.denyPatterns ?? execConfig.denyPatterns,
+    denyPatterns: [...(execConfig.denyPatterns ?? []), ...(options?.exec?.denyPatterns ?? [])],
     agentId,
     cwd: workspaceRoot,
     allowBackground,

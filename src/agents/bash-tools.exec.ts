@@ -256,16 +256,13 @@ export function createExecTool(
         for (const pattern of defaults.denyPatterns) {
           let matched = false;
           try {
-            matched = new RegExp(pattern).test(params.command);
+            matched = new RegExp(pattern).test(params.command.trim());
           } catch {
             // Invalid regex — skip this pattern, don't crash
             logInfo(`exec: invalid denyPattern regex ignored: "${pattern}"`);
           }
           if (matched) {
-            throw new Error(
-              `exec denied: command matches deny pattern "${pattern}". ` +
-                `Use the sessions_spawn tool instead for coding agent dispatch.`,
-            );
+            throw new Error(`exec denied: command matches deny pattern "${pattern}".`);
           }
         }
       }
