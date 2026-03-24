@@ -52,6 +52,13 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const sessionLockMocks = vi.hoisted(() => ({
+  acquire: vi.fn(),
+  release: vi.fn(),
+  renew: vi.fn(),
+  resolveTtlMs: vi.fn(() => 120_000),
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -85,6 +92,16 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
+}));
+
+vi.mock("./session-lock-manager.js", () => ({
+  getAcpSessionLockManager: () => ({
+    acquire: (sessionKey: string, ttlMs: number) => sessionLockMocks.acquire(sessionKey, ttlMs),
+    release: (sessionKey: string, ownerId: string) => sessionLockMocks.release(sessionKey, ownerId),
+    renew: (sessionKey: string, ownerId: string, ttlMs: number) =>
+      sessionLockMocks.renew(sessionKey, ownerId, ttlMs),
+  }),
+  resolveAcpSessionLockTtlMs: () => sessionLockMocks.resolveTtlMs(),
 }));
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
@@ -160,6 +177,41 @@ async function runDispatch(params: {
   });
 }
 
+async function runDispatchWithTracking(params: {
+  bodyForAgent: string;
+  cfg?: OpenClawConfig;
+  dispatcher?: ReplyDispatcher;
+  shouldRouteToOriginating?: boolean;
+  onReplyStart?: () => void;
+  ctxOverrides?: Record<string, unknown>;
+}) {
+  const recordProcessed = vi.fn();
+  const markIdle = vi.fn();
+  const result = await tryDispatchAcpReply({
+    ctx: buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: sessionKey,
+      BodyForAgent: params.bodyForAgent,
+      ...params.ctxOverrides,
+    }),
+    cfg: params.cfg ?? createAcpTestConfig(),
+    dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    sessionKey,
+    inboundAudio: false,
+    shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
+    ...(params.shouldRouteToOriginating
+      ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
+      : {}),
+    shouldSendToolSummaries: true,
+    bypassForCommand: false,
+    ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
+    recordProcessed,
+    markIdle,
+  });
+  return { result, recordProcessed, markIdle };
+}
+
 async function emitToolLifecycleEvents(
   onEvent: (event: unknown) => Promise<void>,
   toolCallId: string,
@@ -232,6 +284,14 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    sessionLockMocks.acquire.mockReset();
+    sessionLockMocks.acquire.mockResolvedValue({ acquired: true, ownerId: "owner-1" });
+    sessionLockMocks.release.mockReset();
+    sessionLockMocks.release.mockResolvedValue(undefined);
+    sessionLockMocks.renew.mockReset();
+    sessionLockMocks.renew.mockResolvedValue(true);
+    sessionLockMocks.resolveTtlMs.mockReset();
+    sessionLockMocks.resolveTtlMs.mockReturnValue(120_000);
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -434,5 +494,72 @@ describe("tryDispatchAcpReply", () => {
         text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
       }),
     );
+  });
+
+  it("enforces ACP execution lock to prevent concurrent runs", async () => {
+    setReadyAcpResolution();
+    let releaseRun: (() => void) | undefined;
+    let held = false;
+    sessionLockMocks.acquire.mockImplementation(async () => {
+      if (held) {
+        return { acquired: false } as const;
+      }
+      held = true;
+      return { acquired: true, ownerId: "owner-1" } as const;
+    });
+    sessionLockMocks.release.mockImplementation(async () => {
+      held = false;
+    });
+    managerMocks.runTurn.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        }),
+    );
+
+    const firstDispatch = runDispatch({ bodyForAgent: "first" });
+    await vi.waitFor(() => {
+      expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    });
+
+    const secondResult = await runDispatch({ bodyForAgent: "second" });
+    expect(secondResult?.queuedFinal).toBe(false);
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+
+    releaseRun?.();
+    await firstDispatch;
+  });
+
+  it("marks skipped with acp_execution_locked when lock is already held", async () => {
+    setReadyAcpResolution();
+    sessionLockMocks.acquire.mockResolvedValue({ acquired: false });
+
+    const tracked = await runDispatchWithTracking({ bodyForAgent: "skip me" });
+
+    expect(tracked.result?.queuedFinal).toBe(false);
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(tracked.recordProcessed).toHaveBeenCalledWith("skipped", {
+      reason: "acp_execution_locked",
+    });
+  });
+
+  it("releases lock after successful ACP dispatch", async () => {
+    setReadyAcpResolution();
+    sessionLockMocks.acquire.mockResolvedValue({ acquired: true, ownerId: "owner-success" });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({ bodyForAgent: "success" });
+
+    expect(sessionLockMocks.release).toHaveBeenCalledWith(sessionKey, "owner-success");
+  });
+
+  it("releases lock after ACP dispatch throws", async () => {
+    setReadyAcpResolution();
+    sessionLockMocks.acquire.mockResolvedValue({ acquired: true, ownerId: "owner-error" });
+    managerMocks.runTurn.mockRejectedValue(new Error("boom"));
+
+    await runDispatch({ bodyForAgent: "throws" });
+
+    expect(sessionLockMocks.release).toHaveBeenCalledWith(sessionKey, "owner-error");
   });
 });

@@ -32,6 +32,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { getAcpSessionLockManager, resolveAcpSessionLockTtlMs } from "./session-lock-manager.js";
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -230,6 +231,62 @@ export async function tryDispatchAcpReply(params: {
     onReplyStart: params.onReplyStart,
   });
 
+  const lockManager = getAcpSessionLockManager();
+  const lockTtlMs = resolveAcpSessionLockTtlMs();
+  const lockAcquireStartedAt = Date.now();
+  let lockOwnerId: string | null = null;
+
+  try {
+    const lockAcquire = await lockManager.acquire(sessionKey, lockTtlMs);
+    if (!lockAcquire.acquired) {
+      const counts = params.dispatcher.getQueuedCounts();
+      params.recordProcessed("skipped", { reason: "acp_execution_locked" });
+      params.markIdle("message_completed");
+      logVerbose(
+        `dispatch-acp-lock: session=${sessionKey} lock_contended=true backend_wait_ms=${Date.now() - lockAcquireStartedAt}`,
+      );
+      return { queuedFinal: false, counts };
+    }
+    lockOwnerId = lockAcquire.ownerId;
+    logVerbose(
+      `dispatch-acp-lock: session=${sessionKey} acquired=true owner=${lockOwnerId} ttlMs=${lockTtlMs}`,
+    );
+  } catch (error) {
+    const counts = params.dispatcher.getQueuedCounts();
+    params.recordProcessed("skipped", { reason: "acp_execution_locked" });
+    params.markIdle("message_completed");
+    logVerbose(
+      `dispatch-acp-lock: session=${sessionKey} acquire_failed=${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { queuedFinal: false, counts };
+  }
+
+  let renewTimer: NodeJS.Timeout | null = null;
+  if (lockOwnerId) {
+    // Best-effort heartbeat: renew failures are logged, and the turn continues.
+    const renewEveryMs = Math.max(1_000, Math.floor(lockTtlMs / 2));
+    renewTimer = setInterval(() => {
+      if (!lockOwnerId) {
+        return;
+      }
+      void lockManager
+        .renew(sessionKey, lockOwnerId, lockTtlMs)
+        .then((renewed) => {
+          if (!renewed) {
+            logVerbose(
+              `dispatch-acp-lock: session=${sessionKey} renew_failed owner=${lockOwnerId}`,
+            );
+          }
+        })
+        .catch((error) => {
+          logVerbose(
+            `dispatch-acp-lock: session=${sessionKey} renew_error=${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+    }, renewEveryMs);
+    renewTimer.unref?.();
+  }
+
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
@@ -392,5 +449,21 @@ export async function tryDispatchAcpReply(params: {
     });
     params.markIdle("message_completed");
     return { queuedFinal, counts };
+  } finally {
+    if (renewTimer) {
+      clearInterval(renewTimer);
+    }
+    if (lockOwnerId) {
+      try {
+        await lockManager.release(sessionKey, lockOwnerId);
+        logVerbose(`dispatch-acp-lock: session=${sessionKey} released owner=${lockOwnerId}`);
+      } catch (error) {
+        logVerbose(
+          `dispatch-acp-lock: session=${sessionKey} release_failed owner=${lockOwnerId} error=${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        lockOwnerId = null;
+      }
+    }
   }
 }
