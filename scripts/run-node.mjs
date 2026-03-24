@@ -295,7 +295,7 @@ const isInspectorExecArgv = (value) =>
   value.startsWith("--debug-port=");
 
 const inspectorExecArgvConsumesNextValue = (value) =>
-  value === "--inspect-port" || value === "--debug-port";
+  value === "--inspect-port" || value === "--inspect-publish-uid" || value === "--debug-port";
 
 const isWatchExecArgv = (value) =>
   value === "--watch" ||

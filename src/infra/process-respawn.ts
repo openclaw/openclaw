@@ -128,7 +128,9 @@ function isInspectorExecArgv(value: string): boolean {
 }
 
 function inspectorExecArgvConsumesNextValue(value: string): boolean {
-  return value === "--inspect-port" || value === "--debug-port";
+  return (
+    value === "--inspect-port" || value === "--inspect-publish-uid" || value === "--debug-port"
+  );
 }
 
 function isWatchExecArgv(value: string): boolean {

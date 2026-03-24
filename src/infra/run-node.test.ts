@@ -677,7 +677,7 @@ describe("run-node script", () => {
       };
 
       const forwardedNodeOptions =
-        "--inspect=9229 --inspect-port 9230 --inspect-wait --inspect-brk --max-old-space-size=4096";
+        "--inspect=9229 --inspect-port 9230 --inspect-publish-uid stderr --inspect-wait --inspect-brk --max-old-space-size=4096";
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["gateway"],

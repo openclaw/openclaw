@@ -44,7 +44,7 @@ const quoteNodeOptionToken = (value, originalToken) => {
   if (!/\s/.test(value)) {
     return value;
   }
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  return `"${value.replaceAll('"', '\\"')}"`;
 };
 
 const absolutizeRelativeModuleSpecifier = (token, runtimeCwd) => {

@@ -271,6 +271,8 @@ describe("restartGatewayProcessWithFreshPid", () => {
       "--inspect=9229",
       "--inspect-port",
       "9230",
+      "--inspect-publish-uid",
+      "stderr",
       "--trace-warnings",
       "--inspect-wait",
       "--inspect-brk",
@@ -300,6 +302,8 @@ describe("restartGatewayProcessWithFreshPid", () => {
             "--inspect=9229",
             "--inspect-port",
             "9230",
+            "--inspect-publish-uid",
+            "stderr",
             "--trace-warnings",
             "--inspect-wait",
             "--inspect-brk",
@@ -501,7 +505,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const tsconfigPath = path.join(rootPath, "tsconfig.json");
     process.execArgv = ["--trace-warnings"];
     process.env.NODE_OPTIONS =
-      '--inspect=9229 --inspect-port 9230 --require "./loader.js" --max-old-space-size=4096';
+      '--inspect=9229 --inspect-port 9230 --inspect-publish-uid stderr --require "./loader.js" --max-old-space-size=4096';
     process.argv = ["/usr/local/bin/node", path.join(rootPath, "openclaw.mjs"), "gateway"];
     resolveOpenClawPackageRootSyncMock.mockReturnValue(rootPath);
     existsSyncMock.mockImplementation(
@@ -524,7 +528,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
         env: expect.objectContaining({
           NODE_OPTIONS: "--max-old-space-size=4096",
           OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS:
-            '--inspect=9229 --inspect-port 9230 --require "./loader.js" --max-old-space-size=4096',
+            '--inspect=9229 --inspect-port 9230 --inspect-publish-uid stderr --require "./loader.js" --max-old-space-size=4096',
         }),
         stdio: "inherit",
       }),
