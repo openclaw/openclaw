@@ -21,11 +21,8 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
   if (!expectedParts) {
     return null;
   }
-  if (!isOffsetlessIsoDateTime(raw)) {
-    return null;
-  }
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    getZonedDateTimeParts(Date.now(), timeZone);
 
     const naiveMs = new Date(`${raw}Z`).getTime();
     if (Number.isNaN(naiveMs)) {
@@ -69,36 +66,33 @@ function matchesOffsetlessIsoDateTimeParts(
   timeZone: string,
   expected: OffsetlessIsoDateTimeParts,
 ): boolean {
-  const utcDate = new Date(utcMs);
-  if (utcDate.getUTCMilliseconds() !== expected.millisecond) {
-    return false;
-  }
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    hourCycle: "h23",
-  }).formatToParts(utcDate);
-  const getNumericPart = (type: string) => {
-    const part = parts.find((candidate) => candidate.type === type);
-    return Number.parseInt(part?.value ?? "0", 10);
-  };
+  const actual = getZonedDateTimeParts(utcMs, timeZone);
   return (
-    getNumericPart("year") === expected.year &&
-    getNumericPart("month") === expected.month &&
-    getNumericPart("day") === expected.day &&
-    getNumericPart("hour") === expected.hour &&
-    getNumericPart("minute") === expected.minute &&
-    getNumericPart("second") === expected.second
+    actual.year === expected.year &&
+    actual.month === expected.month &&
+    actual.day === expected.day &&
+    actual.hour === expected.hour &&
+    actual.minute === expected.minute &&
+    actual.second === expected.second &&
+    actual.millisecond === expected.millisecond
   );
 }
 
 function getTimeZoneOffsetMs(utcMs: number, timeZone: string): number {
+  const parts = getZonedDateTimeParts(utcMs, timeZone);
+  const localAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+
+  return localAsUtc - utcMs;
+}
+
+function getZonedDateTimeParts(utcMs: number, timeZone: string): OffsetlessIsoDateTimeParts {
   const utcDate = new Date(utcMs);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -111,20 +105,17 @@ function getTimeZoneOffsetMs(utcMs: number, timeZone: string): number {
     hour12: false,
     hourCycle: "h23",
   }).formatToParts(utcDate);
-
   const getNumericPart = (type: string) => {
     const part = parts.find((candidate) => candidate.type === type);
     return Number.parseInt(part?.value ?? "0", 10);
   };
-
-  const localAsUtc = Date.UTC(
-    getNumericPart("year"),
-    getNumericPart("month") - 1,
-    getNumericPart("day"),
-    getNumericPart("hour"),
-    getNumericPart("minute"),
-    getNumericPart("second"),
-  );
-
-  return localAsUtc - utcMs;
+  return {
+    year: getNumericPart("year"),
+    month: getNumericPart("month"),
+    day: getNumericPart("day"),
+    hour: getNumericPart("hour"),
+    minute: getNumericPart("minute"),
+    second: getNumericPart("second"),
+    millisecond: utcDate.getUTCMilliseconds(),
+  };
 }
