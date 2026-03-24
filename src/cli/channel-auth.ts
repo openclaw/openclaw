@@ -90,18 +90,20 @@ async function resolveChannelPluginForMode(
 }> {
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(cfg, mode);
-  const channelId = normalizeChannelId(channelInput);
-  if (!channelId) {
-    throw new Error(`Unsupported channel: ${channelInput}`);
-  }
+  const normalizedChannelId = normalizeChannelId(channelInput);
 
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
-    channelId,
+    rawChannel: channelInput,
+    ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,
     supports: (candidate) => supportsChannelAuthMode(candidate, mode),
   });
+  const channelId = resolved.channelId ?? normalizedChannelId;
+  if (!channelId) {
+    throw new Error(`Unsupported channel: ${channelInput}`);
+  }
   const plugin = resolved.plugin;
   if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
     throw new Error(`Channel ${channelId} does not support ${mode}`);
