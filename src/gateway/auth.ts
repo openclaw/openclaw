@@ -290,7 +290,7 @@ export function assertGatewayAuthConfigured(
       return;
     }
     throw new Error(
-      "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN; note: legacy CLAWDBOT_*/MOLTBOT_* env vars are no longer supported)",
     );
   }
   if (auth.mode === "password" && !auth.password) {
@@ -302,7 +302,9 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
       );
     }
-    throw new Error("gateway auth mode is password, but no password was configured");
+    throw new Error(
+      "gateway auth mode is password, but no password was configured (note: legacy CLAWDBOT_*/MOLTBOT_* env vars are no longer supported)",
+    );
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
