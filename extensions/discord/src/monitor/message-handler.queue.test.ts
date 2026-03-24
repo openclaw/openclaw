@@ -280,7 +280,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
           createPreflightContext(preflightParams.data.channel_id),
       );
 
-      const handler = createDiscordMessageHandler(createDiscordHandlerParams({ workerRunTimeoutMs: 50 }));
+      const handler = createDiscordMessageHandler(
+        createDiscordHandlerParams({ workerRunTimeoutMs: 50 }),
+      );
 
       await expect(
         handler(createMessageData("m-1") as never, {} as never),

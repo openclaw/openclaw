@@ -202,18 +202,14 @@ function installPluginRuntimeDeps(pluginDir, pluginId) {
       "--package-lock=false",
     ],
   });
-  const result = spawnSync(
-    npmRunner.command,
-    npmRunner.args,
-    {
-      cwd: pluginDir,
-      encoding: "utf8",
-      env: npmRunner.env,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-    },
-  );
+  const result = spawnSync(npmRunner.command, npmRunner.args, {
+    cwd: pluginDir,
+    encoding: "utf8",
+    env: npmRunner.env,
+    stdio: "pipe",
+    shell: npmRunner.shell,
+    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  });
   if (result.status === 0) {
     return;
   }
