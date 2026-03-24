@@ -502,6 +502,13 @@ export class GatewayClient {
           this.deviceTokenRetryBudgetUsed = true;
           this.backoffMs = Math.min(this.backoffMs, 250);
         }
+        const isTransientPreHelloClose =
+          this.pendingConnectErrorDetailCode == null &&
+          err instanceof Error &&
+          /^gateway closed \(1000\):\s*$/.test(err.message);
+        if (isTransientPreHelloClose) {
+          return;
+        }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {

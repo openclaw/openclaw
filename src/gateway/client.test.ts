@@ -8,6 +8,7 @@ const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
+const logErrorMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -107,6 +108,7 @@ vi.mock("../logger.js", async (importOriginal) => {
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),
+    logError: (...args: unknown[]) => logErrorMock(...args),
   };
 });
 
@@ -408,6 +410,7 @@ describe("GatewayClient connect auth payload", () => {
     wsInstances.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
+    logErrorMock.mockReset();
   });
 
   function connectFrameFrom(ws: MockWebSocket) {
@@ -474,6 +477,22 @@ describe("GatewayClient connect auth payload", () => {
           code: "INVALID_REQUEST",
           message: "unauthorized",
           details,
+        },
+      }),
+    );
+  }
+
+  function emitConnectSuccess(ws: MockWebSocket, connectId: string | undefined) {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectId,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "conn-1" },
+          features: { methods: ["health"] },
         },
       }),
     );
@@ -646,6 +665,40 @@ describe("GatewayClient connect auth payload", () => {
       deviceToken: "stored-device-token",
     });
     client.stop();
+  });
+
+  it("suppresses transient pre-hello 1000 closes while reconnect succeeds", async () => {
+    vi.useFakeTimers();
+    const onConnectError = vi.fn();
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+      onHelloOk,
+    });
+
+    try {
+      const { ws: ws1 } = startClientAndConnect({ client });
+      ws1.emitClose(1000, "");
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(wsInstances.length).toBe(2));
+
+      const ws2 = getLatestWs();
+      ws2.emitOpen();
+      emitConnectChallenge(ws2, "nonce-2");
+      const secondConnect = connectRequestFrom(ws2);
+      emitConnectSuccess(ws2, secondConnect.id);
+
+      await vi.waitFor(() => expect(onHelloOk).toHaveBeenCalled());
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed: Error: gateway closed (1000):"),
+      );
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {

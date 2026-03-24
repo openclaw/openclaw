@@ -548,6 +548,46 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
   });
+  it("waits through a transient pre-hello close when the client later completes hello", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let healthRequests = 0;
+
+    class ReconnectingStubGatewayClient {
+      constructor(
+        private readonly opts: {
+          onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+          onClose?: (code: number, reason: string) => void;
+        },
+      ) {}
+
+      async request(method: string) {
+        if (method === "health") {
+          healthRequests += 1;
+          return { ok: true };
+        }
+        return undefined;
+      }
+
+      start() {
+        setTimeout(() => this.opts.onClose?.(1000, ""), 0);
+        setTimeout(() => void this.opts.onHelloOk?.({ features: { methods: ["health"] } }), 1);
+      }
+
+      stop() {}
+    }
+
+    __testing.setCreateGatewayClientForTests(
+      (opts) => new ReconnectingStubGatewayClient(opts as never) as never,
+    );
+
+    const promise = callGateway({ method: "health" });
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(healthRequests).toBe(1);
+  });
+
 
   it("includes connection details on timeout", async () => {
     startMode = "silent";
