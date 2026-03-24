@@ -552,9 +552,10 @@ function scoreToolEfficiency(sessions: SessionEntry[][]): {
 // ---------------------------------------------------------------------------
 
 interface PlatformIssue {
+  source: "session" | "gateway";
   category: string;
   severity: "high" | "medium" | "low";
-  agent: AgentId;
+  agent: AgentId | "gateway";
   session_id: string;
   timestamp: string;
   tool_name: string;
@@ -608,6 +609,7 @@ function detectPlatformIssues(): PlatformIssue[] {
                 seen.add(sig);
 
                 issues.push({
+                  source: "session",
                   category: classification.category,
                   severity: classification.severity,
                   agent: agentId,
@@ -639,6 +641,7 @@ function detectPlatformIssues(): PlatformIssue[] {
           seen.add(sig);
 
           issues.push({
+            source: "session",
             category: "session-stability",
             severity: errorMsg === "aborted" ? "low" : "high",
             agent: agentId,
@@ -675,6 +678,7 @@ function detectPlatformIssues(): PlatformIssue[] {
           if (!seen.has(sig)) {
             seen.add(sig);
             issues.push({
+              source: "session",
               category: "tool-pipeline",
               severity: "high",
               agent: agentId,
@@ -738,6 +742,160 @@ function classifyError(
 
   // Generic tool error — only flag if high frequency
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Gateway Log Diagnostics
+// ---------------------------------------------------------------------------
+
+const GATEWAY_LOG_DIR = "/tmp/openclaw";
+
+interface GatewayLogEntry {
+  "0": string;
+  "1"?: string;
+  "2"?: string;
+  _meta?: {
+    logLevelName?: string;
+    logLevelId?: number;
+    date?: string;
+    name?: string;
+  };
+  time?: string;
+}
+
+// Patterns for classifying gateway log errors/warnings
+const GATEWAY_PATTERNS: {
+  pattern: RegExp;
+  category: string;
+  severity: "high" | "medium" | "low";
+}[] = [
+  // Config corruption — highest priority
+  {
+    pattern: /JSON5 parse failed|config is invalid|Config invalid|gateway aborted.*config/i,
+    category: "config-corruption",
+    severity: "high",
+  },
+  { pattern: /config reload skipped.*invalid/i, category: "config-corruption", severity: "high" },
+  // Channel delivery failures
+  {
+    pattern: /message is too long|sendMessage.*failed|announce failed/i,
+    category: "channel-delivery",
+    severity: "medium",
+  },
+  // Gateway config drift
+  { pattern: /identity reconcile.*failed=\d+/i, category: "gateway-config", severity: "medium" },
+  {
+    pattern: /OPENCLAW_GATEWAY_TOKEN.*embedded|Service config.*out of date/i,
+    category: "gateway-config",
+    severity: "medium",
+  },
+  // Agent tool conflicts
+  {
+    pattern: /edit failed: Could not find the exact text/i,
+    category: "agent-tool-conflict",
+    severity: "low",
+  },
+  // Session stability — zombie runs, lane waits
+  { pattern: /zombie run/i, category: "session-stability", severity: "high" },
+  {
+    pattern: /lane wait exceeded.*waitedMs=(\d+)/i,
+    category: "session-stability",
+    severity: "medium",
+  },
+  { pattern: /stale session lock/i, category: "session-stability", severity: "low" },
+  { pattern: /onSubagentEnded failed/i, category: "session-stability", severity: "medium" },
+  // Tool/agent timeouts
+  {
+    pattern: /embedded run timeout|timed out.*Trying next account/i,
+    category: "tool-timeout",
+    severity: "high",
+  },
+  { pattern: /stopReason=toolUse/i, category: "tool-timeout", severity: "medium" },
+  // MCP/QMD issues
+  {
+    pattern: /qmd vsearch failed|ggml-metal.*fatal/i,
+    category: "mcp-integration",
+    severity: "medium",
+  },
+  { pattern: /qmd memory failed/i, category: "mcp-integration", severity: "low" },
+  // Auth
+  { pattern: /unauthorized.*token_mismatch/i, category: "auth", severity: "low" },
+  // Missing resources
+  { pattern: /read failed: ENOENT/i, category: "missing-resource", severity: "low" },
+  // Network
+  { pattern: /fetch fallback.*autoSelectFamily/i, category: "network-fallback", severity: "low" },
+  // RPC
+  {
+    pattern: /RPC probe.*failed|Port \d+ is already in use/i,
+    category: "gateway-rpc",
+    severity: "medium",
+  },
+];
+
+function detectGatewayLogIssues(): PlatformIssue[] {
+  const issues: PlatformIssue[] = [];
+  const seen = new Set<string>();
+
+  // Find today's log file
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const logPath = join(GATEWAY_LOG_DIR, `openclaw-${today}.log`);
+  if (!existsSync(logPath)) return issues;
+
+  const raw = readFileSync(logPath, "utf-8");
+  const lines = raw.split("\n").filter((l) => l.trim());
+
+  for (const line of lines) {
+    let entry: GatewayLogEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    // Only process ERROR and WARN
+    const level = entry._meta?.logLevelName;
+    if (level !== "ERROR" && level !== "WARN") continue;
+
+    // Extract message text — field "1" for subsystem loggers, field "0" for root
+    const msg = entry["1"] || entry["0"] || "";
+    const msg2 = entry["2"] || "";
+    const fullMsg = `${msg} ${msg2}`.trim();
+    const timestamp = entry._meta?.date || entry.time || today;
+
+    // Extract subsystem
+    let subsystem = "gateway";
+    try {
+      const nameObj = JSON.parse(entry._meta?.name || "{}");
+      if (nameObj.subsystem) subsystem = nameObj.subsystem;
+    } catch {
+      if (entry._meta?.name) subsystem = entry._meta.name;
+    }
+
+    // Match against patterns
+    for (const { pattern, category, severity } of GATEWAY_PATTERNS) {
+      if (!pattern.test(fullMsg)) continue;
+
+      const sig = `gw:${category}:${subsystem}:${fullMsg.slice(0, 60).replace(/\s+/g, "_")}`;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+
+      issues.push({
+        source: "gateway",
+        category,
+        severity,
+        agent: "gateway",
+        session_id: logPath,
+        timestamp,
+        tool_name: subsystem,
+        error_signature: sig,
+        evidence: fullMsg.slice(0, 300),
+        suggested_labels: ["auto-improve", "platform", category],
+      });
+      break; // first match wins per line
+    }
+  }
+
+  return issues;
 }
 
 // ---------------------------------------------------------------------------
@@ -941,8 +1099,10 @@ function main() {
   const results = agentsToScore.map(scoreAgent);
 
   if (OUTPUT_DIAGNOSTICS) {
-    const issues = detectPlatformIssues();
-    console.log(JSON.stringify(issues, null, 2));
+    const sessionIssues = detectPlatformIssues();
+    const gatewayIssues = detectGatewayLogIssues();
+    const allIssues = [...sessionIssues, ...gatewayIssues];
+    console.log(JSON.stringify(allIssues, null, 2));
   } else if (OUTPUT_JSON) {
     console.log(JSON.stringify(results, null, 2));
   } else if (OUTPUT_TSV) {
