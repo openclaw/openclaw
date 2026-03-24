@@ -7,6 +7,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   countPendingDescendantRuns,
+  getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
 } from "../../agents/subagent-registry.js";
 import {
@@ -191,6 +192,11 @@ export async function buildStatusReply(params: {
     const seenChildSessionKeys = new Set<string>();
     const runs = sortSubagentRuns(listSubagentRunsForRequester(requesterKey)).filter((entry) => {
       if (seenChildSessionKeys.has(entry.childSessionKey)) {
+        return false;
+      }
+      const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
+      const latestRequesterSessionKey = latest?.requesterSessionKey?.trim();
+      if (!latest || latest.runId !== entry.runId || latestRequesterSessionKey !== requesterKey) {
         return false;
       }
       seenChildSessionKeys.add(entry.childSessionKey);

@@ -342,7 +342,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
 
