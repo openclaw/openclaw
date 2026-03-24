@@ -121,6 +121,7 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+const DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS = 5_000;
 
 type PendingStop = {
   ws: WebSocket;
@@ -701,7 +702,7 @@ export class GatewayClient {
     const connectChallengeTimeoutMs =
       typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
         ? Math.max(250, Math.min(10_000, rawConnectDelayMs))
-        : 2_000;
+        : DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS;
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
     }
