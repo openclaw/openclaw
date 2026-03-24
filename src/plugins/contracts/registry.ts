@@ -1,3 +1,4 @@
+import acpProviderPlugin from "../../../extensions/acp-provider/index.js";
 import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
@@ -352,6 +353,7 @@ export const imageGenerationProviderContractRegistry: ImageGenerationProviderCon
   createLazyArrayView(loadImageGenerationProviderContractRegistry);
 
 const bundledProviderPlugins = dedupePlugins([
+  acpProviderPlugin,
   amazonBedrockPlugin,
   anthropicPlugin,
   byteplusPlugin,

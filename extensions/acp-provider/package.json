@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/acp-provider",
+  "version": "2026.3.24",
+  "private": true,
+  "description": "OpenClaw ACP (Agent Client Protocol) provider plugin",
+  "type": "module",
+  "dependencies": {
+    "@mcpc-tech/acp-ai-provider": "^0.2.0",
+    "ai": "^6.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

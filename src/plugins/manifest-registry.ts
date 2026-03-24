@@ -143,11 +143,21 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
-  return (
+  // Accept idHint = manifestId + suffix (e.g. idHint "ollama-provider", manifestId "ollama")
+  if (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
     normalizedHint === `${manifestId}-sandbox` ||
     normalizedHint === `${manifestId}-media-understanding`
+  ) {
+    return true;
+  }
+  // Accept manifestId = idHint + suffix (e.g. idHint "acp", manifestId "acp-provider")
+  return (
+    manifestId === `${normalizedHint}-provider` ||
+    manifestId === `${normalizedHint}-plugin` ||
+    manifestId === `${normalizedHint}-sandbox` ||
+    manifestId === `${normalizedHint}-media-understanding`
   );
 }
 

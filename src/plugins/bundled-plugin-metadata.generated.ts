@@ -2,6 +2,44 @@
 
 export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   {
+    dirName: "acp-provider",
+    idHint: "acp",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/acp-provider",
+    packageVersion: "2026.3.24",
+    packageDescription: "OpenClaw ACP (Agent Client Protocol) provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "acp-provider",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["acp"],
+      providerAuthEnvVars: {
+        acp: ["ACP_COMMAND"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "acp",
+          method: "custom",
+          choiceId: "acp-command",
+          choiceLabel: "ACP Agent",
+          choiceHint: "Spawn an ACP agent as a subprocess (e.g. gemini, claude-agent-acp)",
+          groupId: "acp",
+          groupLabel: "ACP",
+          groupHint: "Agent Client Protocol",
+        },
+      ],
+    },
+  },
+  {
     dirName: "acpx",
     idHint: "acpx",
     source: {

@@ -1,0 +1,24 @@
+{
+  "id": "acp-provider",
+  "providers": ["acp"],
+  "providerAuthEnvVars": {
+    "acp": ["ACP_COMMAND"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "acp",
+      "method": "custom",
+      "choiceId": "acp-command",
+      "choiceLabel": "ACP Agent",
+      "choiceHint": "Spawn an ACP agent as a subprocess (e.g. gemini, claude-agent-acp)",
+      "groupId": "acp",
+      "groupLabel": "ACP",
+      "groupHint": "Agent Client Protocol"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
