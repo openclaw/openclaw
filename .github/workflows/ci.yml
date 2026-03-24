@@ -257,7 +257,7 @@ jobs:
           - runtime: node
             task: channels
             shard_index: 1
-            shard_count: 2
+            shard_count: 3
             command: pnpm test:channels
           - runtime: node
             task: contracts
@@ -265,7 +265,12 @@ jobs:
           - runtime: node
             task: channels
             shard_index: 2
-            shard_count: 2
+            shard_count: 3
+            command: pnpm test:channels
+          - runtime: node
+            task: channels
+            shard_index: 3
+            shard_count: 3
             command: pnpm test:channels
           - runtime: node
             task: protocol
