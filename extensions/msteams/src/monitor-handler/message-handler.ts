@@ -30,6 +30,7 @@ import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
+  extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -103,6 +104,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -533,6 +535,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      ReplyToId: activity.replyToId ?? undefined,
+      ReplyToBody: quoteInfo?.body,
+      ReplyToSender: quoteInfo?.sender,
+      ReplyToIsQuote: quoteInfo ? true : undefined,
       ...mediaPayload,
     });
 
