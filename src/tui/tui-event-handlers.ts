@@ -61,6 +61,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
+  let pendingHistoryRefresh = false;
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -93,9 +94,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
+    pendingHistoryRefresh = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
+  };
+
+  const flushPendingHistoryRefreshIfIdle = () => {
+    if (!pendingHistoryRefresh || state.activeChatRunId) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
   };
 
   const noteSessionRun = (runId: string) => {
@@ -123,6 +133,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
+    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
     }
@@ -137,6 +148,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
+    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
     }
@@ -158,22 +170,21 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
-      // Never reload history for local runs that ended without displayable output.
-      // This prevents the user's message from disappearing when the backend is slow
-      // (e.g., Ollama) and sends an empty final event before the response is ready.
+      // Local runs with displayable output do not need a history reload.
       if (!opts?.allowLocalWithoutDisplayableFinal) {
         return;
       }
-      // Skip history reload if a DIFFERENT run is still active.
-      // This prevents clearing the user's pending message when a stale/concurrent
-      // empty final event arrives while a new message is being processed.
+      // Defer the reload if a newer run is active so we preserve the pending
+      // user message, then flush once that active run finishes.
       if (state.activeChatRunId && state.activeChatRunId !== runId) {
+        pendingHistoryRefresh = true;
         return;
       }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
+    pendingHistoryRefresh = false;
     void loadHistory?.();
   };
 
