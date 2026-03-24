@@ -1,10 +1,10 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
+  DEFAULT_TEST_MODEL_CATALOG,
   assertModelSelection,
   installDirectiveBehaviorE2EHooks,
-  loadModelCatalog,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   mockEmbeddedTextResult,
@@ -13,9 +13,27 @@ import {
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import {
+  loadModelCatalogMock,
+  runEmbeddedPiAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
-import { getReplyFromConfig } from "./reply.js";
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+
+function installFreshDirectiveBehaviorReplyMocks() {
+  vi.doMock("../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  }));
+  vi.doMock("../agents/model-catalog.js", () => ({
+    loadModelCatalog: loadModelCatalogMock,
+  }));
+}
 
 function makeDefaultModelConfig(home: string) {
   return makeWhatsAppDirectiveConfig(home, {
@@ -49,7 +67,7 @@ async function expectThinkStatusForReasoningModel(params: {
   reasoning: boolean;
   expectedLevel: "low" | "off";
 }): Promise<void> {
-  vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+  loadModelCatalogMock.mockResolvedValueOnce([
     {
       id: "claude-opus-4-5",
       name: "Opus 4.5",
@@ -70,7 +88,7 @@ async function expectThinkStatusForReasoningModel(params: {
 }
 
 function mockReasoningCapableCatalog() {
-  vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+  loadModelCatalogMock.mockResolvedValueOnce([
     {
       id: "claude-opus-4-5",
       name: "Opus 4.5",
@@ -111,6 +129,14 @@ async function runReasoningDefaultCase(params: {
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
+
+  beforeEach(async () => {
+    vi.resetModules();
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    installFreshDirectiveBehaviorReplyMocks();
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
 
   it("covers /think status and reasoning defaults for reasoning and non-reasoning models", async () => {
     await withTempHome(async (home) => {
@@ -155,7 +181,7 @@ describe("directive behavior", () => {
       expect(aliasText).toContain("Use: /models <provider>");
       expect(aliasText).toContain("Switch: /model <provider/model>");
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+      loadModelCatalogMock.mockResolvedValueOnce([]);
       const unavailableCatalogText = await runModelDirectiveText(home, "/model");
       expect(unavailableCatalogText).toContain("Current: anthropic/claude-opus-4-5");
       expect(unavailableCatalogText).toContain("Switch: /model <provider/model>");
@@ -172,7 +198,7 @@ describe("directive behavior", () => {
       expect(allowlistedStatusText).not.toContain("claude-sonnet-4-1");
       expect(allowlistedStatusText).toContain("auth:");
 
-      vi.mocked(loadModelCatalog).mockResolvedValue([
+      loadModelCatalogMock.mockResolvedValue([
         { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
@@ -193,7 +219,7 @@ describe("directive behavior", () => {
       expect(noAllowlistText).toContain("- xai");
       expect(noAllowlistText).toContain("Use: /models <provider>");
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      loadModelCatalogMock.mockResolvedValueOnce([
         {
           provider: "anthropic",
           id: "claude-opus-4-5",
@@ -343,7 +369,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
       mockEmbeddedTextResult("done");
-      vi.mocked(loadModelCatalog).mockResolvedValue([
+      loadModelCatalogMock.mockResolvedValue([
         {
           id: "x-ai/grok-4.1-fast",
           name: "Grok 4.1 Fast",
