@@ -643,11 +643,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
     const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-    const deleteWorkspace =
-      resolveAgentIdsByExactWorkspacePath(cfg, workspaceDir).filter((id) => id !== agentId)
-        .length === 0;
-
     const result = pruneAgentConfig(cfg, agentId);
+    const deleteWorkspace =
+      resolveAgentIdsByExactWorkspacePath(result.config, workspaceDir).filter(
+        (id) => id !== agentId,
+      ).length === 0;
     await writeConfigFile(result.config);
 
     if (deleteFiles) {

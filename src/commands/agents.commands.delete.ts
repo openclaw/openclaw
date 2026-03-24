@@ -73,12 +73,13 @@ export async function agentsDeleteCommand(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = resolveAgentDir(cfg, agentId);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const sharedWorkspaceAgents = resolveAgentIdsByExactWorkspacePath(cfg, workspaceDir).filter(
-    (id) => id !== agentId,
-  );
-  const deleteWorkspace = sharedWorkspaceAgents.length === 0;
 
   const result = pruneAgentConfig(cfg, agentId);
+  const sharedWorkspaceAgents = resolveAgentIdsByExactWorkspacePath(
+    result.config,
+    workspaceDir,
+  ).filter((id) => id !== agentId);
+  const deleteWorkspace = sharedWorkspaceAgents.length === 0;
   await writeConfigFile(result.config);
   if (!opts.json) {
     logConfigUpdated(runtime);
