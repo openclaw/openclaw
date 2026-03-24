@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAnthropicVertexProvider,
@@ -17,7 +18,6 @@ import {
 } from "../plugin-sdk/provider-catalog.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
