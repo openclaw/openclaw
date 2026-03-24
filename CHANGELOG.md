@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/cron: suppress the default heartbeat system prompt for cron-triggered embedded runs even when they target non-cron session keys, so cron tasks stop reading `HEARTBEAT.md` and polluting unrelated threads. (#53152) Thanks @Protocol-zero-0.
+
 ## 2026.3.23
 
 ### Breaking
