@@ -269,6 +269,14 @@ export class ClawBrowserPanel extends LitElement {
       background-color: #ffbd2e;
     }
 
+    .tabs-container {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      align-items: flex-end;
+    }
+
     .tabs-bar {
       display: flex;
       gap: 4px;
@@ -568,19 +576,21 @@ export class ClawBrowserPanel extends LitElement {
                     )?.requestFullscreen();
                   }}></div>
                 </div>
-                <div class="tabs-bar">
-                  ${this.tabs.map(
-                    (tab) => html`
-                    <div 
-                      class="tab-item ${tab.sessionId === this.currentSessionId ? "active" : ""}" 
-                      @click=${() => void this.switchTab(tab)}
-                      @mousedown=${(e: Event) => e.stopPropagation()}
-                    >
-                      <span class="tab-title" title=${tab.url}>${tab.title || tab.url || "New Tab"}</span>
-                      <span class="tab-close" @click=${(e: Event) => void this.handleCloseTab(e, tab)}>×</span>
-                    </div>
-                  `,
-                  )}
+                <div class="tabs-container">
+                  <div class="tabs-bar">
+                    ${this.tabs.map(
+                      (tab) => html`
+                      <div 
+                        class="tab-item ${tab.sessionId === this.currentSessionId ? "active" : ""}" 
+                        @click=${() => void this.switchTab(tab)}
+                        @mousedown=${(e: Event) => e.stopPropagation()}
+                      >
+                        <span class="tab-title" title=${tab.url}>${tab.title || tab.url || "New Tab"}</span>
+                        <span class="tab-close" @click=${(e: Event) => void this.handleCloseTab(e, tab)}>×</span>
+                      </div>
+                    `,
+                    )}
+                  </div>
                   <button 
                     class="new-tab-btn" 
                     @click=${() => void this.handleNewTab()} 
