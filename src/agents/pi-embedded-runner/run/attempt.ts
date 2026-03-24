@@ -158,6 +158,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -1524,6 +1525,13 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+export function shouldInjectHeartbeatPrompt(params: {
+  isDefaultAgent: boolean;
+  trigger?: EmbeddedRunAttemptParams["trigger"];
+}): boolean {
+  return params.isDefaultAgent && shouldInjectHeartbeatPromptForTrigger(params.trigger);
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -1969,7 +1977,10 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-    const heartbeatPrompt = isDefaultAgent
+    const heartbeatPrompt = shouldInjectHeartbeatPrompt({
+      isDefaultAgent,
+      trigger: params.trigger,
+    })
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
 

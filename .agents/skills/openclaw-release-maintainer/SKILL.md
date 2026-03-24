@@ -72,8 +72,19 @@ pnpm test:install:smoke
 For a non-root smoke path:
 
 ```bash
-OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
+  OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 ```
+
+After npm publish, run:
+
+```bash
+node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
+```
+
+- This verifies the published registry install path in a fresh temp prefix.
+- For stable correction releases like `YYYY.M.D-N`, it also verifies the
+  upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
+  silently leave existing global installs on the old base stable payload.
 
 ## Check all relevant release builds
 
@@ -138,9 +149,10 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
   build, signing, notarization, packaged mac artifact generation, and
   stable-feed `appcast.xml` artifact generation.
-- After a successful real private mac publish, the agent must download
-  `macos-release-<tag>` from that run and upload the packaged mac assets to the
-  existing GitHub release in `openclaw/openclaw`.
+- Real private mac publish uploads the packaged `.zip`, `.dmg`, and
+  `.dSYM.zip` assets to the existing GitHub release in `openclaw/openclaw`
+  automatically when `OPENCLAW_PUBLIC_REPO_RELEASE_TOKEN` is present in the
+  private repo `mac-release` environment.
 - For stable releases, the agent must also download the signed
   `macos-appcast-<tag>` artifact from the successful private mac workflow and
   then update `appcast.xml` on `main`.
@@ -164,12 +176,24 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   `scripts/package-mac-dist.sh` to build, sign, notarize, and package the app;
   manual GitHub release asset upload; then `scripts/make_appcast.sh` plus the
   `appcast.xml` commit to `main`.
+- `scripts/package-mac-dist.sh` now fails closed for release builds if the
+  bundled app comes out with a debug bundle id, an empty Sparkle feed URL, or a
+  `CFBundleVersion` below the canonical Sparkle build floor for that short
+  version. For correction tags, set a higher explicit `APP_BUILD`.
+- `scripts/make_appcast.sh` first uses `generate_appcast` from `PATH`, then
+  falls back to the SwiftPM Sparkle tool output under `apps/macos/.build`.
 - For stable tags, the local fallback may update the shared production
   `appcast.xml`.
 - For beta tags, the local fallback still publishes the mac assets but must not
   update the shared production `appcast.xml` unless a separate beta feed exists.
 - Treat the local workflow as fallback only. Prefer the CI/CD publish workflow
   when it is working.
+- After any stable mac publish, verify all of the following before you call the
+  release finished:
+  - the GitHub release has `.zip`, `.dmg`, and `.dSYM.zip` assets
+  - `appcast.xml` on `main` points at the new stable zip
+  - the packaged app reports the expected short version and a numeric
+    `CFBundleVersion` at or above the canonical Sparkle build floor
 
 ## Run the release sequence
 
@@ -198,9 +222,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 15. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish and wait for success.
-16. Download `macos-release-<tag>` from the successful private mac run and
-    upload the `.zip`, `.dmg`, and `.dSYM.zip` artifacts to the existing
-    GitHub release in `openclaw/openclaw`.
+16. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+    and `.dSYM.zip` artifacts to the existing GitHub release in
+    `openclaw/openclaw`.
 17. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
 18. For beta releases, publish the mac assets but expect no shared production

@@ -24,7 +24,7 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   CLAUDE_PARAM_GROUPS,
   assertRequiredParams,
@@ -860,7 +860,12 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root: params.root,
+    readFile: async (absolutePath: string) =>
+      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
+  });
+  const normalized = wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
   return params.mutationLockingEnabled
     ? wrapToolMutationLock(normalized, params.root, {
         containerWorkdir: params.containerWorkdir,
@@ -886,7 +891,10 @@ export function createHostWorkspaceEditTool(
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root,
+    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+  });
   const normalized = wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
   return options?.mutationLockingEnabled ? wrapToolMutationLock(normalized, root) : normalized;
 }

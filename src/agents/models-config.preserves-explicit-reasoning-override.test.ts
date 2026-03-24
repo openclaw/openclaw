@@ -1,13 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
-import { readGeneratedModelsJson } from "./models-config.test-utils.js";
+
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
+}));
 
 installModelsConfigTestHooks();
+
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
+let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+  ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
+  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+    await import("./models-config.js"));
+  ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  resetModelsJsonReadyCacheForTest();
+});
 
 type ModelEntry = {
   id: string;

@@ -2,11 +2,17 @@ import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.m
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
+export const channelTimingManifestPath = "test/fixtures/test-timings.channels.json";
 export const unitMemoryHotspotManifestPath = "test/fixtures/test-memory-hotspots.unit.json";
 
 const defaultTimingManifest = {
   config: "vitest.unit.config.ts",
   defaultDurationMs: 250,
+  files: {},
+};
+const defaultChannelTimingManifest = {
+  config: "vitest.channels.config.ts",
+  defaultDurationMs: 3000,
   files: {},
 };
 const defaultMemoryHotspotManifest = {
@@ -87,12 +93,12 @@ export function loadTestRunnerBehavior() {
   };
 }
 
-export function loadUnitTimingManifest() {
-  const raw = tryReadJsonFile(unitTimingManifestPath, defaultTimingManifest);
+const loadTimingManifest = (manifestPath, fallbackManifest) => {
+  const raw = tryReadJsonFile(manifestPath, fallbackManifest);
   const defaultDurationMs =
     Number.isFinite(raw.defaultDurationMs) && raw.defaultDurationMs > 0
       ? raw.defaultDurationMs
-      : defaultTimingManifest.defaultDurationMs;
+      : fallbackManifest.defaultDurationMs;
   const files = Object.fromEntries(
     Object.entries(raw.files ?? {})
       .map(([file, value]) => {
@@ -116,12 +122,19 @@ export function loadUnitTimingManifest() {
   );
 
   return {
-    config:
-      typeof raw.config === "string" && raw.config ? raw.config : defaultTimingManifest.config,
+    config: typeof raw.config === "string" && raw.config ? raw.config : fallbackManifest.config,
     generatedAt: typeof raw.generatedAt === "string" ? raw.generatedAt : "",
     defaultDurationMs,
     files,
   };
+};
+
+export function loadUnitTimingManifest() {
+  return loadTimingManifest(unitTimingManifestPath, defaultTimingManifest);
+}
+
+export function loadChannelTimingManifest() {
+  return loadTimingManifest(channelTimingManifestPath, defaultChannelTimingManifest);
 }
 
 export function loadUnitMemoryHotspotManifest() {
@@ -266,6 +279,40 @@ export function packFilesByDuration(files, bucketCount, estimateDurationMs) {
   }
 
   return buckets.map((bucket) => bucket.files).filter((bucket) => bucket.length > 0);
+}
+
+export function packFilesByDurationWithBaseLoads(
+  files,
+  bucketCount,
+  estimateDurationMs,
+  baseLoadsMs = [],
+) {
+  const normalizedBucketCount = Math.max(0, Math.floor(bucketCount));
+  if (normalizedBucketCount <= 0) {
+    return [];
+  }
+
+  const buckets = Array.from({ length: normalizedBucketCount }, (_, index) => ({
+    totalMs:
+      Number.isFinite(baseLoadsMs[index]) && baseLoadsMs[index] >= 0
+        ? Math.round(baseLoadsMs[index])
+        : 0,
+    files: [],
+  }));
+
+  const sortedFiles = [...files].toSorted((left, right) => {
+    return estimateDurationMs(right) - estimateDurationMs(left);
+  });
+
+  for (const file of sortedFiles) {
+    const bucket = buckets.reduce((lightest, current) =>
+      current.totalMs < lightest.totalMs ? current : lightest,
+    );
+    bucket.files.push(file);
+    bucket.totalMs += estimateDurationMs(file);
+  }
+
+  return buckets.map((bucket) => bucket.files);
 }
 
 export function dedupeFilesPreserveOrder(files, exclude = new Set()) {

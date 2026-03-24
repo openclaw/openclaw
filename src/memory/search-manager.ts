@@ -1,8 +1,4 @@
-import os from "node:os";
-import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
@@ -57,13 +53,13 @@ export async function getMemorySearchManager(params: {
       return { manager: cached };
     }
     if (statusOnly) {
-      const manager = new QmdStatusOnlyManager({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved: resolved.qmd,
-      });
-      QMD_MANAGER_CACHE.set(cacheKey, manager);
-      return { manager };
+      const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
+      if (fullCached) {
+        // Status callers often close the manager they receive. Wrap the live
+        // full manager with a no-op close so health/status probes do not tear
+        // down the active QMD manager for the process.
+        return { manager: new BorrowedMemoryManager(fullCached) };
+      }
     }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
@@ -75,8 +71,11 @@ export async function getMemorySearchManager(params: {
       });
       if (primary) {
         if (statusOnly) {
-          QMD_MANAGER_CACHE.set(cacheKey, primary);
-          return { manager: primary };
+          const wrapper = new CachedStatusMemoryManager(primary, () => {
+            QMD_MANAGER_CACHE.delete(cacheKey);
+          });
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
         }
         const wrapper = new FallbackMemoryManager(
           {
@@ -109,87 +108,95 @@ export async function getMemorySearchManager(params: {
   }
 }
 
-class QmdStatusOnlyManager implements MemorySearchManager {
-  private readonly workspaceDir: string;
-  private readonly indexPath: string;
-  private readonly sourceSet: Set<"memory" | "sessions">;
+class BorrowedMemoryManager implements MemorySearchManager {
+  constructor(private readonly inner: MemorySearchManager) {}
 
-  constructor(
-    private readonly params: {
-      cfg: OpenClawConfig;
-      agentId: string;
-      resolved: ResolvedQmdConfig;
-    },
+  async search(
+    query: string,
+    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ) {
-    this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    this.indexPath = path.join(
-      stateDir,
-      "agents",
-      params.agentId,
-      "qmd",
-      "xdg-cache",
-      "qmd",
-      "index.sqlite",
-    );
-    this.sourceSet = new Set(
-      params.resolved.collections.map((collection) =>
-        collection.kind === "sessions" ? "sessions" : "memory",
-      ),
-    );
+    return await this.inner.search(query, opts);
   }
 
-  async search(): Promise<never> {
-    throw new Error("memory search unavailable in status-only mode");
-  }
-
-  async readFile(): Promise<never> {
-    throw new Error("memory read unavailable in status-only mode");
+  async readFile(params: { relPath: string; from?: number; lines?: number }) {
+    return await this.inner.readFile(params);
   }
 
   status() {
-    return {
-      backend: "qmd" as const,
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-      files: 0,
-      chunks: 0,
-      dirty: false,
-      workspaceDir: this.workspaceDir,
-      dbPath: this.indexPath,
-      sources: Array.from(this.sourceSet),
-      vector: { enabled: true, available: true },
-      batch: {
-        enabled: false,
-        failures: 0,
-        limit: 0,
-        wait: false,
-        concurrency: 0,
-        pollIntervalMs: 0,
-        timeoutMs: 0,
-      },
-      custom: {
-        qmd: {
-          collections: this.params.resolved.collections.length,
-          lastUpdateAt: null,
-          lightweightStatus: true,
-        },
-      },
-    };
+    return this.inner.status();
   }
 
-  async sync(): Promise<void> {}
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+    await this.inner.sync?.(params);
+  }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    return { ok: true };
+    return await this.inner.probeEmbeddingAvailability();
   }
 
-  async probeVectorAvailability(): Promise<boolean> {
-    return true;
+  async probeVectorAvailability() {
+    return await this.inner.probeVectorAvailability();
   }
 
-  async close(): Promise<void> {}
+  async close() {}
+}
+
+class CachedStatusMemoryManager implements MemorySearchManager {
+  private closed = false;
+
+  constructor(
+    private readonly inner: MemorySearchManager,
+    private readonly onClose: () => void,
+  ) {}
+
+  async search(
+    query: string,
+    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+  ) {
+    return await this.inner.search(query, opts);
+  }
+
+  async readFile(params: { relPath: string; from?: number; lines?: number }) {
+    return await this.inner.readFile(params);
+  }
+
+  status() {
+    return this.inner.status();
+  }
+
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+    await this.inner.sync?.(params);
+  }
+
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    return await this.inner.probeEmbeddingAvailability();
+  }
+
+  async probeVectorAvailability() {
+    return await this.inner.probeVectorAvailability();
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    try {
+      await this.inner.close?.();
+    } finally {
+      this.onClose();
+    }
+  }
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
