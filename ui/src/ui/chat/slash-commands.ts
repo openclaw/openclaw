@@ -152,9 +152,17 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     name: "steer",
-    description: "Redirect a session",
+    description: "Inject a message into the active run",
     args: "[id] <message>",
     icon: "send",
+    category: "agents",
+    executeLocal: true,
+  },
+  {
+    name: "redirect",
+    description: "Abort and restart with a new message",
+    args: "[id] <message>",
+    icon: "refresh",
     category: "agents",
     executeLocal: true,
   },

@@ -90,6 +90,8 @@ export async function executeSlashCommand(
       return await executeKill(client, sessionKey, args);
     case "steer":
       return await executeSteer(client, sessionKey, args);
+    case "redirect":
+      return await executeRedirect(client, sessionKey, args);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -606,38 +608,80 @@ function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | 
   return session?.fastMode === true ? "on" : "off";
 }
 
+/**
+ * Resolve an optional subagent target from the first word of args.
+ * Returns the resolved session key and the remaining message, or
+ * falls back to the current session key with the full args as message.
+ */
+async function resolveSteerTarget(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<{ key: string; message: string; label?: string } | { error: string }> {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return { error: "empty" };
+  }
+  const spaceIdx = trimmed.indexOf(" ");
+  if (spaceIdx > 0) {
+    const maybeTarget = trimmed.slice(0, spaceIdx);
+    const rest = trimmed.slice(spaceIdx + 1).trim();
+    if (rest) {
+      const sessions = await client.request<SessionsListResult>("sessions.list", {});
+      const matched = resolveKillTargets(sessions?.sessions ?? [], sessionKey, maybeTarget);
+      if (matched.length === 1) {
+        return { key: matched[0], message: rest, label: maybeTarget };
+      }
+      if (matched.length > 1) {
+        return { error: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
+      }
+    }
+  }
+  return { key: sessionKey, message: trimmed };
+}
+
+/** Soft inject — queues a message into the active run via chat.send (deliver: false). */
 async function executeSteer(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  const trimmed = args.trim();
-  if (!trimmed) {
-    return { content: "Usage: `/steer [id] <message>`" };
+  const resolved = await resolveSteerTarget(client, sessionKey, args);
+  if ("error" in resolved) {
+    return {
+      content: resolved.error === "empty" ? "Usage: `/steer [id] <message>`" : resolved.error,
+    };
   }
   try {
-    // Try to resolve the first word as a subagent target.
-    const spaceIdx = trimmed.indexOf(" ");
-    if (spaceIdx > 0) {
-      const maybeTarget = trimmed.slice(0, spaceIdx);
-      const rest = trimmed.slice(spaceIdx + 1).trim();
-      if (rest) {
-        const sessions = await client.request<SessionsListResult>("sessions.list", {});
-        const matched = resolveKillTargets(sessions?.sessions ?? [], sessionKey, maybeTarget);
-        if (matched.length === 1) {
-          await client.request("sessions.steer", { key: matched[0], message: rest });
-          return { content: `Steered \`${maybeTarget}\`.` };
-        }
-        if (matched.length > 1) {
-          return { content: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
-        }
-        // No match — treat the entire input as the message for the current session.
-      }
-    }
-    await client.request("sessions.steer", { key: sessionKey, message: trimmed });
-    return { content: "Steered." };
+    await client.request("chat.send", {
+      sessionKey: resolved.key,
+      message: resolved.message,
+      deliver: false,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return { content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered." };
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
+  }
+}
+
+/** Hard redirect — aborts the active run and restarts with a new message. */
+async function executeRedirect(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const resolved = await resolveSteerTarget(client, sessionKey, args);
+  if ("error" in resolved) {
+    return {
+      content: resolved.error === "empty" ? "Usage: `/redirect [id] <message>`" : resolved.error,
+    };
+  }
+  try {
+    await client.request("sessions.steer", { key: resolved.key, message: resolved.message });
+    return { content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected." };
+  } catch (err) {
+    return { content: `Failed to redirect: ${String(err)}` };
   }
 }
 
