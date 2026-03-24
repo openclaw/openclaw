@@ -2,12 +2,6 @@ import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 describe("tavily plugin", () => {
-  it("exports a valid plugin entry with correct id and name", () => {
-    expect(plugin.id).toBe("tavily");
-    expect(plugin.name).toBe("Tavily Plugin");
-    expect(typeof plugin.register).toBe("function");
-  });
-
   it("registers web search provider and two tools", () => {
     const registrations: {
       webSearchProviders: unknown[];
@@ -26,6 +20,8 @@ describe("tavily plugin", () => {
 
     plugin.register(mockApi as never);
 
+    expect(plugin.id).toBe("tavily");
+    expect(plugin.name).toBe("Tavily Plugin");
     expect(registrations.webSearchProviders).toHaveLength(1);
     expect(registrations.tools).toHaveLength(2);
 

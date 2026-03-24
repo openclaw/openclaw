@@ -1,5 +1,7 @@
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
 import {
   formatSlackStreamingBooleanMigrationMessage,
   formatSlackStreamModeMigrationMessage,
@@ -140,6 +142,15 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
       changes.push(
         `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
+      );
+    }
+    if (
+      params.pathPrefix.startsWith("channels.discord") &&
+      resolved === "off" &&
+      hadLegacyStreamMode
+    ) {
+      changes.push(
+        `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming="partial" to opt in explicitly.`,
       );
     }
 
@@ -800,11 +811,91 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     };
   };
 
+  const normalizeLegacyMistralModelMaxTokens = () => {
+    const rawProviders = next.models?.providers;
+    if (!isRecord(rawProviders)) {
+      return;
+    }
+
+    let providersChanged = false;
+    const nextProviders = { ...rawProviders };
+    for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
+      if (normalizeProviderId(providerId) !== "mistral" || !isRecord(rawProvider)) {
+        continue;
+      }
+      const rawModels = rawProvider.models;
+      if (!Array.isArray(rawModels)) {
+        continue;
+      }
+
+      let modelsChanged = false;
+      const nextModels = rawModels.map((model, index) => {
+        if (!isRecord(model)) {
+          return model;
+        }
+        const modelId = typeof model.id === "string" ? model.id.trim() : "";
+        const contextWindow =
+          typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+            ? model.contextWindow
+            : null;
+        const maxTokens =
+          typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens)
+            ? model.maxTokens
+            : null;
+        if (!modelId || contextWindow === null || maxTokens === null) {
+          return model;
+        }
+
+        const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId,
+          contextWindow,
+          rawMaxTokens: maxTokens,
+        });
+        if (normalizedMaxTokens === maxTokens) {
+          return model;
+        }
+
+        modelsChanged = true;
+        changes.push(
+          `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
+        );
+        return {
+          ...model,
+          maxTokens: normalizedMaxTokens,
+        };
+      });
+
+      if (!modelsChanged) {
+        continue;
+      }
+
+      nextProviders[providerId] = {
+        ...rawProvider,
+        models: nextModels,
+      };
+      providersChanged = true;
+    }
+
+    if (!providersChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      models: {
+        ...next.models,
+        providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+      },
+    };
+  };
+
   normalizeBrowserSsrFPolicyAlias();
   normalizeLegacyNanoBananaSkill();
   normalizeLegacyTalkConfig();
   normalizeLegacyCrossContextMessageConfig();
   normalizeLegacyMediaProviderOptions();
+  normalizeLegacyMistralModelMaxTokens();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;

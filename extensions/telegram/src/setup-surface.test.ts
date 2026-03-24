@@ -1,70 +1,91 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  createTestWizardPrompter,
+  runSetupWizardFinalize,
+  runSetupWizardPrepare,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
 async function runPrepare(cfg: OpenClawConfig, accountId: string) {
-  return await telegramSetupWizard.prepare?.({
+  return await runSetupWizardPrepare({
+    prepare: telegramSetupWizard.prepare,
     cfg,
     accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: {} as never,
     options: {},
   });
 }
 
 async function runFinalize(cfg: OpenClawConfig, accountId: string) {
-  const prompter = {
-    note: vi.fn(async () => undefined),
-  };
+  const note = vi.fn(async () => undefined);
 
-  await telegramSetupWizard.finalize?.({
+  await runSetupWizardFinalize({
+    finalize: telegramSetupWizard.finalize,
     cfg,
     accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: prompter as never,
-    forceAllowFrom: false,
+    prompter: createTestWizardPrompter({ note }),
   });
 
-  return prompter.note;
+  return note;
+}
+
+function expectPreparedResult(
+  prepared: Awaited<ReturnType<typeof runPrepare>>,
+): { cfg: OpenClawConfig } & Exclude<Awaited<ReturnType<typeof runPrepare>>, void | undefined> {
+  expect(prepared).toBeDefined();
+  if (
+    !prepared ||
+    typeof prepared !== "object" ||
+    !("cfg" in prepared) ||
+    prepared.cfg === undefined
+  ) {
+    throw new Error("Expected prepare result with cfg");
+  }
+  return prepared as { cfg: OpenClawConfig } & Exclude<
+    Awaited<ReturnType<typeof runPrepare>>,
+    void | undefined
+  >;
 }
 
 describe("telegramSetupWizard.prepare", () => {
   it('adds groups["*"].requireMention=true for fresh setups', async () => {
-    const prepared = await runPrepare(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
+    const prepared = expectPreparedResult(
+      await runPrepare(
+        {
+          channels: {
+            telegram: {
+              botToken: "tok",
+            },
           },
         },
-      },
-      DEFAULT_ACCOUNT_ID,
+        DEFAULT_ACCOUNT_ID,
+      ),
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: true },
     });
   });
 
   it("preserves an explicit wildcard group mention setting", async () => {
-    const prepared = await runPrepare(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
-            groups: {
-              "*": { requireMention: false },
+    const prepared = expectPreparedResult(
+      await runPrepare(
+        {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              groups: {
+                "*": { requireMention: false },
+              },
             },
           },
         },
-      },
-      DEFAULT_ACCOUNT_ID,
+        DEFAULT_ACCOUNT_ID,
+      ),
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: false },
     });
   });
