@@ -415,7 +415,7 @@ describe("agents.create", () => {
 
   it("does not persist config when IDENTITY.md append is rejected after preflight", async () => {
     mocks.appendFileWithinRoot.mockRejectedValueOnce(
-      new SafeOpenError("path escapes workspace root", "path escapes workspace root"),
+      new SafeOpenError("path-mismatch", "path escapes workspace root"),
     );
 
     const { respond, promise } = makeCall("agents.create", {
