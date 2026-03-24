@@ -143,7 +143,7 @@ export function stopFeishuMonitorState(accountId?: string): void {
     }
     botOpenIds.delete(accountId);
     botNames.delete(accountId);
-    unregisterBotName(accountId);
+    unregisterBotName("feishu", accountId);
     return;
   }
 
@@ -154,7 +154,7 @@ export function stopFeishuMonitorState(accountId?: string): void {
   httpServers.clear();
   botOpenIds.clear();
   for (const id of botNames.keys()) {
-    unregisterBotName(id);
+    unregisterBotName("feishu", id);
   }
   botNames.clear();
 }

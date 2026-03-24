@@ -166,7 +166,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /** Resolve bot_name from whichever ctx fields are available. */
   const resolveBot = (ctx: object): string | undefined => {
     const c = ctx as { accountId?: string; channelId?: string };
-    return resolveBotName([c.accountId, c.channelId]);
+    return resolveBotName(c.channelId, c.accountId);
   };
 
   const mergeBeforeModelResolve = (

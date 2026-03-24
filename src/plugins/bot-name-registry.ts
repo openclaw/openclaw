@@ -1,7 +1,7 @@
 /**
  * Bot Name Registry
  *
- * A process-level store that maps accountId → bot display name.
+ * A process-level store that maps (channelId, accountId) → bot display name.
  * Channel providers (e.g. Feishu) write here when they resolve a bot
  * identity; the hook runner reads here to inject `bot_name` into every
  * hook event so plugins can see the bot name without coupling to a
@@ -17,39 +17,47 @@ function getRegistry(): Map<string, string> {
   return (g[botNameRegistryKey] ??= new Map());
 }
 
-/** Register or update the bot display name for a given accountId. */
-export function registerBotName(accountId: string, botName: string): void {
-  getRegistry().set(accountId, botName);
+// Null byte cannot appear in channelId or accountId, making it a safe delimiter.
+function makeKey(channelId: string, accountId: string): string {
+  return `${channelId}\x00${accountId}`;
 }
 
-/** Remove the bot name entry for a given accountId (e.g. on monitor stop). */
-export function unregisterBotName(accountId: string): void {
-  getRegistry().delete(accountId);
+/** Register or update the bot display name for a given (channelId, accountId) pair. */
+export function registerBotName(channelId: string, accountId: string, botName: string): void {
+  getRegistry().set(makeKey(channelId, accountId), botName);
 }
 
-/**
- * Look up the bot display name for a given accountId.
- * Returns undefined if no name has been registered for this account.
- */
-export function getBotName(accountId: string): string | undefined {
-  return getRegistry().get(accountId);
+/** Remove the bot name entry for a given (channelId, accountId) pair (e.g. on monitor stop). */
+export function unregisterBotName(channelId: string, accountId: string): void {
+  getRegistry().delete(makeKey(channelId, accountId));
 }
 
 /**
- * Resolve a bot name from the first matching accountId found in the
- * provided list of candidate IDs. Useful when only a channelId is
- * available and it encodes the accountId (e.g. "feishu/cli_xxx").
+ * Look up the bot display name for a given (channelId, accountId) pair.
+ * Returns undefined if no name has been registered for this combination.
  */
-export function resolveBotName(candidateIds: Array<string | undefined>): string | undefined {
+export function getBotName(channelId: string, accountId: string): string | undefined {
+  return getRegistry().get(makeKey(channelId, accountId));
+}
+
+/**
+ * Resolve the bot display name for a (channelId, accountId) pair.
+ * Falls back to (channelId, "default") when accountId is absent —
+ * covers agent hooks that carry channelId but no accountId.
+ */
+export function resolveBotName(
+  channelId: string | undefined,
+  accountId: string | undefined,
+): string | undefined {
+  if (!channelId) {
+    return undefined;
+  }
   const registry = getRegistry();
-  for (const id of candidateIds) {
-    if (!id) {
-      continue;
-    }
-    const name = registry.get(id);
+  if (accountId) {
+    const name = registry.get(makeKey(channelId, accountId));
     if (name) {
       return name;
     }
   }
-  return undefined;
+  return registry.get(makeKey(channelId, "default"));
 }
