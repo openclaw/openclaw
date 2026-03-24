@@ -53,11 +53,11 @@ first-class messaging surface. Send and receive email through the standard
 `message` tool, with webhook-based inbound delivery, HMAC signature
 verification, and LLM-safe content formatting.
 
-- **npm:** `@lobsterkit/lobstermail`
+- **npm:** `lobstermail`
 - **repo:** [github.com/lobster-kit/lobsterkit-mail](https://github.com/lobster-kit/lobsterkit-mail)
 
 ```bash
-openclaw plugins install @lobsterkit/lobstermail
+openclaw plugins install lobstermail
 ```
 
 ### Lossless Claw (LCM)
