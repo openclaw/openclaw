@@ -17,12 +17,12 @@ let openResponsesTesting: {
     responseId: string,
     sessionKey: string,
     now: number,
-    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): void;
   lookupResponseSessionAt(
     responseId: string | undefined,
     now: number,
-    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): string | undefined;
   getResponseSessionIds(): string[];
 };
@@ -233,6 +233,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resMissingModel);
 
+      agentCommand.mockClear();
+      const resInvalidModel = await postResponses(port, { model: "openai/", input: "hi" });
+      expect(resInvalidModel.status).toBe(400);
+      const invalidModelJson = (await resInvalidModel.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidModelJson.error?.type).toBe("invalid_request_error");
+      expect(invalidModelJson.error?.message).toBe("Invalid `model`.");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resInvalidModel);
+
       mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(
         port,
@@ -267,9 +278,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(resChannelHeader.status).toBe(200);
       const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
-        "webchat",
+        "custom-client-channel",
       );
       await ensureResponseConsumed(resChannelHeader);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resModelOverride = await postResponses(port, {
+        model: "openai/text-embedding-3-small",
+        input: "hi",
+      });
+      expect(resModelOverride.status).toBe(200);
+      const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsModelOverride as { model?: string } | undefined)?.model).toBe(
+        "openai/text-embedding-3-small",
+      );
+      await ensureResponseConsumed(resModelOverride);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {
@@ -777,7 +800,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(secondResponse);
   });
 
-  it("does not reuse prior sessions across different user scopes", async () => {
+  it("reuses prior sessions across different user values when auth scope matches", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
     agentCommand.mockResolvedValueOnce({
@@ -812,8 +835,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
       | { sessionKey?: string }
       | undefined;
-    expect(secondOpts?.sessionKey).not.toBe(firstOpts?.sessionKey);
-    expect(secondOpts?.sessionKey ?? "").toContain("openresponses-user:bob");
+    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });
 
@@ -864,22 +886,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
   });
 
-  it("does not reuse cached sessions when the user scope changes", () => {
+  it("does not reuse cached sessions when the auth subject changes", () => {
     openResponsesTesting.storeResponseSessionAt("resp_1", "session_1", 100, {
+      authSubject: "subject:a",
       agentId: "main",
-      user: "alice",
     });
 
     expect(
       openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        authSubject: "subject:a",
         agentId: "main",
-        user: "alice",
       }),
     ).toBe("session_1");
     expect(
       openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        authSubject: "subject:b",
         agentId: "main",
-        user: "bob",
       }),
     ).toBeUndefined();
   });
