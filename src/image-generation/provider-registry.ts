@@ -2,11 +2,12 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryKey } from "../plugins/runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
 const BUILTIN_IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProviderPlugin[] = [];
 const UNSAFE_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"]);
+const imageGenerationBootstrapAttempts = new Set<string>();
 
 function normalizeImageGenerationProviderId(id: string | undefined): string | undefined {
   const normalized = normalizeProviderId(id ?? "");
@@ -20,14 +21,36 @@ function isSafeImageGenerationProviderId(id: string | undefined): id is string {
   return Boolean(id && !UNSAFE_PROVIDER_IDS.has(id));
 }
 
+function getImageGenerationBootstrapAttemptKey(): string {
+  return getActivePluginRegistryKey() ?? "<none>";
+}
+
 function resolvePluginImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
   const active = getActivePluginRegistry();
-  const registry =
-    (active?.imageGenerationProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
+  if ((active?.imageGenerationProviders?.length ?? 0) > 0 || !cfg) {
+    return active?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  }
+
+  const attemptKey = getImageGenerationBootstrapAttemptKey();
+  if (imageGenerationBootstrapAttempts.has(attemptKey)) {
+    return active?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  }
+
+  imageGenerationBootstrapAttempts.add(attemptKey);
+  let registry;
+  try {
+    registry = loadOpenClawPlugins({ config: cfg });
+  } catch (error) {
+    imageGenerationBootstrapAttempts.delete(attemptKey);
+    throw error;
+  }
+
+  const activeKeyAfterLoad = getActivePluginRegistryKey();
+  if (activeKeyAfterLoad) {
+    imageGenerationBootstrapAttempts.add(activeKeyAfterLoad);
+  }
   return registry?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
 }
 

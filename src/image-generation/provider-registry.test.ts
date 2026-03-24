@@ -88,6 +88,22 @@ describe("image-generation provider registry", () => {
     });
   });
 
+  it("does not reload the same empty registry key on every lookup", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry, "existing-registry");
+
+    loadOpenClawPluginsMock.mockImplementation(() => {
+      const loadedRegistry = createEmptyPluginRegistry();
+      setActivePluginRegistry(loadedRegistry, "existing-registry");
+      return loadedRegistry;
+    });
+
+    expect(getImageGenerationProvider("openai", {} as OpenClawConfig)).toBeUndefined();
+    expect(getImageGenerationProvider("openai", {} as OpenClawConfig)).toBeUndefined();
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores prototype-like provider ids and aliases", () => {
     const registry = createEmptyPluginRegistry();
     registry.imageGenerationProviders.push(
