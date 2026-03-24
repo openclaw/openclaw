@@ -39,9 +39,27 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
     hints.push("Another process is listening on this port.");
   }
   if (listeners.length > 1) {
-    hints.push(
-      "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+    // Check if all listeners are from the same PID on loopback only — normal dual-stack behavior.
+    const pids = new Set(listeners.map((l) => l.pid).filter((p): p is number => p !== undefined));
+    const allSamePid = pids.size === 1;
+    const allLoopback = listeners.every(
+      (l) =>
+        l.address !== undefined &&
+        (l.address.startsWith("127.") ||
+          l.address.startsWith("::1") ||
+          l.address === "0.0.0.0" ||
+          l.address === "::"),
     );
+    if (allSamePid && allLoopback) {
+      // Same PID on loopback dual-stack (IPv4 + IPv6) — this is expected, downgrade to info.
+      hints.push(
+        "Dual-stack loopback listeners detected (same process, IPv4 + IPv6). This is normal and not a conflict.",
+      );
+    } else {
+      hints.push(
+        "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+      );
+    }
   }
   return hints;
 }

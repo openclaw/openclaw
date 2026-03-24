@@ -54,6 +54,36 @@ describe("ports-format", () => {
     expect(buildPortHints([], 18789)).toEqual([]);
   });
 
+  it("downgrades dual-stack same-PID loopback hint to info instead of warning", () => {
+    // IPv4 + IPv6 loopback from the same PID — normal dual-stack, not a conflict.
+    const hints = buildPortHints(
+      [
+        { pid: 12345, commandLine: "node dist/index.js gateway", address: "127.0.0.1:18789" },
+        { pid: 12345, commandLine: "node dist/index.js gateway", address: "[::1]:18789" },
+      ],
+      18789,
+    );
+    expect(hints).toContainEqual(
+      expect.stringContaining("Dual-stack loopback listeners detected"),
+    );
+    expect(hints).not.toContainEqual(expect.stringContaining("Multiple listeners detected"));
+  });
+
+  it("still warns for same-PID listeners on non-loopback interfaces", () => {
+    // Same PID but on non-loopback interfaces — likely a real conflict.
+    const hints = buildPortHints(
+      [
+        { pid: 12345, commandLine: "node dist/index.js gateway", address: "0.0.0.0:18789" },
+        { pid: 12345, commandLine: "node dist/index.js gateway", address: "192.168.1.10:18789" },
+      ],
+      18789,
+    );
+    expect(hints).toContainEqual(
+      expect.stringContaining("Multiple listeners detected"),
+    );
+    expect(hints).not.toContainEqual(expect.stringContaining("Dual-stack loopback"));
+  });
+
   it("formats listeners with pid, user, command, and address fallbacks", () => {
     expect(
       formatPortListener({ pid: 123, user: "alice", commandLine: "ssh -N", address: "::1" }),
