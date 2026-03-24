@@ -6,8 +6,8 @@ import {
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
-import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
@@ -20,12 +20,14 @@ type DispatchReplyWithBufferedBlockDispatcherFn =
 
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
 
+/** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   cfg: OpenClawConfig;
   ctxPayload: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   onSettled: () => void | Promise<void>;
   replyOptions?: ReplyDispatchFromConfigOptions;
+  configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
@@ -36,10 +38,12 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
         cfg: params.cfg,
         dispatcher: params.dispatcher,
         replyOptions: params.replyOptions,
+        configOverride: params.configOverride,
       }),
   });
 }
 
+/** Assemble the common inbound reply dispatch dependencies for a resolved route. */
 export function buildInboundReplyDispatchBase(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -80,6 +84,7 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
   typeof recordInboundSessionAndDispatchReply
 >[0];
 
+/** Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn. */
 export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
@@ -97,6 +102,7 @@ export async function dispatchInboundReplyWithBase(
   });
 }
 
+/** Record the inbound session first, then dispatch the reply using normalized outbound delivery. */
 export async function recordInboundSessionAndDispatchReply(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -119,7 +125,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     onRecordError: params.onRecordError,
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
@@ -131,7 +137,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     ctx: params.ctxPayload,
     cfg: params.cfg,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       deliver,
       onError: params.onDispatchError,
     },

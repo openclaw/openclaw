@@ -18,7 +18,7 @@ type HarnessState = {
       cdpPort?: number;
       cdpUrl?: string;
       color: string;
-      driver?: "openclaw" | "extension" | "existing-session";
+      driver?: "openclaw" | "existing-session";
       attachOnly?: boolean;
     }
   >;
@@ -184,6 +184,18 @@ export function getChromeMcpMocks(): Record<string, MockFn> {
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
 
+type BrowserServerModule = typeof import("./server.js");
+let browserServerModule: BrowserServerModule | null = null;
+
+async function loadBrowserServerModule(): Promise<BrowserServerModule> {
+  if (browserServerModule) {
+    return browserServerModule;
+  }
+  vi.resetModules();
+  browserServerModule = await import("./server.js");
+  return browserServerModule;
+}
+
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   return {
@@ -303,9 +315,19 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-const server = await import("./server.js");
-export const startBrowserControlServerFromConfig = server.startBrowserControlServerFromConfig;
-export const stopBrowserControlServer = server.stopBrowserControlServer;
+export async function startBrowserControlServerFromConfig() {
+  const server = await loadBrowserServerModule();
+  return await server.startBrowserControlServerFromConfig();
+}
+
+export async function stopBrowserControlServer(): Promise<void> {
+  const server = browserServerModule;
+  browserServerModule = null;
+  if (!server) {
+    return;
+  }
+  await server.stopBrowserControlServer();
+}
 
 export function makeResponse(
   body: unknown,
@@ -379,6 +401,7 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
 
 export function installBrowserControlServerHooks() {
   beforeEach(async () => {
+    vi.useRealTimers();
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
       if (state.createTargetId) {
         return { targetId: state.createTargetId };
@@ -387,6 +410,7 @@ export function installBrowserControlServerHooks() {
     });
 
     await resetBrowserControlServerTestContext();
+    await loadBrowserServerModule();
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;

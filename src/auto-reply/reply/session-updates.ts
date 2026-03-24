@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   resolveTimezone,
@@ -12,6 +19,7 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -258,6 +266,8 @@ export async function incrementCompactionCount(params: {
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
+  /** Session id after compaction, when the runtime rotated transcripts. */
+  newSessionId?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -267,6 +277,7 @@ export async function incrementCompactionCount(params: {
     now = Date.now(),
     amount = 1,
     tokensAfter,
+    newSessionId,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -282,6 +293,15 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
+  if (newSessionId && newSessionId !== entry.sessionId) {
+    updates.sessionId = newSessionId;
+    updates.sessionFile = resolveCompactionSessionFile({
+      entry,
+      sessionKey,
+      storePath,
+      newSessionId,
+    });
+  }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
@@ -305,4 +325,73 @@ export async function incrementCompactionCount(params: {
     });
   }
   return nextCount;
+}
+
+function resolveCompactionSessionFile(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath?: string;
+  newSessionId: string;
+}): string {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const pathOpts = resolveSessionFilePathOptions({
+    agentId,
+    storePath: params.storePath,
+  });
+  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+    sessionFile: params.entry.sessionFile,
+    previousSessionId: params.entry.sessionId,
+    nextSessionId: params.newSessionId,
+  });
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  return resolveSessionFilePath(
+    params.newSessionId,
+    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
+    pathOpts,
+  );
+}
+
+function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  try {
+    const parentDir = fs.realpathSync(path.dirname(resolved));
+    return path.join(parentDir, path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
+function rewriteSessionFileForNewSessionId(params: {
+  sessionFile?: string;
+  previousSessionId: string;
+  nextSessionId: string;
+}): string | undefined {
+  const trimmed = params.sessionFile?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const base = path.basename(trimmed);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const withoutExt = base.slice(0, -".jsonl".length);
+  if (withoutExt === params.previousSessionId) {
+    return path.join(path.dirname(trimmed), `${params.nextSessionId}.jsonl`);
+  }
+  if (withoutExt.startsWith(`${params.previousSessionId}-topic-`)) {
+    return path.join(
+      path.dirname(trimmed),
+      `${params.nextSessionId}${base.slice(params.previousSessionId.length)}`,
+    );
+  }
+  const forkMatch = withoutExt.match(
+    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
+  );
+  if (forkMatch?.[2] === params.previousSessionId) {
+    return path.join(path.dirname(trimmed), `${forkMatch[1]}_${params.nextSessionId}.jsonl`);
+  }
+  return undefined;
 }

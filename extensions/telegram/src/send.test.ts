@@ -15,12 +15,16 @@ const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegr
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
+  pinMessageTelegram,
   reactMessageTelegram,
+  renameForumTopicTelegram,
   sendMessageTelegram,
   sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  unpinMessageTelegram,
 } = await importTelegramSendModule();
 
 async function expectChatNotFoundWithChatId(
@@ -215,6 +219,101 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("pins and unpins Telegram messages", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.pinChatMessage.mockResolvedValue(true);
+    botApi.unpinChatMessage.mockResolvedValue(true);
+
+    await pinMessageTelegram("-1001234567890", 101, { accountId: "default" });
+    await unpinMessageTelegram("-1001234567890", 101, { accountId: "default" });
+
+    expect(botApi.pinChatMessage).toHaveBeenCalledWith("-1001234567890", 101, {
+      disable_notification: true,
+    });
+    expect(botApi.unpinChatMessage).toHaveBeenCalledWith("-1001234567890", 101);
+  });
+
+  it("renames a Telegram forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await renameForumTopicTelegram("-1001234567890", 271, "Codex Thread", {
+      accountId: "default",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+    });
+  });
+
+  it("edits a Telegram forum topic name and icon via the shared helper", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("-1001234567890", 271, {
+      accountId: "default",
+      name: "Codex Thread",
+      iconCustomEmojiId: "emoji-123",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+      icon_custom_emoji_id: "emoji-123",
+    });
+  });
+
+  it("strips topic suffixes before editing a Telegram forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("telegram:group:-1001234567890:topic:271", 271, {
+      accountId: "default",
+      name: "Codex Thread",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+    });
+  });
+
+  it("rejects empty topic edits", async () => {
+    await expect(
+      editForumTopicTelegram("-1001234567890", 271, {
+        accountId: "default",
+      }),
+    ).rejects.toThrow("Telegram forum topic update requires a name or iconCustomEmojiId");
+    await expect(
+      editForumTopicTelegram("-1001234567890", 271, {
+        accountId: "default",
+        iconCustomEmojiId: "   ",
+      }),
+    ).rejects.toThrow("Telegram forum topic icon custom emoji ID is required");
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
@@ -280,10 +379,12 @@ describe("sendMessageTelegram", () => {
           parse_mode: "HTML",
           message_thread_id: 271,
           reply_to_message_id: 100,
+          allow_sending_without_reply: true,
         },
         secondCall: {
           message_thread_id: 271,
           reply_to_message_id: 100,
+          allow_sending_without_reply: true,
         },
       },
     ] as const;
@@ -721,10 +822,11 @@ describe("sendMessageTelegram", () => {
         options: {
           replyToMessageId: 999,
         },
-        expectedVideoNote: { reply_to_message_id: 999 },
+        expectedVideoNote: { reply_to_message_id: 999, allow_sending_without_reply: true },
         expectedMessage: {
           parse_mode: "HTML",
           reply_to_message_id: 999,
+          allow_sending_without_reply: true,
         },
       },
     ];
@@ -995,6 +1097,7 @@ describe("sendMessageTelegram", () => {
           parse_mode: "HTML",
           message_thread_id: 271,
           reply_to_message_id: 500,
+          allow_sending_without_reply: true,
         },
       },
       {
@@ -1680,6 +1783,7 @@ describe("shared send behaviors", () => {
           expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
             parse_mode: "HTML",
             reply_to_message_id: 100,
+            allow_sending_without_reply: true,
           });
         },
       },
@@ -1702,6 +1806,7 @@ describe("shared send behaviors", () => {
           });
           expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
             reply_to_message_id: 500,
+            allow_sending_without_reply: true,
           });
         },
       },

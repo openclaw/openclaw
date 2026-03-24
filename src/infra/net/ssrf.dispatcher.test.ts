@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -15,13 +16,26 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("undici", () => ({
-  Agent: agentCtor,
-  EnvHttpProxyAgent: envHttpProxyAgentCtor,
-  ProxyAgent: proxyAgentCtor,
-}));
+import type { PinnedHostname } from "./ssrf.js";
 
-import { createPinnedDispatcher, type PinnedHostname } from "./ssrf.js";
+let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
+
+beforeEach(async () => {
+  vi.resetModules();
+  agentCtor.mockClear();
+  envHttpProxyAgentCtor.mockClear();
+  proxyAgentCtor.mockClear();
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: agentCtor,
+    EnvHttpProxyAgent: envHttpProxyAgentCtor,
+    ProxyAgent: proxyAgentCtor,
+  };
+  ({ createPinnedDispatcher } = await import("./ssrf.js"));
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+});
 
 describe("createPinnedDispatcher", () => {
   it("uses pinned lookup without overriding global family policy", () => {
@@ -73,6 +87,89 @@ describe("createPinnedDispatcher", () => {
     });
   });
 
+  it("replaces the pinned lookup when a dispatcher override hostname is provided", () => {
+    const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.221"],
+      lookup: originalLookup,
+    };
+
+    createPinnedDispatcher(pinned, {
+      mode: "direct",
+      pinnedHostname: {
+        hostname: "api.telegram.org",
+        addresses: ["149.154.167.220"],
+      },
+    });
+
+    const firstCallArg = agentCtor.mock.calls.at(-1)?.[0] as
+      | { connect?: { lookup?: PinnedHostname["lookup"] } }
+      | undefined;
+    expect(firstCallArg?.connect?.lookup).toBeTypeOf("function");
+
+    const lookup = firstCallArg?.connect?.lookup;
+    const callback = vi.fn();
+    lookup?.("api.telegram.org", callback);
+
+    expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
+    expect(originalLookup).not.toHaveBeenCalled();
+  });
+
+  it("keeps the override bound to the matching hostname only", () => {
+    const originalLookup = vi.fn(
+      (_hostname: string, callback: (err: null, address: string, family: number) => void) => {
+        callback(null, "93.184.216.34", 4);
+      },
+    ) as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.221"],
+      lookup: originalLookup,
+    };
+
+    createPinnedDispatcher(pinned, {
+      mode: "direct",
+      pinnedHostname: {
+        hostname: "api.telegram.org",
+        addresses: ["149.154.167.220"],
+      },
+    });
+
+    const firstCallArg = agentCtor.mock.calls.at(-1)?.[0] as
+      | { connect?: { lookup?: PinnedHostname["lookup"] } }
+      | undefined;
+    const lookup = firstCallArg?.connect?.lookup;
+    const callback = vi.fn();
+    lookup?.("example.com", callback);
+
+    expect(originalLookup).toHaveBeenCalledWith("example.com", expect.any(Function));
+    expect(callback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
+  });
+
+  it("rejects pinned override addresses that violate SSRF policy", () => {
+    const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.221"],
+      lookup: originalLookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "api.telegram.org",
+            addresses: ["127.0.0.1"],
+          },
+        },
+        undefined,
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
@@ -120,8 +217,9 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
-      proxyTls: {
+      requestTls: {
         autoSelectFamily: false,
+        lookup,
       },
     });
   });

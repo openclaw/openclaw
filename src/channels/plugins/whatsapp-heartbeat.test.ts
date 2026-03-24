@@ -1,18 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(),
-  resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
-}));
-
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStoreSync: vi.fn(() => []),
-}));
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore } from "../../config/sessions.js";
-import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
-import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
+
+const loadSessionStoreMock = vi.hoisted(() => vi.fn());
+const readChannelAllowFromStoreSyncMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+
+type WhatsAppHeartbeatModule = typeof import("./whatsapp-heartbeat.js");
+
+let resolveWhatsAppHeartbeatRecipients: WhatsAppHeartbeatModule["resolveWhatsAppHeartbeatRecipients"];
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   return {
@@ -23,12 +17,12 @@ function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 describe("resolveWhatsAppHeartbeatRecipients", () => {
-  function setSessionStore(store: ReturnType<typeof loadSessionStore>) {
-    vi.mocked(loadSessionStore).mockReturnValue(store);
+  function setSessionStore(store: Record<string, unknown>) {
+    loadSessionStoreMock.mockReturnValue(store);
   }
 
   function setAllowFromStore(entries: string[]) {
-    vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(entries);
+    readChannelAllowFromStoreSyncMock.mockReturnValue(entries);
   }
 
   function resolveWith(
@@ -45,9 +39,20 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     setAllowFromStore(["+15550000001"]);
   }
 
-  beforeEach(() => {
-    vi.mocked(loadSessionStore).mockClear();
-    vi.mocked(readChannelAllowFromStoreSync).mockClear();
+  beforeEach(async () => {
+    vi.resetModules();
+    loadSessionStoreMock.mockReset();
+    readChannelAllowFromStoreSyncMock.mockReset();
+    vi.doMock("../../config/sessions/store-summary.js", () => ({
+      loadSessionStoreSummary: loadSessionStoreMock,
+    }));
+    vi.doMock("../../config/sessions/paths.js", () => ({
+      resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
+    }));
+    vi.doMock("../../pairing/pairing-store.js", () => ({
+      readChannelAllowFromStoreSync: readChannelAllowFromStoreSyncMock,
+    }));
+    ({ resolveWhatsAppHeartbeatRecipients } = await import("./whatsapp-heartbeat.js"));
     setAllowFromStore([]);
   });
 

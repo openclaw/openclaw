@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeDiscordOutboundTarget } from "./normalize.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscordMock = vi.fn();
+  const sendDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
   const sendWebhookMessageDiscordMock = vi.fn();
   const getThreadBindingManagerMock = vi.fn();
   return {
     sendMessageDiscordMock,
+    sendDiscordComponentMessageMock,
     sendPollDiscordMock,
     sendWebhookMessageDiscordMock,
     getThreadBindingManagerMock,
@@ -19,6 +20,8 @@ vi.mock("./send.js", async (importOriginal) => {
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
+    sendDiscordComponentMessage: (...args: unknown[]) =>
+      hoisted.sendDiscordComponentMessageMock(...args),
     sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
     sendWebhookMessageDiscord: (...args: unknown[]) =>
       hoisted.sendWebhookMessageDiscordMock(...args),
@@ -33,7 +36,14 @@ vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
-const { discordOutbound } = await import("./outbound-adapter.js");
+let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
+let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
+  ({ discordOutbound } = await import("./outbound-adapter.js"));
+});
 
 const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",
@@ -112,6 +122,10 @@ describe("discordOutbound", () => {
   beforeEach(() => {
     hoisted.sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
+      channelId: "ch-1",
+    });
+    hoisted.sendDiscordComponentMessageMock.mockClear().mockResolvedValue({
+      messageId: "component-1",
       channelId: "ch-1",
     });
     hoisted.sendPollDiscordMock.mockClear().mockResolvedValue({
@@ -249,7 +263,60 @@ describe("discordOutbound", () => {
       }),
     );
     expect(result).toEqual({
+      channel: "discord",
       messageId: "poll-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("sends component payload media sequences with the component message first", async () => {
+    hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
+      messageId: "component-1",
+      channelId: "ch-1",
+    });
+    hoisted.sendMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "msg-2",
+      channelId: "ch-1",
+    });
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "hello",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+        channelData: {
+          discord: {
+            components: { text: "hello", components: [] },
+          },
+        },
+      },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/media"],
+    });
+
+    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "channel:123456",
+      expect.objectContaining({ text: "hello" }),
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.png",
+        mediaLocalRoots: ["/tmp/media"],
+        accountId: "default",
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/2.png",
+        mediaLocalRoots: ["/tmp/media"],
+        accountId: "default",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-2",
       channelId: "ch-1",
     });
   });

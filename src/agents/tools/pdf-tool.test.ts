@@ -10,15 +10,24 @@ import {
   providerSupportsNativePdf,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
-import { createPdfTool, resolvePdfModelConfigForTool } from "./pdf-tool.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...actual,
-    complete: vi.fn(),
-  };
-});
+const completeMock = vi.hoisted(() => vi.fn());
+
+type PdfToolModule = typeof import("./pdf-tool.js");
+let createPdfTool: PdfToolModule["createPdfTool"];
+let resolvePdfModelConfigForTool: PdfToolModule["resolvePdfModelConfigForTool"];
+
+async function importPdfToolModule(): Promise<PdfToolModule> {
+  vi.resetModules();
+  vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    return {
+      ...actual,
+      complete: completeMock,
+    };
+  });
+  return import("./pdf-tool.js");
+}
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
@@ -131,7 +140,7 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
-  const webMedia = await import("../../../extensions/whatsapp/src/media.js");
+  const webMedia = await import("../../media/web-media.js");
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");
@@ -242,8 +251,10 @@ describe("providerSupportsNativePdf", () => {
 describe("resolvePdfModelConfigForTool", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAuthEnv();
+    completeMock.mockReset();
+    ({ resolvePdfModelConfigForTool } = await importPdfToolModule());
   });
 
   afterEach(() => {
@@ -254,7 +265,7 @@ describe("resolvePdfModelConfigForTool", () => {
   it("returns null without any auth", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
@@ -265,7 +276,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             pdfModel: { primary: "anthropic/claude-opus-4-6" },
           },
         },
@@ -281,7 +292,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -296,7 +307,7 @@ describe("resolvePdfModelConfigForTool", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
-      const cfg = withDefaultModel("openai/gpt-5.2");
+      const cfg = withDefaultModel("openai/gpt-5.4");
       const config = resolvePdfModelConfigForTool({ cfg, agentDir });
       expect(config).not.toBeNull();
       // Should prefer anthropic for native PDF
@@ -321,8 +332,10 @@ describe("resolvePdfModelConfigForTool", () => {
 describe("createPdfTool", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAuthEnv();
+    completeMock.mockReset();
+    ({ createPdfTool } = await importPdfToolModule());
   });
 
   afterEach(() => {
@@ -338,7 +351,7 @@ describe("createPdfTool", () => {
   it("returns null without any auth configured", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(createPdfTool({ config: cfg, agentDir })).toBeNull();
     });
@@ -484,8 +497,7 @@ describe("createPdfTool", () => {
         images: [],
       });
 
-      const piAi = await import("@mariozechner/pi-ai");
-      vi.mocked(piAi.complete).mockResolvedValue({
+      completeMock.mockResolvedValue({
         role: "assistant",
         stopReason: "stop",
         content: [{ type: "text", text: "fallback summary" }],

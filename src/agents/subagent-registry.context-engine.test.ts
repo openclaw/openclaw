@@ -1,19 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const noop = () => {};
+
 const mocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
   ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitialized: vi.fn(),
   resolveContextEngine: vi.fn(),
   onSubagentEnded: vi.fn(async () => {}),
-  onAgentEvent: vi.fn(() => () => {}),
+  onAgentEvent: vi.fn(() => noop),
   persistSubagentRunsToDisk: vi.fn(),
+  restoreSubagentRunsFromDisk: vi.fn(() => 0),
+  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, unknown>) => new Map(runs)),
 }));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: vi.fn(() => ({})),
+    loadConfig: mocks.loadConfig,
   };
 });
 
@@ -34,9 +39,9 @@ vi.mock("./runtime-plugins.js", () => ({
 }));
 
 vi.mock("./subagent-registry-state.js", () => ({
-  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, unknown>) => new Map(runs)),
+  getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
-  restoreSubagentRunsFromDisk: vi.fn(() => 0),
+  restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
 }));
 
 vi.mock("./subagent-announce-queue.js", () => ({
@@ -47,38 +52,46 @@ vi.mock("./timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
 }));
 
-import {
-  registerSubagentRun,
-  releaseSubagentRun,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
-
 describe("subagent-registry context-engine bootstrap", () => {
-  beforeEach(() => {
+  let mod: typeof import("./subagent-registry.js");
+
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
-    resetSubagentRegistryForTests({ persist: false });
+    mod = await import("./subagent-registry.js");
+    mod.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("reloads runtime plugins with the spawned workspace before subagent end hooks", async () => {
-    registerSubagentRun({
+  it("reloads runtime plugins with the spawned workspace before released subagent end hooks", async () => {
+    mod.addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:session:child",
+      controllerSessionKey: "agent:main:session:parent",
       requesterSessionKey: "agent:main:session:parent",
+      requesterOrigin: undefined,
       requesterDisplayKey: "parent",
       task: "task",
       cleanup: "keep",
+      expectsCompletionMessage: undefined,
+      spawnMode: "run",
       workspaceDir: "/tmp/workspace",
+      createdAt: 1,
+      startedAt: 1,
+      sessionStartedAt: 1,
+      accumulatedRuntimeMs: 0,
+      cleanupHandled: false,
     });
 
-    releaseSubagentRun("run-1");
+    mod.releaseSubagentRun("run-1");
 
     await vi.waitFor(() => {
       expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
       });
     });
     expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);

@@ -2,8 +2,8 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -47,6 +47,10 @@ export type MockSock = {
   user: { id: string };
 };
 
+const sessionState = vi.hoisted(() => ({
+  sock: undefined as MockSock | undefined,
+}));
+
 function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
@@ -70,19 +74,8 @@ function createMockSock(): MockSock {
   };
 }
 
-function getPairingStoreMocks() {
-  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
-  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
-  return {
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-}
-
-const sock: MockSock = createMockSock();
-
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
@@ -94,24 +87,114 @@ vi.mock("../../../src/media/store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => mockLoadConfig(),
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => getPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
 
-vi.mock("./session.js", () => ({
-  createWaSocket: vi.fn().mockResolvedValue(sock),
-  waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-  getStatusCode: vi.fn(() => 500),
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
+  };
+});
+
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn().mockImplementation(async () => {
+      if (!sessionState.sock) {
+        throw new Error("mock WhatsApp socket not initialized");
+      }
+      return sessionState.sock;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    getStatusCode: vi.fn(() => 500),
+  };
+});
 
 export function getSock(): MockSock {
-  return sock;
+  if (!sessionState.sock) {
+    throw new Error("mock WhatsApp socket not initialized");
+  }
+  return sessionState.sock;
+}
+
+type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+let monitorWebInbox: MonitorWebInbox;
+
+export async function settleInboundWork() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
+  await vi.waitFor(
+    () => {
+      expect(onMessage).toHaveBeenCalledTimes(count);
+    },
+    // Channel-suite workers can be saturated under no-isolate CI runs.
+    { timeout: 5_000, interval: 5 },
+  );
+}
+
+export async function startInboxMonitor(onMessage: InboxOnMessage) {
+  if (!monitorWebInbox) {
+    ({ monitorWebInbox } = await import("./inbound.js"));
+  }
+  const listener = await monitorWebInbox({
+    verbose: false,
+    onMessage,
+    accountId: DEFAULT_ACCOUNT_ID,
+    authDir: getAuthDir(),
+  });
+  return { listener, sock: getSock() };
+}
+
+export function buildNotifyMessageUpsert(params: {
+  id: string;
+  remoteJid: string;
+  text: string;
+  timestamp: number;
+  pushName?: string;
+  participant?: string;
+}) {
+  return {
+    type: "notify",
+    messages: [
+      {
+        key: {
+          id: params.id,
+          fromMe: false,
+          remoteJid: params.remoteJid,
+          participant: params.participant,
+        },
+        message: { conversation: params.text },
+        messageTimestamp: params.timestamp,
+        pushName: params.pushName,
+      },
+    ],
+  };
 }
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
@@ -137,14 +220,19 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {
+    vi.useRealTimers();
+    vi.resetModules();
     vi.clearAllMocks();
+    sessionState.sock = createMockSock();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
     readAllowFromStoreMock.mockResolvedValue([]);
     upsertPairingRequestMock.mockResolvedValue({
       code: "PAIRCODE",
       created: true,
     });
-    const { resetWebInboundDedupe } = await import("./inbound.js");
+    const inboundModule = await import("./inbound.js");
+    monitorWebInbox = inboundModule.monitorWebInbox;
+    const { resetWebInboundDedupe } = inboundModule;
     resetWebInboundDedupe();
     if (createAuthDir) {
       authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));

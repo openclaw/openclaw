@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -47,6 +48,7 @@ export function resolvePluginTools(params: {
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
   suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
@@ -58,12 +60,21 @@ export function resolvePluginTools(params: {
     return [];
   }
 
-  const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
-    workspaceDir: params.context.workspaceDir,
-    env,
-    logger: createPluginLoaderLogger(log),
-  });
+  const activeRegistry = getActivePluginRegistry();
+  const registry =
+    getActivePluginRegistryKey() && activeRegistry
+      ? activeRegistry
+      : loadOpenClawPlugins({
+          config: effectiveConfig,
+          workspaceDir: params.context.workspaceDir,
+          runtimeOptions: params.allowGatewaySubagentBinding
+            ? {
+                allowGatewaySubagentBinding: true,
+              }
+            : undefined,
+          env,
+          logger: createPluginLoaderLogger(log),
+        });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
@@ -98,6 +109,11 @@ export function resolvePluginTools(params: {
       continue;
     }
     if (!resolved) {
+      if (entry.names.length > 0) {
+        log.debug(
+          `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
+        );
+      }
       continue;
     }
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
