@@ -5,8 +5,8 @@ import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-dep
 describe("resolveNpmRunner", () => {
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
     const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
-    const expectedNpmCliPath = path.resolve(
-      path.dirname(execPath),
+    const expectedNpmCliPath = path.posix.resolve(
+      path.posix.dirname(execPath),
       "../lib/node_modules/npm/bin/npm-cli.js",
     );
 
