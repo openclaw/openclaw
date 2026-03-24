@@ -24,6 +24,27 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+  it("anchors Windows npm staging to the adjacent npm-cli.js without a shell", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const expectedNpmCliPath = path.win32.resolve(
+      path.win32.dirname(execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
+
+    const runner = resolveNpmRunner({
+      execPath,
+      env: {},
+      existsSync: (candidate: string) => candidate === expectedNpmCliPath,
+      platform: "win32",
+    });
+
+    expect(runner).toEqual({
+      command: execPath,
+      args: [expectedNpmCliPath],
+      shell: false,
+    });
+  });
+
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {
     expect(
       resolveNpmRunner({
@@ -44,8 +65,8 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("keeps shell mode for bare npm fallback on Windows", () => {
-    expect(
+  it("fails closed on Windows when no toolchain-local npm CLI exists", () => {
+    expect(() =>
       resolveNpmRunner({
         execPath: "C:\\node\\node.exe",
         env: {
@@ -54,13 +75,6 @@ describe("resolveNpmRunner", () => {
         existsSync: () => false,
         platform: "win32",
       }),
-    ).toEqual({
-      command: "npm",
-      args: [],
-      shell: true,
-      env: {
-        Path: "C:\\node;C:\\Windows\\System32",
-      },
-    });
+    ).toThrow("failed to resolve a toolchain-local npm CLI");
   });
 });

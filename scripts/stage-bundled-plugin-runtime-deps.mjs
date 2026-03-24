@@ -89,29 +89,39 @@ export function resolveNpmRunner(params = {}) {
   const platform = params.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path;
   const nodeDir = pathImpl.dirname(execPath);
-  const npmCliPath = pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js");
-  if (existsSync(npmCliPath)) {
+  const npmCliPath = resolveToolchainNpmCliPath({ existsSync, nodeDir, pathImpl });
+  if (npmCliPath) {
     return {
       command: execPath,
       args: [npmCliPath],
       shell: false,
     };
   }
+  if (platform === "win32") {
+    throw new Error(`failed to resolve a toolchain-local npm CLI next to ${execPath}`);
+  }
   const pathKey = resolvePathEnvKey(env);
   const currentPath = env[pathKey];
-  const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
   return {
     command: "npm",
     args: [],
-    shell: platform === "win32",
+    shell: false,
     env: {
       ...env,
       [pathKey]:
         typeof currentPath === "string" && currentPath.length > 0
-          ? `${nodeDir}${pathDelimiter}${currentPath}`
+          ? `${nodeDir}${path.delimiter}${currentPath}`
           : nodeDir,
     },
   };
+}
+
+function resolveToolchainNpmCliPath(params) {
+  const candidates = [
+    params.pathImpl.resolve(params.nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
+    params.pathImpl.resolve(params.nodeDir, "node_modules/npm/bin/npm-cli.js"),
+  ];
+  return candidates.find((candidate) => params.existsSync(candidate));
 }
 
 function resolvePathEnvKey(env) {
