@@ -2,6 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import {
   clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
@@ -19,7 +20,6 @@ import {
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 function normalizeGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): string | undefined {
