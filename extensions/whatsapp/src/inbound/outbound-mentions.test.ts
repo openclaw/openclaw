@@ -90,6 +90,14 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("x`y`@1234567890")).toEqual([]);
   });
 
+  it("skips mentions inside multi-backtick code spans", () => {
+    expect(extractOutboundMentions("`` @+1234567890 ``")).toEqual([]);
+    expect(extractOutboundMentions("```@+1234567890```")).toEqual([]);
+    expect(extractOutboundMentions("`` @+1234567890 `` but @+9876543210 outside")).toEqual([
+      "9876543210@s.whatsapp.net",
+    ]);
+  });
+
   it("matches mention followed by punctuation", () => {
     expect(extractOutboundMentions("hey @+1234567890, what's up?")).toEqual([
       "1234567890@s.whatsapp.net",
