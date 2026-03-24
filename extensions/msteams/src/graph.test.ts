@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadMSTeamsSdkWithAuthMock, readAccessTokenMock, resolveMSTeamsCredentialsMock } =
-  vi.hoisted(() => {
-    return {
-      loadMSTeamsSdkWithAuthMock: vi.fn(),
-      readAccessTokenMock: vi.fn(),
-      resolveMSTeamsCredentialsMock: vi.fn(),
-    };
-  });
+const {
+  loadMSTeamsSdkWithAuthMock,
+  createMSTeamsTokenProviderMock,
+  readAccessTokenMock,
+  resolveMSTeamsCredentialsMock,
+} = vi.hoisted(() => {
+  return {
+    loadMSTeamsSdkWithAuthMock: vi.fn(),
+    createMSTeamsTokenProviderMock: vi.fn(),
+    readAccessTokenMock: vi.fn(),
+    resolveMSTeamsCredentialsMock: vi.fn(),
+  };
+});
 
 vi.mock("./sdk.js", () => ({
   loadMSTeamsSdkWithAuth: loadMSTeamsSdkWithAuthMock,
+  createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
 }));
 
 vi.mock("./token-response.js", () => ({
@@ -66,10 +72,10 @@ describe("msteams graph helpers", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://graph.microsoft.com/v1.0/groups?$select=id",
       {
-        headers: {
+        headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           ConsistencyLevel: "eventual",
-        },
+        }),
       },
     );
 
@@ -86,25 +92,21 @@ describe("msteams graph helpers", () => {
   });
 
   it("resolves Graph tokens through the SDK auth provider", async () => {
-    const getAccessToken = vi.fn(async () => ({ accessToken: "sdk-token" }));
-    const MsalTokenProvider = vi.fn(function MockMsalTokenProvider() {
-      return { getAccessToken };
-    });
+    const getAccessToken = vi.fn(async () => "raw-graph-token");
+    const mockApp = { id: "mock-app" };
 
     resolveMSTeamsCredentialsMock.mockReturnValue({
       appId: "app-id",
       appPassword: "app-password",
       tenantId: "tenant-id",
     });
-    loadMSTeamsSdkWithAuthMock.mockResolvedValue({
-      sdk: { MsalTokenProvider },
-      authConfig: { clientId: "app-id" },
-    });
+    loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: mockApp });
+    createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
     readAccessTokenMock.mockReturnValue("resolved-token");
 
     await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
 
-    expect(MsalTokenProvider).toHaveBeenCalledWith({ clientId: "app-id" });
+    expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
   });
 
@@ -114,15 +116,9 @@ describe("msteams graph helpers", () => {
       "MS Teams credentials missing",
     );
 
-    const getAccessToken = vi.fn(async () => ({ token: null }));
-    loadMSTeamsSdkWithAuthMock.mockResolvedValue({
-      sdk: {
-        MsalTokenProvider: vi.fn(function MockMsalTokenProvider() {
-          return { getAccessToken };
-        }),
-      },
-      authConfig: { clientId: "app-id" },
-    });
+    const getAccessToken = vi.fn(async () => null);
+    loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: { id: "mock-app" } });
+    createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
     resolveMSTeamsCredentialsMock.mockReturnValue({
       appId: "app-id",
       appPassword: "app-password",

@@ -2181,7 +2181,7 @@
 {"recordType":"path","path":"channels.mattermost.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Mattermost Require Mention","help":"Require @mention in channels before responding (default: true).","hasChildren":false}
 {"recordType":"path","path":"channels.mattermost.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.mattermost.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.msteams","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Microsoft Teams","help":"Bot Framework; enterprise support.","hasChildren":true}
+{"recordType":"path","path":"channels.msteams","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Microsoft Teams","help":"Teams SDK; enterprise support.","hasChildren":true}
 {"recordType":"path","path":"channels.msteams.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.msteams.allowFrom.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.appId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}

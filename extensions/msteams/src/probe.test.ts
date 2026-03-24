@@ -5,16 +5,25 @@ const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,
 }));
 
-vi.mock("@microsoft/agents-hosting", () => ({
-  getAuthConfigWithDefaults: (cfg: unknown) => cfg,
-  MsalTokenProvider: class {
-    async getAccessToken() {
+vi.mock("@microsoft/teams.apps", () => ({
+  App: class {
+    protected async getBotToken() {
       if (hostMockState.tokenError) {
         throw hostMockState.tokenError;
       }
-      return "token";
+      return { value: "token" };
+    }
+    protected async getAppGraphToken() {
+      if (hostMockState.tokenError) {
+        throw hostMockState.tokenError;
+      }
+      return { value: "token" };
     }
   },
+}));
+
+vi.mock("@microsoft/teams.api", () => ({
+  Client: class {},
 }));
 
 import { probeMSTeams } from "./probe.js";

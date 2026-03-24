@@ -2091,10 +2091,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       channel: {
         id: "msteams",
         label: "Microsoft Teams",
-        selectionLabel: "Microsoft Teams (Bot Framework)",
+        selectionLabel: "Microsoft Teams (Teams SDK)",
         docsPath: "/channels/msteams",
         docsLabel: "msteams",
-        blurb: "Bot Framework; enterprise support.",
+        blurb: "Teams SDK; enterprise support.",
         aliases: ["teams"],
         order: 60,
       },

@@ -24324,7 +24324,7 @@
         "network"
       ],
       "label": "Microsoft Teams",
-      "help": "Bot Framework; enterprise support.",
+      "help": "Teams SDK; enterprise support.",
       "hasChildren": true
     },
     {
