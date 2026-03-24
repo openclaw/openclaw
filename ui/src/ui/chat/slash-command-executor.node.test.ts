@@ -265,6 +265,46 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
+  it("treats /model status as model info instead of a model patch", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "default-model" },
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "status",
+    );
+
+    expect(result.content).toBe(
+      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+  });
+
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
@@ -287,6 +327,7 @@ describe("executeSlashCommand directives", () => {
       "gpt-5-mini",
     );
 
+    expect(result.content).toBe("Model set to `gpt-5-mini`.");
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: "gpt-5-mini",
@@ -295,6 +336,41 @@ describe("executeSlashCommand directives", () => {
       kind: "qualified",
       value: "openai/gpt-5-mini",
     });
+  });
+
+  it("treats /model list as model info instead of a model patch", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "default-model" },
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "list",
+    );
+
+    expect(result.content).toBe(
+      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
   });
 
   it("resolves the legacy main alias for /usage", async () => {

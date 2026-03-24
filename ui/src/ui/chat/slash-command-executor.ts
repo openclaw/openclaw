@@ -126,7 +126,10 @@ async function executeModel(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  if (!args) {
+  const rawArg = args.trim();
+  const normalizedArg = rawArg.toLowerCase();
+
+  if (!rawArg || normalizedArg === "status" || normalizedArg === "list") {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
@@ -160,7 +163,7 @@ async function executeModel(
       patched.resolved?.modelProvider,
     );
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${rawArg}\`.`,
       action: "refresh",
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
