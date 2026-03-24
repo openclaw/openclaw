@@ -236,7 +236,11 @@ export async function createGatewayRuntimeState(params: {
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.
         releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
-        releasePinnedPluginChannelRegistry(params.pluginRegistry);
+        // Release unconditionally (no registry arg): the channel pin may have
+        // been re-pinned to a deferred-reload registry that differs from the
+        // original params.pluginRegistry, so an identity-guarded release would
+        // be a no-op and leak the pin across in-process restarts.
+        releasePinnedPluginChannelRegistry();
       },
       httpServer,
       httpServers,
@@ -258,7 +262,7 @@ export async function createGatewayRuntimeState(params: {
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
-    releasePinnedPluginChannelRegistry(params.pluginRegistry);
+    releasePinnedPluginChannelRegistry();
     throw err;
   }
 }
