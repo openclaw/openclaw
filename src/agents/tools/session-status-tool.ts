@@ -425,6 +425,8 @@ export function createSessionStatusTool(opts?: {
         channel: channelForOverride,
         groupId: resolved.entry.groupId,
         groupChannel: resolved.entry.groupChannel,
+        groupSubject: resolved.entry.subject,
+        parentSessionKey: resolved.entry.parentSessionKey,
       });
       let effectiveProvider = configured.provider;
       let effectiveModel = configured.model;
