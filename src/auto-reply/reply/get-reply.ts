@@ -160,9 +160,6 @@ export async function getReplyFromConfig(
   let hasResolvedHeartbeatModelOverride = false;
   // Handle modelOverride from Gateway (e.g., image model when images detected)
   let hasAppliedImageModelOverride = false;
-  // Save original provider/model for media understanding (before image model override)
-  const originalProvider = provider;
-  const originalModel = model;
   if (opts?.modelOverride?.trim()) {
     const modelRef = resolveModelRefFromString({
       raw: opts.modelOverride.trim(),
@@ -245,6 +242,29 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
+
+  // Apply media/link enrichment BEFORE initSessionState so that
+  // sessionCtx captures the enriched content (e.g. audio transcripts,
+  // link summaries). Otherwise resolveReplyDirectives and runPreparedReply
+  // use stale pre-enrichment Body* fields from sessionCtx.
+  if (!isFastTestEnv) {
+    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
+      ctx: finalized,
+      cfg,
+      agentDir,
+      activeModel: { provider, model },
+    });
+    logIngressStage(
+      "media-understanding",
+      `applied=${appliedMediaUnderstanding ? "1" : "0"} model=${provider}/${model}`,
+    );
+    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
+      ctx: finalized,
+      cfg,
+    });
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
+  }
+
   const sessionState = await initSessionState({
     ctx: finalized,
     cfg,
@@ -387,48 +407,6 @@ export async function getReplyFromConfig(
       provider = resolved.ref.provider;
       model = resolved.ref.model;
     }
-  }
-
-  // Media understanding with effective model calculation
-  if (!isFastTestEnv) {
-    // Determine the effective model for media understanding:
-    // 1. If image model override was applied, use that (vision-capable)
-    // 2. If channel model is vision model, use that
-    // 3. If channel model exists but is text-only, use default model
-    // 4. Otherwise use original model (handles case where channel model wasn't overridden)
-    // This ensures vision-capable models don't get unnecessary captions added.
-    let effectiveModelForMedia: { provider: string; model: string } = {
-      provider: originalProvider,
-      model: originalModel,
-    };
-
-    if (hasAppliedImageModelOverride) {
-      // Image model override was applied - it's vision-capable by definition
-      effectiveModelForMedia = { provider, model };
-    } else if (channelModelOverride && channelModelIsVisionModel) {
-      // Channel model is vision-capable, use that
-      effectiveModelForMedia = { provider, model };
-    } else if (channelModelOverride && !channelModelIsVisionModel) {
-      // Channel model exists but is text-only - use default model to avoid
-      // passing image payloads to text-only models
-      effectiveModelForMedia = { provider: defaultProvider, model: defaultModel };
-    }
-
-    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: effectiveModelForMedia,
-    });
-    logIngressStage(
-      "media-understanding",
-      `applied=${appliedMediaUnderstanding ? "1" : "0"} effectiveModel=${effectiveModelForMedia.provider}/${effectiveModelForMedia.model}`,
-    );
-    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-    });
-    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
 
   emitPreAgentMessageHooks({
