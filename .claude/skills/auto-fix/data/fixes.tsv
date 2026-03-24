@@ -1,3 +1,7 @@
 issue	category	severity	pr	status	error_signature	files_changed	description
 16	session-stability	low	17	merged	session-abort:*:aborted	1	Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session
 16	session-stability	low	18	pr-open	session-abort:*:aborted	2	Extend isFailoverAssistantError to handle stopReason=aborted and add /request was aborted/i pattern; ZAI resolves stream with stopReason=aborted bypassing promptError fallback path
+21	channel-delivery	medium	22	pr-open	gw:channel-delivery:telegram/api:telegram_message_failed	1	Add markdownToTelegramChunks to sendMessageTelegram text send path; long messages now split into 4096-char chunks instead of failing with 400 Bad Request
+19	config-corruption	high	-	out-of-scope	gw:config-corruption:openclaw:Gateway_aborted:_config_is_invalid	0	Transient file corruption already resolved; no reproducible code path found; native file system event outside auto-fix scope
+20	mcp-integration	medium	-	out-of-scope	gw:mcp-integration:memory:qmd_vsearch_failed	0	Native llama.cpp Metal GPU crash in ggml-metal-context.m; requires node-llama-cpp version bump (dependency upgrade out of scope)
+23	gateway-config	medium	-	out-of-scope	gw:gateway-config:openclaw:Service_config_issue:_Gateway_service_embeds_OPENCLAW_GATEWA	0	LaunchAgent plist embeds OPENCLAW_GATEWAY_TOKEN; fix is operational (openclaw gateway install --force), not a code change
