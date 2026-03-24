@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
@@ -55,6 +56,36 @@ describe("image-generation provider registry", () => {
 
     expect(provider?.id).toBe("custom-image");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to config-backed plugin loading when the active registry has no image providers", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry, "existing-registry");
+
+    const loadedRegistry = createEmptyPluginRegistry();
+    loadedRegistry.imageGenerationProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+        }),
+      },
+    });
+    loadOpenClawPluginsMock.mockReturnValue(loadedRegistry);
+
+    const provider = getImageGenerationProvider("openai", {} as OpenClawConfig);
+
+    expect(provider?.id).toBe("openai");
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
+      config: {},
+    });
   });
 
   it("ignores prototype-like provider ids and aliases", () => {
