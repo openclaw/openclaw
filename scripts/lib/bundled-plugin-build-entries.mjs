@@ -13,7 +13,7 @@ function readBundledPluginPackageJson(packageJsonPath) {
   }
 }
 
-function collectPluginSourceEntries(packageJson) {
+function collectPluginSourceEntries(packageJson, pluginDir) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
         (entry) => typeof entry === "string" && entry.trim().length > 0,
@@ -26,6 +26,19 @@ function collectPluginSourceEntries(packageJson) {
       : undefined;
   if (setupEntry) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
+  }
+  // Auto-discover runtime API entry points that the core boundary modules
+  // load dynamically via jiti.  Without these the plugin fails at runtime
+  // even though index.js loads fine.
+  if (pluginDir) {
+    for (const file of fs.readdirSync(pluginDir)) {
+      if (file.endsWith("-runtime-api.ts") || file === "runtime-api.ts") {
+        const entry = `./${file}`;
+        if (!packageEntries.includes(entry)) {
+          packageEntries.push(entry);
+        }
+      }
+    }
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
 }
@@ -57,7 +70,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
       id: dirent.name,
       hasPackageJson: packageJson !== null,
       packageJson,
-      sourceEntries: collectPluginSourceEntries(packageJson),
+      sourceEntries: collectPluginSourceEntries(packageJson, pluginDir),
     });
   }
 
