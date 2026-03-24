@@ -119,4 +119,51 @@ describe("openstream plugin", () => {
 
     expect(String(result?.text ?? "")).toContain("Usage: /openstream model <modelId>");
   });
+
+  it("recommends enabling prompt guidance only when it is disabled", async () => {
+    const { command } = createApi({
+      pluginConfig: {
+        promptGuidance: false,
+      },
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              models: ["deepseek-v3:671b"],
+            },
+          },
+        },
+      },
+    });
+
+    if (!command) {
+      throw new Error("openstream command was not registered");
+    }
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      commandBody: "/openstream doctor",
+      args: "doctor",
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              models: ["deepseek-v3:671b"],
+            },
+          },
+        },
+      },
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    const text = String(result?.text ?? "");
+    expect(text).toContain("Enable plugin prompt guidance");
+    expect(text).toContain("context=131072");
+    expect(text).not.toContain("context=2097152");
+  });
 });

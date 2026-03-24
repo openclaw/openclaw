@@ -160,7 +160,7 @@ export function buildOpenStreamDoctorReport(params: {
     );
   }
 
-  if (params.pluginConfig.promptGuidance) {
+  if (!params.pluginConfig.promptGuidance) {
     recommendations.push(
       "Enable plugin prompt guidance so OpenClaw can keep cached Ollama/tool-call recovery guidance out of user space.",
     );

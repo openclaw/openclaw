@@ -35,7 +35,11 @@ export function estimateContextWindow(modelId: string): number | undefined {
     return name.includes("128k") ? 131072 : OLLAMA_EXTENDED_CONTEXT_WINDOW;
   }
   if (name.includes("deepseek") && name.includes("v3")) {
-    return OLLAMA_MEGA_CONTEXT_WINDOW;
+    if (name.includes("2m")) return OLLAMA_MEGA_CONTEXT_WINDOW;
+    if (name.includes("1m")) return 1048576;
+    if (name.includes("256k")) return OLLAMA_EXTENDED_CONTEXT_WINDOW;
+    if (name.includes("128k")) return 131072;
+    return 131072;
   }
   if (name.includes("kimi") && (name.includes("k2") || name.includes("2.5"))) {
     return OLLAMA_MEGA_CONTEXT_WINDOW;
