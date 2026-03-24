@@ -62,7 +62,7 @@ x-i18n:
   "uiHints": {
     "monitorOnly": {
       "label": "Monitor only",
-      "description": "Audit risky activity without blocking calls."
+      "help": "Audit risky activity without blocking calls."
     },
     "auditLogPath": {
       "label": "Audit log path",
