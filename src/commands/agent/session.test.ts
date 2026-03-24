@@ -22,7 +22,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
-const { resolveSessionKeyForRequest } = await import("./session.js");
+let resolveSessionKeyForRequest: typeof import("./session.js").resolveSessionKeyForRequest;
+
+async function loadFreshSessionModuleForTest() {
+  vi.resetModules();
+  ({ resolveSessionKeyForRequest } = await import("./session.js"));
+}
 
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
@@ -46,7 +51,8 @@ describe("resolveSessionKeyForRequest", () => {
     mocks.loadSessionStore.mockImplementation((storePath: string) => stores[storePath] ?? {});
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshSessionModuleForTest();
     vi.clearAllMocks();
     mocks.listAgentIds.mockReturnValue(["main"]);
   });

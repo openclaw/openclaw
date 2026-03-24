@@ -10,10 +10,10 @@ import {
   mockEmbeddedTextResult,
   replyText,
   replyTexts,
-  runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
 import { getReplyFromConfig } from "./reply.js";
 
@@ -28,7 +28,7 @@ function makeDefaultModelConfig(home: string) {
 }
 
 async function runReplyToCurrentCase(home: string, text: string) {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
+  runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedTextResult(text));
 
   const res = await getReplyFromConfig(
     {
@@ -86,7 +86,7 @@ async function runReasoningDefaultCase(params: {
   expectedReasoningLevel: "off" | "on";
   thinkingDefault?: "off" | "low" | "medium" | "high";
 }) {
-  vi.mocked(runEmbeddedPiAgent).mockClear();
+  runEmbeddedPiAgentMock.mockClear();
   mockEmbeddedTextResult("done");
   mockReasoningCapableCatalog();
 
@@ -103,8 +103,8 @@ async function runReasoningDefaultCase(params: {
     }),
   );
 
-  expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-  const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+  const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
   expect(call?.thinkLevel).toBe(params.expectedThinkLevel);
   expect(call?.reasoningLevel).toBe(params.expectedReasoningLevel);
 }
@@ -124,9 +124,9 @@ describe("directive behavior", () => {
         reasoning: false,
         expectedLevel: "off",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
 
-      vi.mocked(runEmbeddedPiAgent).mockClear();
+      runEmbeddedPiAgentMock.mockClear();
 
       for (const scenario of [
         {
@@ -237,7 +237,7 @@ describe("directive behavior", () => {
       });
       expect(missingAuthText).toContain("Providers:");
       expect(missingAuthText).not.toContain("missing (missing)");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("sets model override on /model directive", async () => {
@@ -264,7 +264,7 @@ describe("directive behavior", () => {
         model: "gpt-4.1-mini",
         provider: "openai",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("ignores inline /model and /think directives while still running agent content", async () => {
@@ -283,11 +283,11 @@ describe("directive behavior", () => {
 
       const texts = replyTexts(inlineModelRes);
       expect(texts).toContain("done");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
       expect(call?.model).toBe("claude-opus-4-5");
-      vi.mocked(runEmbeddedPiAgent).mockClear();
+      runEmbeddedPiAgentMock.mockClear();
 
       mockEmbeddedTextResult("done");
       const inlineThinkRes = await getReplyFromConfig(
@@ -301,7 +301,7 @@ describe("directive behavior", () => {
       );
 
       expect(replyTexts(inlineThinkRes)).toContain("done");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     });
   });
   it("passes elevated defaults when sender is approved", async () => {
@@ -330,8 +330,8 @@ describe("directive behavior", () => {
         ),
       );
 
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.bashElevated).toEqual({
         enabled: true,
         allowed: true,
@@ -398,8 +398,8 @@ describe("directive behavior", () => {
         config,
       );
 
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.reasoningLevel).toBe("off");
     });
   });
@@ -411,7 +411,7 @@ describe("directive behavior", () => {
         expect(payload?.replyToId).toBe("msg-123");
       }
 
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue(
+      runEmbeddedPiAgentMock.mockResolvedValue(
         makeEmbeddedTextResult("hi [[reply_to_current]] [[reply_to:abc-456]]"),
       );
 
