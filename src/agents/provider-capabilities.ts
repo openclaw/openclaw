@@ -34,7 +34,11 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   nonStreaming: false,
 };
 
-const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
   anthropic: {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
@@ -100,7 +104,7 @@ export function resolveProviderCapabilities(provider?: string | null): ProviderC
   const normalized = normalizeProviderId(provider ?? "");
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...PROVIDER_CAPABILITIES[normalized],
+    ...CORE_PROVIDER_CAPABILITIES[normalized],
   };
 }
 

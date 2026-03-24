@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
 
@@ -62,9 +62,22 @@ export type TtsConfig = {
     model?: string;
     voice?: string;
   };
-  /** Microsoft Edge (node-edge-tts) configuration. */
+  /** Legacy alias for Microsoft speech configuration. */
   edge?: {
-    /** Explicitly allow Edge TTS usage (no API key required). */
+    /** Explicitly allow Microsoft speech usage (no API key required). */
+    enabled?: boolean;
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+    pitch?: string;
+    rate?: string;
+    volume?: string;
+    saveSubtitles?: boolean;
+    proxy?: string;
+    timeoutMs?: number;
+  };
+  /** Preferred alias for Microsoft speech configuration. */
+  microsoft?: {
     enabled?: boolean;
     voice?: string;
     lang?: string;

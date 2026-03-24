@@ -1,3 +1,4 @@
+import { buildAnthropicVertexProvider } from "../../extensions/anthropic-vertex/provider-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../providers/github-copilot-token.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -601,7 +603,10 @@ export function normalizeProviders(params: {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
-        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
+        const fromEnv =
+          normalizedKey === "anthropic-vertex"
+            ? resolveEnvApiKey(normalizedKey, env)?.apiKey
+            : resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
           if (profileApiKey && profileApiKey.source !== "plaintext") {
@@ -666,10 +671,22 @@ type ProviderApiKeyResolver = (provider: string) => {
   discoveryApiKey?: string;
 };
 
+type ProviderAuthResolver = (
+  provider: string,
+  options?: { oauthMarker?: string },
+) => {
+  apiKey: string | undefined;
+  discoveryApiKey?: string;
+  mode: "api_key" | "oauth" | "token" | "none";
+  source: "env" | "profile" | "none";
+  profileId?: string;
+};
+
 type ImplicitProviderContext = ImplicitProviderParams & {
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderApiKeyResolver;
+  resolveProviderAuth: ProviderAuthResolver;
 };
 
 type ImplicitProviderLoader = (
@@ -865,6 +882,8 @@ async function resolvePluginImplicitProviders(
       env: ctx.env,
       resolveProviderApiKey: (providerId) =>
         ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+      resolveProviderAuth: (providerId, options) =>
+        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
     });
     mergeImplicitProviderSet(
       discovered,
@@ -901,11 +920,74 @@ export async function resolveImplicitProviders(
       discoveryApiKey: fromProfiles?.discoveryApiKey,
     };
   };
+  const resolveProviderAuth: ProviderAuthResolver = (
+    provider: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: "api_key",
+        source: "env",
+      };
+    }
+
+    const ids = listProfilesForProvider(authStore, provider);
+    let oauthCandidate:
+      | {
+          apiKey: string | undefined;
+          discoveryApiKey?: string;
+          mode: "oauth";
+          source: "profile";
+          profileId: string;
+        }
+      | undefined;
+    for (const id of ids) {
+      const cred = authStore.profiles[id];
+      if (!cred) {
+        continue;
+      }
+      if (cred.type === "oauth") {
+        oauthCandidate ??= {
+          apiKey: options?.oauthMarker,
+          discoveryApiKey: toDiscoveryApiKey(cred.access),
+          mode: "oauth",
+          source: "profile",
+          profileId: id,
+        };
+        continue;
+      }
+      const resolved = resolveApiKeyFromCredential(cred, env);
+      if (!resolved) {
+        continue;
+      }
+      return {
+        apiKey: resolved.apiKey,
+        discoveryApiKey: resolved.discoveryApiKey,
+        mode: cred.type,
+        source: "profile",
+        profileId: id,
+      };
+    }
+    if (oauthCandidate) {
+      return oauthCandidate;
+    }
+
+    return {
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none",
+      source: "none",
+    };
+  };
   const context: ImplicitProviderContext = {
     ...params,
     authStore,
     env,
     resolveProviderApiKey,
+    resolveProviderAuth,
   };
 
   for (const loader of SIMPLE_IMPLICIT_PROVIDER_LOADERS) {
@@ -950,6 +1032,21 @@ export async function resolveImplicitProviders(
               : implicitBedrock.models,
         }
       : implicitBedrock;
+  }
+
+  const implicitAnthropicVertex = resolveImplicitAnthropicVertexProvider({ env });
+  if (implicitAnthropicVertex) {
+    const existing = providers["anthropic-vertex"];
+    providers["anthropic-vertex"] = existing
+      ? {
+          ...implicitAnthropicVertex,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitAnthropicVertex.models,
+        }
+      : implicitAnthropicVertex;
   }
 
   return providers;
@@ -1011,6 +1108,17 @@ export async function resolveImplicitCopilotProvider(params: {
     baseUrl,
     models: [],
   } satisfies ProviderConfig;
+}
+
+export function resolveImplicitAnthropicVertexProvider(params: {
+  env?: NodeJS.ProcessEnv;
+}): ProviderConfig | null {
+  const env = params.env ?? process.env;
+  if (!hasAnthropicVertexAvailableAuth(env)) {
+    return null;
+  }
+
+  return buildAnthropicVertexProvider({ env });
 }
 
 export async function resolveImplicitBedrockProvider(params: {

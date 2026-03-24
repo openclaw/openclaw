@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -17,7 +18,10 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechListVoicesRequest,
   SpeechProviderConfiguredContext,
@@ -33,6 +37,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+
+// Runtime model type — wraps pi-ai Model<Api> for provider plugin contracts.
+export type ProviderRuntimeModel = Model<Api>;
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -187,6 +194,18 @@ export type ProviderDiscoveryContext = {
     apiKey: string | undefined;
     discoveryApiKey?: string;
   };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
+  };
 };
 
 export type ProviderDiscoveryResult =
@@ -242,6 +261,61 @@ export type ProviderPlugin = {
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+export type WebSearchProviderId = string;
+
+export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebSearchProviderContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
+export type WebSearchProviderPlugin = {
+  id: WebSearchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
+  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
+};
+
+export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
 };
 
 export type OpenClawPluginGatewayMethod = {
@@ -1026,3 +1100,7 @@ export type SpeechProviderPlugin = {
 export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
   pluginId: string;
 };
+
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+
+export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;

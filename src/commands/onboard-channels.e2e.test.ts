@@ -182,6 +182,10 @@ vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),
+    ensureOnboardingPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      installed: true,
+    })),
     // Allow tests to simulate an empty plugin registry during onboarding.
     reloadOnboardingPluginRegistry: vi.fn(() => {}),
   };

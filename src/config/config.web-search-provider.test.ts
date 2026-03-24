@@ -41,6 +41,21 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts firecrawl provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "firecrawl",
+        providerConfig: {
+          apiKey: "fc-test-key", // pragma: allowlist secret
+          baseUrl: "https://api.firecrawl.dev",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts gemini provider with no extra config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -83,11 +98,13 @@ describe("web search provider auto-detection", () => {
 
   beforeEach(() => {
     delete process.env.BRAVE_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.TAVILY_API_KEY;
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
@@ -110,6 +127,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
+    process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("firecrawl");
   });
 
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {

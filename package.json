@@ -370,6 +370,10 @@
       "types": "./dist/plugin-sdk/provider-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-stream.js"
     },
+    "./plugin-sdk/provider-tools": {
+      "types": "./dist/plugin-sdk/provider-tools.d.ts",
+      "default": "./dist/plugin-sdk/provider-tools.js"
+    },
     "./plugin-sdk/provider-usage": {
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
@@ -493,6 +497,66 @@
     "./plugin-sdk/zalouser": {
       "types": "./dist/plugin-sdk/zalouser.d.ts",
       "default": "./dist/plugin-sdk/zalouser.js"
+    },
+    "./plugin-sdk/account-resolution": {
+      "types": "./dist/plugin-sdk/account-resolution.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution.js"
+    },
+    "./plugin-sdk/allow-from": {
+      "types": "./dist/plugin-sdk/allow-from.d.ts",
+      "default": "./dist/plugin-sdk/allow-from.js"
+    },
+    "./plugin-sdk/allowlist-resolution": {
+      "types": "./dist/plugin-sdk/allowlist-resolution.d.ts",
+      "default": "./dist/plugin-sdk/allowlist-resolution.js"
+    },
+    "./plugin-sdk/allowlist-config-edit": {
+      "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
+      "default": "./dist/plugin-sdk/allowlist-config-edit.js"
+    },
+    "./plugin-sdk/boolean-param": {
+      "types": "./dist/plugin-sdk/boolean-param.d.ts",
+      "default": "./dist/plugin-sdk/boolean-param.js"
+    },
+    "./plugin-sdk/channel-config-helpers": {
+      "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/image-generation-runtime": {
+      "types": "./dist/plugin-sdk/image-generation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/image-generation-runtime.js"
+    },
+    "./plugin-sdk/reply-history": {
+      "types": "./dist/plugin-sdk/reply-history.d.ts",
+      "default": "./dist/plugin-sdk/reply-history.js"
+    },
+    "./plugin-sdk/media-understanding": {
+      "types": "./dist/plugin-sdk/media-understanding.d.ts",
+      "default": "./dist/plugin-sdk/media-understanding.js"
+    },
+    "./plugin-sdk/google": {
+      "types": "./dist/plugin-sdk/google.d.ts",
+      "default": "./dist/plugin-sdk/google.js"
+    },
+    "./plugin-sdk/request-url": {
+      "types": "./dist/plugin-sdk/request-url.d.ts",
+      "default": "./dist/plugin-sdk/request-url.js"
+    },
+    "./plugin-sdk/runtime-store": {
+      "types": "./dist/plugin-sdk/runtime-store.d.ts",
+      "default": "./dist/plugin-sdk/runtime-store.js"
+    },
+    "./plugin-sdk/speech": {
+      "types": "./dist/plugin-sdk/speech.d.ts",
+      "default": "./dist/plugin-sdk/speech.js"
+    },
+    "./plugin-sdk/state-paths": {
+      "types": "./dist/plugin-sdk/state-paths.d.ts",
+      "default": "./dist/plugin-sdk/state-paths.js"
+    },
+    "./plugin-sdk/tool-send": {
+      "types": "./dist/plugin-sdk/tool-send.d.ts",
+      "default": "./dist/plugin-sdk/tool-send.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },
@@ -625,6 +689,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.16.1",
+    "@anthropic-ai/vertex-sdk": "^0.14.4",
     "@aws-sdk/client-bedrock": "^3.1011.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.1.0",

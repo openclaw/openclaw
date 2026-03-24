@@ -1,0 +1,424 @@
+import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  generateImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
+import type {
+  ImageGenerationResolution,
+  ImageGenerationSourceImage,
+} from "../../image-generation/types.js";
+import { getImageMetadata } from "../../media/image-ops.js";
+import { saveMediaBuffer } from "../../media/store.js";
+import { loadWebMedia } from "../../plugin-sdk/web-media.js";
+import { resolveUserPath } from "../../utils.js";
+import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { decodeDataUrl } from "./image-tool.helpers.js";
+import { resolveMediaToolLocalRoots } from "./media-tool-shared.js";
+import {
+  createSandboxBridgeReadFile,
+  resolveSandboxedBridgeMediaPath,
+  type AnyAgentTool,
+  type SandboxFsBridge,
+  type ToolFsPolicy,
+} from "./tool-runtime.helpers.js";
+
+const DEFAULT_COUNT = 1;
+const MAX_COUNT = 4;
+const MAX_INPUT_IMAGES = 4;
+const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
+
+const ImageGenerateToolSchema = Type.Object({
+  action: Type.Optional(
+    Type.String({
+      description:
+        'Optional action: "generate" (default) or "list" to inspect available providers/models.',
+    }),
+  ),
+  prompt: Type.Optional(Type.String({ description: "Image generation prompt." })),
+  image: Type.Optional(
+    Type.String({
+      description: "Optional reference image path or URL for edit mode.",
+    }),
+  ),
+  images: Type.Optional(
+    Type.Array(Type.String(), {
+      description: `Optional reference images for edit mode (up to ${MAX_INPUT_IMAGES}).`,
+    }),
+  ),
+  model: Type.Optional(
+    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-1." }),
+  ),
+  size: Type.Optional(
+    Type.String({
+      description:
+        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+    }),
+  ),
+  resolution: Type.Optional(
+    Type.String({
+      description:
+        "Optional resolution hint: 1K, 2K, or 4K. Useful for Google edit/generation flows.",
+    }),
+  ),
+  count: Type.Optional(
+    Type.Number({
+      description: `Optional number of images to request (1-${MAX_COUNT}).`,
+      minimum: 1,
+      maximum: MAX_COUNT,
+    }),
+  ),
+});
+
+function hasConfiguredImageGenerationModel(cfg: OpenClawConfig): boolean {
+  const configured = cfg.agents?.defaults?.imageGenerationModel;
+  if (typeof configured === "string") {
+    return configured.trim().length > 0;
+  }
+  if (configured?.primary?.trim()) {
+    return true;
+  }
+  return (configured?.fallbacks ?? []).some((entry) => entry.trim().length > 0);
+}
+
+function resolveAction(args: Record<string, unknown>): "generate" | "list" {
+  const raw = readStringParam(args, "action");
+  if (!raw) {
+    return "generate";
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "generate" || normalized === "list") {
+    return normalized;
+  }
+  throw new ToolInputError('action must be "generate" or "list"');
+}
+
+function resolveRequestedCount(args: Record<string, unknown>): number {
+  const count = readNumberParam(args, "count", { integer: true });
+  if (count === undefined) {
+    return DEFAULT_COUNT;
+  }
+  if (count < 1 || count > MAX_COUNT) {
+    throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
+  }
+  return count;
+}
+
+function normalizeResolution(raw: string | undefined): ImageGenerationResolution | undefined {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "1K" || normalized === "2K" || normalized === "4K") {
+    return normalized;
+  }
+  throw new ToolInputError("resolution must be one of 1K, 2K, or 4K");
+}
+
+function normalizeReferenceImages(args: Record<string, unknown>): string[] {
+  const imageCandidates: string[] = [];
+  if (typeof args.image === "string") {
+    imageCandidates.push(args.image);
+  }
+  if (Array.isArray(args.images)) {
+    imageCandidates.push(
+      ...args.images.filter((value): value is string => typeof value === "string"),
+    );
+  }
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const candidate of imageCandidates) {
+    const trimmed = candidate.trim();
+    const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    if (!dedupe || seen.has(dedupe)) {
+      continue;
+    }
+    seen.add(dedupe);
+    normalized.push(trimmed);
+  }
+  if (normalized.length > MAX_INPUT_IMAGES) {
+    throw new ToolInputError(
+      `Too many reference images: ${normalized.length} provided, maximum is ${MAX_INPUT_IMAGES}.`,
+    );
+  }
+  return normalized;
+}
+
+type ImageGenerateSandboxConfig = {
+  root: string;
+  bridge: SandboxFsBridge;
+};
+
+async function loadReferenceImages(params: {
+  imageInputs: string[];
+  maxBytes?: number;
+  localRoots: string[];
+  sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+}): Promise<
+  Array<{
+    sourceImage: ImageGenerationSourceImage;
+    resolvedImage: string;
+    rewrittenFrom?: string;
+  }>
+> {
+  const loaded: Array<{
+    sourceImage: ImageGenerationSourceImage;
+    resolvedImage: string;
+    rewrittenFrom?: string;
+  }> = [];
+
+  for (const imageRawInput of params.imageInputs) {
+    const trimmed = imageRawInput.trim();
+    const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    if (!imageRaw) {
+      throw new ToolInputError("image required (empty string in array)");
+    }
+    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
+    const isFileUrl = /^file:/i.test(imageRaw);
+    const isHttpUrl = /^https?:\/\//i.test(imageRaw);
+    const isDataUrl = /^data:/i.test(imageRaw);
+    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+      throw new ToolInputError(
+        `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+      );
+    }
+    if (params.sandboxConfig && isHttpUrl) {
+      throw new ToolInputError("Sandboxed image_generate does not allow remote URLs.");
+    }
+
+    const resolvedImage = (() => {
+      if (params.sandboxConfig) {
+        return imageRaw;
+      }
+      if (imageRaw.startsWith("~")) {
+        return resolveUserPath(imageRaw);
+      }
+      return imageRaw;
+    })();
+
+    const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
+      ? { resolved: "" }
+      : params.sandboxConfig
+        ? await resolveSandboxedBridgeMediaPath({
+            sandbox: params.sandboxConfig,
+            mediaPath: resolvedImage,
+            inboundFallbackDir: "media/inbound",
+          })
+        : {
+            resolved: resolvedImage.startsWith("file://")
+              ? resolvedImage.slice("file://".length)
+              : resolvedImage,
+          };
+    const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
+
+    const media = isDataUrl
+      ? decodeDataUrl(resolvedImage)
+      : params.sandboxConfig
+        ? await loadWebMedia(resolvedPath ?? resolvedImage, {
+            maxBytes: params.maxBytes,
+            sandboxValidated: true,
+            readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
+          })
+        : await loadWebMedia(resolvedPath ?? resolvedImage, {
+            maxBytes: params.maxBytes,
+            localRoots: params.localRoots,
+          });
+    if (media.kind !== "image") {
+      throw new ToolInputError(`Unsupported media type: ${media.kind}`);
+    }
+
+    const mimeType =
+      ("contentType" in media && media.contentType) ||
+      ("mimeType" in media && media.mimeType) ||
+      "image/png";
+
+    loaded.push({
+      sourceImage: {
+        buffer: media.buffer,
+        mimeType,
+      },
+      resolvedImage,
+      ...(resolvedPathInfo.rewrittenFrom ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom } : {}),
+    });
+  }
+
+  return loaded;
+}
+
+async function inferResolutionFromInputImages(
+  images: ImageGenerationSourceImage[],
+): Promise<ImageGenerationResolution> {
+  let maxDimension = 0;
+  for (const image of images) {
+    const meta = await getImageMetadata(image.buffer);
+    const dimension = Math.max(meta?.width ?? 0, meta?.height ?? 0);
+    maxDimension = Math.max(maxDimension, dimension);
+  }
+  if (maxDimension >= 3000) {
+    return "4K";
+  }
+  if (maxDimension >= 1500) {
+    return "2K";
+  }
+  return DEFAULT_RESOLUTION;
+}
+
+export function createImageGenerateTool(options?: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  sandbox?: ImageGenerateSandboxConfig;
+  fsPolicy?: ToolFsPolicy;
+}): AnyAgentTool | null {
+  const cfg = options?.config ?? loadConfig();
+  if (!hasConfiguredImageGenerationModel(cfg)) {
+    return null;
+  }
+  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+  });
+  const sandboxConfig =
+    options?.sandbox && options.sandbox.root.trim()
+      ? {
+          root: options.sandbox.root.trim(),
+          bridge: options.sandbox.bridge,
+          workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+        }
+      : null;
+
+  return {
+    label: "Image Generation",
+    name: "image_generate",
+    description:
+      'Generate new images or edit reference images with the configured image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths.',
+    parameters: ImageGenerateToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const action = resolveAction(params);
+      if (action === "list") {
+        const providers = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
+          id: provider.id,
+          ...(provider.label ? { label: provider.label } : {}),
+          ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+          models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
+          ...(provider.supportedSizes ? { supportedSizes: [...provider.supportedSizes] } : {}),
+          ...(provider.supportedResolutions
+            ? { supportedResolutions: [...provider.supportedResolutions] }
+            : {}),
+          ...(typeof provider.supportsImageEditing === "boolean"
+            ? { supportsImageEditing: provider.supportsImageEditing }
+            : {}),
+        }));
+        const lines = providers.flatMap((provider) => {
+          const caps: string[] = [];
+          if (provider.supportsImageEditing) {
+            caps.push("editing");
+          }
+          if ((provider.supportedResolutions?.length ?? 0) > 0) {
+            caps.push(`resolutions ${provider.supportedResolutions?.join("/")}`);
+          }
+          if ((provider.supportedSizes?.length ?? 0) > 0) {
+            caps.push(`sizes ${provider.supportedSizes?.join(", ")}`);
+          }
+          const modelLine =
+            provider.models.length > 0
+              ? `models: ${provider.models.join(", ")}`
+              : "models: unknown";
+          return [
+            `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
+            `  ${modelLine}`,
+            ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
+          ];
+        });
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { providers },
+        };
+      }
+
+      const prompt = readStringParam(params, "prompt", { required: true });
+      const imageInputs = normalizeReferenceImages(params);
+      const model = readStringParam(params, "model");
+      const size = readStringParam(params, "size");
+      const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
+      const count = resolveRequestedCount(params);
+      const loadedReferenceImages = await loadReferenceImages({
+        imageInputs,
+        localRoots,
+        sandboxConfig,
+      });
+      const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
+      const resolution =
+        explicitResolution ??
+        (size
+          ? undefined
+          : inputImages.length > 0
+            ? await inferResolutionFromInputImages(inputImages)
+            : undefined);
+
+      const result = await generateImage({
+        cfg,
+        prompt,
+        agentDir: options?.agentDir,
+        modelOverride: model,
+        size,
+        resolution,
+        count,
+        inputImages,
+      });
+
+      const savedImages = await Promise.all(
+        result.images.map((image) =>
+          saveMediaBuffer(
+            image.buffer,
+            image.mimeType,
+            "tool-image-generation",
+            undefined,
+            image.fileName,
+          ),
+        ),
+      );
+
+      const revisedPrompts = result.images
+        .map((image) => image.revisedPrompt?.trim())
+        .filter((entry): entry is string => Boolean(entry));
+      const lines = [
+        `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        ...savedImages.map((image) => `MEDIA:${image.path}`),
+      ];
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          provider: result.provider,
+          model: result.model,
+          count: savedImages.length,
+          paths: savedImages.map((image) => image.path),
+          ...(imageInputs.length === 1
+            ? {
+                image: loadedReferenceImages[0]?.resolvedImage,
+                ...(loadedReferenceImages[0]?.rewrittenFrom
+                  ? { rewrittenFrom: loadedReferenceImages[0].rewrittenFrom }
+                  : {}),
+              }
+            : imageInputs.length > 1
+              ? {
+                  images: loadedReferenceImages.map((entry) => ({
+                    image: entry.resolvedImage,
+                    ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
+                  })),
+                }
+              : {}),
+          ...(resolution ? { resolution } : {}),
+          ...(size ? { size } : {}),
+          attempts: result.attempts,
+          metadata: result.metadata,
+          ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
+        },
+      };
+    },
+  };
+}

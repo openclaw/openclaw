@@ -181,6 +181,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agent.wait",
     "wake",
     "talk.mode",
+    "talk.speak",
     "tts.enable",
     "tts.disable",
     "tts.convert",

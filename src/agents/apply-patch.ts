@@ -293,7 +293,7 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false) {
+    if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
@@ -303,8 +303,8 @@ async function resolvePatchPath(
       });
     }
     return {
-      resolved: resolved.hostPath,
-      display: resolved.relativePath || resolved.hostPath,
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
     };
   }
 

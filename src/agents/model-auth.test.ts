@@ -1,7 +1,11 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  GCP_VERTEX_CREDENTIALS_MARKER,
+  NON_ENV_SECRETREF_MARKER,
+} from "./model-auth-markers.js";
 import {
   applyLocalNoAuthHeaderOverride,
   hasUsableCustomProviderApiKey,
@@ -164,6 +168,24 @@ describe("resolveUsableCustomProviderApiKey", () => {
         },
       },
       provider: "custom",
+    });
+    expect(resolved).toBeNull();
+  });
+
+  it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            "anthropic-vertex": {
+              baseUrl: "https://us-central1-aiplatform.googleapis.com",
+              apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "anthropic-vertex",
     });
     expect(resolved).toBeNull();
   });

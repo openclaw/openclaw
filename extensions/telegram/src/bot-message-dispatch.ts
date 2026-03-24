@@ -20,10 +20,7 @@ import {
   modelSupportsVision,
 } from "../../../src/agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
-import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
 import { createReplyPrefixOptions } from "../../../src/channels/reply-prefix.js";

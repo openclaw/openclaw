@@ -20,6 +20,22 @@ function mergeProviderIntoRegistry(
   registry.set(normalizedKey, merged);
 }
 
+function mergeProviderIntoRegistry(
+  registry: Map<string, MediaUnderstandingProvider>,
+  provider: MediaUnderstandingProvider,
+) {
+  const normalizedKey = normalizeMediaProviderId(provider.id);
+  const existing = registry.get(normalizedKey);
+  const merged = existing
+    ? {
+        ...existing,
+        ...provider,
+        capabilities: provider.capabilities ?? existing.capabilities,
+      }
+    : provider;
+  registry.set(normalizedKey, merged);
+}
+
 export function normalizeMediaProviderId(id: string): string {
   const normalized = normalizeProviderId(id);
   if (normalized === "gemini") {
