@@ -125,4 +125,46 @@ describe("config io observe", () => {
       expect(observeEvents).toHaveLength(1);
     });
   });
+
+  it("records forensic audit from loadConfig when only the backup file provides the baseline", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, auditPath, warn } = await makeIo(home);
+
+      await io.writeConfigFile({
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+        channels: {
+          telegram: {
+            enabled: true,
+            dmPolicy: "pairing",
+            groupPolicy: "allowlist",
+          },
+        },
+      });
+      await fs.copyFile(configPath, `${configPath}.bak`);
+
+      const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
+      await fs.writeFile(configPath, clobberedRaw, "utf-8");
+
+      const loaded = io.loadConfig();
+      expect(loaded.gateway?.mode).toBeUndefined();
+
+      const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+      const observe = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((line) => line.event === "config.observe")
+        .at(-1);
+
+      expect(observe).toBeDefined();
+      expect(observe?.backupHash).toBeTypeOf("string");
+      expect(observe?.suspicious).toEqual(
+        expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
+      );
+
+      const anomalyLog = warn.mock.calls
+        .map((call) => call[0])
+        .find((entry) => typeof entry === "string" && entry.startsWith("Config observe anomaly:"));
+      expect(anomalyLog).toContain(configPath);
+    });
+  });
 });
