@@ -565,11 +565,13 @@ function resolveCurrentThinkingLevel(
   if (!session?.modelProvider || !session.model) {
     return "off";
   }
-  return resolveThinkingDefaultForModel({
-    provider: session.modelProvider,
-    model: session.model,
-    catalog: models,
-  });
+  return (
+    resolveThinkingDefaultForModel({
+      provider: session.modelProvider,
+      model: session.model,
+      catalog: models,
+    }) ?? "off"
+  );
 }
 
 function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {

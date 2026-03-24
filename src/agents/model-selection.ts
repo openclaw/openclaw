@@ -646,11 +646,13 @@ export function resolveThinkingDefault(params: {
   if (configured) {
     return configured;
   }
-  return resolveThinkingDefaultForModel({
-    provider: params.provider,
-    model: params.model,
-    catalog: params.catalog,
-  });
+  return (
+    resolveThinkingDefaultForModel({
+      provider: params.provider,
+      model: params.model,
+      catalog: params.catalog,
+    }) ?? "off"
+  );
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

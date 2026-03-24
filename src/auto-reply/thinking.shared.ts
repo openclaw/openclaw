@@ -142,7 +142,7 @@ export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
   catalog?: ThinkingCatalogEntry[];
-}): ThinkLevel {
+}): ThinkLevel | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelId = params.model.trim();
   if (normalizedProvider === "anthropic" && ANTHROPIC_CLAUDE_46_MODEL_RE.test(modelId)) {
@@ -157,7 +157,10 @@ export function resolveThinkingDefaultForModel(params: {
   if (candidate?.reasoning) {
     return "low";
   }
-  return "off";
+  if (candidate && !candidate.reasoning) {
+    return "off";
+  }
+  return undefined;
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

@@ -180,7 +180,7 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("low");
   });
 
-  it("defaults to off when no adaptive or reasoning hint is present", () => {
+  it("defaults to off when catalog lists model without reasoning", () => {
     expect(
       resolveThinkingDefaultForModel({
         provider: "openai",
@@ -188,6 +188,25 @@ describe("resolveThinkingDefaultForModel", () => {
         catalog: [{ provider: "openai", id: "gpt-4.1-mini", reasoning: false }],
       }),
     ).toBe("off");
+  });
+
+  it("returns undefined when model is not in catalog", () => {
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        catalog: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no catalog is provided", () => {
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      }),
+    ).toBeUndefined();
   });
 });
 

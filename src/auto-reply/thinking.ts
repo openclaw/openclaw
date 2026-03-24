@@ -111,7 +111,7 @@ export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
   catalog?: ThinkingCatalogEntry[];
-}): ThinkLevel {
+}): ThinkLevel | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
