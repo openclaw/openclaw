@@ -55,6 +55,15 @@ describe("computeInlineScriptHashes", () => {
     expect(hashes).toEqual([]);
   });
 
+  it("does not treat data-src as an external script attribute", () => {
+    const content = "console.log('inline')";
+    const expected = createHash("sha256").update(content, "utf8").digest("base64");
+    const hashes = computeInlineScriptHashes(
+      `<html><script data-src="/app.js">${content}</script></html>`,
+    );
+    expect(hashes).toEqual([`sha256-${expected}`]);
+  });
+
   it("hashes only inline scripts when mixed with external", () => {
     const inlineContent = "console.log('init')";
     const expected = createHash("sha256").update(inlineContent, "utf8").digest("base64");
