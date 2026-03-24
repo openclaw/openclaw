@@ -1579,6 +1579,8 @@ export function renderApp(state: AppViewState) {
                         .enabled=${state.showClawComputer}
                         .activeTool=${state.activeClawTool}
                         .imageUrl=${debugImageUrl}
+                        .activeImageUrl=${state.activeImageUrl}
+                        .gatewayUrl=${state.settings.gatewayUrl}
                         @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
                         @close=${() => state.toggleClawComputer()}
                         @float=${() => state.setClawComputerWidth(0)}

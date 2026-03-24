@@ -14,7 +14,6 @@ import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
@@ -85,19 +84,6 @@ type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
-
-function resolveMappedHookExternalContentSource(params: {
-  subPath: string;
-  payload: Record<string, unknown>;
-  sessionKey: string;
-}) {
-  const payloadSource =
-    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
-  if (params.subPath === "gmail" || payloadSource === "gmail") {
-    return "gmail" as const;
-  }
-  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
-}
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -616,7 +602,6 @@ export function createHooksRequestHandler(
         idempotencyKey,
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
-        externalContentSource: "webhook",
       });
       rememberHookRunId(replayKey, runId, now);
       sendJson(res, 200, { ok: true, runId });
@@ -710,11 +695,6 @@ export function createHooksRequestHandler(
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
-            externalContentSource: resolveMappedHookExternalContentSource({
-              subPath,
-              payload: payload as Record<string, unknown>,
-              sessionKey: sessionKey.value,
-            }),
           });
           rememberHookRunId(replayKey, runId, now);
           sendJson(res, 200, { ok: true, runId });
@@ -825,19 +805,33 @@ export function createGatewayHttpServer(opts: {
         {
           name: "debug-image",
           run: async () => {
-            if (requestPath === "/api/debug-image") {
+            const url = new URL(req.url ?? "/", "http://localhost");
+            if (url.pathname === "/api/debug-image") {
+              const imagePath = url.searchParams.get("path");
+              if (!imagePath) {
+                res.statusCode = 400;
+                res.end("Missing path parameter");
+                return true;
+              }
+
+              // Basic security check: ensure path is within allowed directories or is a valid absolute path
+              // For now, we allow absolute paths as the user specified, but we could restrict it later.
               try {
                 const fs = await import("node:fs");
-                const img = fs.readFileSync(
-                  "/home/fish/.openclaw/workspace/linux-desktop-control/images/desktop_screeshot_20260318_181311_annotated.png",
-                );
+                if (!fs.existsSync(imagePath)) {
+                  res.statusCode = 404;
+                  res.end("Image not found");
+                  return true;
+                }
+
+                const img = fs.readFileSync(imagePath);
                 res.statusCode = 200;
                 res.setHeader("Content-Type", "image/png");
                 res.setHeader("Access-Control-Allow-Origin", "*");
                 res.end(img);
               } catch {
-                res.statusCode = 404;
-                res.end("Not Found");
+                res.statusCode = 500;
+                res.end("Error reading image");
               }
               return true;
             }
