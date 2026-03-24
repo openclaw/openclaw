@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as sessions from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
@@ -158,5 +159,61 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toEqual({ found: false, killed: false });
+  });
+
+  it("still terminates the run when session store persistence fails during kill", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:worker-store-fail";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            sessionId: "sess-worker-store-fail",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-worker-store-fail",
+      childSessionKey,
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: "agent:main:other-requester",
+      requesterDisplayKey: "other-requester",
+      task: "do the work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const updateSessionStoreSpy = vi
+      .spyOn(sessions, "updateSessionStore")
+      .mockRejectedValueOnce(new Error("session store unavailable"));
+
+    try {
+      const result = await killSubagentRunAdmin({
+        cfg: {
+          session: { store: storePath },
+        } as OpenClawConfig,
+        sessionKey: childSessionKey,
+      });
+
+      expect(result).toMatchObject({
+        found: true,
+        killed: true,
+        runId: "run-worker-store-fail",
+        sessionKey: childSessionKey,
+      });
+      expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+    } finally {
+      updateSessionStoreSpy.mockRestore();
+    }
   });
 });
