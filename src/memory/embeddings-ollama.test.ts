@@ -1,13 +1,15 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 let createOllamaEmbeddingProvider: typeof import("./embeddings-ollama.js").createOllamaEmbeddingProvider;
 
-beforeEach(async () => {
+beforeAll(async () => {
+  ({ createOllamaEmbeddingProvider } = await import("./embeddings-ollama.js"));
+});
+
+beforeEach(() => {
   vi.useRealTimers();
   vi.doUnmock("undici");
-  vi.resetModules();
-  ({ createOllamaEmbeddingProvider } = await import("./embeddings-ollama.js"));
 });
 
 afterEach(() => {
