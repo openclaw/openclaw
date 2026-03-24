@@ -3,6 +3,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
+  createSignalToolResultConfig,
   config,
   flush,
   getSignalToolResultTestMocks,
@@ -28,25 +29,6 @@ const {
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
-
-function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = config as OpenClawConfig;
-  const channels = (base.channels ?? {}) as Record<string, unknown>;
-  const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  return {
-    ...base,
-    channels: {
-      ...channels,
-      signal: {
-        ...signal,
-        autoStart: true,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        ...overrides,
-      },
-    },
-  };
-}
 
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
@@ -127,7 +109,7 @@ function expectNoReplyDeliveryOrRouteUpdate() {
 
 function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
   setSignalToolResultTestConfig(
-    createSignalConfig({
+    createSignalToolResultConfig({
       autoStart: false,
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -164,7 +146,7 @@ describe("monitorSignalProvider tool results", () => {
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
     await receiveSignalPayloads({
       payloads: [
@@ -318,7 +300,7 @@ describe("monitorSignalProvider tool results", () => {
 
   it("does not resend pairing code when a request is already pending", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })

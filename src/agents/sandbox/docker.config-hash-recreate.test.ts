@@ -10,6 +10,13 @@ type SpawnCall = {
   args: string[];
 };
 
+type MockDockerChild = EventEmitter & {
+  stdout: Readable;
+  stderr: Readable;
+  stdin: { end: (input?: string | Buffer) => void };
+  kill: (signal?: NodeJS.Signals) => void;
+};
+
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   inspectRunning: true,
@@ -26,62 +33,70 @@ vi.mock("./registry.js", () => ({
   updateRegistry: registryMocks.updateRegistry,
 }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+function createMockDockerChild(): MockDockerChild {
+  const child = new EventEmitter() as MockDockerChild;
+  child.stdout = new Readable({ read() {} });
+  child.stderr = new Readable({ read() {} });
+  child.stdin = { end: () => undefined };
+  child.kill = () => undefined;
+  return child;
+}
+
+function spawnDockerProcess(command: string, args: string[]) {
+  spawnState.calls.push({ command, args });
+  const child = createMockDockerChild();
+
+  let code = 0;
+  let stdout = "";
+  let stderr = "";
+  if (command !== "docker") {
+    code = 1;
+    stderr = `unexpected command: ${command}`;
+  } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
+    stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+  } else if (
+    args[0] === "inspect" &&
+    args[1] === "-f" &&
+    args[2]?.includes('index .Config.Labels "openclaw.configHash"')
+  ) {
+    stdout = `${spawnState.labelHash}\n`;
+  } else if (
+    (args[0] === "rm" && args[1] === "-f") ||
+    (args[0] === "image" && args[1] === "inspect") ||
+    args[0] === "create" ||
+    args[0] === "start"
+  ) {
+    code = 0;
+  } else {
+    code = 1;
+    stderr = `unexpected docker args: ${args.join(" ")}`;
+  }
+
+  queueMicrotask(() => {
+    if (stdout) {
+      child.stdout.emit("data", Buffer.from(stdout));
+    }
+    if (stderr) {
+      child.stderr.emit("data", Buffer.from(stderr));
+    }
+    child.emit("close", code);
+  });
+  return child;
+}
+
+async function createChildProcessMock(
+  importOriginal: () => Promise<typeof import("node:child_process")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
-    spawn: (command: string, args: string[]) => {
-      spawnState.calls.push({ command, args });
-      const child = new EventEmitter() as EventEmitter & {
-        stdout: Readable;
-        stderr: Readable;
-        stdin: { end: (input?: string | Buffer) => void };
-        kill: (signal?: NodeJS.Signals) => void;
-      };
-      child.stdout = new Readable({ read() {} });
-      child.stderr = new Readable({ read() {} });
-      child.stdin = { end: () => undefined };
-      child.kill = () => undefined;
-
-      let code = 0;
-      let stdout = "";
-      let stderr = "";
-      if (command !== "docker") {
-        code = 1;
-        stderr = `unexpected command: ${command}`;
-      } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-        stdout = spawnState.inspectRunning ? "true\n" : "false\n";
-      } else if (
-        args[0] === "inspect" &&
-        args[1] === "-f" &&
-        args[2]?.includes('index .Config.Labels "openclaw.configHash"')
-      ) {
-        stdout = `${spawnState.labelHash}\n`;
-      } else if (
-        (args[0] === "rm" && args[1] === "-f") ||
-        (args[0] === "image" && args[1] === "inspect") ||
-        args[0] === "create" ||
-        args[0] === "start"
-      ) {
-        code = 0;
-      } else {
-        code = 1;
-        stderr = `unexpected docker args: ${args.join(" ")}`;
-      }
-
-      queueMicrotask(() => {
-        if (stdout) {
-          child.stdout.emit("data", Buffer.from(stdout));
-        }
-        if (stderr) {
-          child.stderr.emit("data", Buffer.from(stderr));
-        }
-        child.emit("close", code);
-      });
-      return child;
-    },
+    spawn: spawnDockerProcess,
   };
-});
+}
+
+vi.mock("node:child_process", async (importOriginal) =>
+  createChildProcessMock(() => importOriginal<typeof import("node:child_process")>()),
+);
 
 let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 
@@ -91,62 +106,9 @@ async function loadFreshDockerModuleForTest() {
     readRegistry: registryMocks.readRegistry,
     updateRegistry: registryMocks.updateRegistry,
   }));
-  vi.doMock("node:child_process", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("node:child_process")>();
-    return {
-      ...actual,
-      spawn: (command: string, args: string[]) => {
-        spawnState.calls.push({ command, args });
-        const child = new EventEmitter() as EventEmitter & {
-          stdout: Readable;
-          stderr: Readable;
-          stdin: { end: (input?: string | Buffer) => void };
-          kill: (signal?: NodeJS.Signals) => void;
-        };
-        child.stdout = new Readable({ read() {} });
-        child.stderr = new Readable({ read() {} });
-        child.stdin = { end: () => undefined };
-        child.kill = () => undefined;
-
-        let code = 0;
-        let stdout = "";
-        let stderr = "";
-        if (command !== "docker") {
-          code = 1;
-          stderr = `unexpected command: ${command}`;
-        } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-          stdout = spawnState.inspectRunning ? "true\n" : "false\n";
-        } else if (
-          args[0] === "inspect" &&
-          args[1] === "-f" &&
-          args[2]?.includes('index .Config.Labels "openclaw.configHash"')
-        ) {
-          stdout = `${spawnState.labelHash}\n`;
-        } else if (
-          (args[0] === "rm" && args[1] === "-f") ||
-          (args[0] === "image" && args[1] === "inspect") ||
-          args[0] === "create" ||
-          args[0] === "start"
-        ) {
-          code = 0;
-        } else {
-          code = 1;
-          stderr = `unexpected docker args: ${args.join(" ")}`;
-        }
-
-        queueMicrotask(() => {
-          if (stdout) {
-            child.stdout.emit("data", Buffer.from(stdout));
-          }
-          if (stderr) {
-            child.stderr.emit("data", Buffer.from(stderr));
-          }
-          child.emit("close", code);
-        });
-        return child;
-      },
-    };
-  });
+  vi.doMock("node:child_process", async (importOriginal) =>
+    createChildProcessMock(() => importOriginal<typeof import("node:child_process")>()),
+  );
   ({ ensureSandboxContainer } = await import("./docker.js"));
 }
 

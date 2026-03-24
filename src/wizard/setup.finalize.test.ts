@@ -176,6 +176,59 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
   expect(firstArg && "token" in firstArg).toBe(false);
 }
 
+type AdvancedFinalizeArgs = {
+  nextConfig?: OpenClawConfig;
+  prompter?: ReturnType<typeof buildWizardPrompter>;
+  runtime?: RuntimeEnv;
+  installDaemon?: boolean;
+};
+
+function createLaterPrompter() {
+  return buildWizardPrompter({
+    select: vi.fn(async () => "later") as never,
+    confirm: vi.fn(async () => false),
+  });
+}
+
+function createEnabledFirecrawlSearchConfig(): OpenClawConfig {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider: "firecrawl",
+          enabled: true,
+        },
+      },
+    },
+  };
+}
+
+function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
+  return {
+    flow: "advanced" as const,
+    opts: {
+      acceptRisk: true,
+      authChoice: "skip" as const,
+      installDaemon: params.installDaemon ?? false,
+      skipHealth: true,
+      skipUi: true,
+    },
+    baseConfig: {},
+    nextConfig: params.nextConfig ?? {},
+    workspaceDir: "/tmp",
+    settings: {
+      port: 18789,
+      bind: "loopback" as const,
+      authMode: "token" as const,
+      gatewayToken: undefined,
+      tailscaleMode: "off" as const,
+      tailscaleResetOnExit: false,
+    },
+    prompter: params.prompter ?? createLaterPrompter(),
+    runtime: params.runtime ?? createRuntime(),
+  };
+}
+
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     runTui.mockClear();
@@ -381,43 +434,14 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("reports selected providers blocked by plugin policy as unavailable", async () => {
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        tools: {
-          web: {
-            search: {
-              provider: "firecrawl",
-              enabled: true,
-            },
-          },
-        },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: createEnabledFirecrawlSearchConfig(),
+        prompter,
+      }),
+    );
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("selected but unavailable under the current plugin policy"),
@@ -441,34 +465,9 @@ describe("finalizeSetupWizard", () => {
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "perplexity");
 
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Web search is available via Perplexity Search (auto-detected)."),
@@ -490,43 +489,14 @@ describe("finalizeSetupWizard", () => {
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "firecrawl");
 
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        tools: {
-          web: {
-            search: {
-              provider: "firecrawl",
-              enabled: true,
-            },
-          },
-        },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: createEnabledFirecrawlSearchConfig(),
+        prompter,
+      }),
+    );
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining(
