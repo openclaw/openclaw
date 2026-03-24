@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserAgentActRoutes } from "./agent.act.js";
-import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -95,6 +93,15 @@ vi.mock("./agent.shared.js", () => ({
     });
   }),
 }));
+
+let registerBrowserAgentActRoutes: typeof import("./agent.act.js").registerBrowserAgentActRoutes;
+let registerBrowserAgentSnapshotRoutes: typeof import("./agent.snapshot.js").registerBrowserAgentSnapshotRoutes;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ registerBrowserAgentActRoutes } = await import("./agent.act.js"));
+  ({ registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js"));
+});
 
 function getSnapshotGetHandler() {
   const { app, getHandlers } = createBrowserRouteApp();

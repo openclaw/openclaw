@@ -29,12 +29,23 @@ async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, 
     server as unknown as { server?: { address?: () => unknown } }
   ).server?.address?.();
   const requestUrl = new URL(baseUrl);
-  if (address && typeof address === "object" && "port" in address && address.port) {
-    requestUrl.port = String(address.port);
+  if (
+    !address ||
+    typeof address !== "object" ||
+    !("port" in address) ||
+    (typeof address.port !== "number" && typeof address.port !== "string") ||
+    !address.port
+  ) {
+    throw new Error("voice webhook server did not expose a bound port");
   }
+  requestUrl.port = String(address.port);
   return await fetch(requestUrl.toString(), {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-plivo-signature-v2": "sig",
+      "x-plivo-signature-v2-nonce": "nonce",
+    },
     body,
   });
 }
@@ -118,7 +129,12 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
       expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-inbound-1");
+      expect(provider.hangupCalls[0]).toEqual(
+        expect.objectContaining({
+          providerCallId: "provider-inbound-1",
+          reason: "hangup-bot",
+        }),
+      );
       expect(manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
     } finally {
       await server.stop();

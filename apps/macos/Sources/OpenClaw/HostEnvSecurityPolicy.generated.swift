@@ -63,7 +63,23 @@ enum HostEnvSecurityPolicy {
         "OPENSSL_ENGINES",
         "PYTHONSTARTUP",
         "WGETRC",
-        "CURL_HOME"
+        "CURL_HOME",
+        "CLASSPATH",
+        "CGO_CFLAGS",
+        "CGO_LDFLAGS",
+        "GOFLAGS",
+        "CORECLR_PROFILER_PATH",
+        "PHPRC",
+        "PHP_INI_SCAN_DIR",
+        "DENO_DIR",
+        "BUN_CONFIG_REGISTRY",
+        "LUA_PATH",
+        "LUA_CPATH",
+        "GEM_HOME",
+        "GEM_PATH",
+        "BUNDLE_GEMFILE",
+        "COMPOSER_HOME",
+        "XDG_CONFIG_HOME"
     ]
 
     static let blockedOverridePrefixes: [String] = [

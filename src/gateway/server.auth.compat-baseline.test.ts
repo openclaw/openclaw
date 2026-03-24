@@ -37,7 +37,7 @@ function expectAuthErrorDetails(params: {
   }
 }
 
-async function expectSharedOperatorScopesPreserved(
+async function expectSharedOperatorScopesCleared(
   port: number,
   auth: { token?: string; password?: string },
 ) {
@@ -51,8 +51,8 @@ async function expectSharedOperatorScopesPreserved(
     expect(res.ok).toBe(true);
 
     const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
-    expect((adminRes.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
+    expect(adminRes.ok).toBe(false);
+    expect(adminRes.error?.message ?? "").toContain("missing scope");
   } finally {
     ws.close();
   }
@@ -87,8 +87,8 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("keeps requested scopes for shared-token operator connects without device identity", async () => {
-      await expectSharedOperatorScopesPreserved(port, { token: "secret" });
+    test("clears requested scopes for shared-token operator connects without device identity", async () => {
+      await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -239,8 +239,8 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("keeps requested scopes for shared-password operator connects without device identity", async () => {
-      await expectSharedOperatorScopesPreserved(port, { password: "secret" });
+    test("clears requested scopes for shared-password operator connects without device identity", async () => {
+      await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
   });
 

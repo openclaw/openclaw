@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -139,14 +140,6 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
   } as unknown as ResolvedFeishuAccount;
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as RuntimeEnv;
-}
-
 function createTopicEvent(messageId: string) {
   return {
     sender: {
@@ -164,13 +157,6 @@ function createTopicEvent(messageId: string) {
       create_time: "1710000000000",
     },
   };
-}
-
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
 }
 
 async function setupLifecycleMonitor() {
@@ -201,6 +187,7 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
@@ -334,6 +321,7 @@ describe("Feishu ACP-init failure lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -346,9 +334,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     const event = createTopicEvent("om_topic_msg_1");
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
@@ -371,9 +363,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     const event = createTopicEvent("om_topic_msg_2");
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(lastRuntime?.error).not.toHaveBeenCalled();

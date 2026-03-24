@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -134,14 +136,6 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
   } as unknown as ResolvedFeishuAccount;
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as RuntimeEnv;
-}
-
 function createCardActionEvent(params: {
   token: string;
   action: string;
@@ -181,13 +175,6 @@ function createCardActionEvent(params: {
   };
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 async function setupLifecycleMonitor() {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -216,9 +203,11 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu card-action lifecycle", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
+    resetProcessedFeishuCardActionTokensForTests();
     process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-card-action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const dispatcher = {
@@ -318,6 +307,8 @@ describe("Feishu card-action lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    resetProcessedFeishuCardActionTokensForTests();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -334,9 +325,14 @@ describe("Feishu card-action lifecycle", () => {
     });
 
     await onCardAction(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
     await onCardAction(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
@@ -379,9 +375,15 @@ describe("Feishu card-action lifecycle", () => {
     });
 
     await onCardAction(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    });
     await onCardAction(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);

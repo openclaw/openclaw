@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/suites.js";
 import "./accounts.test-mocks.js";
+import "./zalo-js.test-mocks.js";
 import type { ReplyPayload } from "../runtime-api.js";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -111,9 +112,8 @@ describe("zalouserPlugin outbound sendPayload", () => {
 describe("zalouserPlugin messaging target normalization", () => {
   it("normalizes user/group aliases to canonical targets", () => {
     const normalize = zalouserPlugin.messaging?.normalizeTarget;
-    expect(normalize).toBeTypeOf("function");
     if (!normalize) {
-      return;
+      throw new Error("normalizeTarget unavailable");
     }
     expect(normalize("zlu:g:30003")).toBe("group:30003");
     expect(normalize("zalouser:u:20002")).toBe("user:20002");
@@ -124,9 +124,8 @@ describe("zalouserPlugin messaging target normalization", () => {
 
   it("treats canonical and provider-native user/group targets as ids", () => {
     const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
-    expect(looksLikeId).toBeTypeOf("function");
     if (!looksLikeId) {
-      return;
+      throw new Error("looksLikeId unavailable");
     }
     expect(looksLikeId("user:20002")).toBe(true);
     expect(looksLikeId("group:30003")).toBe(true);

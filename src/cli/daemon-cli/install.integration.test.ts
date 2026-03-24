@@ -3,14 +3,15 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
+const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const serviceMock = vi.hoisted(() => ({
   label: "Gateway",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   install: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   uninstall: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
@@ -25,13 +26,7 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    error: (message: string) => runtimeErrors.push(message),
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
-    },
-  },
+  defaultRuntime,
 }));
 
 const { runDaemonInstall } = await import("./install.js");
@@ -52,9 +47,7 @@ describe("runDaemonInstall integration", () => {
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_TOKEN",
-      "CLAWDBOT_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "CLAWDBOT_GATEWAY_PASSWORD",
     ]);
     tempHome = await makeTempWorkspace("openclaw-daemon-install-int-");
     configPath = path.join(tempHome, "openclaw.json");
@@ -69,14 +62,11 @@ describe("runDaemonInstall integration", () => {
   });
 
   beforeEach(async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
     vi.clearAllMocks();
+    resetRuntimeCapture();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
-    process.env.CLAWDBOT_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";
-    process.env.CLAWDBOT_GATEWAY_PASSWORD = "";
     serviceMock.isLoaded.mockResolvedValue(false);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();

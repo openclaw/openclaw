@@ -9,6 +9,7 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -21,16 +22,19 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listBundledPluginPackArtifacts(),
+  "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
+  "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
 const requiredPathPrefixes = ["dist/control-ui/assets/"];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack while
-// failing fast if duplicate/shim content sneaks back into the release artifact.
-const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
+// startup/doctor OOM reports. Keep enough headroom for the current pack with
+// restored bundled upgrade surfaces while still catching regressions quickly.
+const npmPackUnpackedSizeBudgetBytes = 190 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -86,7 +90,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
     )
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function formatMiB(bytes: number): string {
@@ -250,6 +254,7 @@ const requiredPluginSdkExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",
@@ -325,6 +330,18 @@ async function main() {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
         console.error(`  - ${path}`);
+      }
+      if (
+        missing.some(
+          (path) =>
+            path === "dist/build-info.json" ||
+            path === "dist/control-ui/index.html" ||
+            path.startsWith("dist/"),
+        )
+      ) {
+        console.error(
+          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+        );
       }
     }
     if (forbidden.length > 0) {

@@ -1,16 +1,18 @@
 import {
-  resolvePayloadMediaUrls,
-  sendPayloadMediaSequenceOrFallback,
-  sendTextMediaPayload,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import {
   attachChannelToResult,
+  type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";

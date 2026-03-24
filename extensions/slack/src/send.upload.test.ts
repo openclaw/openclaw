@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
@@ -31,7 +31,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   })),
 }));
 
-const { sendMessageSlack } = await import("./send.js");
+let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -63,6 +63,11 @@ function createUploadTestClient(): UploadTestClient {
 
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ sendMessageSlack } = await import("./send.js"));
+  });
 
   beforeEach(() => {
     globalThis.fetch = vi.fn(
