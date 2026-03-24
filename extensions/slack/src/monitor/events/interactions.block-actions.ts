@@ -353,6 +353,15 @@ function buildSlackPluginInteractionData(params: {
   return payload ? `${actionId}:${payload}` : actionId;
 }
 
+function isSlackReplyActionId(actionId: string): boolean {
+  return (
+    actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
+    actionId === SLACK_REPLY_SELECT_ACTION_ID ||
+    actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
+    actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
+  );
+}
+
 function buildSlackPluginInteractionId(params: {
   userId?: string;
   channelId?: string;
@@ -734,7 +743,17 @@ async function handleSlackBlockAction(params: {
     actionId: parsed.actionId,
     summary: parsed.actionSummary,
   });
-  if (pluginInteractionData) {
+  if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
+    const handledBindingApproval = await handleSlackPluginBindingApproval({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      respond,
+    });
+    if (handledBindingApproval) {
+      return;
+    }
+  } else if (pluginInteractionData) {
     const handled = await dispatchSlackPluginInteraction({
       ctx: params.ctx,
       parsed,
