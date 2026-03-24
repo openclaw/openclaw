@@ -807,6 +807,53 @@ const targetedEntries = (() => {
     return [createTargetedEntry(owner, false, uniqueFilters)];
   }).flat();
 })();
+const estimateTopLevelEntryDurationMs = (entry) => {
+  const filters = getExplicitEntryFilters(entry.args);
+  if (filters.length === 0) {
+    return unitTimingManifest.defaultDurationMs;
+  }
+  return filters.reduce((totalMs, file) => {
+    if (isUnitConfigTestFile(file)) {
+      return totalMs + estimateUnitDurationMs(file);
+    }
+    if (channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
+      return totalMs + 3_000;
+    }
+    if (file.startsWith("extensions/")) {
+      return totalMs + 2_000;
+    }
+    return totalMs + 1_000;
+  }, 0);
+};
+const topLevelSingleShardAssignments = (() => {
+  if (shardIndexOverride === null || shardCount <= 1) {
+    return new Map();
+  }
+
+  // Single-file and other non-shardable explicit lanes would otherwise run on
+  // every shard. Assign them to one top-level shard instead.
+  const entriesNeedingAssignment = runs.filter((entry) => {
+    const explicitFilterCount = countExplicitEntryFilters(entry.args);
+    if (explicitFilterCount === null) {
+      return false;
+    }
+    const effectiveShardCount = Math.min(shardCount, Math.max(1, explicitFilterCount - 1));
+    return effectiveShardCount <= 1;
+  });
+
+  const assignmentMap = new Map();
+  const buckets = packFilesByDuration(
+    entriesNeedingAssignment,
+    shardCount,
+    estimateTopLevelEntryDurationMs,
+  );
+  for (const [bucketIndex, bucket] of buckets.entries()) {
+    for (const entry of bucket) {
+      assignmentMap.set(entry, bucketIndex + 1);
+    }
+  }
+  return assignmentMap;
+})();
 // Node 25 local runs still show cross-process worker shutdown contention even
 // after moving the known heavy files into singleton lanes.
 const topLevelParallelEnabled =
@@ -1258,6 +1305,13 @@ const runOnce = (entry, extraArgs = []) =>
 
 const run = async (entry, extraArgs = []) => {
   const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  const topLevelAssignedShard = topLevelSingleShardAssignments.get(entry);
+  if (topLevelAssignedShard !== undefined) {
+    if (shardIndexOverride !== null && shardIndexOverride !== topLevelAssignedShard) {
+      return 0;
+    }
+    return runOnce(entry, extraArgs);
+  }
   // Vitest requires the shard count to stay strictly below the number of
   // resolved test files, so explicit-filter lanes need a `< fileCount` cap.
   const effectiveShardCount =
