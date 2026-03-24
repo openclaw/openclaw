@@ -109,7 +109,61 @@ function resolveReconnectSleepAttempts(policy: ReconnectPolicy): number {
   return Number.POSITIVE_INFINITY;
 }
 
-function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
+function resolveCappedBackoffPrefixAttempts(
+  initialMs: number,
+  factor: number,
+  maxMs: number,
+): number {
+  if (!(initialMs < maxMs)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(Math.log(maxMs / initialMs) / Math.log(factor)) + 1);
+}
+
+function sumCappedBackoffBudgetMs(
+  initialMs: number,
+  factor: number,
+  maxMs: number,
+  attempts: number,
+): number {
+  if (attempts <= 0) {
+    return 0;
+  }
+  const prefixAttempts = Math.min(
+    attempts,
+    resolveCappedBackoffPrefixAttempts(initialMs, factor, maxMs),
+  );
+  let totalMs = 0;
+  for (let attempt = 0; attempt < prefixAttempts; attempt++) {
+    totalMs += Math.min(maxMs, Math.round(initialMs * factor ** attempt));
+  }
+  if (prefixAttempts < attempts) {
+    totalMs += (attempts - prefixAttempts) * maxMs;
+  }
+  return totalMs;
+}
+
+function countCappedBackoffSleepsForBudget(
+  initialMs: number,
+  factor: number,
+  maxMs: number,
+  budgetMs: number,
+): number {
+  if (budgetMs <= 0) {
+    return 0;
+  }
+  const prefixAttempts = resolveCappedBackoffPrefixAttempts(initialMs, factor, maxMs);
+  let totalMs = 0;
+  for (let attempt = 0; attempt < prefixAttempts; attempt++) {
+    totalMs += Math.min(maxMs, Math.round(initialMs * factor ** attempt));
+    if (totalMs >= budgetMs) {
+      return attempt + 1;
+    }
+  }
+  return prefixAttempts + Math.ceil(Math.max(0, budgetMs - totalMs) / maxMs);
+}
+
+export function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
   const reconnectPolicy = resolveReconnectPolicy(msg);
   const baseMs = Math.max(MIN_DISCONNECT_BASE_MS, reconnectPolicy.initialMs);
   const maxMs = Math.max(baseMs, reconnectPolicy.maxMs);
@@ -123,20 +177,16 @@ function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
       maxMs,
     };
   }
-  let retryBudgetMs = 0;
-  for (let attempt = 1; attempt <= reconnectSleepAttempts; attempt++) {
-    retryBudgetMs += computeReconnectDelayCeiling(reconnectPolicy, attempt);
-  }
-  retryBudgetMs = Math.max(MIN_DISCONNECT_RETRY_BUDGET_MS, retryBudgetMs);
-
-  let sleepBudgetMs = 0;
-  let sleepCount = 0;
-  let backoffMs = baseMs;
-  while (sleepBudgetMs < retryBudgetMs) {
-    sleepBudgetMs += backoffMs;
-    sleepCount += 1;
-    backoffMs = Math.min(maxMs, Math.round(backoffMs * factor));
-  }
+  const retryBudgetMs = Math.max(
+    MIN_DISCONNECT_RETRY_BUDGET_MS,
+    sumCappedBackoffBudgetMs(
+      reconnectPolicy.initialMs * (1 + reconnectPolicy.jitter),
+      reconnectPolicy.factor,
+      reconnectPolicy.maxMs,
+      reconnectSleepAttempts,
+    ),
+  );
+  const sleepCount = countCappedBackoffSleepsForBudget(baseMs, factor, maxMs, retryBudgetMs);
 
   return {
     maxAttempts: 2 + sleepCount,

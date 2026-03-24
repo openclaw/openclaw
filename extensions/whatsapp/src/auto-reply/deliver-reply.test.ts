@@ -29,6 +29,7 @@ vi.mock("../reconnect.js", async (importOriginal) => {
 });
 
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
+let resolveDisconnectRetryStrategy: typeof import("./deliver-reply.js").resolveDisconnectRetryStrategy;
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -93,7 +94,7 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 describe("deliverWebReply", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({ deliverWebReply } = await import("./deliver-reply.js"));
+    ({ deliverWebReply, resolveDisconnectRetryStrategy } = await import("./deliver-reply.js"));
     vi.clearAllMocks();
     sleepWithAbortMock.mockImplementation(async () => undefined);
   });
@@ -370,6 +371,23 @@ describe("deliverWebReply", () => {
     expect(sleepWithAbortMock).toHaveBeenNthCalledWith(2, 2000, undefined);
     expect(sleepWithAbortMock).toHaveBeenNthCalledWith(3, 3600, undefined);
     expect(sleepWithAbortMock).toHaveBeenNthCalledWith(14, 30000, undefined);
+  });
+
+  it("derives large finite reconnect budgets without looping over every reconnect attempt", () => {
+    const msg = makeMsg();
+    msg.disconnectRetryPolicy = {
+      initialMs: 2_000,
+      maxMs: 30_000,
+      factor: 1.8,
+      jitter: 0,
+      maxAttempts: 100_000,
+    };
+    const roundSpy = vi.spyOn(Math, "round");
+
+    const strategy = resolveDisconnectRetryStrategy(msg);
+
+    expect(strategy.maxAttempts).toBeGreaterThan(2);
+    expect(roundSpy.mock.calls.length).toBeLessThan(50);
   });
 
   it("aborts reconnect-gap backoff when shutdown begins", async () => {
