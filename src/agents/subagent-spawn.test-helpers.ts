@@ -45,6 +45,18 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
+export function identityDeliveryContext(value: unknown) {
+  return value;
+}
+
+export function createDefaultSessionHelperMocks() {
+  return {
+    resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
+    resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
+    resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
+  };
+}
+
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   loadConfig?: () => Record<string, unknown>;
@@ -126,6 +138,12 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => ({ hasHooks: () => false }),
   }));
+
+  vi.doMock("../utils/delivery-context.js", () => ({
+    normalizeDeliveryContext: identityDeliveryContext,
+  }));
+
+  vi.doMock("./tools/sessions-helpers.js", () => createDefaultSessionHelperMocks());
 
   const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
   return {
