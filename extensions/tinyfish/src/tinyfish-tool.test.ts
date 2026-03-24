@@ -77,7 +77,8 @@ describe("tinyfish automation tool", () => {
     })) as { details: Record<string, unknown> };
 
     expect(fetchWithGuard).toHaveBeenCalledTimes(1);
-    const firstRequest = fetchWithGuard.mock.calls[0]?.[0] as MockFetchRequest | undefined;
+    const firstCalls = fetchWithGuard.mock.calls as MockFetchRequest[][];
+    const firstRequest = firstCalls[0]?.[0];
     expect(firstRequest).toMatchObject({
       init: {
         method: "POST",
@@ -129,7 +130,8 @@ describe("tinyfish automation tool", () => {
       goal: "Collect the pricing table",
     });
 
-    const firstRequest = fetchWithGuard.mock.calls[0]?.[0] as MockFetchRequest | undefined;
+    const firstCalls = fetchWithGuard.mock.calls as MockFetchRequest[][];
+    const firstRequest = firstCalls[0]?.[0];
     expect(firstRequest?.init?.headers).toMatchObject({
       "X-API-Key": "env-key",
     });
