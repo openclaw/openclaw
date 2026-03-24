@@ -91,7 +91,7 @@ export function resolveNpmRunner(params = {}) {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? env.ComSpec ?? "cmd.exe";
-  const pathImpl = platform === "win32" ? path.win32 : path;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
   const npmToolchain = resolveToolchainNpmRunner({
     comSpec,
@@ -202,18 +202,14 @@ function installPluginRuntimeDeps(pluginDir, pluginId) {
       "--package-lock=false",
     ],
   });
-  const result = spawnSync(
-    npmRunner.command,
-    npmRunner.args,
-    {
-      cwd: pluginDir,
-      encoding: "utf8",
-      env: npmRunner.env,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-    },
-  );
+  const result = spawnSync(npmRunner.command, npmRunner.args, {
+    cwd: pluginDir,
+    encoding: "utf8",
+    env: npmRunner.env,
+    stdio: "pipe",
+    shell: npmRunner.shell,
+    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  });
   if (result.status === 0) {
     return;
   }

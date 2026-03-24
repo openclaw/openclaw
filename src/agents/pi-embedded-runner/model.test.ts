@@ -22,6 +22,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
@@ -85,32 +86,6 @@ function resolveModelAsyncForTest(
     ...options,
     runtimeHooks: createRuntimeHooks(),
   });
-}
-
-function buildForwardCompatTemplate(params: {
-  id: string;
-  name: string;
-  provider: string;
-  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
-  baseUrl: string;
-  reasoning?: boolean;
-  input?: readonly ["text"] | readonly ["text", "image"];
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow?: number;
-  maxTokens?: number;
-}) {
-  return {
-    id: params.id,
-    name: params.name,
-    provider: params.provider,
-    api: params.api,
-    baseUrl: params.baseUrl,
-    reasoning: params.reasoning ?? true,
-    input: params.input ?? (["text", "image"] as const),
-    cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: params.contextWindow ?? 200000,
-    maxTokens: params.maxTokens ?? 64000,
-  };
 }
 
 describe("buildInlineProviderModels", () => {
@@ -199,6 +174,25 @@ describe("buildInlineProviderModels", () => {
       baseUrl: "http://localhost:10000",
       api: "anthropic-messages",
       name: "claude-opus-4.5",
+    });
+  });
+
+  it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      "google-paid ": {
+        baseUrl: "https://generativelanguage.googleapis.com",
+        api: "google-generative-ai",
+        models: [makeModel("gemini-2.5-pro")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      provider: "google-paid",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
   });
 
@@ -307,6 +301,54 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("http://localhost:9000");
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
+  });
+
+  it("normalizes Google fallback baseUrls for custom providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "google-paid": {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            api: "google-generative-ai",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("normalizes configured Google override baseUrls when provider api is omitted", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-2.5-pro",
+      templateModel: {
+        ...makeModel("gemini-2.5-pro"),
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [{ id: "gemini-2.5-pro", name: "gemini-2.5-pro" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.api).toBe("google-generative-ai");
+    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("includes provider headers in provider fallback model", () => {
