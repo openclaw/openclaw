@@ -339,7 +339,7 @@ export function buildSubagentList(params: {
       buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
     );
   return {
-    total: params.runs.length,
+    total: dedupedRuns.length,
     active,
     recent,
     text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),
