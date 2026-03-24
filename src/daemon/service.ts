@@ -39,15 +39,6 @@ import {
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
-import {
-  probeWindowsService,
-  isWindowsServiceInstalled,
-  readWindowsServiceCommand,
-  readWindowsServiceRuntime,
-  restartWindowsService,
-  stopWindowsService,
-  uninstallWindowsService,
-} from "./windows-service.js";
 export type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
@@ -58,6 +49,8 @@ export type {
   GatewayServiceRestartResult,
   GatewayServiceStageArgs,
 } from "./service-types.js";
+
+type WindowsServiceModule = typeof import("./windows-service.js");
 
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   write: (args: TArgs) => Promise<unknown>,
@@ -156,13 +149,22 @@ function isSupportedGatewayServicePlatform(
   return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
 }
 
+let windowsServiceModulePromise: Promise<WindowsServiceModule> | null = null;
+
+async function loadWindowsServiceModule(): Promise<WindowsServiceModule> {
+  windowsServiceModulePromise ??= import("./windows-service.js");
+  return await windowsServiceModulePromise;
+}
+
 async function useWindowsService(env: GatewayServiceEnv): Promise<boolean> {
+  const { isWindowsServiceInstalled } = await loadWindowsServiceModule();
   return await isWindowsServiceInstalled({ env }).catch(() => false);
 }
 
 async function readWindowsCommandOrScheduledTask(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const { probeWindowsService, readWindowsServiceCommand } = await loadWindowsServiceModule();
   const probe = await probeWindowsService(env).catch(() => null);
   if (probe) {
     return await readWindowsServiceCommand(env, probe);
@@ -173,6 +175,7 @@ async function readWindowsCommandOrScheduledTask(
 async function readWindowsRuntimeOrScheduledTask(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
+  const { probeWindowsService, readWindowsServiceRuntime } = await loadWindowsServiceModule();
   if (await probeWindowsService(env).catch(() => null)) {
     return await readWindowsServiceRuntime(env);
   }
@@ -181,6 +184,7 @@ async function readWindowsRuntimeOrScheduledTask(
 
 async function stopWindowsRuntimeOrScheduledTask(args: GatewayServiceControlArgs): Promise<void> {
   const env = args.env ?? (process.env as GatewayServiceEnv);
+  const { probeWindowsService, stopWindowsService } = await loadWindowsServiceModule();
   if (await probeWindowsService(env).catch(() => null)) {
     await stopWindowsService({ ...args, env });
     return;
@@ -192,6 +196,7 @@ async function restartWindowsRuntimeOrScheduledTask(
   args: GatewayServiceControlArgs,
 ): Promise<GatewayServiceRestartResult> {
   const env = args.env ?? (process.env as GatewayServiceEnv);
+  const { probeWindowsService, restartWindowsService } = await loadWindowsServiceModule();
   if (await probeWindowsService(env).catch(() => null)) {
     return await restartWindowsService({ ...args, env });
   }
@@ -201,6 +206,7 @@ async function restartWindowsRuntimeOrScheduledTask(
 async function uninstallWindowsRuntimeOrScheduledTask(
   args: GatewayServiceManageArgs,
 ): Promise<void> {
+  const { probeWindowsService, uninstallWindowsService } = await loadWindowsServiceModule();
   if (await probeWindowsService(args.env).catch(() => null)) {
     await uninstallWindowsService(args);
     return;

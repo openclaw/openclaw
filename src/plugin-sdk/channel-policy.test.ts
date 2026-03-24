@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import { createRestrictSendersChannelSecurity } from "./channel-policy.js";
 
@@ -23,24 +22,25 @@ describe("createRestrictSendersChannelSecurity", () => {
       policyPathSuffix: "dmPolicy",
     });
 
-    expect(
-      security.resolveDmPolicy?.({
-        cfg: { channels: {} } as never,
+    const resolved = security.resolveDmPolicy?.({
+      cfg: { channels: {} } as never,
+      accountId: "default",
+      account: {
         accountId: "default",
-        account: {
-          accountId: "default",
-          dmPolicy: "allowlist",
-          allowFrom: ["line:user:abc"],
-        },
-      }),
-    ).toEqual({
+        dmPolicy: "allowlist",
+        allowFrom: ["line:user:abc"],
+      },
+    });
+
+    expect(resolved).toMatchObject({
       policy: "allowlist",
       allowFrom: ["line:user:abc"],
       policyPath: "channels.line.dmPolicy",
       allowFromPath: "channels.line.",
-      approveHint: formatPairingApproveHint("line"),
       normalizeEntry: undefined,
     });
+    expect(resolved?.approveHint).toContain("pairing list line");
+    expect(resolved?.approveHint).toContain("pairing approve line <code>");
 
     expect(
       security.collectWarnings?.({
