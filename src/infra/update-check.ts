@@ -356,6 +356,19 @@ export function compareSemverStrings(a: string | null, b: string | null): number
   if (pa.patch !== pb.patch) {
     return pa.patch < pb.patch ? -1 : 1;
   }
+
+  // Release rank: prerelease (0) < stable (1) < revision (2).
+  // Mirrors releaseRank() in config/version.ts.
+  const rankA = pa.prerelease?.length ? 0 : pa.revision != null ? 2 : 1;
+  const rankB = pb.prerelease?.length ? 0 : pb.revision != null ? 2 : 1;
+  if (rankA !== rankB) {
+    return rankA < rankB ? -1 : 1;
+  }
+
+  if (pa.revision != null && pb.revision != null && pa.revision !== pb.revision) {
+    return pa.revision < pb.revision ? -1 : 1;
+  }
+
   return comparePrerelease(pa.prerelease, pb.prerelease);
 }
 
@@ -363,6 +376,7 @@ type ComparableSemver = {
   major: number;
   minor: number;
   patch: number;
+  revision: number | null;
   prerelease: string[] | null;
 };
 
@@ -381,11 +395,15 @@ function parseComparableSemver(version: string | null): ComparableSemver | null 
   if (!major || !minor || !patch) {
     return null;
   }
+  // Purely numeric suffixes (e.g. -1, -2) are calver correction revisions,
+  // not semver pre-releases.  Align with parseOpenClawVersion in config/version.ts.
+  const isRevision = prereleaseRaw != null && /^[0-9]+$/.test(prereleaseRaw);
   return {
     major: Number.parseInt(major, 10),
     minor: Number.parseInt(minor, 10),
     patch: Number.parseInt(patch, 10),
-    prerelease: prereleaseRaw ? prereleaseRaw.split(".").filter(Boolean) : null,
+    revision: isRevision ? Number.parseInt(prereleaseRaw, 10) : null,
+    prerelease: prereleaseRaw && !isRevision ? prereleaseRaw.split(".").filter(Boolean) : null,
   };
 }
 

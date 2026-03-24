@@ -21,9 +21,21 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("1.0.0-beta.2", "1.0.0-beta.1")).toBe(1);
 
     expect(compareSemverStrings("1.0.0-2", "1.0.0-1")).toBe(1);
-    expect(compareSemverStrings("1.0.0-1", "1.0.0-beta.1")).toBe(-1);
+    expect(compareSemverStrings("1.0.0-1", "1.0.0-beta.1")).toBe(1);
     expect(compareSemverStrings("1.0.0.beta.2", "1.0.0-beta.1")).toBe(1);
     expect(compareSemverStrings("1.0.0", "1.0.0.beta.1")).toBe(1);
+  });
+
+  it("treats numeric -N suffixes as correction revisions newer than base release", () => {
+    // The core calver bug: 2026.3.23-1 is a correction publish, NOT a pre-release.
+    expect(compareSemverStrings("2026.3.23-1", "2026.3.23")).toBe(1);
+    expect(compareSemverStrings("2026.3.23", "2026.3.23-1")).toBe(-1);
+    expect(compareSemverStrings("2026.3.23-2", "2026.3.23-1")).toBe(1);
+    expect(compareSemverStrings("2026.3.23-1", "2026.3.23-1")).toBe(0);
+
+    // Revisions are still newer than pre-releases of the same base version.
+    expect(compareSemverStrings("2026.3.23-1", "2026.3.23-beta.1")).toBe(1);
+    expect(compareSemverStrings("2026.3.23-beta.1", "2026.3.23-1")).toBe(-1);
   });
 
   it("returns null for invalid inputs", () => {
