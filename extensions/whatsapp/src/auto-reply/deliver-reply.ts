@@ -106,8 +106,7 @@ function resolveReconnectSleepAttempts(policy: ReconnectPolicy): number {
   if (policy.maxAttempts > 0) {
     return Math.max(0, policy.maxAttempts - 1);
   }
-  // Keep reply retries bounded even when reconnect itself is configured as unlimited.
-  return Math.max(1, DEFAULT_RECONNECT_POLICY.maxAttempts - 1);
+  return Number.POSITIVE_INFINITY;
 }
 
 function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
@@ -116,6 +115,14 @@ function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
   const maxMs = Math.max(baseMs, reconnectPolicy.maxMs);
   const factor = Math.max(1.1, reconnectPolicy.factor);
   const reconnectSleepAttempts = resolveReconnectSleepAttempts(reconnectPolicy);
+  if (!Number.isFinite(reconnectSleepAttempts)) {
+    return {
+      maxAttempts: Number.POSITIVE_INFINITY,
+      baseMs,
+      factor,
+      maxMs,
+    };
+  }
   let retryBudgetMs = 0;
   for (let attempt = 1; attempt <= reconnectSleepAttempts; attempt++) {
     retryBudgetMs += computeReconnectDelayCeiling(reconnectPolicy, attempt);
@@ -189,6 +196,7 @@ export async function deliverWebReply(params: {
     let lastErr: unknown;
     let strategy = STANDARD;
     let maxAttempts = strategy.maxAttempts;
+    let disconnectSleepAttempt = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -202,9 +210,12 @@ export async function deliverWebReply(params: {
         if (isReconnectGap && msg.shouldRetryDisconnect?.() === false) {
           throw err;
         }
-        const shouldExtendDisconnectRetries = strategy === STANDARD && useDisconnectWindow;
-        if (shouldExtendDisconnectRetries) {
+        const shouldPromoteDisconnectRetries = strategy === STANDARD && useDisconnectWindow;
+        const latePromotion = shouldPromoteDisconnectRetries && attempt > 1;
+        if (latePromotion) {
+          strategy = DISCONNECT;
           maxAttempts = DISCONNECT.maxAttempts;
+          disconnectSleepAttempt = 0;
         }
         const isLast = attempt >= maxAttempts;
         if (!isDisconnect || isLast) {
@@ -216,11 +227,16 @@ export async function deliverWebReply(params: {
             ? strategy.baseMs * attempt
             : Math.min(
                 strategy.maxMs ?? Number.POSITIVE_INFINITY,
-                Math.round(strategy.baseMs * Math.pow(strategy.factor, attempt - 2)),
+                Math.round(strategy.baseMs * Math.pow(strategy.factor, disconnectSleepAttempt)),
               );
 
-        if (shouldExtendDisconnectRetries) {
+        if (strategy === DISCONNECT) {
+          disconnectSleepAttempt += 1;
+        }
+
+        if (shouldPromoteDisconnectRetries && !latePromotion) {
           strategy = DISCONNECT;
+          maxAttempts = DISCONNECT.maxAttempts;
         }
 
         logVerbose(

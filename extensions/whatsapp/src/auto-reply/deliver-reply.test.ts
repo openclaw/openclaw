@@ -330,7 +330,43 @@ describe("deliverWebReply", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
     expect(sleepWithAbortMock).toHaveBeenNthCalledWith(1, 500, undefined);
     expect(sleepWithAbortMock).toHaveBeenNthCalledWith(2, 1000, undefined);
-    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(3, 1500, undefined);
+    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(3, 2000, undefined);
+  });
+
+  it("keeps retrying when reconnect policy is unlimited", async () => {
+    const msg = makeMsg();
+    msg.disconnectRetryWindowActive = () => true;
+    msg.disconnectRetryPolicy = {
+      initialMs: 2_000,
+      maxMs: 30_000,
+      factor: 1.8,
+      jitter: 0,
+      maxAttempts: 0,
+    };
+    const replyMock = msg.reply as unknown as {
+      mockRejectedValueOnce: (v: unknown) => void;
+      mockResolvedValueOnce: (v: unknown) => void;
+    };
+    for (let attempt = 0; attempt < 14; attempt++) {
+      replyMock.mockRejectedValueOnce(new Error("socket disconnected"));
+    }
+    replyMock.mockResolvedValueOnce(undefined);
+
+    await deliverWebReply({
+      replyResult: { text: "hi" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(15);
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(14);
+    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(1, 500, undefined);
+    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(2, 2000, undefined);
+    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(3, 3600, undefined);
+    expect(sleepWithAbortMock).toHaveBeenNthCalledWith(14, 30000, undefined);
   });
 
   it("aborts reconnect-gap backoff when shutdown begins", async () => {
