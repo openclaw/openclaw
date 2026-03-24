@@ -1157,10 +1157,9 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Generate cursor and hasMore from the actual delivered messages
     const deliveredMessages = bounded.messages as Array<{ timestamp?: number | string }>;
-    // Use sliced (not bounded) for cursor calculation to get the earliest message in the page
-    const slicedMessages = sliced as Array<{ timestamp?: number | string }>;
-    const oldestInPage = slicedMessages.length > 0 ? slicedMessages[0] : null;
-    const cursorTimestamp = oldestInPage?.timestamp;
+    // Use delivered (not sliced) for cursor calculation to avoid missing messages dropped by size capping
+    const oldestDelivered = deliveredMessages.length > 0 ? deliveredMessages[0] : null;
+    const cursorTimestamp = oldestDelivered?.timestamp;
     const cursor =
       cursorTimestamp !== undefined && cursorTimestamp !== null
         ? String(
@@ -1170,13 +1169,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           )
         : null;
 
-    // hasMore: check if there are messages earlier than the current cursor in ALL messages
+    // hasMore: check if there are messages earlier than the current cursor OR if size capping dropped messages
     let hasMore = false;
     if (cursor !== null && cursorTimestamp !== undefined) {
       const cursorTs =
         typeof cursorTimestamp === "number" ? cursorTimestamp : new Date(cursorTimestamp).getTime();
       // Check if there are any messages in allMessages that are earlier than cursor
-      hasMore = allMessages.some((msg) => {
+      const hasEarlierMessages = allMessages.some((msg) => {
         const ts = msg.timestamp;
         if (ts === undefined || ts === null) {
           return false; // Messages without timestamp don't count as "earlier"
@@ -1184,6 +1183,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         const tsNum = typeof ts === "number" ? ts : new Date(ts).getTime();
         return !isNaN(tsNum) && tsNum < cursorTs;
       });
+      // Also check if size capping dropped messages from the current page
+      const hasDroppedMessages = deliveredMessages.length < sliced.length;
+      hasMore = hasEarlierMessages || hasDroppedMessages;
     }
 
     // Debug logging for pagination
