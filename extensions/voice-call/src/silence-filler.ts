@@ -9,13 +9,8 @@
  *   filler.dispose();         // cleanup on call end
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { MediaStreamHandler } from "./media-stream.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ASSETS_DIR = path.resolve(__dirname, "..", "assets");
+import { SILENCE_FILLER_ASSETS_BASE64 } from "./silence-filler-assets.js";
 
 export interface SilenceFillerConfig {
   /** Milliseconds of silence before filler starts (default: 3500) */
@@ -41,15 +36,10 @@ function loadSfx(): Map<string, Buffer> {
   if (sfxCache) {
     return sfxCache;
   }
-  sfxCache = new Map();
-
-  const files = ["typing.raw", "processing.raw"];
-  for (const file of files) {
-    const filePath = path.join(ASSETS_DIR, file);
-    if (fs.existsSync(filePath)) {
-      sfxCache.set(file.replace(".raw", ""), fs.readFileSync(filePath));
-    }
-  }
+  sfxCache = new Map([
+    ["typing", Buffer.from(SILENCE_FILLER_ASSETS_BASE64.typing, "base64")],
+    ["processing", Buffer.from(SILENCE_FILLER_ASSETS_BASE64.processing, "base64")],
+  ]);
   return sfxCache;
 }
 
