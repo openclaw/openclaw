@@ -450,4 +450,26 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Webhook URL to POST usage data after each message.
+   * Enables external billing/usage tracking systems.
+   *
+   * POST payload:
+   * {
+   *   workspaceId: string,
+   *   action: "chat",
+   *   model: string,
+   *   inputTokens: number,
+   *   outputTokens: number,
+   *   channel: "telegram" | "slack" | "discord" | "web" | etc
+   * }
+   */
+  usageWebhook?: {
+    /** Webhook URL to POST usage data. */
+    url: string;
+    /** Bearer token for authentication. */
+    token?: SecretInput;
+    /** Header name for the token (default: X-Gateway-Token). */
+    tokenHeader?: string;
+  };
 };

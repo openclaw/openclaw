@@ -46,6 +46,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import { reportUsageToWebhookIfConfigured } from "./usage-webhook.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -809,6 +810,16 @@ export async function handleOpenResponsesHttpRequest(
 
     rememberResponseSession();
     writeSseEvent(res, { type: "response.completed", response: finalResponse });
+
+    // Report usage to webhook if configured
+    void reportUsageToWebhookIfConfigured({
+      cfg: deps.cfg,
+      usage: { input: usage.input_tokens, output: usage.output_tokens },
+      model,
+      channel: messageChannel,
+      sessionKey,
+    });
+
     writeDone(res);
     res.end();
   };
