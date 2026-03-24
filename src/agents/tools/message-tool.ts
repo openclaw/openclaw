@@ -365,7 +365,14 @@ function buildMessageToolSchemaProps(options: {
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
     ...buildPresenceSchema(),
-    ...options.extraProperties,
+    // Channel plugin schema properties (from extraProperties) are always optional —
+    // channels may define card/file/etc fields but the message tool must not
+    // require them when not sending a card-based message.
+    ...(options.extraProperties
+      ? Object.fromEntries(
+          Object.entries(options.extraProperties).map(([k, v]) => [k, Type.Optional(v)]),
+        )
+      : {}),
   };
 }
 
