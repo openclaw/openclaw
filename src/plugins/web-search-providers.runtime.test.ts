@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
@@ -22,7 +22,10 @@ let loadPluginManifestRegistryMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
+let resetWebSearchProviderSnapshotCacheForTests: WebSearchProvidersRuntimeModule["__testing"]["resetWebSearchProviderSnapshotCacheForTests"];
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
+let loaderModule: typeof import("./loader.js");
+let manifestRegistryModule: ManifestRegistryModule;
 
 function buildMockedWebSearchProviders(params?: {
   config?: { plugins?: Record<string, unknown> };
@@ -73,10 +76,20 @@ function buildMockedWebSearchProviders(params?: {
 }
 
 describe("resolvePluginWebSearchProviders", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
-    const manifestRegistryModule = await import("./manifest-registry.js");
+    manifestRegistryModule = await import("./manifest-registry.js");
+    loaderModule = await import("./loader.js");
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
+    ({
+      resolvePluginWebSearchProviders,
+      resolveRuntimeWebSearchProviders,
+      __testing: { resetWebSearchProviderSnapshotCacheForTests },
+    } = await import("./web-search-providers.runtime.js"));
+  });
+
+  beforeEach(() => {
+    resetWebSearchProviderSnapshotCacheForTests();
     loadPluginManifestRegistryMock = vi
       .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
       .mockReturnValue({
@@ -112,7 +125,6 @@ describe("resolvePluginWebSearchProviders", () => {
       ) => infer R
         ? R
         : never);
-    const loaderModule = await import("./loader.js");
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
       .mockImplementation((params) => {
@@ -120,9 +132,6 @@ describe("resolvePluginWebSearchProviders", () => {
         registry.webSearchProviders = buildMockedWebSearchProviders(params);
         return registry;
       });
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
-    ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
-      await import("./web-search-providers.runtime.js"));
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
   });

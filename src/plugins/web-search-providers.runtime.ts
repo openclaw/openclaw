@@ -17,10 +17,21 @@ type WebSearchProviderSnapshotCacheEntry = {
   expiresAt: number;
   providers: PluginWebSearchProviderEntry[];
 };
-const webSearchProviderSnapshotCache = new WeakMap<
+let webSearchProviderSnapshotCache = new WeakMap<
   OpenClawConfig,
   WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
 >();
+
+function resetWebSearchProviderSnapshotCacheForTests() {
+  webSearchProviderSnapshotCache = new WeakMap<
+    OpenClawConfig,
+    WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
+  >();
+}
+
+export const __testing = {
+  resetWebSearchProviderSnapshotCacheForTests,
+} as const;
 
 const DEFAULT_DISCOVERY_CACHE_MS = 1000;
 const DEFAULT_MANIFEST_CACHE_MS = 1000;

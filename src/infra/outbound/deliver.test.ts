@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
 import {
   signalOutbound,
@@ -200,9 +200,12 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();

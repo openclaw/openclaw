@@ -18,6 +18,15 @@ const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
 let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
 
+function resetSessionMaintenanceWarningForTests() {
+  warnedContexts.clear();
+  deliverRuntimePromise = null;
+}
+
+export const __testing = {
+  resetSessionMaintenanceWarningForTests,
+} as const;
+
 function loadDeliverRuntime() {
   deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");
   return deliverRuntimePromise;
