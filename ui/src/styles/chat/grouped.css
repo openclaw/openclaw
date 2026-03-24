@@ -133,7 +133,7 @@
 .chat-divider__label {
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -141,7 +141,7 @@
 .chat-avatar {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--panel-strong);
   display: grid;
   place-items: center;
