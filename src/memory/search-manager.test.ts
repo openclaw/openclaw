@@ -195,7 +195,7 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses lightweight cached managers for status-only qmd requests", async () => {
+  it("reuses cached qmd managers for status-only requests", async () => {
     const agentId = "status-agent";
     const cfg = createQmdCfg(agentId);
 
@@ -209,14 +209,9 @@ describe("getMemorySearchManager caching", () => {
       provider: "qmd",
       model: "qmd",
       requestedProvider: "qmd",
-      custom: {
-        qmd: {
-          lightweightStatus: true,
-        },
-      },
     });
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
     expect(second.manager).toBe(first.manager);
   });
