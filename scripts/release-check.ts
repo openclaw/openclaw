@@ -329,6 +329,18 @@ async function main() {
       for (const path of missing) {
         console.error(`  - ${path}`);
       }
+      if (
+        missing.some(
+          (path) =>
+            path === "dist/build-info.json" ||
+            path === "dist/control-ui/index.html" ||
+            path.startsWith("dist/"),
+        )
+      ) {
+        console.error(
+          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+        );
+      }
     }
     if (forbidden.length > 0) {
       console.error("release-check: forbidden files in npm pack:");

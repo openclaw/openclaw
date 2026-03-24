@@ -12,13 +12,28 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
+APP_VERSION_INPUT="${APP_VERSION:-$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")}"
 
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
+export BUILD_CONFIG
 
 # Use release bundle ID (not .debug) so Sparkle auto-update works.
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
 export BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
+
+canonical_sparkle_build() {
+  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+}
+
+# Local fallback releases must not silently fall back to a git-rev-count build number.
+# For correction tags, pass a higher explicit APP_BUILD than the canonical floor.
+if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]; then
+  CANONICAL_APP_BUILD="$(canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true)"
+  if [[ "$CANONICAL_APP_BUILD" =~ ^[0-9]+$ ]]; then
+    export APP_BUILD="$CANONICAL_APP_BUILD"
+  fi
+fi
 
 "$ROOT_DIR/scripts/package-mac-app.sh"
 
@@ -29,6 +44,9 @@ if [[ ! -d "$APP" ]]; then
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
+BUNDLE_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
+ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
+ACTUAL_FEED_URL=$(/usr/libexec/PlistBuddy -c "Print SUFeedURL" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
 ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"
 DMG="$ROOT_DIR/dist/OpenClaw-$VERSION.dmg"
 NOTARY_ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.notary.zip"
@@ -40,6 +58,31 @@ SKIP_DMG="${SKIP_DMG:-0}"
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
+fi
+
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  if [[ "$ACTUAL_BUNDLE_ID" == *.debug ]]; then
+    echo "Error: release packaging produced debug bundle id '$ACTUAL_BUNDLE_ID'." >&2
+    exit 1
+  fi
+
+  if [[ -z "$ACTUAL_FEED_URL" ]]; then
+    echo "Error: release packaging produced an empty SUFeedURL." >&2
+    exit 1
+  fi
+
+  CANONICAL_APP_BUILD="$(canonical_sparkle_build "$VERSION" 2>/dev/null || true)"
+  if [[ "$CANONICAL_APP_BUILD" =~ ^[0-9]+$ ]]; then
+    if [[ ! "$BUNDLE_VERSION" =~ ^[0-9]+$ ]]; then
+      echo "Error: release packaging produced non-numeric CFBundleVersion '$BUNDLE_VERSION'." >&2
+      exit 1
+    fi
+    if (( BUNDLE_VERSION < CANONICAL_APP_BUILD )); then
+      echo "Error: CFBundleVersion '$BUNDLE_VERSION' is below the canonical Sparkle floor '$CANONICAL_APP_BUILD' for '$VERSION'." >&2
+      echo "Set APP_BUILD explicitly only when you need a higher correction build." >&2
+      exit 1
+    fi
+  fi
 fi
 
 if [[ "$NOTARIZE" == "1" ]]; then
