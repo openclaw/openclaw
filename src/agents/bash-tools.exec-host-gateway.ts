@@ -8,6 +8,7 @@ import {
   recordAllowlistUse,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
+  resolvePolicyAllowlistCandidatePath,
 } from "../infra/exec-approvals.js";
 import {
   describeInterpreterInlineEval,
@@ -184,7 +185,10 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
-        resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+        resolvedPath: resolvePolicyAllowlistCandidatePath(
+          allowlistEval.segments[0]?.resolution ?? null,
+          params.workdir,
+        ),
         ...buildExecApprovalTurnSourceContext(params),
       });
     const {
@@ -200,7 +204,10 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
-    const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
+    const resolvedPath = resolvePolicyAllowlistCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    );
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget({
@@ -337,7 +344,12 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
+  recordMatchedAllowlistUse(
+    resolvePolicyAllowlistCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    ),
+  );
 
   return { execCommandOverride: enforcedCommand };
 }
