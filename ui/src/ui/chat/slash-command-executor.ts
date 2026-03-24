@@ -16,7 +16,11 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, normalizeChatModelOverrideValue, resolveServerChatModelValue } from "../chat-model-ref.ts";
+import {
+  createChatModelOverride,
+  normalizeChatModelOverrideValue,
+  resolveServerChatModelValue,
+} from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -158,8 +162,8 @@ async function executeModel(
     const patchedModel = patched.resolved?.model ?? args.trim();
     const rawOverride = createChatModelOverride(patchedModel.trim());
     const resolvedValue = rawOverride
-      ? (normalizeChatModelOverrideValue(rawOverride, state.chatModelCatalog ?? []) ||
-         resolveServerChatModelValue(patchedModel, patched.resolved?.modelProvider))
+      ? normalizeChatModelOverrideValue(rawOverride, state.chatModelCatalog ?? []) ||
+        resolveServerChatModelValue(patchedModel, patched.resolved?.modelProvider)
       : resolveServerChatModelValue(patchedModel, patched.resolved?.modelProvider);
     return {
       content: `Model set to \`${args.trim()}\`.`,

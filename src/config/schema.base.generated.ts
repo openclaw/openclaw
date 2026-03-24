@@ -12347,7 +12347,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "browser.cdpUrl": {
       label: "Browser CDP URL",
       help: "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
-      tags: ["advanced"],
+      tags: ["security", "advanced"],
+      sensitive: true,
     },
     "browser.color": {
       label: "Browser Accent Color",
@@ -12397,7 +12398,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "browser.profiles.*.cdpUrl": {
       label: "Browser Profile CDP URL",
       help: "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
-      tags: ["storage"],
+      tags: ["security", "storage"],
+      sensitive: true,
     },
     "browser.profiles.*.userDataDir": {
       label: "Browser Profile User Data Dir",

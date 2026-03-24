@@ -7936,9 +7936,10 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
+      "sensitive": true,
       "tags": [
-        "advanced"
+        "advanced",
+        "security"
       ],
       "label": "Browser CDP URL",
       "help": "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
@@ -8120,8 +8121,9 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
+      "sensitive": true,
       "tags": [
+        "security",
         "storage"
       ],
       "label": "Browser Profile CDP URL",
