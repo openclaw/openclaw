@@ -515,7 +515,7 @@ export async function killControlledSubagentRun(params: {
     };
   }
   const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+  if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
       runId: params.entry.runId,
@@ -527,7 +527,7 @@ export async function killControlledSubagentRun(params: {
   const killCache = new Map<string, Record<string, SessionEntry>>();
   const stopResult = await killSubagentRun({
     cfg: params.cfg,
-    entry: params.entry,
+    entry: currentEntry,
     cache: killCache,
   });
   const seenChildSessionKeys = new Set<string>();
