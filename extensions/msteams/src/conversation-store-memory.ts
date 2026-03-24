@@ -54,7 +54,7 @@ export function createMSTeamsConversationStoreMemory(
       // Prefer personal (1:1) conversations over group/channel to avoid
       // routing proactive sends to the wrong conversation (see #51947).
       return (
-        matches.find((m) => m.reference.conversation?.conversationType === "personal") ??
+        matches.find((m) => m.reference.conversation?.conversationType?.toLowerCase() === "personal") ??
         matches[0]!
       );
     },

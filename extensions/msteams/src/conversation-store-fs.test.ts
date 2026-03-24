@@ -194,6 +194,35 @@ describe("msteams conversation store (fs)", () => {
     // Should return the most recently seen entry
     expect(found!.conversationId).toBe("19:group-new@thread.tacv2");
   });
+
+  it("findByUserId matches personal conversation type case-insensitively", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    const baseRef: StoredConversationReference = {
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u3", aadObjectId: "aad3" },
+    };
+
+    await store.upsert("19:group@thread.tacv2", {
+      ...baseRef,
+      conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+    });
+
+    // Upstream may return "Personal" with capital P
+    await store.upsert("a:1dm_casetest", {
+      ...baseRef,
+      conversation: { id: "a:1dm_casetest", conversationType: "Personal" },
+    });
+
+    const found = await store.findByUserId("aad3");
+    expect(found).not.toBeNull();
+    expect(found!.conversationId).toBe("a:1dm_casetest");
+  });
 });
 
 describe("msteams conversation store (memory)", () => {
@@ -367,5 +396,28 @@ describe("msteams conversation store (memory)", () => {
     const found = await store.findByUserId("aad-z");
     expect(found).not.toBeNull();
     expect(found!.conversationId).toBe("a:1only_dm");
+  });
+
+  it("findByUserId matches personal conversation type case-insensitively", async () => {
+    const store = createMSTeamsConversationStoreMemory([
+      {
+        conversationId: "19:group@thread.tacv2",
+        reference: {
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+          user: { id: "user-ci", aadObjectId: "aad-ci", name: "CaseUser" },
+        },
+      },
+      {
+        conversationId: "a:1dm_Personal",
+        reference: {
+          conversation: { id: "a:1dm_Personal", conversationType: "Personal" },
+          user: { id: "user-ci", aadObjectId: "aad-ci", name: "CaseUser" },
+        },
+      },
+    ]);
+
+    const found = await store.findByUserId("aad-ci");
+    expect(found).not.toBeNull();
+    expect(found!.conversationId).toBe("a:1dm_Personal");
   });
 });
