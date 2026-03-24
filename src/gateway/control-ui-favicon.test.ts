@@ -23,7 +23,7 @@ function makeMockHttpResponse() {
     },
   } as unknown as ServerResponse;
   const end = () => {
-    const result = chunks.map(c => (typeof c === "string" ? c : c.toString())).join("");
+    const result = chunks.map((c) => (typeof c === "string" ? c : c.toString())).join("");
     return result;
   };
   return { res, end, headers };
