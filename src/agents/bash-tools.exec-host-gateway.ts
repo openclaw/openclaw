@@ -6,9 +6,9 @@ import {
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
   recordAllowlistUse,
+  resolveApprovalAuditCandidatePath,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
-  resolvePolicyAllowlistCandidatePath,
 } from "../infra/exec-approvals.js";
 import {
   describeInterpreterInlineEval,
@@ -185,7 +185,7 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
-        resolvedPath: resolvePolicyAllowlistCandidatePath(
+        resolvedPath: resolveApprovalAuditCandidatePath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -204,7 +204,7 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
-    const resolvedPath = resolvePolicyAllowlistCandidatePath(
+    const resolvedPath = resolveApprovalAuditCandidatePath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
@@ -345,7 +345,7 @@ export async function processGatewayAllowlist(
   }
 
   recordMatchedAllowlistUse(
-    resolvePolicyAllowlistCandidatePath(
+    resolveApprovalAuditCandidatePath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     ),

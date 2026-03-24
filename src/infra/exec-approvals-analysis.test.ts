@@ -94,7 +94,8 @@ describe("exec approvals shell analysis", () => {
 
       const planned = resolvePlannedSegmentArgv(segment);
       expect(planned).toEqual([
-        segment.resolution?.resolvedRealPath ?? segment.resolution?.resolvedPath,
+        segment.resolution?.execution.resolvedRealPath ??
+          segment.resolution?.execution.resolvedPath,
         "-lc",
         "echo hi",
       ]);

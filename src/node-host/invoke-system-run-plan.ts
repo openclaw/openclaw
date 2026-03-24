@@ -1004,7 +1004,8 @@ export function hardenApprovedExecutionPaths(params: {
     };
   }
 
-  const pinnedExecutable = resolution?.resolvedRealPath ?? resolution?.resolvedPath;
+  const pinnedExecutable =
+    resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
   if (!pinnedExecutable) {
     return {
       ok: false,
