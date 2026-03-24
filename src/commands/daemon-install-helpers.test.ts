@@ -342,7 +342,7 @@ describe("buildGatewayInstallPlan", () => {
   });
 });
 
-describe("buildGatewayInstallPlan — dotenv merge", () => {
+describe("buildGatewayInstallPlan — durable env merge", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -353,7 +353,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("merges .env file vars into the install plan", async () => {
+  it("does not copy state-dir .env vars into the install plan", async () => {
     await writeStateDirDotEnv("BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
     });
@@ -365,12 +365,12 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       runtime: "node",
     });
 
-    expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
-    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("config env vars override .env file vars", async () => {
+  it("config env vars are still included", async () => {
     await writeStateDirDotEnv("MY_KEY=from-dotenv\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
     });
