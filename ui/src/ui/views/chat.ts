@@ -799,6 +799,16 @@ function renderSlashMenu(
   `;
 }
 
+let activePopupCloseHandler: ((ev: MouseEvent) => void) | null = null;
+
+function dismissActionsPopup(menu: Element) {
+  menu.classList.remove("agent-chat__actions-popup--open");
+  if (activePopupCloseHandler) {
+    document.removeEventListener("click", activePopupCloseHandler);
+    activePopupCloseHandler = null;
+  }
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -1216,17 +1226,20 @@ export function renderChat(props: ChatProps) {
                 @click=${(e: Event) => {
                   const wrap = (e.currentTarget as HTMLElement).parentElement!;
                   const menu = wrap.querySelector(".agent-chat__actions-popup") as HTMLElement;
-                  if (menu) {
-                    menu.classList.toggle("agent-chat__actions-popup--open");
+                  if (!menu) {
+                    return;
+                  }
+                  const wasOpen = menu.classList.contains("agent-chat__actions-popup--open");
+                  dismissActionsPopup(menu);
+                  if (!wasOpen) {
+                    menu.classList.add("agent-chat__actions-popup--open");
                     const close = (ev: MouseEvent) => {
                       if (!wrap.contains(ev.target as Node)) {
-                        menu.classList.remove("agent-chat__actions-popup--open");
-                        document.removeEventListener("click", close);
+                        dismissActionsPopup(menu);
                       }
                     };
-                    if (menu.classList.contains("agent-chat__actions-popup--open")) {
-                      setTimeout(() => document.addEventListener("click", close), 0);
-                    }
+                    activePopupCloseHandler = close;
+                    setTimeout(() => document.addEventListener("click", close), 0);
                   }
                 }}
                 title="Actions"
@@ -1236,9 +1249,10 @@ export function renderChat(props: ChatProps) {
               </button>
               <div class="agent-chat__actions-popup">
                 <button class="agent-chat__actions-item" @click=${(e: Event) => {
-                  (e.target as HTMLElement)
-                    .closest(".agent-chat__actions-popup")
-                    ?.classList.remove("agent-chat__actions-popup--open");
+                  const popup = (e.target as HTMLElement).closest(".agent-chat__actions-popup");
+                  if (popup) {
+                    dismissActionsPopup(popup);
+                  }
                   document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
                 }}>
                   <span class="agent-chat__actions-item-icon">${icons.paperclip}</span>
@@ -1249,9 +1263,10 @@ export function renderChat(props: ChatProps) {
                     ? nothing
                     : html`
                   <button class="agent-chat__actions-item" @click=${(e: Event) => {
-                    (e.target as HTMLElement)
-                      .closest(".agent-chat__actions-popup")
-                      ?.classList.remove("agent-chat__actions-popup--open");
+                    const popup = (e.target as HTMLElement).closest(".agent-chat__actions-popup");
+                    if (popup) {
+                      dismissActionsPopup(popup);
+                    }
                     props.onNewSession();
                   }}>
                     <span class="agent-chat__actions-item-icon">${icons.plus}</span>
@@ -1260,9 +1275,10 @@ export function renderChat(props: ChatProps) {
                 `
                 }
                 <button class="agent-chat__actions-item" @click=${(e: Event) => {
-                  (e.target as HTMLElement)
-                    .closest(".agent-chat__actions-popup")
-                    ?.classList.remove("agent-chat__actions-popup--open");
+                  const popup = (e.target as HTMLElement).closest(".agent-chat__actions-popup");
+                  if (popup) {
+                    dismissActionsPopup(popup);
+                  }
                   exportMarkdown(props);
                 }} ?disabled=${props.messages.length === 0}>
                   <span class="agent-chat__actions-item-icon">${icons.download}</span>

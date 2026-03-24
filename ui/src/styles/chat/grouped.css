@@ -12,11 +12,6 @@
   margin-right: 16px;
 }
 
-/* Hide tool message groups entirely from chat */
-.chat-group.tool {
-  display: none !important;
-}
-
 /* User messages on right */
 .chat-group.user {
   flex-direction: row-reverse;
