@@ -123,7 +123,7 @@ function describeMSTeamsMessageTool({
     cfg.channels?.msteams?.enabled !== false &&
     Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
   return {
-    actions: enabled ? (["poll"] satisfies ChannelMessageActionName[]) : [],
+    actions: enabled ? (["poll", "edit", "delete"] satisfies ChannelMessageActionName[]) : [],
     capabilities: enabled ? ["cards"] : [],
     schema: enabled
       ? {
@@ -405,6 +405,106 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               details: { ok: true, channel: "msteams", messageId: result.messageId },
             };
           }
+          if (ctx.action === "edit") {
+            const to =
+              typeof ctx.params.to === "string"
+                ? ctx.params.to.trim()
+                : typeof ctx.params.target === "string"
+                  ? ctx.params.target.trim()
+                  : (ctx.toolContext?.currentChannelId?.trim() ?? "");
+            const messageId =
+              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
+            const content =
+              typeof ctx.params.text === "string"
+                ? ctx.params.text
+                : typeof ctx.params.content === "string"
+                  ? ctx.params.content
+                  : typeof ctx.params.message === "string"
+                    ? ctx.params.message
+                    : "";
+            if (!to || !messageId) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Edit requires a target (to) and messageId.",
+                  },
+                ],
+                details: { error: "Edit requires a target (to) and messageId." },
+              };
+            }
+            if (!content) {
+              return {
+                isError: true,
+                content: [{ type: "text" as const, text: "Edit requires content." }],
+                details: { error: "Edit requires content." },
+              };
+            }
+            const { editMessageMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await editMessageMSTeams({
+              cfg: ctx.cfg,
+              to,
+              activityId: messageId,
+              text: content,
+            });
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    ok: true,
+                    channel: "msteams",
+                    conversationId: result.conversationId,
+                  }),
+                },
+              ],
+              details: { ok: true, channel: "msteams" },
+            };
+          }
+
+          if (ctx.action === "delete") {
+            const to =
+              typeof ctx.params.to === "string"
+                ? ctx.params.to.trim()
+                : typeof ctx.params.target === "string"
+                  ? ctx.params.target.trim()
+                  : (ctx.toolContext?.currentChannelId?.trim() ?? "");
+            const messageId =
+              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
+            if (!to || !messageId) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Delete requires a target (to) and messageId.",
+                  },
+                ],
+                details: { error: "Delete requires a target (to) and messageId." },
+              };
+            }
+            const { deleteMessageMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await deleteMessageMSTeams({
+              cfg: ctx.cfg,
+              to,
+              activityId: messageId,
+            });
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    ok: true,
+                    channel: "msteams",
+                    conversationId: result.conversationId,
+                  }),
+                },
+              ],
+              details: { ok: true, channel: "msteams" },
+            };
+          }
+
           // Return null to fall through to default handler
           return null as never;
         },
