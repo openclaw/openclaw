@@ -10,6 +10,7 @@
 
 import {
   type CircuitState,
+  CIRCUIT_CONFIG,
   createDefaultCircuit,
   checkCircuit,
   recordSuccess,
