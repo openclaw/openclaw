@@ -6,6 +6,19 @@ import {
   readErrorName,
 } from "./errors.js";
 
+/**
+ * Lightweight helper to write startup errors without risk of throwing.
+ * Lazy-imported to avoid circular dependency issues.
+ */
+async function writeStartupErrorQuietly(err: unknown, label: string): Promise<void> {
+  try {
+    const { writeStartupError } = await import("./startup-error.js");
+    writeStartupError(err, label);
+  } catch {
+    // Swallow. Diagnostics must never cause additional crashes.
+  }
+}
+
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
 const handlers = new Set<UnhandledRejectionHandler>();
@@ -233,13 +246,15 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      process.exit(1);
+      void writeStartupErrorQuietly(reason, "FATAL unhandled rejection").finally(() =>
+        process.exit(1),
+      );
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      process.exit(1);
+      void writeStartupErrorQuietly(reason, "Configuration error").finally(() => process.exit(1));
       return;
     }
 
@@ -252,6 +267,8 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+    void writeStartupErrorQuietly(reason, "Unhandled promise rejection").finally(() =>
+      process.exit(1),
+    );
   });
 }

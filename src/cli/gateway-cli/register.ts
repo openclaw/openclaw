@@ -24,7 +24,7 @@ import {
   pickGatewayPort,
   renderBeaconLines,
 } from "./discover.js";
-import { addGatewayRunCommand } from "./run.js";
+import { addGatewayRunCommand, addGatewayWatchdogCommand } from "./run.js";
 
 function runGatewayCommand(action: () => Promise<void>, label?: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -110,6 +110,8 @@ export function registerGatewayCli(program: Command) {
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe the Gateway",
   });
+
+  addGatewayWatchdogCommand(gateway);
 
   gatewayCallOpts(
     gateway

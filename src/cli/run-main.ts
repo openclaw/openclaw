@@ -121,8 +121,14 @@ export async function runCli(argv: string[] = process.argv) {
     // These log the error and exit gracefully instead of crashing without trace.
     installUnhandledRejectionHandler();
 
-    process.on("uncaughtException", (error) => {
+    process.on("uncaughtException", async (error) => {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      try {
+        const { writeStartupError } = await import("../infra/startup-error.js");
+        writeStartupError(error, "Uncaught exception before gateway startup");
+      } catch {
+        // Swallow diagnostics errors.
+      }
       process.exit(1);
     });
 
