@@ -1,11 +1,11 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { LEMONADE_DEFAULT_BASE_URL, LEMONADE_MODEL_PLACEHOLDER } from "./lemonade-defaults.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
-import { LEMONADE_DEFAULT_BASE_URL, LEMONADE_MODEL_PLACEHOLDER } from "./lemonade-defaults.js";
 
 const LEMONADE_KEY = process.env.LEMONADE_API_KEY?.trim() || "lemonade-local";
 const LEMONADE_BASE_URL = process.env.LEMONADE_BASE_URL?.trim() || LEMONADE_DEFAULT_BASE_URL;
