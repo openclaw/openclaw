@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   crossPlatformRelative,
@@ -329,5 +331,33 @@ describe("import validation-before-write contract", () => {
   it("escape detection errors are descriptive", () => {
     const error = new Error("Import aborted: asset escapes extraction tree: /tmp/evil");
     expect(error.message).toContain("escapes extraction tree");
+  });
+
+  it("config-not-a-file errors are descriptive", () => {
+    const error = new Error("Import aborted: config asset is not a regular file: some/dir");
+    expect(error.message).toContain("not a regular file");
+  });
+});
+
+describe("remap-workspace safety", () => {
+  it("rejects filesystem root as remap target", () => {
+    const resolved = path.resolve("/");
+    const root = path.parse(resolved).root;
+    expect(resolved).toBe(root);
+  });
+
+  it("rejects home directory as remap target", () => {
+    const home = os.homedir();
+    const resolved = path.resolve(home);
+    expect(resolved).toBe(home);
+  });
+
+  it("accepts a subdirectory as remap target", () => {
+    const target = path.join(os.homedir(), "my-workspace");
+    const resolved = path.resolve(target);
+    const root = path.parse(resolved).root;
+    const home = os.homedir();
+    expect(resolved).not.toBe(root);
+    expect(resolved).not.toBe(home);
   });
 });

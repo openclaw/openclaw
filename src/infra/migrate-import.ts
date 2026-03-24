@@ -474,6 +474,19 @@ export async function importMigrateArchive(
     ? resolveUserPath(opts.remapWorkspace)
     : undefined;
 
+  // Guard against dangerous remap-workspace targets that could cause
+  // catastrophic data loss during overwrite (rm + copy).
+  if (resolvedRemapWorkspace) {
+    const resolved = path.resolve(resolvedRemapWorkspace);
+    const root = path.parse(resolved).root;
+    const home = os.homedir();
+    if (resolved === root || resolved === home || resolved === path.dirname(home)) {
+      throw new Error(
+        `Refusing --remap-workspace target "${resolvedRemapWorkspace}": path is too broad and could cause data loss.`,
+      );
+    }
+  }
+
   // Build import plan: map each manifest asset to a local target path.
   const importAssets: MigrateImportAsset[] = manifest.assets.map((asset) => {
     const targetPath = remapSourceToTarget({
@@ -608,6 +621,18 @@ export async function importMigrateArchive(
         throw new Error(
           `Import aborted: asset escapes extraction tree: ${manifestAsset.archivePath}`,
         );
+      }
+
+      // Config and credentials assets must be regular files (or directories
+      // for credentials), not the other way around. Reject config payloads
+      // that are directories — they would corrupt the config file path.
+      if (importAsset.kind === "config") {
+        const stat = await fs.lstat(realExtracted);
+        if (!stat.isFile()) {
+          throw new Error(
+            `Import aborted: config asset is not a regular file: ${manifestAsset.archivePath}`,
+          );
+        }
       }
 
       validated.push({ importAsset, realExtracted });
