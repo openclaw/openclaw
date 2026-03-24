@@ -1436,7 +1436,7 @@ const memoryPlugin = {
 
           // Memory Reinforcement: boost recalled memories (sync, in-memory only)
           // Uses the SAME search results — no extra API call
-          const ids = rawResults.map((r) => r.entry.id);
+          const ids = finalScored.map((r) => r.entry.id);
           db.incrementRecallCount(ids);
 
           tracer.traceRecall(
