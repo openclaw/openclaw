@@ -1,158 +1,209 @@
-import { describe, expect, it, vi } from "vitest";
-import { createWebOnMessageHandler } from "./on-message.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-/**
- * Minimal stubs for the dependencies that `createWebOnMessageHandler` needs.
- * Only the fields exercised by the fromMe early-exit path are populated;
- * everything else is a no-op or empty object.
- */
-function stubParams(overrides?: { echoTrackerHas?: (key: string) => boolean }) {
-  const processed: Array<{ body: string; fromMe?: boolean }> = [];
-  const echoForgotten: string[] = [];
+// Mock all external dependencies so we can instantiate the real handler.
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  loadConfig: vi.fn(() => ({
+    channels: { whatsapp: { enabled: true, groupPolicy: "allowlist", groups: {} } },
+    commands: {},
+    messages: {},
+    session: {},
+  })),
+}));
 
-  const echoTracker = {
-    rememberText: vi.fn(),
-    has: overrides?.echoTrackerHas ?? (() => false),
-    forget: (key: string) => echoForgotten.push(key),
-    buildCombinedKey: (p: { sessionKey: string; combinedBody: string }) =>
-      `combined:${p.sessionKey}:${p.combinedBody}`,
-  };
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: vi.fn(() => ({
+    agentId: "test-agent",
+    sessionKey: "agent:test-agent:main",
+    mainSessionKey: "agent:test-agent:main",
+    accountId: "default",
+  })),
+  buildGroupHistoryKey: vi.fn(() => "whatsapp:default:group:test-group"),
+}));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const verboseMessages: string[] = [];
   return {
-    processed,
-    echoForgotten,
-    echoTracker,
+    logVerbose: vi.fn((msg: string) => verboseMessages.push(msg)),
+    shouldLogVerbose: vi.fn(() => true),
+    getChildLogger: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    })),
+    __verboseMessages: verboseMessages,
   };
-}
+});
 
-function makeMsg(overrides: Partial<{
-  body: string;
-  from: string;
-  to: string;
-  chatType: "direct" | "group";
-  fromMe: boolean;
-  conversationId: string;
-  accountId: string;
-  senderJid: string;
-  senderE164: string;
-  senderName: string;
-  selfJid: string;
-  selfE164: string;
-  chatId: string;
-  groupSubject: string;
-}> = {}) {
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  normalizeE164: vi.fn((v: string) => v),
+  jidToE164: vi.fn((v: string) => v),
+}));
+
+vi.mock("./group-gating.js", () => ({
+  applyGroupGating: vi.fn(() => ({ shouldProcess: true })),
+}));
+
+vi.mock("./broadcast.js", () => ({
+  maybeBroadcastMessage: vi.fn(async () => false),
+}));
+
+vi.mock("./process-message.js", () => ({
+  processMessage: vi.fn(async () => true),
+}));
+
+vi.mock("./last-route.js", () => ({
+  updateLastRouteInBackground: vi.fn(),
+  trackBackgroundTask: vi.fn(),
+}));
+
+vi.mock("./peer.js", () => ({
+  resolvePeerId: vi.fn(() => "120363408809173967@g.us"),
+}));
+
+import { createWebOnMessageHandler } from "./on-message.js";
+import { processMessage } from "./process-message.js";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { WebInboundMsg } from "../types.js";
+
+function makeMsg(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
   return {
     id: "msg-1",
-    body: overrides.body ?? "Hello from the group",
-    from: overrides.from ?? "120363408809173967@g.us",
-    to: overrides.to ?? "+971506443271",
-    conversationId: overrides.conversationId ?? overrides.from ?? "120363408809173967@g.us",
-    accountId: overrides.accountId ?? "default",
-    chatType: overrides.chatType ?? ("group" as const),
-    chatId: overrides.chatId ?? "120363408809173967@g.us",
-    fromMe: overrides.fromMe ?? false,
-    senderJid: overrides.senderJid ?? "215233729704@lid",
-    senderE164: overrides.senderE164 ?? "+923006761319",
-    senderName: overrides.senderName ?? "Test User",
-    selfJid: overrides.selfJid ?? "971506443271@s.whatsapp.net",
-    selfE164: overrides.selfE164 ?? "+971506443271",
-    groupSubject: overrides.groupSubject ?? "Test Group",
+    body: "Hello from the group",
+    from: "120363408809173967@g.us",
+    to: "+971506443271",
+    conversationId: "120363408809173967@g.us",
+    accountId: "default",
+    chatType: "group",
+    chatId: "120363408809173967@g.us",
+    fromMe: false,
+    senderJid: "215233729704@lid",
+    senderE164: "+923006761319",
+    senderName: "Test User",
+    selfJid: "971506443271@s.whatsapp.net",
+    selfE164: "+971506443271",
+    groupSubject: "Test Group",
     groupParticipants: [],
     mentionedJids: [],
     sendComposing: vi.fn().mockResolvedValue(undefined),
     reply: vi.fn().mockResolvedValue(undefined),
     sendMedia: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as WebInboundMsg;
+}
+
+function createHandler(overrides?: { echoTrackerHas?: (key: string) => boolean }) {
+  const echoTracker = {
+    rememberText: vi.fn(),
+    has: overrides?.echoTrackerHas ?? vi.fn(() => false),
+    forget: vi.fn(),
+    buildCombinedKey: vi.fn(
+      (p: { sessionKey: string; combinedBody: string }) =>
+        `combined:${p.sessionKey}:${p.combinedBody}`,
+    ),
   };
+
+  const handler = createWebOnMessageHandler({
+    cfg: {
+      channels: { whatsapp: { enabled: true, groupPolicy: "allowlist", groups: {} } },
+      commands: {},
+      messages: {},
+      session: {},
+    } as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
+    verbose: true,
+    connectionId: "test-conn",
+    maxMediaBytes: 20_971_520,
+    groupHistoryLimit: 20,
+    groupHistories: new Map(),
+    groupMemberNames: new Map(),
+    echoTracker,
+    backgroundTasks: new Set(),
+    replyResolver: vi.fn() as never,
+    replyLogger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as never,
+    baseMentionConfig: { requireMention: false },
+    account: { accountId: "default" },
+  });
+
+  return { handler, echoTracker };
 }
 
 describe("on-message fromMe echo protection", () => {
-  it("should skip fromMe messages in group chats", async () => {
-    const { echoTracker } = stubParams();
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    // We can't easily construct the full handler without mocking
-    // the entire module graph, so we verify the logic inline:
+  it("skips fromMe messages in group chats and never calls processMessage", async () => {
+    const { handler, echoTracker } = createHandler();
     const msg = makeMsg({ fromMe: true, chatType: "group" });
 
-    // The core assertion: fromMe should be truthy
-    expect(msg.fromMe).toBe(true);
+    await handler(msg);
 
-    // When fromMe is true, the handler should return before reaching
-    // echoTracker or processMessage.  echoTracker.has should NOT be called.
-    const hasSpied = vi.fn().mockReturnValue(false);
-    const tracker = { ...echoTracker, has: hasSpied };
+    // processMessage should NOT have been called
+    expect(processMessage).not.toHaveBeenCalled();
 
-    // Simulate the guard logic from on-message.ts:
-    if (msg.fromMe) {
-      // This is the early exit path we added
-      expect(true).toBe(true); // reached the guard
-    } else {
-      // Should never reach here for fromMe messages
-      if (tracker.has(msg.body)) {
-        tracker.forget(msg.body);
-      }
-    }
+    // echoTracker.has should NOT have been called (fromMe exits before it)
+    expect(echoTracker.has).not.toHaveBeenCalled();
 
-    // echoTracker.has should NOT have been called because fromMe exited first
-    expect(hasSpied).not.toHaveBeenCalled();
+    // logVerbose should have logged the skip reason
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping auto-reply: fromMe message"),
+    );
   });
 
-  it("should NOT skip non-fromMe messages in group chats", () => {
+  it("processes non-fromMe messages from group members normally", async () => {
+    const { handler } = createHandler();
     const msg = makeMsg({ fromMe: false, chatType: "group" });
-    expect(msg.fromMe).toBe(false);
 
-    // This message should pass through the fromMe guard
-    let reachedEchoCheck = false;
-    if (msg.fromMe) {
-      // Should not enter here
-    } else {
-      reachedEchoCheck = true;
-    }
-    expect(reachedEchoCheck).toBe(true);
+    await handler(msg);
+
+    // processMessage SHOULD have been called
+    expect(processMessage).toHaveBeenCalled();
   });
 
-  it("should skip fromMe messages in direct chats too", () => {
-    const msg = makeMsg({ fromMe: true, chatType: "direct" });
-    expect(msg.fromMe).toBe(true);
+  it("skips fromMe messages in direct chats too", async () => {
+    const { handler } = createHandler();
+    const msg = makeMsg({
+      fromMe: true,
+      chatType: "direct",
+      from: "+923006761319",
+      to: "+971506443271",
+    });
 
-    // fromMe guard applies to all chat types
-    let skipped = false;
-    if (msg.fromMe) {
-      skipped = true;
-    }
-    expect(skipped).toBe(true);
+    await handler(msg);
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping auto-reply: fromMe message in direct"),
+    );
   });
 
-  it("should still use echo tracker as fallback when fromMe is false", () => {
+  it("still uses echo tracker as fallback when fromMe is false but text matches", async () => {
+    const echoHas = vi.fn(() => true);
+    const { handler, echoTracker } = createHandler({ echoTrackerHas: echoHas });
     const msg = makeMsg({ fromMe: false, body: "echoed text" });
-    const hasSpied = vi.fn().mockReturnValue(true);
-    const forgetSpied = vi.fn();
 
-    let skippedByFromMe = false;
-    let skippedByEcho = false;
+    await handler(msg);
 
-    if (msg.fromMe) {
-      skippedByFromMe = true;
-    } else if (hasSpied(msg.body)) {
-      skippedByEcho = true;
-      forgetSpied(msg.body);
-    }
-
-    expect(skippedByFromMe).toBe(false);
-    expect(skippedByEcho).toBe(true);
-    expect(hasSpied).toHaveBeenCalledWith("echoed text");
-    expect(forgetSpied).toHaveBeenCalledWith("echoed text");
+    // fromMe is false, so echo tracker should be checked
+    expect(echoHas).toHaveBeenCalledWith("echoed text");
+    // Echo was detected, so forget should be called
+    expect(echoTracker.forget).toHaveBeenCalledWith("echoed text");
+    // processMessage should NOT have been called (echo detected)
+    expect(processMessage).not.toHaveBeenCalled();
   });
 
-  it("should handle undefined fromMe as non-fromMe", () => {
-    const msg = makeMsg({});
-    // @ts-expect-error testing undefined case
-    msg.fromMe = undefined;
+  it("treats undefined fromMe as non-fromMe and processes the message", async () => {
+    const { handler } = createHandler();
+    const msg = makeMsg({ fromMe: undefined });
 
-    // undefined is falsy — should NOT trigger the guard
-    let skipped = false;
-    if (msg.fromMe) {
-      skipped = true;
-    }
-    expect(skipped).toBe(false);
+    await handler(msg);
+
+    // undefined is falsy — message should be processed
+    expect(processMessage).toHaveBeenCalled();
   });
 });
