@@ -158,6 +158,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import type { EmbeddedRunTrigger } from "./params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -1526,7 +1527,7 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
 
 export function shouldInjectHeartbeatPrompt(params: {
   isDefaultAgent: boolean;
-  trigger?: string;
+  trigger?: EmbeddedRunTrigger;
 }): boolean {
   return params.isDefaultAgent && params.trigger !== "cron";
 }

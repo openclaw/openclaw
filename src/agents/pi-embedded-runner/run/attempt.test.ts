@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   buildSessionsYieldContextMessage,
@@ -331,6 +333,43 @@ describe("shouldInjectHeartbeatPrompt", () => {
 
   it("suppresses the heartbeat prompt for non-default agents", () => {
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
+  });
+
+  it("omits heartbeat prompt content for cron-triggered full-mode runs on non-cron session keys", () => {
+    const sessionKey = "agent:main:kos:thread:abc";
+    expect(resolvePromptModeForSession(sessionKey)).toBe("full");
+
+    const heartbeatPrompt = shouldInjectHeartbeatPrompt({
+      isDefaultAgent: true,
+      trigger: "cron",
+    })
+      ? resolveHeartbeatPrompt(undefined)
+      : undefined;
+
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      defaultThinkLevel: "off",
+      reasoningLevel: "off",
+      reasoningTagHint: false,
+      heartbeatPrompt,
+      promptMode: resolvePromptModeForSession(sessionKey),
+      runtimeInfo: {
+        host: "host",
+        os: "Darwin",
+        arch: "arm64",
+        node: "v22.0.0",
+        model: "openai/gpt-5.4",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      userTime: "00:00",
+      userTimeFormat: "24",
+    });
+
+    expect(prompt).not.toContain("## Heartbeats");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+    expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 });
 
