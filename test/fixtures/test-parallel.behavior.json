@@ -91,6 +91,10 @@
         "reason": "This Telegram bot runtime suite measured ~819.9 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
       },
       {
+        "file": "extensions/telegram/src/fetch.test.ts",
+        "reason": "This Telegram transport suite measured ~759.3 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
         "file": "extensions/telegram/src/webhook.test.ts",
         "reason": "This Telegram webhook suite hoists grammY bot and InputFile mocks; keep it in its own forked channel lane so shared workers do not reuse telegram runtime modules with mismatched constructors."
       }
