@@ -120,10 +120,19 @@ export async function startReplayControlServer(params: {
   cleanupTimer.unref();
 
   const server = createHttpServer((req, res) => {
+    // Authorize synchronously before any async body reads. (Keeps 401 deterministic and
+    // avoids relying on microtask ordering with `void async` handlers.)
+    try {
+      assertAuthorized(req, token);
+    } catch (err) {
+      const response = toHttpErrorResponse(err);
+      sendJson(res, response.status, response.body);
+      return;
+    }
+
     void (async () => {
       try {
         const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-        assertAuthorized(req, token);
 
         if (req.method === "POST" && path === "/api/replay/v1/runs.create") {
           const body = await readJsonBody(req);
