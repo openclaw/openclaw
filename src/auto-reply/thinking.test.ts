@@ -6,26 +6,37 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-}));
-import {
-  listThinkingLevelLabels,
-  listThinkingLevels,
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
-} from "./thinking.js";
+let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
+let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
+let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
+let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
-beforeEach(() => {
+async function loadFreshThinkingModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
+  }));
+  return await import("./thinking.js");
+}
+
+beforeEach(async () => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
+
+  ({
+    listThinkingLevelLabels,
+    listThinkingLevels,
+    normalizeReasoningLevel,
+    normalizeThinkLevel,
+    resolveThinkingDefaultForModel,
+  } = await loadFreshThinkingModuleForTest());
 });
 
 describe("normalizeThinkLevel", () => {

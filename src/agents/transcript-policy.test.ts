@@ -1,7 +1,44 @@
-import { describe, expect, it } from "vitest";
-import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderCapabilitiesWithPlugin: vi.fn(({ provider }: { provider?: string }) => {
+    switch (provider) {
+      case "kimi":
+      case "kimi-code":
+        return {
+          providerFamily: "anthropic",
+          preserveAnthropicThinkingSignatures: false,
+        };
+      case "openrouter":
+        return {
+          openAiCompatTurnValidation: false,
+          geminiThoughtSignatureSanitization: true,
+          geminiThoughtSignatureModelHints: ["gemini"],
+        };
+      case "kilocode":
+        return {
+          geminiThoughtSignatureSanitization: true,
+          geminiThoughtSignatureModelHints: ["gemini"],
+        };
+      default:
+        return undefined;
+    }
+  }),
+  resetProviderRuntimeHookCacheForTest: vi.fn(),
+}));
+
+let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
+
+async function loadFreshTranscriptPolicyModuleForTest() {
+  vi.resetModules();
+  ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
+}
 
 describe("resolveTranscriptPolicy", () => {
+  beforeEach(async () => {
+    await loadFreshTranscriptPolicyModuleForTest();
+  });
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",

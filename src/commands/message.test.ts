@@ -70,12 +70,47 @@ vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   handleWhatsAppAction,
 }));
 
-import { messageCommand } from "./message.js";
+let messageCommand: typeof import("./message.js").messageCommand;
+
+async function loadFreshMessageCommandModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => testConfig,
+    };
+  });
+  vi.doMock("../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway,
+  }));
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: callGatewayMock,
+    callGatewayLeastPrivilege: callGatewayMock,
+    randomIdempotencyKey: () => "idem-1",
+  }));
+  vi.doMock("../../extensions/whatsapp/src/session.js", () => ({
+    webAuthExists,
+  }));
+  vi.doMock("../../extensions/discord/src/actions/runtime.js", () => ({
+    handleDiscordAction,
+  }));
+  vi.doMock("../../extensions/slack/runtime-api.js", () => ({
+    handleSlackAction,
+  }));
+  vi.doMock("../../extensions/telegram/src/action-runtime.js", () => ({
+    handleTelegramAction,
+  }));
+  vi.doMock("../../extensions/whatsapp/runtime-api.js", () => ({
+    handleWhatsAppAction,
+  }));
+  ({ messageCommand } = await import("./message.js"));
+}
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 const EMPTY_TEST_REGISTRY = createTestRegistry([]);
 
-beforeEach(() => {
+beforeEach(async () => {
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
@@ -88,6 +123,7 @@ beforeEach(() => {
   handleTelegramAction.mockClear();
   handleWhatsAppAction.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
+  await loadFreshMessageCommandModuleForTest();
 });
 
 afterEach(() => {

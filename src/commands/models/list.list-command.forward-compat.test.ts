@@ -287,13 +287,6 @@ describe("modelsListCommand forward-compat", () => {
           input: ["text"],
           contextWindow: 272000,
         },
-        {
-          provider: "openai-codex",
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-          input: ["text"],
-          contextWindow: 272000,
-        },
       ]);
       mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
         provider === "openai-codex"
@@ -308,17 +301,11 @@ describe("modelsListCommand forward-compat", () => {
           if (modelId === "gpt-5.4") {
             return { ...OPENAI_CODEX_53_MODEL };
           }
-          if (modelId === "gpt-5.4") {
-            return { ...OPENAI_CODEX_MODEL };
-          }
           return undefined;
         },
       );
       await runAllOpenAiCodexCommand();
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-        }),
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
           available: true,

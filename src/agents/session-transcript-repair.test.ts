@@ -207,10 +207,9 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
-  it("drops orphan tool results that follow an aborted assistant message", () => {
-    // When an assistant message is aborted, any tool results that follow should be
-    // dropped as orphans (since we skip extracting tool calls from aborted messages).
-    // This addresses the edge case where a partial tool result was persisted before abort.
+  it("retains matching tool results that follow an aborted assistant message", () => {
+    // Aborted assistant turns do not synthesize missing tool results, but real
+    // matching results in the same span remain part of the repaired transcript.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -229,12 +228,11 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // The orphan tool result should be dropped
-    expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages).toHaveLength(2);
+    expect(result.droppedOrphanCount).toBe(0);
+    expect(result.messages).toHaveLength(3);
     expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
-    // No synthetic results should be added
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect(result.messages[2]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
 });

@@ -12,12 +12,18 @@ let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 
 describe("requestExecApprovalDecision", () => {
-  beforeAll(async () => {
+  async function loadFreshApprovalRequestModulesForTest() {
+    vi.resetModules();
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
+  }
+
+  beforeAll(async () => {
+    await loadFreshApprovalRequestModulesForTest();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshApprovalRequestModulesForTest();
     vi.mocked(callGatewayTool).mockClear();
   });
 

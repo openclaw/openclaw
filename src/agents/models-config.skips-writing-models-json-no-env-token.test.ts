@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -10,7 +11,12 @@ import {
   withTempEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
+}));
+
+import { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } from "./models-config.js";
 
 installModelsConfigTestHooks();
 
@@ -53,7 +59,19 @@ async function runEnvProviderCase(params: {
 }
 
 describe("models-config", () => {
-  it("skips writing models.json when no env token or profile exists", async () => {
+  beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    resetModelsJsonReadyCacheForTest();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    resetModelsJsonReadyCacheForTest();
+  });
+
+  it("writes marker-backed defaults but skips env-gated providers when no env token or profile exists", async () => {
     await withTempHome(async (home) => {
       await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"], async () => {
         unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"]);
@@ -70,8 +88,19 @@ describe("models-config", () => {
           agentDir,
         );
 
-        await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toThrow();
-        expect(result.wrote).toBe(false);
+        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+        const parsed = JSON.parse(raw) as { providers: Record<string, ProviderConfig> };
+
+        expect(result.wrote).toBe(true);
+        expect(Object.keys(parsed.providers)).toEqual(
+          expect.arrayContaining(["chutes", "deepseek", "mistral", "xai"]),
+        );
+        expect(parsed.providers["deepseek"]?.apiKey).toBe("DEEPSEEK_API_KEY");
+        expect(parsed.providers["mistral"]?.apiKey).toBe("MISTRAL_API_KEY");
+        expect(parsed.providers["xai"]?.apiKey).toBe("XAI_API_KEY");
+        expect(parsed.providers["openai"]).toBeUndefined();
+        expect(parsed.providers["minimax"]).toBeUndefined();
+        expect(parsed.providers["synthetic"]).toBeUndefined();
       });
     });
   });

@@ -268,6 +268,13 @@ vi.mock("../config/sessions/types.js", async (importOriginal) => {
     ),
   };
 });
+vi.mock("../channels/config-presence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
+  return {
+    ...actual,
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  };
+});
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () =>
     [
@@ -461,6 +468,8 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue({
       ts: 0,
