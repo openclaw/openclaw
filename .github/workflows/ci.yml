@@ -313,6 +313,7 @@ jobs:
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
           if [ "${{ matrix.task }}" = "channels" ]; then
+            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
           fi
           if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
