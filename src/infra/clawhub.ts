@@ -9,6 +9,11 @@ const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
+export type ClawHubPackageCompatibility = {
+  pluginApiRange?: string;
+  builtWithOpenClawVersion?: string;
+  minGatewayVersion?: string;
+};
 
 export type ClawHubPackageListItem = {
   name: string;
@@ -31,11 +36,7 @@ export type ClawHubPackageDetail = {
   package:
     | (ClawHubPackageListItem & {
         tags?: Record<string, string>;
-        compatibility?: {
-          pluginApiRange?: string;
-          builtWithOpenClawVersion?: string;
-          minGatewayVersion?: string;
-        } | null;
+        compatibility?: ClawHubPackageCompatibility | null;
         capabilities?: {
           executesCode?: boolean;
           runtimeId?: string;
@@ -78,11 +79,7 @@ export type ClawHubPackageVersion = {
     changelog: string;
     distTags?: string[];
     files?: unknown;
-    compatibility?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { compatibility?: infer C }
-        ? C
-        : never
-      : never;
+    compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
         ? C
@@ -179,6 +176,17 @@ type ClawHubRequestParams = {
   fetchImpl?: FetchLike;
 };
 
+type ClawHubConfigLike = {
+  token?: unknown;
+  accessToken?: unknown;
+  authToken?: unknown;
+  apiToken?: unknown;
+  auth?: ClawHubConfigLike | null;
+  session?: ClawHubConfigLike | null;
+  credentials?: ClawHubConfigLike | null;
+  user?: ClawHubConfigLike | null;
+};
+
 export class ClawHubRequestError extends Error {
   readonly status: number;
   readonly requestPath: string;
@@ -200,6 +208,74 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (baseUrl?.trim() || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function extractTokenFromClawHubConfig(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as ClawHubConfigLike;
+  return (
+    readNonEmptyString(record.accessToken) ??
+    readNonEmptyString(record.authToken) ??
+    readNonEmptyString(record.apiToken) ??
+    readNonEmptyString(record.token) ??
+    extractTokenFromClawHubConfig(record.auth) ??
+    extractTokenFromClawHubConfig(record.session) ??
+    extractTokenFromClawHubConfig(record.credentials) ??
+    extractTokenFromClawHubConfig(record.user)
+  );
+}
+
+function resolveClawHubConfigPaths(): string[] {
+  const explicit =
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() ||
+    process.env.CLAWHUB_CONFIG_PATH?.trim() ||
+    process.env.CLAWDHUB_CONFIG_PATH?.trim(); // legacy misspelling from older clawhub CLI builds; keep for back-compat
+  if (explicit) {
+    return [explicit];
+  }
+
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  const configHome =
+    xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
+  const xdgPath = path.join(configHome, "clawhub", "config.json");
+
+  if (process.platform === "darwin") {
+    return [
+      path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json"),
+      xdgPath,
+    ];
+  }
+
+  return [xdgPath];
+}
+
+export async function resolveClawHubAuthToken(): Promise<string | undefined> {
+  const envToken =
+    process.env.OPENCLAW_CLAWHUB_TOKEN?.trim() ||
+    process.env.CLAWHUB_TOKEN?.trim() ||
+    process.env.CLAWHUB_AUTH_TOKEN?.trim();
+  if (envToken) {
+    return envToken;
+  }
+
+  for (const configPath of resolveClawHubConfigPaths()) {
+    try {
+      const raw = await fs.readFile(configPath, "utf8");
+      const token = extractTokenFromClawHubConfig(JSON.parse(raw));
+      if (token) {
+        return token;
+      }
+    } catch {
+      // Try the next candidate path.
+    }
+  }
+  return undefined;
 }
 
 function parseComparableSemver(version: string | null | undefined): ComparableSemver | null {
@@ -370,6 +446,7 @@ async function clawhubRequest(
   params: ClawHubRequestParams,
 ): Promise<{ response: Response; url: URL }> {
   const url = buildUrl(params);
+  const token = params.token?.trim() || (await resolveClawHubAuthToken());
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -382,7 +459,7 @@ async function clawhubRequest(
   );
   try {
     const response = await (params.fetchImpl ?? fetch)(url, {
-      headers: params.token ? { Authorization: `Bearer ${params.token}` } : undefined,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       signal: controller.signal,
     });
     return { response, url };

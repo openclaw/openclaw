@@ -11,6 +11,8 @@ const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = v
   unregisterHttpMock: vi.fn(),
 }));
 
+let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
 }));
@@ -74,14 +76,19 @@ vi.mock("./template-messages.js", () => ({
 }));
 
 describe("monitorLineProvider lifecycle", () => {
-  beforeEach(() => {
-    createLineBotMock.mockClear();
-    unregisterHttpMock.mockClear();
-    registerPluginHttpRouteMock.mockClear().mockReturnValue(unregisterHttpMock);
+  beforeEach(async () => {
+    vi.resetModules();
+    createLineBotMock.mockReset();
+    createLineBotMock.mockReturnValue({
+      account: { accountId: "default" },
+      handleWebhook: vi.fn(),
+    });
+    unregisterHttpMock.mockReset();
+    registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
+    ({ monitorLineProvider } = await import("./monitor.js"));
   });
 
   it("waits for abort before resolving", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
     const abort = new AbortController();
     let resolved = false;
 
@@ -108,7 +115,6 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("stops immediately when signal is already aborted", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
     const abort = new AbortController();
     abort.abort();
 
@@ -124,8 +130,6 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("returns immediately without abort signal and stop is idempotent", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
-
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret

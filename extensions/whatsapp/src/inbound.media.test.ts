@@ -3,6 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  mockExtractMessageContent,
+  mockGetContentType,
+  mockIsJidGroup,
+  mockNormalizeMessageContent,
+} from "../../../test/mocks/baileys.js";
+
+type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
@@ -55,9 +63,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 process.env.HOME = HOME;
 
-vi.mock("@whiskeysockets/baileys", async () => {
-  const actual =
-    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
+vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
   const jpegBuffer = Buffer.from([
     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
     0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
@@ -72,11 +79,19 @@ vi.mock("@whiskeysockets/baileys", async () => {
   ]);
   return {
     ...actual,
+    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
     downloadMediaMessage: vi.fn().mockResolvedValue(jpegBuffer),
+    extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
+    getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
+    isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
+    normalizeMessageContent: vi.fn((message: MockMessageInput) =>
+      mockNormalizeMessageContent(message),
+    ),
   };
 });
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const { EventEmitter } = require("node:events");
   const ev = new EventEmitter();
   const sock = {
@@ -90,6 +105,7 @@ vi.mock("./session.js", () => {
     user: { id: "me@s.whatsapp.net" },
   };
   return {
+    ...actual,
     createWaSocket: vi.fn().mockResolvedValue(sock),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 200),

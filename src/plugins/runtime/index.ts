@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listRuntimeImageGenerationProviders,
@@ -10,6 +9,7 @@ import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
+import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -94,23 +94,6 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
         cfg: params.cfg,
       }),
   };
-}
-
-let cachedVersion: string | null = null;
-
-function resolveVersion(): string {
-  if (cachedVersion) {
-    return cachedVersion;
-  }
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("../../../package.json") as { version?: string };
-    cachedVersion = pkg.version ?? "unknown";
-    return cachedVersion;
-  } catch {
-    cachedVersion = "unknown";
-    return cachedVersion;
-  }
 }
 
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
@@ -201,7 +184,9 @@ export type CreatePluginRuntimeOptions = {
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const runtime = {
-    version: resolveVersion(),
+    // Sourced from the shared OpenClaw version resolver (#52899) so plugins
+    // always see the same version the CLI reports, avoiding API-version drift.
+    version: VERSION,
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(

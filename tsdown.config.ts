@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
+import { listBundledPluginBuildEntries } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -78,60 +78,6 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     platform: "node",
     inputOptions: buildInputOptions,
   };
-}
-
-function listBundledPluginBuildEntries(): Record<string, string> {
-  const extensionsRoot = path.join(process.cwd(), "extensions");
-  const entries: Record<string, string> = {};
-
-  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
-      continue;
-    }
-    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
-      continue;
-    }
-
-    const pluginDir = path.join(extensionsRoot, dirent.name);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    let packageEntries: string[] = [];
-    if (fs.existsSync(packageJsonPath)) {
-      try {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown; setupEntry?: unknown };
-        };
-        packageEntries = Array.isArray(packageJson.openclaw?.extensions)
-          ? packageJson.openclaw.extensions.filter(
-              (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-            )
-          : [];
-        const setupEntry =
-          typeof packageJson.openclaw?.setupEntry === "string" &&
-          packageJson.openclaw.setupEntry.trim().length > 0
-            ? packageJson.openclaw.setupEntry
-            : undefined;
-        if (setupEntry) {
-          packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
-        }
-      } catch {
-        packageEntries = [];
-      }
-    }
-
-    const sourceEntries = packageEntries.length > 0 ? packageEntries : ["./index.ts"];
-    for (const entry of sourceEntries) {
-      const normalizedEntry = entry.replace(/^\.\//, "");
-      const entryKey = `extensions/${dirent.name}/${normalizedEntry.replace(/\.[^.]+$/u, "")}`;
-      entries[entryKey] = path.join("extensions", dirent.name, normalizedEntry);
-    }
-  }
-
-  return entries;
 }
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
