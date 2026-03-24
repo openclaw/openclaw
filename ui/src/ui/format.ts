@@ -8,10 +8,7 @@ export { formatRelativeTimestamp, formatDurationHuman };
  * Format an epoch timestamp as a full date-time string (e.g. "2026-03-20 14:30").
  * Uses the user's local timezone via `Intl.DateTimeFormat`.
  */
-export function formatFullDateTime(
-  epochMs: number | null | undefined,
-  fallback = "n/a",
-): string {
+export function formatFullDateTime(epochMs: number | null | undefined, fallback = "n/a"): string {
   if (epochMs == null || !Number.isFinite(epochMs)) {
     return fallback;
   }
