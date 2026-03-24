@@ -128,3 +128,147 @@ gchar* systemd_normalize_profile(const gchar *raw_profile) {
     g_free(trimmed);
     return res;
 }
+
+gboolean systemd_parse_service_properties(GVariant *props, const gchar *home_dir, gchar ***exec_start_argv_out, gchar **working_directory_out, gchar ***environment_out) {
+    if (!props || !exec_start_argv_out || !working_directory_out || !environment_out) {
+        return FALSE;
+    }
+
+    *exec_start_argv_out = NULL;
+    *working_directory_out = NULL;
+    *environment_out = NULL;
+
+    GVariant *exec_start_v = g_variant_lookup_value(props, "ExecStart", NULL);
+    GVariant *working_dir_v = g_variant_lookup_value(props, "WorkingDirectory", G_VARIANT_TYPE_STRING);
+    GVariant *env_v = g_variant_lookup_value(props, "Environment", NULL);
+    GVariant *env_files_v = g_variant_lookup_value(props, "EnvironmentFiles", NULL);
+
+    gboolean parse_success = FALSE;
+
+    if (exec_start_v) {
+        const gchar *type_string = g_variant_get_type_string(exec_start_v);
+        GVariantIter *iter = NULL;
+        
+        // Handle both observed systemd signatures
+        if (g_strcmp0(type_string, "a(sasbttuii)") == 0) {
+            g_variant_get(exec_start_v, "a(sasbttuii)", &iter);
+            gchar *path;
+            gchar **argv;
+            gboolean ignore_errors;
+            guint64 start_time, stop_time;
+            guint32 pid;
+            gint32 code, status;
+
+            if (g_variant_iter_next(iter, "(s^asbttuii)", &path, &argv, &ignore_errors, &start_time, &stop_time, &pid, &code, &status)) {
+                if (argv && g_strv_length(argv) > 0) {
+                    *exec_start_argv_out = argv;
+                    parse_success = TRUE;
+                } else {
+                    g_strfreev(argv);
+                }
+                g_free(path);
+            }
+            g_variant_iter_free(iter);
+        } else if (g_strcmp0(type_string, "a(sasbttttuii)") == 0) {
+            g_variant_get(exec_start_v, "a(sasbttttuii)", &iter);
+            gchar *path;
+            gchar **argv;
+            gboolean ignore_errors;
+            guint64 start_time, stop_time, exec_time, something_else; // The extra 'tt' fields
+            guint32 pid;
+            gint32 code, status;
+
+            if (g_variant_iter_next(iter, "(s^asbttttuii)", &path, &argv, &ignore_errors, &start_time, &stop_time, &exec_time, &something_else, &pid, &code, &status)) {
+                if (argv && g_strv_length(argv) > 0) {
+                    *exec_start_argv_out = argv;
+                    parse_success = TRUE;
+                } else {
+                    g_strfreev(argv);
+                }
+                g_free(path);
+            }
+            g_variant_iter_free(iter);
+        } else {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Unexpected ExecStart GVariant signature: %s", type_string);
+        }
+        g_variant_unref(exec_start_v);
+    }
+
+    if (!parse_success) {
+        // Required field failed, clean up any partial state
+        if (working_dir_v) g_variant_unref(working_dir_v);
+        if (env_v) g_variant_unref(env_v);
+        if (env_files_v) g_variant_unref(env_files_v);
+        return FALSE;
+    }
+
+    if (working_dir_v) {
+        const gchar *raw_wd = g_variant_get_string(working_dir_v, NULL);
+        if (raw_wd && raw_wd[0] != '\0') {
+            const gchar *clean_wd = raw_wd;
+            // Systemd uses prefixes like '!' and '-' to modify working directory behavior.
+            // We conservatively strip these observed syntactic modifiers to get the real absolute path.
+            while (*clean_wd == '!' || *clean_wd == '-') {
+                clean_wd++;
+            }
+            
+            if (clean_wd[0] == '/') {
+                *working_directory_out = g_strdup(clean_wd);
+            } else if (clean_wd[0] != '\0') {
+                // Not an absolute path after stripping, invalid format
+                parse_success = FALSE;
+            }
+        }
+        g_variant_unref(working_dir_v);
+    }
+
+    if (!parse_success) {
+        g_strfreev(*exec_start_argv_out);
+        *exec_start_argv_out = NULL;
+        if (env_v) g_variant_unref(env_v);
+        if (env_files_v) g_variant_unref(env_files_v);
+        return FALSE;
+    }
+
+    gchar **merged_env = g_new0(gchar*, 1);
+
+    if (env_v) {
+        const gchar **env_array = g_variant_get_strv(env_v, NULL);
+        if (env_array) {
+            for (gsize i = 0; env_array[i] != NULL; i++) {
+                gchar *eq = strchr(env_array[i], '=');
+                if (eq) {
+                    g_autofree gchar *key = g_strndup(env_array[i], eq - env_array[i]);
+                    merged_env = g_environ_setenv(merged_env, key, eq + 1, TRUE);
+                }
+            }
+            g_free(env_array);
+        }
+        g_variant_unref(env_v);
+    }
+
+    if (env_files_v) {
+        // Signature: a(sb) - array of (path, optional boolean)
+        if (g_strcmp0(g_variant_get_type_string(env_files_v), "a(sb)") == 0) {
+            GVariantIter *iter;
+            g_variant_get(env_files_v, "a(sb)", &iter);
+            gchar *path;
+            gboolean optional;
+
+            while (g_variant_iter_next(iter, "(sb)", &path, &optional)) {
+                merged_env = systemd_parse_single_env_file(path, home_dir, NULL, optional, merged_env);
+                g_free(path);
+            }
+            g_variant_iter_free(iter);
+        }
+        g_variant_unref(env_files_v);
+    }
+
+    if (g_strv_length(merged_env) > 0) {
+        *environment_out = merged_env;
+    } else {
+        g_strfreev(merged_env);
+    }
+
+    return TRUE;
+}

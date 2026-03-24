@@ -389,87 +389,6 @@ static void publish_systemd_state_with_cached_config(const gchar *active_state, 
     g_strfreev(sys_state.environment);
 }
 
-static void apply_service_config_from_variant(GVariant *props) {
-    g_strfreev(cached_exec_start_argv);
-    cached_exec_start_argv = NULL;
-    g_free(cached_working_directory);
-    cached_working_directory = NULL;
-    g_strfreev(cached_environment);
-    cached_environment = NULL;
-
-    GVariant *exec_start_v = g_variant_lookup_value(props, "ExecStart", NULL);
-    GVariant *working_dir_v = g_variant_lookup_value(props, "WorkingDirectory", G_VARIANT_TYPE_STRING);
-    GVariant *env_v = g_variant_lookup_value(props, "Environment", NULL);
-    GVariant *env_files_v = g_variant_lookup_value(props, "EnvironmentFiles", NULL);
-
-    if (exec_start_v) {
-        // Signature: a(sasbttuii)
-        GVariantIter *iter;
-        g_variant_get(exec_start_v, "a(sasbttuii)", &iter);
-        gchar *path;
-        gchar **argv;
-        gboolean ignore_errors;
-        guint64 start_time, stop_time;
-        guint32 pid;
-        gint32 code, status;
-
-        if (g_variant_iter_next(iter, "(s^asbttuii)", &path, &argv, &ignore_errors, &start_time, &stop_time, &pid, &code, &status)) {
-            cached_exec_start_argv = argv;
-            g_free(path);
-        }
-        g_variant_iter_free(iter);
-        g_variant_unref(exec_start_v);
-    }
-
-    if (working_dir_v) {
-        cached_working_directory = g_strdup(g_variant_get_string(working_dir_v, NULL));
-        if (g_strcmp0(cached_working_directory, "") == 0) {
-            g_free(cached_working_directory);
-            cached_working_directory = NULL;
-        }
-        g_variant_unref(working_dir_v);
-    }
-
-    gchar **merged_env = g_new0(gchar*, 1);
-
-    if (env_v) {
-        const gchar **env_array = g_variant_get_strv(env_v, NULL);
-        if (env_array) {
-            for (gsize i = 0; env_array[i] != NULL; i++) {
-                gchar *eq = strchr(env_array[i], '=');
-                if (eq) {
-                    g_autofree gchar *key = g_strndup(env_array[i], eq - env_array[i]);
-                    merged_env = g_environ_setenv(merged_env, key, eq + 1, TRUE);
-                }
-            }
-            g_free(env_array);
-        }
-        g_variant_unref(env_v);
-    }
-
-    if (env_files_v) {
-        // Signature: a(sb) - array of (path, optional boolean)
-        GVariantIter *iter;
-        g_variant_get(env_files_v, "a(sb)", &iter);
-        gchar *path;
-        gboolean optional;
-        const gchar *home_dir = g_get_home_dir();
-
-        while (g_variant_iter_next(iter, "(sb)", &path, &optional)) {
-            merged_env = systemd_parse_single_env_file(path, home_dir, NULL, optional, merged_env);
-            g_free(path);
-        }
-        g_variant_iter_free(iter);
-        g_variant_unref(env_files_v);
-    }
-
-    if (g_strv_length(merged_env) > 0) {
-        cached_environment = merged_env;
-    } else {
-        g_strfreev(merged_env);
-    }
-}
-
 typedef struct {
     gchar *unit_name;
     gchar *unit_object_path;
@@ -518,11 +437,25 @@ static void on_get_service_properties_ready(GObject *source_object, GAsyncResult
         // GetAll returns (a{sv})
         GVariant *props = g_variant_get_child_value(result, 0);
         if (props) {
-            GVariant *exec_check = g_variant_lookup_value(props, "ExecStart", NULL);
-            if (exec_check) {
-                apply_service_config_from_variant(props);
+            gchar **new_exec_argv = NULL;
+            gchar *new_working_dir = NULL;
+            gchar **new_env = NULL;
+
+            if (systemd_parse_service_properties(props, g_get_home_dir(), &new_exec_argv, &new_working_dir, &new_env)) {
+                g_strfreev(cached_exec_start_argv);
+                cached_exec_start_argv = new_exec_argv;
+                
+                g_free(cached_working_directory);
+                cached_working_directory = new_working_dir;
+                
+                g_strfreev(cached_environment);
+                cached_environment = new_env;
+                
                 config_loaded = TRUE;
-                g_variant_unref(exec_check);
+            } else {
+                g_strfreev(new_exec_argv);
+                g_free(new_working_dir);
+                g_strfreev(new_env);
             }
             g_variant_unref(props);
         }

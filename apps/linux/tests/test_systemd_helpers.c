@@ -167,6 +167,208 @@ static void test_optional_env_file(void) {
     g_strfreev(env);
 }
 
+static void test_parse_service_props_old_signature(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    // Build ExecStart a(sasbttuii)
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(sasbttuii)"));
+    
+    GVariantBuilder argv_builder;
+    g_variant_builder_init(&argv_builder, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&argv_builder, "s", "/usr/bin/openclaw");
+    g_variant_builder_add(&argv_builder, "s", "gateway");
+    
+    g_variant_builder_add(&exec_builder, "(s@asbttuii)",
+                          "/usr/bin/openclaw",
+                          g_variant_builder_end(&argv_builder),
+                          FALSE,
+                          (guint64)0, (guint64)0,
+                          (guint32)0, (gint32)0, (gint32)0);
+
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_assert_true(success);
+    g_assert_nonnull(exec_start_argv);
+    g_assert_cmpstr(exec_start_argv[0], ==, "/usr/bin/openclaw");
+    g_assert_cmpstr(exec_start_argv[1], ==, "gateway");
+    g_assert_null(exec_start_argv[2]);
+    g_assert_null(working_dir);
+    g_assert_null(env);
+    
+    g_strfreev(exec_start_argv);
+    g_variant_unref(props);
+}
+
+static void test_parse_service_props_new_signature(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    // Build ExecStart a(sasbttttuii)
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(sasbttttuii)"));
+    
+    GVariantBuilder argv_builder;
+    g_variant_builder_init(&argv_builder, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&argv_builder, "s", "/usr/bin/openclaw");
+    
+    g_variant_builder_add(&exec_builder, "(s@asbttttuii)",
+                          "/usr/bin/openclaw",
+                          g_variant_builder_end(&argv_builder),
+                          FALSE,
+                          (guint64)0, (guint64)0, (guint64)0, (guint64)0,
+                          (guint32)0, (gint32)0, (gint32)0);
+
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_assert_true(success);
+    g_assert_nonnull(exec_start_argv);
+    g_assert_cmpstr(exec_start_argv[0], ==, "/usr/bin/openclaw");
+    g_assert_null(exec_start_argv[1]);
+    
+    g_strfreev(exec_start_argv);
+    g_variant_unref(props);
+}
+
+static void test_parse_service_props_working_directory_normalization(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    // Valid ExecStart required for success
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(sasbttuii)"));
+    GVariantBuilder argv_builder;
+    g_variant_builder_init(&argv_builder, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&argv_builder, "s", "test");
+    g_variant_builder_add(&exec_builder, "(s@asbttuii)", "test", g_variant_builder_end(&argv_builder), FALSE, (guint64)0, (guint64)0, (guint32)0, (gint32)0, (gint32)0);
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    // Regression test: the ! prefix
+    g_variant_builder_add(&dict_builder, "{sv}", "WorkingDirectory", g_variant_new_string("!/home/testuser"));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_assert_true(success);
+    g_assert_cmpstr(working_dir, ==, "/home/testuser");
+    
+    g_strfreev(exec_start_argv);
+    g_free(working_dir);
+    g_variant_unref(props);
+}
+
+static void test_parse_service_props_working_directory_multiple_prefixes(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(sasbttuii)"));
+    GVariantBuilder argv_builder;
+    g_variant_builder_init(&argv_builder, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&argv_builder, "s", "test");
+    g_variant_builder_add(&exec_builder, "(s@asbttuii)", "test", g_variant_builder_end(&argv_builder), FALSE, (guint64)0, (guint64)0, (guint32)0, (gint32)0, (gint32)0);
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    g_variant_builder_add(&dict_builder, "{sv}", "WorkingDirectory", g_variant_new_string("-!/opt/openclaw"));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_assert_true(success);
+    g_assert_cmpstr(working_dir, ==, "/opt/openclaw");
+    
+    g_strfreev(exec_start_argv);
+    g_free(working_dir);
+    g_variant_unref(props);
+}
+
+static void test_parse_service_props_invalid_working_directory(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(sasbttuii)"));
+    GVariantBuilder argv_builder;
+    g_variant_builder_init(&argv_builder, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&argv_builder, "s", "test");
+    g_variant_builder_add(&exec_builder, "(s@asbttuii)", "test", g_variant_builder_end(&argv_builder), FALSE, (guint64)0, (guint64)0, (guint32)0, (gint32)0, (gint32)0);
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    // Not an absolute path after stripping -> should fail
+    g_variant_builder_add(&dict_builder, "{sv}", "WorkingDirectory", g_variant_new_string("!relative/path"));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_assert_false(success);
+    g_assert_null(exec_start_argv);
+    g_assert_null(working_dir);
+    g_assert_null(env);
+    
+    g_variant_unref(props);
+}
+
+static void test_parse_service_props_invalid_signature(void) {
+    GVariantBuilder dict_builder;
+    g_variant_builder_init(&dict_builder, G_VARIANT_TYPE("a{sv}"));
+
+    // Create an unsupported signature
+    GVariantBuilder exec_builder;
+    g_variant_builder_init(&exec_builder, G_VARIANT_TYPE("a(s)"));
+    g_variant_builder_add(&exec_builder, "(s)", "test");
+    g_variant_builder_add(&dict_builder, "{sv}", "ExecStart", g_variant_builder_end(&exec_builder));
+    
+    GVariant *props = g_variant_builder_end(&dict_builder);
+    
+    gchar **exec_start_argv = NULL;
+    gchar *working_dir = NULL;
+    gchar **env = NULL;
+    
+    // Expect a warning log about unexpected signature
+    g_test_expect_message(G_LOG_DOMAIN, G_LOG_LEVEL_WARNING, "*Unexpected ExecStart GVariant signature*");
+    
+    gboolean success = systemd_parse_service_properties(props, "/home/test", &exec_start_argv, &working_dir, &env);
+    
+    g_test_assert_expected_messages();
+    
+    g_assert_false(success);
+    g_assert_null(exec_start_argv);
+    
+    g_variant_unref(props);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -197,6 +399,13 @@ int main(int argc, char **argv) {
 
     g_test_add_func("/systemd/env_file_parsing", test_env_file_parsing);
     g_test_add_func("/systemd/optional_env_file", test_optional_env_file);
+    
+    g_test_add_func("/systemd/parse_service_props_old_signature", test_parse_service_props_old_signature);
+    g_test_add_func("/systemd/parse_service_props_new_signature", test_parse_service_props_new_signature);
+    g_test_add_func("/systemd/parse_service_props_working_directory_normalization", test_parse_service_props_working_directory_normalization);
+    g_test_add_func("/systemd/parse_service_props_working_directory_multiple_prefixes", test_parse_service_props_working_directory_multiple_prefixes);
+    g_test_add_func("/systemd/parse_service_props_invalid_working_directory", test_parse_service_props_invalid_working_directory);
+    g_test_add_func("/systemd/parse_service_props_invalid_signature", test_parse_service_props_invalid_signature);
     
     return g_test_run();
 }
