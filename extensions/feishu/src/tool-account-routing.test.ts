@@ -110,7 +110,7 @@ describe("feishu tool account routing", () => {
     registerFeishuPermTools(api);
 
     const tool = resolveTool("feishu_perm", { agentAccountId: "b" });
-    await tool.execute("call", { action: "unknown_action" });
+    await tool.execute("call", { action: "list", token: "tok", type: "doc" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
