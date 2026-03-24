@@ -17,7 +17,8 @@
 - NEVER use mcp_search for Dart AI calls (dart_get_task, dart_create_task, etc.) — spawn Neo with the full task instead.
 - NEVER use exec to call mcporter, curl, or any tool that fetches external data — spawn Neo instead.
 - NEVER use exec to call `openclaw config get` or any CLI command — use `gateway(config.get, ...)` directly instead.
-- NEVER use exec to investigate system issues autonomously — if you see something needs investigation (QMD, memory, logs, gateway), spawn Neo to investigate instead of doing it yourself.
+- NEVER use exec to investigate system issues autonomously — if you see something needs investigation (QMD, memory, logs, gateway, session visibility, config values), spawn Neo to investigate instead of doing it yourself.
+- NEVER use exec to mutate system state: no `openclaw config set`, no `openclaw gateway restart`, no `openclaw config list` — spawn Neo for all config changes and gateway operations.
 - NEVER mix context from different channels in a single response.
 - If a message is not for your channel, reply with ONLY: NO_REPLY
 
