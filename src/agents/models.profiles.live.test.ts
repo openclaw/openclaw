@@ -8,7 +8,7 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isModernModelRef } from "./live-model-filter.js";
+import { isHighSignalLiveModelRef } from "./live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
@@ -20,6 +20,10 @@ const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
+const LIVE_SETUP_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
+);
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -65,6 +69,32 @@ async function withLiveHeartbeat<T>(operation: Promise<T>, context: string): Pro
     clearInterval(timer);
     if (heartbeatCount > 0) {
       logProgress(`${context}: completed after ${formatElapsedSeconds(Date.now() - startedAt)}`);
+    }
+  }
+}
+
+async function withLiveStageTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+  timeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): Promise<T> {
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await withLiveHeartbeat(
+      Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          hardTimer = setTimeout(() => {
+            reject(new Error(`${context} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          hardTimer.unref?.();
+        }),
+      ]),
+      context,
+    );
+  } finally {
+    if (hardTimer) {
+      clearTimeout(hardTimer);
     }
   }
 }
@@ -341,8 +371,16 @@ describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
     async () => {
-      const cfg = loadConfig();
-      await ensureOpenClawModelsJson(cfg);
+      logProgress("[live-models] loading config");
+      const cfg = await withLiveStageTimeout(
+        Promise.resolve().then(() => loadConfig()),
+        "[live-models] load config",
+      );
+      logProgress("[live-models] preparing models.json");
+      await withLiveStageTimeout(
+        ensureOpenClawModelsJson(cfg),
+        "[live-models] prepare models.json",
+      );
       if (!DIRECT_ENABLED) {
         logProgress(
           "[live-models] skipping (set OPENCLAW_LIVE_MODELS=modern|all|<list>; all=modern)",
@@ -357,8 +395,11 @@ describeLive("live models (profile keys)", () => {
 
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const models = modelRegistry.getAll();
+      logProgress("[live-models] loading model registry");
+      const models = await withLiveStageTimeout(
+        Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
+        "[live-models] load model registry",
+      );
 
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
@@ -388,7 +429,7 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
-          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
         }
@@ -417,7 +458,7 @@ describeLive("live models (profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,

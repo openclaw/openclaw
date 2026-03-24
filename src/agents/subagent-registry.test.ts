@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitialized: vi.fn(),
   resolveContextEngine: vi.fn(),
+  onSubagentEnded: vi.fn(async () => {}),
+  runSubagentEnded: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
 }));
 
@@ -113,6 +115,10 @@ describe("subagent registry seam flow", () => {
         sessionId: "sess-child",
         updatedAt: 1,
       },
+    });
+    mocks.getGlobalHookRunner.mockReturnValue(null);
+    mocks.resolveContextEngine.mockResolvedValue({
+      onSubagentEnded: mocks.onSubagentEnded,
     });
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -234,5 +240,110 @@ describe("subagent registry seam flow", () => {
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-delete-give-up"),
     ).toBeUndefined();
+  });
+
+  it("finalizes retry-budgeted completion delete runs during resume", async () => {
+    const endedHookRunner = {
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded: mocks.runSubagentEnded,
+    };
+    mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set("run-resume-delete", {
+        runId: "run-resume-delete",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "resume delete retry budget",
+        cleanup: "delete",
+        createdAt: Date.parse("2026-03-24T11:58:00Z"),
+        startedAt: Date.parse("2026-03-24T11:59:00Z"),
+        endedAt: Date.parse("2026-03-24T11:59:30Z"),
+        expectsCompletionMessage: true,
+        announceRetryCount: 3,
+        lastAnnounceRetryAt: Date.parse("2026-03-24T11:59:40Z"),
+      });
+      return 1;
+    }) as never);
+
+    mod.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:child",
+        reason: "deleted",
+        workspaceDir: undefined,
+      });
+    });
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-resume-delete"),
+    ).toBeUndefined();
+  });
+
+  it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:parent": {
+        sessionId: "sess-parent",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-parent-expired",
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "expired parent cleanup",
+      cleanup: "delete",
+      createdAt: Date.parse("2026-03-24T11:50:00Z"),
+      startedAt: Date.parse("2026-03-24T11:50:30Z"),
+      endedAt: Date.parse("2026-03-24T11:51:00Z"),
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-child-finished",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "parent",
+      task: "descendant settles",
+      cleanup: "keep",
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        mod
+          .listSubagentRunsForRequester("agent:main:main")
+          .find((entry) => entry.runId === "run-parent-expired"),
+      ).toBeUndefined();
+    });
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-child-finished",
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:parent",
+        reason: "deleted",
+        workspaceDir: undefined,
+      });
+    });
   });
 });
