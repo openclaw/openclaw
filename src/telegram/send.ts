@@ -26,7 +26,7 @@ import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helper
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -770,22 +770,60 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textParams =
-    hasThreadParams || replyMarkup
-      ? {
-          ...threadParams,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
-      : undefined;
-  const res = await sendTelegramText(text, textParams, opts.plainText);
-  const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
-  recordSentMessage(chatId, messageId);
+
+  // Telegram's sendMessage hard limit is 4096 characters (HTML-rendered). Split the
+  // markdown into chunks so long responses (e.g. daily briefs, research summaries)
+  // are delivered as multiple messages instead of failing with 400 message is too long.
+  // Only apply chunking when necessary (text or HTML rendering exceeds the limit). (#21)
+  const TELEGRAM_TEXT_LIMIT = 4096;
+  const chunks = markdownToTelegramChunks(text, TELEGRAM_TEXT_LIMIT, { tableMode });
+
+  // Single chunk (or short text): use the normal send path unchanged.
+  if (chunks.length <= 1) {
+    const textParams =
+      hasThreadParams || replyMarkup
+        ? {
+            ...threadParams,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    const res = await sendTelegramText(text, textParams, opts.plainText);
+    const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
+    recordSentMessage(chatId, messageId);
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+    return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  }
+
+  // Multiple chunks: send each in sequence. Reply markup goes on the last chunk only.
+  let lastMessageId: string | undefined;
+  let resolvedChatId: string = String(chatId);
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    const chunkParams =
+      hasThreadParams || (isLast && replyMarkup)
+        ? {
+            ...threadParams,
+            ...(isLast && replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    // Send each chunk via sendTelegramText so HTML parse fallback and thread routing apply.
+    const chunkRes = await sendTelegramText(chunks[i].text, chunkParams);
+    const chunkMessageId = resolveTelegramMessageIdOrThrow(chunkRes, `text chunk ${i + 1} send`);
+    recordSentMessage(chatId, chunkMessageId);
+    lastMessageId = String(chunkMessageId);
+    resolvedChatId = String(chunkRes?.chat?.id ?? chatId);
+  }
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "outbound",
   });
-  return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  // Return last chunk's message ID as the "main" message.
+  return { messageId: lastMessageId!, chatId: resolvedChatId };
 }
 
 export async function sendTypingTelegram(
