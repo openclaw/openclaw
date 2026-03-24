@@ -393,6 +393,13 @@ export async function monitorWebhook({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: {
+          at: Date.now(),
+          error: "abort signal received",
+        },
+      });
       cleanup();
       resolve();
     };
@@ -418,6 +425,14 @@ export async function monitorWebhook({
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: {
+          at: Date.now(),
+          error: String(err),
+        },
+        lastError: String(err),
+      });
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });
