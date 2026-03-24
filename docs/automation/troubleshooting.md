@@ -98,13 +98,14 @@ Common signatures:
 openclaw config get agents.defaults.heartbeat.activeHours
 openclaw config get agents.defaults.heartbeat.activeHours.timezone
 openclaw config get agents.defaults.userTimezone || echo "agents.defaults.userTimezone not set"
+openclaw config get agents.list
 openclaw cron list
 openclaw logs --follow
 ```
 
 Quick rules:
 
-- `Config path not found: agents.defaults.userTimezone` means the key is unset; heartbeat falls back to host timezone (or `activeHours.timezone` if set).
+- `Config path not found: agents.defaults.userTimezone` means the default key is unset; heartbeat still uses `agents.list[].userTimezone` for the active agent when present, otherwise falls back to host timezone (or `activeHours.timezone` if set).
 - Cron without `--tz` uses gateway host timezone.
 - Heartbeat `activeHours` uses configured timezone resolution (`user`, `local`, or explicit IANA tz).
 - Cron `at` schedules treat ISO timestamps without timezone as UTC unless you used CLI `--at "<offset-less-iso>" --tz <iana>`.

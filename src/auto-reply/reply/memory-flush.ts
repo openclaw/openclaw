@@ -60,9 +60,10 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
 export function resolveMemoryFlushRelativePathForRun(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  agentId?: string;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
+  const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs, params.agentId);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   return `memory/${dateStamp}.md`;
 }
@@ -71,15 +72,11 @@ export function resolveMemoryFlushPromptForRun(params: {
   prompt: string;
   cfg?: OpenClawConfig;
   nowMs?: number;
+  agentId?: string;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const { timeLine } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
-  const dateStamp = resolveMemoryFlushRelativePathForRun({
-    cfg: params.cfg,
-    nowMs,
-  })
-    .replace(/^memory\//, "")
-    .replace(/\.md$/, "");
+  const { userTimezone, timeLine } = resolveCronStyleNow(params.cfg ?? {}, nowMs, params.agentId);
+  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   const withDate = params.prompt.replaceAll("YYYY-MM-DD", dateStamp).trimEnd();
   if (!withDate) {
     return timeLine;

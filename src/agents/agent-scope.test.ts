@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentUserTimezone,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
@@ -21,6 +22,40 @@ import {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("resolveAgentUserTimezone", () => {
+  it("uses the per-agent override when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+        list: [{ id: "work", userTimezone: "America/Los_Angeles" }],
+      },
+    };
+
+    expect(resolveAgentUserTimezone(cfg, "work")).toBe("America/Los_Angeles");
+  });
+
+  it("falls back to the default agent timezone", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+        list: [{ id: "work" }],
+      },
+    };
+
+    expect(resolveAgentUserTimezone(cfg, "work")).toBe("America/New_York");
+  });
+
+  it("falls back to the system timezone when nothing is configured", () => {
+    const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
+
+    expect(resolveAgentUserTimezone({}, "work")).toBe(hostTimezone);
+  });
 });
 
 describe("resolveAgentConfig", () => {

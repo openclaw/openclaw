@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -6,7 +7,6 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
@@ -324,7 +324,7 @@ export async function runReplyAgent(params: {
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
     };
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const nextSessionFile = resolveSessionTranscriptPath(
       nextSessionId,
       agentId,
@@ -736,7 +736,12 @@ export async function runReplyAgent(params: {
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
         const workspaceDir = process.cwd();
-        readPostCompactionContext(workspaceDir, cfg)
+        readPostCompactionContext(
+          workspaceDir,
+          cfg,
+          undefined,
+          resolveSessionAgentId({ sessionKey, config: cfg }),
+        )
           .then((contextContent) => {
             if (contextContent) {
               enqueueSystemEvent(contextContent, { sessionKey });

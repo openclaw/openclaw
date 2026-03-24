@@ -838,7 +838,8 @@ Higher values preserve more visual detail.
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Default timezone for system prompt context and other user-time features. Per-agent override:
+`agents.list[].userTimezone`. Falls back to host timezone when neither is set.
 
 ```json5
 {
@@ -1409,6 +1410,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
+- `userTimezone`: optional IANA timezone override for this agent. Used before `agents.defaults.userTimezone` for prompt context, `session_status`, heartbeat `"user"` active-hours resolution, and `"user"` envelope/system-event timestamps.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.

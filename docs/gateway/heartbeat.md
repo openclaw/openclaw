@@ -233,7 +233,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
-  - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
+  - Omitted or `"user"`: uses the active agent's `agents.list[].userTimezone` if set, otherwise `agents.defaults.userTimezone`, then falls back to the host system timezone.
   - `"local"`: always uses the host system timezone.
   - Any IANA identifier (e.g. `America/New_York`): used directly; if invalid, falls back to the `"user"` behavior above.
   - `start` and `end` must not be equal for an active window; equal values are treated as zero-width (always outside the window).

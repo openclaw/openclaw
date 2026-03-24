@@ -5,6 +5,7 @@ import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
+  IanaTimezoneSchema,
   IdentitySchema,
   SecretInputSchema,
   ToolsLinksSchema,
@@ -773,6 +774,7 @@ export const AgentEntrySchema = z
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
+    userTimezone: IanaTimezoneSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

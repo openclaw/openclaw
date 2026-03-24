@@ -245,7 +245,7 @@ export async function processDiscordMessage(
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
   });
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg, { agentId: route.agentId });
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
     sessionKey: route.sessionKey,

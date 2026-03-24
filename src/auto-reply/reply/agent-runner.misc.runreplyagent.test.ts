@@ -8,6 +8,7 @@ import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
+import * as postCompactionContext from "./post-compaction-context.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -838,6 +839,105 @@ describe("runReplyAgent auto-compaction token update", () => {
     const queuedSystemEvents = peekSystemEvents(sessionKey);
     expect(queuedSystemEvents.some((event) => event.includes("Post-Compaction Audit"))).toBe(false);
     expect(queuedSystemEvents.some((event) => event.includes("WORKFLOW_AUTO.md"))).toBe(false);
+  });
+
+  it("uses the config-resolved default agent timezone for legacy main post-compaction context", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compact-default-agent-"));
+    const workspaceDir = path.join(tmp, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sessionFile = path.join(tmp, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ type: "message", message: { role: "assistant", content: [] } })}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10_000,
+      compactionCount: 0,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    const readPostCompactionContextSpy = vi
+      .spyOn(postCompactionContext, "readPostCompactionContext")
+      .mockResolvedValue(null);
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 11_000, output: 500, total: 11_500 },
+            lastCallUsage: { input: 10_500, output: 500, total: 11_000 },
+            compactionCount: 1,
+          },
+        },
+      };
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+          timeFormat: "12",
+          compaction: { memoryFlush: { enabled: false } },
+        },
+        list: [{ id: "work", default: true, userTimezone: "America/Los_Angeles" }],
+      },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const previousCwd = process.cwd();
+    process.chdir(workspaceDir);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-03T14:00:00.000Z"));
+      await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-5",
+        agentCfgContextTokens: 200_000,
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+      expect(readPostCompactionContextSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        config,
+        undefined,
+        "work",
+      );
+    } finally {
+      vi.useRealTimers();
+      process.chdir(previousCwd);
+      readPostCompactionContextSpy.mockRestore();
+    }
   });
 });
 

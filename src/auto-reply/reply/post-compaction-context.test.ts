@@ -250,6 +250,28 @@ Read WORKFLOW.md on startup.
     expect(result).toContain("Current time:");
   });
 
+  it("uses the per-agent userTimezone override when configured", async () => {
+    const content = `## Session Startup
+
+Read memory/YYYY-MM-DD.md on startup.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: {
+        defaults: { userTimezone: "America/New_York", timeFormat: "12" },
+        list: [{ id: "work", userTimezone: "America/Los_Angeles" }],
+      },
+    } as OpenClawConfig;
+    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
+    const result = await readPostCompactionContext(tmpDir, cfg, nowMs, "work");
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("memory/2026-03-03.md");
+    expect(result).toContain(
+      "Current time: Tuesday, March 3rd, 2026 — 6:00 AM (America/Los_Angeles) / 2026-03-03 14:00 UTC",
+    );
+  });
+
   // -------------------------------------------------------------------------
   // postCompactionSections config
   // -------------------------------------------------------------------------

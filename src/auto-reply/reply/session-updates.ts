@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveUserTimezone } from "../../agents/date-time.js";
+import { resolveAgentUserTimezone, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,7 +19,6 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -52,7 +51,7 @@ export async function drainFormattedSystemEvents(params: {
     return trimmed;
   };
 
-  const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
+  const resolveSystemEventTimezone = (cfg: OpenClawConfig, agentId?: string) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
     if (!raw) {
       return { mode: "local" as const };
@@ -67,19 +66,19 @@ export async function drainFormattedSystemEvents(params: {
     if (lowered === "user") {
       return {
         mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+        timeZone: resolveAgentUserTimezone(cfg, agentId),
       };
     }
     const explicit = resolveTimezone(raw);
     return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
   };
 
-  const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
+  const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig, agentId?: string) => {
     const date = new Date(ts);
     if (Number.isNaN(date.getTime())) {
       return "unknown-time";
     }
-    const zone = resolveSystemEventTimezone(cfg);
+    const zone = resolveSystemEventTimezone(cfg, agentId);
     if (zone.mode === "utc") {
       return formatUtcTimestamp(date, { displaySeconds: true });
     }
@@ -94,6 +93,7 @@ export async function drainFormattedSystemEvents(params: {
 
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   systemLines.push(
     ...queued
       .map((event) => {
@@ -101,7 +101,7 @@ export async function drainFormattedSystemEvents(params: {
         if (!compacted) {
           return null;
         }
-        return `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${compacted}`;
+        return `[${formatSystemEventTimestamp(event.ts, params.cfg, agentId)}] ${compacted}`;
       })
       .filter((v): v is string => Boolean(v)),
   );
@@ -333,7 +333,7 @@ function resolveCompactionSessionFile(params: {
   storePath?: string;
   newSessionId: string;
 }): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey });
   const pathOpts = resolveSessionFilePathOptions({
     agentId,
     storePath: params.storePath,

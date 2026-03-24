@@ -31,7 +31,8 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
-    resolveAgentIdFromSessionKey: () => "main",
+    resolveAgentIdFromSessionKey: (sessionKey: string | undefined) =>
+      typeof sessionKey === "string" && sessionKey.startsWith("agent:work:") ? "work" : "main",
     resolveExplicitAgentSessionKey: () => undefined,
     resolveAgentMainSessionKey: ({
       cfg,
@@ -58,7 +59,11 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: () => ["main"],
+  listAgentIds: () => ["main", "work"],
+  resolveSessionAgentId: (params: { sessionKey?: string }) =>
+    typeof params?.sessionKey === "string" && params.sessionKey.startsWith("agent:work:")
+      ? "work"
+      : "main",
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -566,6 +571,53 @@ describe("gateway agent handler", () => {
 
     const callArgs = mocks.agentCommand.mock.calls[0][0];
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+
+    resetTimeConfig();
+  });
+
+  it("uses the session agent timezone when agentId is omitted", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+        list: [
+          {
+            id: "work",
+            userTimezone: "America/Los_Angeles",
+          },
+        ],
+      },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:work:main",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "What time is it?",
+        sessionKey: "agent:work:main",
+        idempotencyKey: "test-timestamp-session-agent",
+      },
+      { reqId: "ts-session-agent" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+
+    const callArgs = mocks.agentCommand.mock.calls[0][0];
+    expect(callArgs.message).toBe("[Wed 2026-01-28 17:30 PST] What time is it?");
 
     resetTimeConfig();
   });

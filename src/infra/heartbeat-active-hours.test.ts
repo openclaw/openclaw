@@ -59,6 +59,28 @@ describe("isWithinActiveHours", () => {
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 23, 59, 0))).toBe(true);
   });
 
+  it("uses the per-agent userTimezone override for user-scoped windows", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+        },
+        list: [
+          {
+            id: "work",
+            userTimezone: "America/Los_Angeles",
+          },
+        ],
+      },
+    };
+    const heartbeat = heartbeatWindow("08:00", "10:00", "user");
+
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 16, 30, 0), "work")).toBe(true);
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 18, 30, 0), "work")).toBe(
+      false,
+    );
+  });
+
   it("supports overnight ranges", () => {
     const cfg = cfgWithUserTimezone("UTC");
     const heartbeat = heartbeatWindow("22:00", "06:00", "UTC");

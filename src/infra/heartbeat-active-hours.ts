@@ -1,26 +1,22 @@
-import { resolveUserTimezone } from "../agents/date-time.js";
+import { resolveAgentUserTimezone } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import { resolveTimezone } from "./format-time/format-datetime.ts";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
-function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
+function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string, agentId?: string): string {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+    return resolveAgentUserTimezone(cfg, agentId);
   }
   if (trimmed === "local") {
     const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
     return host?.trim() || "UTC";
   }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
-  } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
+  return resolveTimezone(trimmed) ?? resolveAgentUserTimezone(cfg, agentId);
 }
 
 function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
@@ -71,6 +67,7 @@ export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
   nowMs?: number,
+  agentId?: string,
 ): boolean {
   const active = heartbeat?.activeHours;
   if (!active) {
@@ -86,7 +83,7 @@ export function isWithinActiveHours(
     return false;
   }
 
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
+  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone, agentId);
   const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
   if (currentMin === null) {
     return true;

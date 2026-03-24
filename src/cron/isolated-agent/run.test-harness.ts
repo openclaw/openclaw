@@ -54,6 +54,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
     resolveAgentConfig: resolveAgentConfigMock,
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
     resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
+    resolveAgentUserTimezone: vi.fn().mockReturnValue("UTC"),
     resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
     resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
     resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,

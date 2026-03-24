@@ -11,6 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveUserTimezone } from "./date-time.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
@@ -154,6 +155,11 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentUserTimezone(cfg: OpenClawConfig, agentId?: string): string {
+  const overrides = agentId ? resolveAgentEntry(cfg, agentId)?.userTimezone : undefined;
+  return resolveUserTimezone(overrides ?? cfg.agents?.defaults?.userTimezone);
 }
 
 export function resolveAgentSkillsFilter(

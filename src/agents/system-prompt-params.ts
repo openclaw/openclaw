@@ -2,12 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { findGitRoot } from "../infra/git-root.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-  type ResolvedTimeFormat,
-} from "./date-time.js";
+import { resolveAgentUserTimezone } from "./agent-scope.js";
+import { formatUserTime, resolveUserTimeFormat, type ResolvedTimeFormat } from "./date-time.js";
 
 export type RuntimeInfoInput = {
   agentId?: string;
@@ -44,7 +40,7 @@ export function buildSystemPromptParams(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
   });
-  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+  const userTimezone = resolveAgentUserTimezone(params.config ?? {}, params.agentId);
   const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return {

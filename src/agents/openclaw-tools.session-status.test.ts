@@ -276,6 +276,45 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("uses the per-agent userTimezone override in the status time line", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-16T15:00:00.000Z"));
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: {},
+            userTimezone: "America/New_York",
+            timeFormat: "12",
+          },
+          list: [{ id: "support", userTimezone: "America/Los_Angeles" }],
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+      resetSessionStore({
+        main: {
+          sessionId: "s1",
+          updatedAt: 10,
+        },
+      });
+
+      const tool = getSessionStatusTool("agent:support:main");
+
+      const result = await tool.execute("call-timezone", { sessionKey: "main" });
+      const details = result.details as { ok?: boolean; statusText?: string };
+      expect(details.ok).toBe(true);
+      expect(details.statusText).toContain(
+        "🕒 Time: Monday, February 16th, 2026 — 7:00 AM (America/Los_Angeles)",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },

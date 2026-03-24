@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -420,7 +420,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     // formatting in a separate code path — they never reach this handler.
     // See: https://github.com/moltbot/moltbot/issues/3658
     if (!skipTimestampInjection) {
-      message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+      const resolvedAgentId = resolveSessionAgentId({
+        sessionKey: requestedSessionKey,
+        config: cfg,
+      });
+      message = injectTimestamp(message, timestampOptsFromConfig(cfg, resolvedAgentId));
     }
 
     if (requestedSessionKey) {

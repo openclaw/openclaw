@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { formatZonedTimestamp } from "./format-time/format-datetime.ts";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
   drainSystemEventEntries,
@@ -182,6 +183,76 @@ describe("system events (session routing)", () => {
     });
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
+  });
+
+  it("uses the per-agent userTimezone override for user envelope timestamps", async () => {
+    const key = "agent:work:main";
+    const cfg = {
+      agents: {
+        defaults: {
+          envelopeTimezone: "user",
+          userTimezone: "America/New_York",
+        },
+        list: [{ id: "work", userTimezone: "America/Los_Angeles" }],
+      },
+    } as OpenClawConfig;
+    const timestamp = new Date("2026-01-12T20:19:17Z");
+    const expectedTimestamp = formatZonedTimestamp(timestamp, {
+      timeZone: "America/Los_Angeles",
+      displaySeconds: true,
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(timestamp);
+      enqueueSystemEvent("Model switched.", { sessionKey: key });
+
+      const result = await drainFormattedSystemEvents({
+        cfg,
+        sessionKey: key,
+        isMainSession: false,
+        isNewSession: false,
+      });
+
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the config-resolved default agent timezone for legacy main session keys", async () => {
+    const key = "main";
+    const cfg = {
+      agents: {
+        defaults: {
+          envelopeTimezone: "user",
+          userTimezone: "America/New_York",
+        },
+        list: [{ id: "work", default: true, userTimezone: "America/Los_Angeles" }],
+      },
+    } as OpenClawConfig;
+    const timestamp = new Date("2026-01-12T20:19:17Z");
+    const expectedTimestamp = formatZonedTimestamp(timestamp, {
+      timeZone: "America/Los_Angeles",
+      displaySeconds: true,
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(timestamp);
+      enqueueSystemEvent("Model switched.", { sessionKey: key });
+
+      const result = await drainFormattedSystemEvents({
+        cfg,
+        sessionKey: key,
+        isMainSession: true,
+        isNewSession: false,
+      });
+
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

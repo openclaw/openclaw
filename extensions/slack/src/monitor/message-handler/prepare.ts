@@ -601,7 +601,7 @@ export async function prepareSlackMessage(params: {
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });
-  const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg, { agentId: route.agentId });
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
     sessionKey,

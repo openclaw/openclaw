@@ -466,9 +466,13 @@ export async function runMemoryFlushIfNeeded(params: {
   }
   let memoryCompactionCompleted = false;
   const memoryFlushNowMs = Date.now();
+  const agentIdForFlush = params.sessionKey
+    ? resolveAgentIdFromSessionKey(params.sessionKey)
+    : undefined;
   const memoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
     cfg: params.cfg,
     nowMs: memoryFlushNowMs,
+    agentId: agentIdForFlush,
   });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
@@ -502,6 +506,7 @@ export async function runMemoryFlushIfNeeded(params: {
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
             nowMs: memoryFlushNowMs,
+            agentId: agentIdForFlush,
           }),
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,

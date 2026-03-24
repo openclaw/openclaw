@@ -11,6 +11,7 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  IanaTimezoneSchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
@@ -44,7 +45,7 @@ export const AgentDefaultsSchema = z
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
-    userTimezone: z.string().optional(),
+    userTimezone: IanaTimezoneSchema.optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),

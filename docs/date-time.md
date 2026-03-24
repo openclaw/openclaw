@@ -37,7 +37,7 @@ You can override this behavior:
 
 - `envelopeTimezone: "utc"` uses UTC.
 - `envelopeTimezone: "local"` uses the host timezone.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
+- `envelopeTimezone: "user"` uses the active agent's `agents.list[].userTimezone` when set, otherwise `agents.defaults.userTimezone`, then falls back to the host timezone.
 - Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
 - `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
 - `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
@@ -97,8 +97,29 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 }
 ```
 
-- `userTimezone` sets the **user-local timezone** for prompt context.
+- `agents.defaults.userTimezone` sets the default **user-local timezone** for prompt context.
+- `agents.list[].userTimezone` overrides that default for a specific agent.
 - `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
+
+### Per-agent override example
+
+```json5
+{
+  agents: {
+    defaults: {
+      userTimezone: "America/Chicago",
+    },
+    list: [
+      {
+        id: "work",
+        userTimezone: "Europe/London",
+      },
+    ],
+  },
+}
+```
+
+In that config, the default agent uses `America/Chicago`, while the `work` agent uses `Europe/London` for prompt context, `session_status`, heartbeat `"user"` windows, and envelope/system-event timestamps when `envelopeTimezone: "user"` is selected.
 
 ## Time format detection (auto)
 
