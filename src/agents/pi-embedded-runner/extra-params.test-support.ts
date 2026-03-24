@@ -20,6 +20,7 @@ type RunExtraParamsCaseParams<
   options?: SimpleStreamOptions;
   payload: TPayload;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  agentId?: string;
 };
 
 export function runExtraParamsCase<
@@ -44,6 +45,7 @@ export function runExtraParamsCase<
     params.applyModelId ?? params.model.id,
     undefined,
     params.thinkingLevel,
+    params.agentId,
   );
 
   const context: Context = { messages: [] };

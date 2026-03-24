@@ -201,6 +201,18 @@ function createParallelToolCallsWrapper(
   };
 }
 
+function createAgentIdHeaderWrapper(baseStreamFn: StreamFn | undefined, agentId: string): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "X-OpenClaw-Agent": agentId,
+      },
+    });
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
@@ -369,6 +381,14 @@ export function applyExtraParamsToAgent(
           ? rawParallelToolCalls
           : typeof rawParallelToolCalls;
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+    }
+  }
+
+  if (agentId) {
+    const providerConfig = cfg?.models?.providers?.[provider];
+    if (providerConfig?.injectAgentHeader === true) {
+      log.debug(`injecting X-OpenClaw-Agent header for ${provider}/${modelId}: ${agentId}`);
+      agent.streamFn = createAgentIdHeaderWrapper(agent.streamFn, agentId);
     }
   }
 }
