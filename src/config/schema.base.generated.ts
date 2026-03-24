@@ -10928,6 +10928,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           enabled: {
             type: "boolean",
           },
+          learningBridge: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              outputDir: {
+                type: "string",
+              },
+              maxPackagesPerDay: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -13593,6 +13610,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Research Enabled",
       help: "Master toggle for research primitives such as event emission, trajectory export, and replay/control endpoints (default: false). Keep off unless you intentionally run research workflows.",
       tags: ["advanced"],
+    },
+    "research.learningBridge": {
+      label: "Learning Bridge",
+      help: "Opt-in learning bridge: local reward tagging and `rl-feed/` export for OpenClaw-RL-style trainers. Requires `research.enabled` (default: off).",
+      tags: ["advanced"],
+    },
+    "research.learningBridge.enabled": {
+      label: "Learning Bridge Enabled",
+      help: "When true (and research is enabled), classifies research events and writes slime-compatible `rl-feed/` artifacts at run end under the configured output directory (default: false).",
+      tags: ["advanced"],
+    },
+    "research.learningBridge.outputDir": {
+      label: "Learning Bridge RL Feed Output Directory",
+      help: "Optional absolute path for the `rl-feed/` root. Must stay under the OpenClaw state directory. Defaults to `<stateDir>/rl-feed`.",
+      tags: ["storage"],
+    },
+    "research.learningBridge.maxPackagesPerDay": {
+      label: "Learning Bridge Max Packages Per Day",
+      help: "Optional soft cap for RL feed packages per day (reserved for future enforcement; v1 does not rate-limit).",
+      tags: ["performance"],
     },
     "memory.backend": {
       label: "Memory Backend",

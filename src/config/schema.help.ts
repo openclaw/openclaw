@@ -860,6 +860,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Research feature gate for experimental telemetry/export/replay surfaces. Keep this disabled in normal product use so no research artifacts or listeners are activated unless explicitly requested.",
   "research.enabled":
     "Master toggle for research primitives such as event emission, trajectory export, and replay/control endpoints (default: false). Keep off unless you intentionally run research workflows.",
+  "research.learningBridge":
+    "Opt-in learning bridge: local reward tagging and `rl-feed/` export for OpenClaw-RL-style trainers. Requires `research.enabled` (default: off).",
+  "research.learningBridge.enabled":
+    "When true (and research is enabled), classifies research events and writes slime-compatible `rl-feed/` artifacts at run end under the configured output directory (default: false).",
+  "research.learningBridge.outputDir":
+    "Optional absolute path for the `rl-feed/` root. Must stay under the OpenClaw state directory. Defaults to `<stateDir>/rl-feed`.",
+  "research.learningBridge.maxPackagesPerDay":
+    "Optional soft cap for RL feed packages per day (reserved for future enforcement; v1 does not rate-limit).",
   memory: "Memory backend configuration (global).",
   "memory.backend":
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',

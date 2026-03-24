@@ -58807,6 +58807,62 @@
       "hasChildren": false
     },
     {
+      "path": "research.learningBridge",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Learning Bridge",
+      "help": "Opt-in learning bridge: local reward tagging and `rl-feed/` export for OpenClaw-RL-style trainers. Requires `research.enabled` (default: off).",
+      "hasChildren": true
+    },
+    {
+      "path": "research.learningBridge.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Learning Bridge Enabled",
+      "help": "When true (and research is enabled), classifies research events and writes slime-compatible `rl-feed/` artifacts at run end under the configured output directory (default: false).",
+      "hasChildren": false
+    },
+    {
+      "path": "research.learningBridge.maxPackagesPerDay",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Learning Bridge Max Packages Per Day",
+      "help": "Optional soft cap for RL feed packages per day (reserved for future enforcement; v1 does not rate-limit).",
+      "hasChildren": false
+    },
+    {
+      "path": "research.learningBridge.outputDir",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Learning Bridge RL Feed Output Directory",
+      "help": "Optional absolute path for the `rl-feed/` root. Must stay under the OpenClaw state directory. Defaults to `<stateDir>/rl-feed`.",
+      "hasChildren": false
+    },
+    {
       "path": "secrets",
       "kind": "core",
       "type": "object",

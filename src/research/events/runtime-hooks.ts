@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ResearchEventV1 } from "./types.js";
-import { createEventsWriter } from "./writer.js";
+import { exportLearningBridgeRun } from "../../learning-bridge/index.js";
+import { redactEvent } from "./redaction.js";
+import { ResearchEventV1Schema, type ResearchEventV1 } from "./types.js";
+import { createEventsWriter, isLearningBridgeEnabled } from "./writer.js";
 
 export type ResearchRunContext = {
   runId: string;
@@ -44,6 +46,10 @@ export function createResearchRunContext(params: {
     agentId: params.agentId,
   });
 
+  const learningBridgeBuffer: ResearchEventV1[] | null = isLearningBridgeEnabled(params.cfg)
+    ? []
+    : null;
+
   const ctx: ResearchRunContext = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -54,10 +60,23 @@ export function createResearchRunContext(params: {
       if (!writer.enabled) {
         return;
       }
-      await writer.emit(toEvent(ctx, event));
+      const e = toEvent(ctx, event);
+      await writer.emit(e);
+      if (learningBridgeBuffer) {
+        learningBridgeBuffer.push(redactEvent(ResearchEventV1Schema.parse(e)));
+      }
     },
     close: async () => {
       await writer.close();
+      if (learningBridgeBuffer && learningBridgeBuffer.length > 0) {
+        await exportLearningBridgeRun({
+          cfg: params.cfg,
+          runId: params.runId,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+          events: learningBridgeBuffer,
+        });
+      }
     },
   };
   return ctx;

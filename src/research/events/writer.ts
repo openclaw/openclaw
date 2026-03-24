@@ -49,6 +49,11 @@ export function isResearchEnabled(cfg?: OpenClawConfig): boolean {
   return cfg?.research?.enabled === true;
 }
 
+/** Learning bridge RL-feed export: requires research + nested gate (no timers; see runtime hook on run close). */
+export function isLearningBridgeEnabled(cfg?: OpenClawConfig): boolean {
+  return cfg?.research?.enabled === true && cfg?.research?.learningBridge?.enabled === true;
+}
+
 export function getResearchPolicy(cfg?: OpenClawConfig): ResearchPolicy {
   const ttlDaysEnv = Number.parseInt(process.env.OPENCLAW_RESEARCH_TTL_DAYS ?? "", 10);
   const maxBytesEnv = Number.parseInt(process.env.OPENCLAW_RESEARCH_MAX_BYTES ?? "", 10);

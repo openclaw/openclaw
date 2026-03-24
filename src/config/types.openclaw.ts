@@ -123,6 +123,14 @@ export type OpenClawConfig = {
   research?: {
     /** Master gate for research surfaces (events/export/replay). */
     enabled?: boolean;
+    /** Opt-in learning bridge: reward tagging + local `rl-feed/` export (requires `enabled`). */
+    learningBridge?: {
+      enabled?: boolean;
+      /** Absolute or user-relative directory root for `rl-feed/` (default: `<stateDir>/rl-feed`). */
+      outputDir?: string;
+      /** Soft cap for packages emitted per calendar day (optional; not enforced in v1). */
+      maxPackagesPerDay?: number;
+    };
   };
   memory?: MemoryConfig;
   mcp?: McpConfig;

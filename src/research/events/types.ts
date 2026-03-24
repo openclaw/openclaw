@@ -1,5 +1,20 @@
 import { z } from "zod";
 
+export const RewardSignalKindSchema = z.enum(["binary", "directional", "combined"]);
+
+export const RewardSignalSchema = z
+  .object({
+    kind: RewardSignalKindSchema,
+    source: z.enum(["user_explicit", "user_implicit", "env_outcome", "approval_decision"]),
+    confidence: z.number().min(0).max(1),
+    scalar: z.number().min(-1).max(1).optional(),
+    hintText: z.string().optional(),
+  })
+  .strict();
+
+export type RewardSignal = z.infer<typeof RewardSignalSchema>;
+export type RewardSignalKind = z.infer<typeof RewardSignalKindSchema>;
+
 const ResearchEventBaseSchema = z
   .object({
     v: z.literal(1),
@@ -9,6 +24,12 @@ const ResearchEventBaseSchema = z
     sessionKey: z.string().min(1).optional(),
     agentId: z.string().min(1),
     kind: z.string().min(1),
+    /** Tagged by the learning-bridge reward classifier (not written to JSONL in v1 unless explicitly emitted). */
+    reward: RewardSignalSchema.optional(),
+    /** Reserved for PR10B+ hive flows; must remain unset in PR10A. */
+    hiveEligible: z.boolean().optional(),
+    /** Reserved for PR10B+ hive flows; must remain unset in PR10A. */
+    hiveContributionId: z.string().optional(),
   })
   .strict();
 
