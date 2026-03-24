@@ -330,13 +330,14 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                     />
                   </div>
-                  ${
-                    safeExternalHref(skill.homepage)
+                  ${(() => {
+                    const href = safeExternalHref(skill.homepage);
+                    return href
                       ? html`<div class="muted" style="font-size: 13px;">
-                        Get your key: <a href="${safeExternalHref(skill.homepage)}" target="_blank" rel="noopener noreferrer">${skill.homepage}</a>
+                        Get your key: <a href="${href}" target="_blank" rel="noopener noreferrer">${skill.homepage}</a>
                       </div>`
-                      : nothing
-                  }
+                      : nothing;
+                  })()}
                   <button
                     class="btn primary"
                     ?disabled=${busy}
