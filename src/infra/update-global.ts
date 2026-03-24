@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
 import { pathExists } from "../utils.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
@@ -16,14 +17,6 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
-const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
-  "dist/extensions/whatsapp/light-runtime-api.js",
-  "dist/extensions/whatsapp/runtime-api.js",
-  "dist/extensions/matrix/helper-api.js",
-  "dist/extensions/matrix/runtime-api.js",
-  "dist/extensions/matrix/thread-bindings-runtime.js",
-  "dist/extensions/msteams/runtime-api.js",
-] as const;
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
@@ -83,7 +76,7 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  for (const relativePath of REQUIRED_BUNDLED_RUNTIME_SIDECARS) {
+  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
     if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
       errors.push(`missing bundled runtime sidecar ${relativePath}`);
     }
