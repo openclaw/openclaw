@@ -1,9 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../src/config/config.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+
+const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
   const buildContext = async (message: Record<string, unknown>) =>
@@ -112,6 +121,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 describe("buildTelegramMessageContext direct peer routing", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    recordInboundSessionMock.mockClear();
   });
 
   it("isolates dm sessions by sender id when chat id differs", async () => {
