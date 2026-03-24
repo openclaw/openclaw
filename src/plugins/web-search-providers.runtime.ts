@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isRecord } from "../utils.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
@@ -97,6 +99,35 @@ function buildWebSearchSnapshotCacheKey(params: {
   });
 }
 
+function pluginManifestDeclaresWebSearch(record: PluginManifestRecord): boolean {
+  const configUiHintKeys = Object.keys(record.configUiHints ?? {});
+  if (configUiHintKeys.some((key) => key === "webSearch" || key.startsWith("webSearch."))) {
+    return true;
+  }
+  if (!isRecord(record.configSchema)) {
+    return false;
+  }
+  const properties = record.configSchema.properties;
+  return isRecord(properties) && "webSearch" in properties;
+}
+
+function resolveWebSearchCandidatePluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] | undefined {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const ids = registry.plugins
+    .filter(pluginManifestDeclaresWebSearch)
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  return ids.length > 0 ? ids : undefined;
+}
+
 export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -129,12 +160,18 @@ export function resolvePluginWebSearchProviders(params: {
     ...params,
     env,
   });
+  const onlyPluginIds = resolveWebSearchCandidatePluginIds({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,
     env,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
+    ...(onlyPluginIds ? { onlyPluginIds } : {}),
     logger: createPluginLoaderLogger(log),
   });
 

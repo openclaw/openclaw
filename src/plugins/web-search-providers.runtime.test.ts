@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
+type ManifestRegistryModule = typeof import("./manifest-registry.js");
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -17,6 +18,7 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
 ] as const;
 
 let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
+let loadPluginManifestRegistryMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
@@ -74,6 +76,39 @@ describe("resolvePluginWebSearchProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
+    const manifestRegistryModule = await import("./manifest-registry.js");
+    loadPluginManifestRegistryMock = vi
+      .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
+      .mockReturnValue({
+        plugins: [
+          {
+            id: "brave",
+            origin: "bundled",
+            rootDir: "/tmp/brave",
+            source: "/tmp/brave/index.js",
+            manifestPath: "/tmp/brave/openclaw.plugin.json",
+            channels: [],
+            providers: [],
+            skills: [],
+            hooks: [],
+            configUiHints: { "webSearch.apiKey": { label: "key" } },
+          },
+          {
+            id: "noise",
+            origin: "bundled",
+            rootDir: "/tmp/noise",
+            source: "/tmp/noise/index.js",
+            manifestPath: "/tmp/noise/openclaw.plugin.json",
+            channels: [],
+            providers: [],
+            skills: [],
+            hooks: [],
+            configUiHints: { unrelated: { label: "nope" } },
+          },
+        ],
+      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (...args: any[]) => infer R
+        ? R
+        : never);
     const loaderModule = await import("./loader.js");
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
@@ -109,6 +144,17 @@ describe("resolvePluginWebSearchProviders", () => {
       "tavily:tavily",
     ]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes plugin loading to manifest-declared web-search candidates", () => {
+    resolvePluginWebSearchProviders({});
+
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["brave"],
+      }),
+    );
   });
 
   it("memoizes snapshot provider resolution for the same config and env", () => {
