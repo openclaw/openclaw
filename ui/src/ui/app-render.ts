@@ -1529,35 +1529,51 @@ export function renderApp(state: AppViewState) {
                 flex-direction: column;
               "
             >
-              ${
-                state.activeClawTool === "images"
-                  ? html`
-                <claw-image-panel
-                  .enabled=${state.showClawComputer}
-                  .activeTool=${state.activeClawTool}
-                  .imageUrl=${debugImageUrl}
-                  @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
-                  @close=${() => state.toggleClawComputer()}
-                  @float=${() => state.setClawComputerWidth(0)}
-                  @dock=${() => state.setClawComputerWidth(600)}
-                  style="flex: 1; min-height: 0;"
-                ></claw-image-panel>
-              `
-                  : html`
-                <claw-computer-panel
-                  .enabled=${state.showClawComputer}
-                  .activeTool=${state.activeClawTool}
-                  .vncUrl=${state.settings.vncWsUrl}
-                  .vncTarget=${state.settings.vncTarget}
-                  .password=${state.settings.vncPassword}
-                  @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
-                  @close=${() => state.toggleClawComputer()}
-                  @float=${() => state.setClawComputerWidth(0)}
-                  @dock=${() => state.setClawComputerWidth(600)}
-                  style="flex: 1; min-height: 0;"
-                ></claw-computer-panel>
-              `
-              }
+              ${(() => {
+                switch (state.activeClawTool) {
+                  case "images":
+                    return html`
+                      <claw-image-panel
+                        .enabled=${state.showClawComputer}
+                        .activeTool=${state.activeClawTool}
+                        .imageUrl=${debugImageUrl}
+                        @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
+                        @close=${() => state.toggleClawComputer()}
+                        @float=${() => state.setClawComputerWidth(0)}
+                        @dock=${() => state.setClawComputerWidth(600)}
+                        style="flex: 1; min-height: 0;"
+                      ></claw-image-panel>
+                    `;
+                  case "browser":
+                    return html`
+                      <claw-browser-panel
+                        .enabled=${state.showClawComputer}
+                        .activeTool=${state.activeClawTool}
+                        .gatewayUrl=${state.settings.gatewayUrl}
+                        @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
+                        @close=${() => state.toggleClawComputer()}
+                        @float=${() => state.setClawComputerWidth(0)}
+                        @dock=${() => state.setClawComputerWidth(600)}
+                        style="flex: 1; min-height: 0;"
+                      ></claw-browser-panel>
+                    `;
+                  default:
+                    return html`
+                      <claw-computer-panel
+                        .enabled=${state.showClawComputer}
+                        .activeTool=${state.activeClawTool}
+                        .vncUrl=${state.settings.vncWsUrl}
+                        .vncTarget=${state.settings.vncTarget}
+                        .password=${state.settings.vncPassword}
+                        @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
+                        @close=${() => state.toggleClawComputer()}
+                        @float=${() => state.setClawComputerWidth(0)}
+                        @dock=${() => state.setClawComputerWidth(600)}
+                        style="flex: 1; min-height: 0;"
+                      ></claw-computer-panel>
+                    `;
+                }
+              })()}
             </div>
           </div>
         `
