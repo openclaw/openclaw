@@ -18,14 +18,18 @@ jobs:
       group: railway-deploy
       cancel-in-progress: true
     steps:
-      - name: Validate and fetch the triggering commit
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate the triggering commit is on main
         env:
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           echo "Docker Release completed for SHA: ${WORKFLOW_SHA}"
           # Verify the SHA is on main before deploying.
           # Guards against force-pushes rewriting history after the workflow started.
-          git fetch --depth=1 origin "${WORKFLOW_SHA}"
           git branch -a --contains "${WORKFLOW_SHA}" | grep -q "main" \
             && echo "SHA ${WORKFLOW_SHA} confirmed on main — proceeding" \
             || { echo "SHA not on main — skipping stale trigger"; exit 0; }
