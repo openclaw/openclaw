@@ -72,7 +72,7 @@ fi
 
 mkdir -p "$(dirname "$out")"
 
-curl -sS https://api.openai.com/v1/audio/transcriptions \
+curl -sS "${OPENAI_BASE_URL:-https://api.openai.com/v1}/audio/transcriptions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Accept: application/json" \
   -F "file=@${in}" \
