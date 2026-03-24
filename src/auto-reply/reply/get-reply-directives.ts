@@ -6,6 +6,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { inferChannelFromSessionKey } from "../../routing/session-key-channel.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -333,7 +334,10 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.BodyStripped = cleanedBody;
 
   const messageProviderKey =
-    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
+    sessionCtx.Provider?.trim().toLowerCase() ??
+    ctx.Provider?.trim().toLowerCase() ??
+    inferChannelFromSessionKey(ctx.SessionKey) ??
+    "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,

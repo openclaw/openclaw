@@ -12,6 +12,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { inferChannelFromSessionKey } from "../routing/session-key-channel.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -120,10 +121,12 @@ function resolveActiveChannel(params: {
   if (normalized) {
     return normalized;
   }
-  return inferProviderFromSessionKey({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
+  return (
+    inferProviderFromSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    }) ?? inferChannelFromSessionKey(params.sessionKey)
+  );
 }
 
 export async function sandboxExplainCommand(
