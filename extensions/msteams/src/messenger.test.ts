@@ -99,6 +99,8 @@ const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
   continueConversation: async (_appId, _reference, logic) => {
     await logic({
       sendActivity: createRecordedSendActivity(proactiveSent),
+      updateActivity: noopUpdateActivity,
+      deleteActivity: noopDeleteActivity,
     });
   },
   process: async () => {},
@@ -175,6 +177,8 @@ describe("msteams messenger", () => {
           }
           throw new TypeError(REVOCATION_ERROR);
         },
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
     }
 
@@ -191,6 +195,8 @@ describe("msteams messenger", () => {
       const sent: string[] = [];
       const ctx = {
         sendActivity: createRecordedSendActivity(sent),
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
       const adapter = createNoopAdapter();
 
@@ -215,6 +221,8 @@ describe("msteams messenger", () => {
           seen.reference = reference;
           await logic({
             sendActivity: createRecordedSendActivity(seen.texts),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
           });
         },
         process: async () => {},
@@ -253,6 +261,8 @@ describe("msteams messenger", () => {
             sent.push(activity as { text?: string; entities?: unknown[] });
             return { id: "id:one" };
           },
+          updateActivity: noopUpdateActivity,
+          deleteActivity: noopDeleteActivity,
         };
 
         const adapter = createNoopAdapter();
@@ -304,6 +314,8 @@ describe("msteams messenger", () => {
 
       const ctx = {
         sendActivity: createRecordedSendActivity(attempts, 429),
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
       const adapter = createNoopAdapter();
 
@@ -328,6 +340,8 @@ describe("msteams messenger", () => {
         sendActivity: async () => {
           throw Object.assign(new Error("bad request"), { statusCode: 400 });
         },
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
 
       const adapter = createNoopAdapter();
@@ -389,7 +403,11 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, _reference, logic) => {
-          await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
+          await logic({
+            sendActivity: createRecordedSendActivity(attempts, 503),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
         },
         process: async () => {},
         updateActivity: noopUpdateActivity,
@@ -425,6 +443,8 @@ describe("msteams messenger", () => {
               batchTexts.push(text ?? "");
               return { id: `id:${text ?? ""}` };
             },
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
           });
           conversationCallTexts.push(batchTexts);
         },
