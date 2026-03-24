@@ -146,6 +146,21 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
+  it("scopes DM channel resolution cache by token identity", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("user:UABC123", "first", {
+      token: "xoxb-test-a",
+      client,
+    });
+    await sendMessageSlack("user:UABC123", "second", {
+      token: "xoxb-test-b",
+      client,
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledTimes(2);
+  });
+
   it("sends file directly to channel without conversations.open", async () => {
     const client = createUploadTestClient();
 

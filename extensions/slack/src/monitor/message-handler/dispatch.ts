@@ -441,7 +441,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (!next.changed) {
         return;
       }
-        draftStream?.update(next.rendered);
+      draftStream?.update(next.rendered);
       hasStreamedMessage = true;
       return;
     }
@@ -451,26 +451,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (statusUpdateCount > 1 && statusUpdateCount % 4 !== 0) {
         return;
       }
-        draftStream?.update(buildStatusFinalPreviewText(statusUpdateCount));
+      draftStream?.update(buildStatusFinalPreviewText(statusUpdateCount));
       hasStreamedMessage = true;
       return;
     }
 
-      draftStream?.update(trimmed);
-      hasStreamedMessage = true;
-    };
-    const onDraftBoundary =
-      !shouldUseDraftStream
-        ? undefined
-        : async () => {
-            if (hasStreamedMessage) {
-              draftStream?.forceNewMessage();
-              hasStreamedMessage = false;
-              appendRenderedText = "";
-              appendSourceText = "";
-            statusUpdateCount = 0;
-          }
-        };
+    draftStream?.update(trimmed);
+    hasStreamedMessage = true;
+  };
+  const onDraftBoundary = !shouldUseDraftStream
+    ? undefined
+    : async () => {
+        if (hasStreamedMessage) {
+          draftStream?.forceNewMessage();
+          hasStreamedMessage = false;
+          appendRenderedText = "";
+          appendSourceText = "";
+          statusUpdateCount = 0;
+        }
+      };
 
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,

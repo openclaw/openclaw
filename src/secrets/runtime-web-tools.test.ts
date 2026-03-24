@@ -686,6 +686,44 @@ describe("runtime web tools resolution", () => {
     expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
   });
 
+  it("keeps configured provider metadata and inactive warnings when search is disabled", async () => {
+    const { metadata, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.providerConfigured).toBe("gemini");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("uses env fallback for unresolved Firecrawl SecretRef when active", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({

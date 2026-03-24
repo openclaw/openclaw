@@ -170,10 +170,18 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackDmCacheKey(params: {
+  accountId?: string;
+  token: string;
+  recipientId: string;
+}): string {
+  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
-  accountId?: string,
+  params: { accountId?: string; token: string },
 ): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
   // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
   // target string had no explicit prefix (parseSlackTarget defaults bare IDs
@@ -185,8 +193,12 @@ async function resolveChannelId(
   if (!isUserId) {
     return { channelId: recipient.id };
   }
-  const cacheKey = accountId ? `${accountId}:${recipient.id}` : undefined;
-  const cachedChannelId = cacheKey ? slackDmChannelCache.get(cacheKey) : undefined;
+  const cacheKey = createSlackDmCacheKey({
+    accountId: params.accountId,
+    token: params.token,
+    recipientId: recipient.id,
+  });
+  const cachedChannelId = slackDmChannelCache.get(cacheKey);
   if (cachedChannelId) {
     return { channelId: cachedChannelId, isDm: true, cacheHit: true };
   }
@@ -195,9 +207,7 @@ async function resolveChannelId(
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  if (cacheKey) {
-    slackDmChannelCache.set(cacheKey, channelId);
-  }
+  slackDmChannelCache.set(cacheKey, channelId);
   return { channelId, isDm: true, cacheHit: false };
 }
 
@@ -292,7 +302,10 @@ export async function sendMessageSlack(
   });
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(client, recipient, account.accountId);
+  const { channelId } = await resolveChannelId(client, recipient, {
+    accountId: account.accountId,
+    token,
+  });
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");

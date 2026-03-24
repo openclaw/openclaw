@@ -123,13 +123,16 @@ export function resolvePreparedExtraParams(params: {
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
   agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
 }): Record<string, unknown> {
-  const resolvedExtraParams = resolveExtraParams({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
+  const resolvedExtraParams =
+    params.resolvedExtraParams ??
+    resolveExtraParams({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const override =
     params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
       ? Object.fromEntries(
@@ -297,6 +300,7 @@ export function applyExtraParamsToAgent(
     extraParamsOverride,
     thinkingLevel,
     agentId,
+    resolvedExtraParams,
   });
 
   if (provider === "openai" || provider === "openai-codex") {

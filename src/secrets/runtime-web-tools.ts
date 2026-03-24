@@ -306,26 +306,24 @@ export async function resolveRuntimeWebTools(params: {
 
   const searchEnabled = search?.enabled !== false;
   const providers = sortWebSearchProvidersForAutoDetect(
-    searchEnabled
-      ? configuredBundledPluginId
+    configuredBundledPluginId
+      ? resolveBundledPluginWebSearchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledPluginId],
+        })
+      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
         ? resolveBundledPluginWebSearchProviders({
             config: params.sourceConfig,
             env: { ...process.env, ...params.context.env },
             bundledAllowlistCompat: true,
-            onlyPluginIds: [configuredBundledPluginId],
           })
-        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-          ? resolveBundledPluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-          : resolvePluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-      : [],
+        : resolvePluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          }),
   );
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
