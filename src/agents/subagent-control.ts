@@ -645,6 +645,15 @@ export async function steerControlledSubagentRun(params: {
       error: "Subagents cannot steer themselves.",
     };
   }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done",
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
+    };
+  }
 
   const rateKey = `${params.controller.callerSessionKey}:${params.entry.childSessionKey}`;
   if (process.env.VITEST !== "true") {

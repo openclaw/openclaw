@@ -292,4 +292,41 @@ describe("steerControlledSubagentRun", () => {
       replaceSpy.mockRestore();
     }
   });
+
+  it("rejects steering runs that are no longer tracked in the registry", async () => {
+    __testing.setDepsForTest({
+      callGateway: async () => {
+        throw new Error("gateway should not be called");
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale",
+        childSessionKey: "agent:main:subagent:stale-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "updated direction",
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale",
+      sessionKey: "agent:main:subagent:stale-worker",
+      text: "stale task is already finished.",
+    });
+  });
 });
