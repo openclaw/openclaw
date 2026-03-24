@@ -13,8 +13,8 @@ export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
 
-export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
 type WebhookRateLimitDefaults = {
   windowMs: number;
