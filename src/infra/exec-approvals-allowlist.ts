@@ -3,13 +3,15 @@ import {
   analyzeShellCommand,
   isWindowsPlatform,
   matchAllowlist,
-  resolveAllowlistCandidatePath,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
   resolveCommandResolutionFromArgv,
-  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
   splitCommandChain,
   type ExecCommandAnalysis,
-  type CommandResolution,
   type ExecCommandSegment,
+  type ExecutableResolution,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
@@ -51,7 +53,7 @@ export function resolveSafeBins(entries?: readonly string[] | null): Set<string>
 
 export function isSafeBinUsage(params: {
   argv: string[];
-  resolution: CommandResolution | null;
+  resolution: ExecutableResolution | null;
   safeBins: Set<string>;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -183,15 +185,16 @@ function isSkillAutoAllowedSegment(params: {
     return false;
   }
   const resolution = params.segment.resolution;
-  if (!resolution?.resolvedPath) {
+  const execution = resolveExecutionTargetResolution(resolution);
+  if (!execution?.resolvedPath) {
     return false;
   }
-  const rawExecutable = resolution.rawExecutable?.trim() ?? "";
+  const rawExecutable = execution.rawExecutable?.trim() ?? "";
   if (!rawExecutable || isPathScopedExecutableToken(rawExecutable)) {
     return false;
   }
-  const executableName = normalizeSkillBinName(resolution.executableName);
-  const resolvedPath = normalizeSkillBinResolvedPath(resolution.resolvedPath);
+  const executableName = normalizeSkillBinName(execution.executableName);
+  const resolvedPath = normalizeSkillBinResolvedPath(execution.resolvedPath);
   if (!executableName || !resolvedPath) {
     return false;
   }
@@ -222,8 +225,8 @@ function evaluateSegments(
         : segment.argv;
     const allowlistSegment =
       effectiveArgv === segment.argv ? segment : { ...segment, argv: effectiveArgv };
-    const executableResolution = segment.resolution?.policyResolution ?? segment.resolution;
-    const candidatePath = resolvePolicyAllowlistCandidatePath(segment.resolution, params.cwd);
+    const executableResolution = resolvePolicyTargetResolution(segment.resolution);
+    const candidatePath = resolvePolicyTargetCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
       candidatePath && executableResolution
         ? { ...executableResolution, resolvedPath: candidatePath }
@@ -262,7 +265,7 @@ function evaluateSegments(
     }
     const safe = isSafeBinUsage({
       argv: effectiveArgv,
-      resolution: segment.resolution,
+      resolution: resolveExecutionTargetResolution(segment.resolution),
       safeBins: params.safeBins,
       safeBinProfiles: params.safeBinProfiles,
       platform: params.platform,
@@ -337,11 +340,8 @@ function hasSegmentExecutableMatch(
   segment: ExecCommandSegment,
   predicate: (token: string) => boolean,
 ): boolean {
-  const candidates = [
-    segment.resolution?.executableName,
-    segment.resolution?.rawExecutable,
-    segment.argv[0],
-  ];
+  const execution = resolveExecutionTargetResolution(segment.resolution);
+  const candidates = [execution?.executableName, execution?.rawExecutable, segment.argv[0]];
   for (const candidate of candidates) {
     const trimmed = candidate?.trim();
     if (!trimmed) {
@@ -464,7 +464,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   }
 
   const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
-  return resolveAllowlistCandidatePath(resolution, params.cwd);
+  return resolveExecutionTargetCandidatePath(resolution, params.cwd);
 }
 
 function isDirectShellPositionalCarrierInvocation(command: string): boolean {
@@ -509,7 +509,7 @@ function collectAllowAlwaysPatterns(params: {
           resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
         };
 
-  const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+  const candidatePath = resolveExecutionTargetCandidatePath(segment.resolution, params.cwd);
   if (!candidatePath) {
     return;
   }
