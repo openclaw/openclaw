@@ -8,6 +8,7 @@ import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
+import { createAepHeadersWrapper } from "./aep-stream-wrapper.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
