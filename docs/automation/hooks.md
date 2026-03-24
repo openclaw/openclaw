@@ -492,6 +492,8 @@ The `onResolution` callback is invoked with the user's decision string after the
 
 The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
 
+`block` takes precedence over `requireApproval`: if the merged hook result has both `block: true` and a `requireApproval` field, the tool call is blocked immediately without triggering the approval flow. This ensures a higher-priority plugin's block cannot be overridden by a lower-priority plugin's approval request.
+
 If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
 
 #### Compaction lifecycle
