@@ -433,9 +433,8 @@ export async function handleOpenAiHttpRequest(
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
-  const modelOverride = resolveOpenAiCompatModelOverride(model);
 
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -443,6 +442,16 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];

@@ -233,6 +233,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resMissingModel);
 
+      agentCommand.mockClear();
+      const resInvalidModel = await postResponses(port, { model: "openai/", input: "hi" });
+      expect(resInvalidModel.status).toBe(400);
+      const invalidModelJson = (await resInvalidModel.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidModelJson.error?.type).toBe("invalid_request_error");
+      expect(invalidModelJson.error?.message).toBe("Invalid `model`.");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resInvalidModel);
+
       mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(
         port,

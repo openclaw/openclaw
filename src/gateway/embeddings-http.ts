@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadConfig } from "../config/config.js";
+import { logWarn } from "../logger.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProviderOptions,
@@ -191,9 +192,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       },
     });
   } catch (err) {
+    logWarn(`openai-compat: embeddings request failed: ${String(err)}`);
     sendJson(res, 500, {
       error: {
-        message: String(err),
+        message: "internal error",
         type: "api_error",
       },
     });

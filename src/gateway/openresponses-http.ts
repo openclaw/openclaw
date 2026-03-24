@@ -37,6 +37,7 @@ import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   getHeader,
+  resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
 } from "./http-utils.js";
@@ -461,7 +462,17 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const modelOverride = resolveOpenAiCompatModelOverride(model);
+  const agentId = resolveAgentIdForRequest({ req, model });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];

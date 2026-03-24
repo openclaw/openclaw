@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  buildAllowedModelSet,
+  isCliProvider,
+  modelKey,
+  parseModelRef,
+} from "../agents/model-selection.js";
+import { loadConfig } from "../config/config.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -50,18 +59,47 @@ export function resolveAgentIdFromModel(model: string | undefined): string | und
   return normalizeAgentId(agentId);
 }
 
-export function resolveOpenAiCompatModelOverride(model: string | undefined): string | undefined {
+export async function resolveOpenAiCompatModelOverride(params: {
+  agentId: string;
+  model: string | undefined;
+}): Promise<{ modelOverride?: string; errorMessage?: string }> {
+  const model = params.model;
   const raw = model?.trim();
   if (!raw) {
-    return undefined;
+    return {};
   }
   if (raw.toLowerCase() === "openclaw") {
-    return undefined;
+    return {};
   }
   if (resolveAgentIdFromModel(raw)) {
-    return undefined;
+    return {};
   }
-  return raw;
+
+  const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
+  if (!parsed) {
+    return { errorMessage: "Invalid `model`." };
+  }
+
+  const cfg = loadConfig();
+  const catalog = await loadGatewayModelCatalog();
+  const allowed = buildAllowedModelSet({
+    cfg,
+    catalog,
+    defaultProvider: DEFAULT_PROVIDER,
+    agentId: params.agentId,
+  });
+  const normalized = modelKey(parsed.provider, parsed.model);
+  if (
+    !isCliProvider(parsed.provider, cfg) &&
+    !allowed.allowAny &&
+    !allowed.allowedKeys.has(normalized)
+  ) {
+    return {
+      errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
+    };
+  }
+
+  return { modelOverride: raw };
 }
 
 export function resolveAgentIdForRequest(params: {

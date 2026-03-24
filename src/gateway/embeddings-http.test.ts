@@ -118,4 +118,18 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const json = (await res.json()) as { error?: { type?: string } };
     expect(json.error?.type).toBe("invalid_request_error");
   });
+
+  it("sanitizes provider failures", async () => {
+    createEmbeddingProviderMock.mockRejectedValueOnce(new Error("secret upstream failure"));
+    const res = await postEmbeddings({
+      model: "openai/text-embedding-3-small",
+      input: "hello",
+    });
+    expect(res.status).toBe(500);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error).toEqual({
+      type: "api_error",
+      message: "internal error",
+    });
+  });
 });
