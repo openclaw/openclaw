@@ -1,26 +1,59 @@
 name: Trigger Railway Deploy
 
+# Fire after CI and Docker Release complete (success or failure).
+# This ensures Railway only deploys green builds.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+      - Docker Release
+    types: [completed]
 
 jobs:
   trigger-deploy:
     runs-on: ubuntu-latest
     # Only run in the fork, not upstream openclaw
     if: github.repository == 'as3445/openclaw'
+    # Only deploy when the triggering workflow was Docker Release.
+    # CI failures should NOT trigger a Railway deploy.
+    # (We still listen to CI to consume its workflow_run event so it doesn't
+    # queue up indefinitely, but we only act on Docker Release success.)
+    if: >
+      github.event.workflow_run.name == 'Docker Release'
+      && github.event.workflow_run.conclusion == 'success'
+    concurrency:
+      group: railway-deploy
+      # Cancel in-progress deploys when a new commit arrives — stale deploys
+      # waste Railway build minutes and race with the fresh one.
+      cancel-in-progress: true
     steps:
+      - name: Validate and fetch the triggering commit
+        env:
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # workflow_run triggers fire from the workflow YAML's commit, not the
+          # code commit. Fetch the actual code SHA that Docker Release built.
+          echo "Docker Release built SHA: ${WORKFLOW_SHA}"
+          git fetch --depth=1 origin "${WORKFLOW_SHA}"
+          # Verify this SHA is on the main branch (not a force-pushed branch that
+          # was rewritten after the workflow ran).
+          git branch -a --contains "${WORKFLOW_SHA}" | grep -q "main" \
+            && echo "SHA is on main — OK" \
+            || { echo "SHA not on main — skipping stale trigger"; exit 0; }
+          echo "Confirmed: will deploy SHA ${WORKFLOW_SHA}"
+
       - name: Push version bump to template repo
+        env:
+          OPENCLAW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/as3445/openclaw-railway-template.git /tmp/tpl
           cd /tmp/tpl
           git config user.email "nox@openclaw.ai"
           git config user.name "Nox (CI)"
-          echo "${{ github.sha }}" > .openclaw-version
+          echo "${OPENCLAW_SHA}" > .openclaw-version
           git add .openclaw-version
           git diff --cached --quiet && echo "No change" && exit 0
-          git commit -m "deploy: openclaw $(echo ${{ github.sha }} | cut -c1-8)"
+          git commit -m "deploy: openclaw ${OPENCLAW_SHA:0:8}"
           git push
 
       - name: Trigger Railway redeploy
@@ -28,4 +61,6 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           npm install -g @railway/cli
-          railway redeploy --service OpenClaw --yes
+          # --wait ensures Railway completes the deploy before the step exits,
+          # preventing the workflow from ending while Railway is still building.
+          railway redeploy --service OpenClaw --yes --wait
