@@ -1174,9 +1174,24 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
     if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
-      logAnnounceGiveUp(entry, "expiry");
-      entry.cleanupCompletedAt = now;
-      persistSubagentRuns();
+      if (!beginSubagentCleanup(runId)) {
+        continue;
+      }
+      void finalizeResumedAnnounceGiveUp({
+        runId,
+        entry,
+        reason: "expiry",
+      }).catch((error) => {
+        defaultRuntime.log(
+          `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
+        );
+        const current = subagentRuns.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        persistSubagentRuns();
+      });
       continue;
     }
     resumedRuns.delete(runId);
