@@ -294,6 +294,7 @@ describe("exec-command-resolution", () => {
     const envPath = path.join(binDir, "env");
     const rgPath = path.join(binDir, "rg");
     const busybox = path.join(dir, "busybox");
+    const resolvedShPath = fs.realpathSync("/bin/sh");
     for (const file of [envPath, rgPath, busybox]) {
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o755);
@@ -316,7 +317,7 @@ describe("exec-command-resolution", () => {
         env: { PATH: `${binDir}${path.delimiter}/bin:/usr/bin` },
         expectedExecutionPath: "/bin/sh",
         expectedPolicyPath: busybox,
-        expectedPlannedArgv: ["/bin/sh", "-lc", "echo hi"],
+        expectedPlannedArgv: [resolvedShPath, "-lc", "echo hi"],
         allowlistPattern: busybox,
         allowlistSatisfied: true,
       },
