@@ -206,9 +206,37 @@ describe("scripts/docker/setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
-    expect(log).toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
-    expect(log).toContain("run --rm openclaw-cli config set gateway.mode local");
-    expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.mode local",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.bind lan",
+    );
+    expect(log).toContain(
+      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://127.0.0.1:18789"] --strict-json',
+    );
+    expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+  });
+
+  it("avoids shared-network openclaw-cli before the gateway is started", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox);
+    expect(result.status).toBe(0);
+
+    const log = await readFile(activeSandbox.logPath, "utf8");
+    const lines = log.split("\n").filter(Boolean);
+    const gatewayStartIdx = lines.findIndex(
+      (line) =>
+        line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway"),
+    );
+    expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
+
+    const prestartLines = lines.slice(0, gatewayStartIdx);
+    expect(prestartLines.some((line) => line.includes("run --rm openclaw-cli"))).toBe(false);
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
@@ -260,6 +288,7 @@ describe("scripts/docker/setup.sh", () => {
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
+    expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
