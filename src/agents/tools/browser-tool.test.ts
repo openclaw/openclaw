@@ -134,7 +134,7 @@ vi.mock("./common.js", async () => {
 });
 
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { createBrowserTool } from "./browser-tool.js";
+import { __resetRememberedBrowserProfilesForTests, createBrowserTool } from "./browser-tool.js";
 
 function mockSingleBrowserProxyNode() {
   nodesUtilsMocks.listNodes.mockResolvedValue([
@@ -150,6 +150,7 @@ function mockSingleBrowserProxyNode() {
 
 function resetBrowserToolMocks() {
   vi.clearAllMocks();
+  __resetRememberedBrowserProfilesForTests();
   configMocks.loadConfig.mockReturnValue({ browser: {} });
   browserConfigMocks.resolveBrowserConfig.mockReturnValue({
     enabled: true,
@@ -861,5 +862,78 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="user"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool session lane stickiness", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("reuses the last explicit profile within the same agent session", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane" });
+
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://mail.google.com",
+    });
+    await tool.execute?.("call-2", {
+      action: "snapshot",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://mail.google.com",
+      expect.objectContaining({ profile: "user" }),
+    );
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "user" }),
+    );
+  });
+
+  it("lets a later explicit profile override the remembered lane", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane-override" });
+
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://mail.google.com",
+    });
+    await tool.execute?.("call-2", {
+      action: "open",
+      profile: "openclaw",
+      url: "https://example.com",
+    });
+    await tool.execute?.("call-3", {
+      action: "snapshot",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+  });
+
+  it("keeps profiles listing lane-agnostic", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane-profiles" });
+
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://mail.google.com",
+    });
+    await tool.execute?.("call-2", {
+      action: "profiles",
+    });
+
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 });

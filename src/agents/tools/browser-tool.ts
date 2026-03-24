@@ -42,6 +42,50 @@ import {
   type NodeListNode,
 } from "./nodes-utils.js";
 
+const rememberedBrowserProfilesBySession = new Map<string, string>();
+
+function normalizeBrowserSessionKey(raw?: string): string | undefined {
+  const trimmed = raw?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeRememberedProfile(raw?: string): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function shouldUseRememberedProfile(action: string): boolean {
+  // `profiles` is intentionally lane-agnostic because it reports control-server state
+  // rather than acting within the current session's browser lane.
+  return action !== "profiles";
+}
+
+function resolveEffectiveBrowserProfile(params: {
+  action: string;
+  explicitProfile?: string;
+  agentSessionKey?: string;
+}): string | undefined {
+  const explicitProfile = normalizeRememberedProfile(params.explicitProfile);
+  if (!shouldUseRememberedProfile(params.action)) {
+    return explicitProfile;
+  }
+  const sessionKey = normalizeBrowserSessionKey(params.agentSessionKey);
+  if (explicitProfile) {
+    if (sessionKey) {
+      rememberedBrowserProfilesBySession.set(sessionKey, explicitProfile);
+    }
+    return explicitProfile;
+  }
+  if (!sessionKey) {
+    return undefined;
+  }
+  return rememberedBrowserProfilesBySession.get(sessionKey);
+}
+
+export function __resetRememberedBrowserProfilesForTests(): void {
+  rememberedBrowserProfilesBySession.clear();
+}
+
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
   const timeoutMs =
@@ -324,7 +368,11 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const profile = resolveEffectiveBrowserProfile({
+        action,
+        explicitProfile: readStringParam(params, "profile"),
+        agentSessionKey: opts?.agentSessionKey,
+      });
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
