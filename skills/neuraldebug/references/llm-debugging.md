@@ -5,7 +5,7 @@ Detailed command reference for NeuralDebug LLM/transformer debugging.
 ## Starting the Server
 
 ```bash
-python src/NeuralDebug/llm/llm_debug_session.py serve -m <model> -p <port>
+python src/neuraldebug/llm/llm_debug_session.py serve -m <model> -p <port>
 ```
 
 | Flag | Short | Default | Description |
@@ -18,7 +18,7 @@ python src/NeuralDebug/llm/llm_debug_session.py serve -m <model> -p <port>
 ## Sending Commands
 
 ```bash
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p <port> [-t timeout] <command> [args]
+python src/neuraldebug/llm/llm_debug_session.py cmd -p <port> [-t timeout] <command> [args]
 ```
 
 ## Command Reference
@@ -52,8 +52,8 @@ python src/NeuralDebug/llm/llm_debug_session.py cmd -p <port> [-t timeout] <comm
 **What it reveals**: At each layer, what would the model predict if the forward pass stopped here?
 
 ```bash
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 logit_lens
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 logit_lens 10  # top-10
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 logit_lens
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 logit_lens 10  # top-10
 ```
 
 Output shows per-layer: top prediction, probability, entropy. Reveals when the model "decides" on an answer.
@@ -63,10 +63,10 @@ Output shows per-layer: top prediction, probability, entropy. Reveals when the m
 
 ```bash
 # Global ranking of attention heads
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 attention
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 attention
 
 # Attention TO a specific token position
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 attention 3
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 attention 3
 ```
 
 #### Probing
@@ -74,12 +74,12 @@ python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 attention 3
 
 ```bash
 # Default: next_token prediction task
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 probe
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 probe
 
 # Specific tasks
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 probe next_token
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 probe token_identity
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 probe position
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 probe next_token
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 probe token_identity
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 probe position
 ```
 
 Trains lightweight classifiers on frozen hidden states. Reports accuracy per layer — 0% means the info isn't encoded, 100% means it is.
@@ -88,7 +88,7 @@ Trains lightweight classifiers on frozen hidden states. Reports accuracy per lay
 **What it reveals**: Which layers causally determine the output by swapping activations between clean and corrupted prompts.
 
 ```bash
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 patch "corrupted prompt here"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 patch "corrupted prompt here"
 ```
 
 Reports recovery score per layer. Positive = this layer is causally responsible.
@@ -98,10 +98,10 @@ Reports recovery score per layer. Positive = this layer is causally responsible.
 
 ```bash
 # Inline code
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 exec_analysis "def analyze(model, tokenizer, input_ids): ..."
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 exec_analysis "def analyze(model, tokenizer, input_ids): ..."
 
 # From file
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 exec_analysis @my_analysis.py
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 exec_analysis @my_analysis.py
 ```
 
 The `analyze()` function receives `(model, tokenizer, input_ids)` and must return a dict. Sandboxed — no filesystem or network access.
@@ -109,7 +109,7 @@ The `analyze()` function receives `(model, tokenizer, input_ids)` and must retur
 ### Diagnosis
 
 ```bash
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 diagnose test_suite.json
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 diagnose test_suite.json
 ```
 
 Runs the full diagnostic pipeline: generation, logit lens, probing, attention, and produces remediation recommendations.
@@ -118,7 +118,7 @@ Runs the full diagnostic pipeline: generation, logit lens, probing, attention, a
 
 ```
 embedding                    — Token + position embedding
-final_norm                   — Final layer normalization
+block_0 … block_N           — Transformer blocks
 block_X.attention            — Self-attention sub-tree
 block_X.attn.ln_qkv         — LayerNorm + Q/K/V projection
 block_X.attn.scores          — Scaled dot-product attention

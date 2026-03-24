@@ -104,19 +104,19 @@ For quick captures without a persistent session:
 
 ```bash
 # Python
-python src/NeuralDebug/python_debugger.py debug script.py -b 42 -o result.json
+python src/neuraldebug/python_debugger.py debug script.py -b 42 -o result.json
 
 # C/C++
-python src/NeuralDebug/cpp_debugger.py debug ./myapp -b main.c:25 -o result.json
+python src/neuraldebug/cpp_debugger.py debug ./myapp -b main.c:25 -o result.json
 
 # With arguments
-python src/NeuralDebug/python_debugger.py debug script.py -b 42 --args "input.txt --verbose"
+python src/neuraldebug/python_debugger.py debug script.py -b 42 --args "input.txt --verbose"
 
 # Multiple breakpoints
-python src/NeuralDebug/python_debugger.py debug script.py -b 42 -b 87 -o result.json
+python src/neuraldebug/python_debugger.py debug script.py -b 42 -b 87 -o result.json
 
 # Conditional breakpoint
-python src/NeuralDebug/python_debugger.py debug script.py -b 42 --condition "x > 10"
+python src/neuraldebug/python_debugger.py debug script.py -b 42 --condition "x > 10"
 ```
 
 ## Response Format

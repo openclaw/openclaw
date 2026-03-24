@@ -1,6 +1,7 @@
 ---
 name: neuraldebug
 description: AI-powered debugging for software (8 languages) and LLM/transformer reasoning. Debug programs with natural language via real debuggers (GDB, LLDB, CDB, JDB, Delve, Node Inspector, rdbg). Debug LLM internals with Logit Lens, Attention Analysis, Probing, Activation Patching, and LoRA fine-tuning. Client-server architecture works with any AI agent.
+version: 0.1.0
 metadata:
   openclaw:
     requires:
@@ -13,7 +14,7 @@ metadata:
         package: "git+https://github.com/DennySun2020/DeepRhapsody.git"
         label: "Install NeuralDebug (pip from GitHub)"
     emoji: "🔍"
----
+    homepage: https://github.com/DennySun2020/DeepRhapsody
 ---
 # NeuralDebug
 
@@ -51,20 +52,20 @@ pip install peft==0.7.1
 ### Interactive Mode (persistent debug session)
 
 ```bash
-# Start debug server for any supported language
-python src/NeuralDebug/python_debug_session.py serve --port 5678
+# Start debug server for a target script
+python src/neuraldebug/python_debug_session.py serve my_script.py --port 5678
 
-# Send commands via natural language
-python src/NeuralDebug/python_debug_session.py cmd -p 5678 launch my_script.py
-python src/NeuralDebug/python_debug_session.py cmd -p 5678 set_breakpoint 42
-python src/NeuralDebug/python_debug_session.py cmd -p 5678 continue
-python src/NeuralDebug/python_debug_session.py cmd -p 5678 inspect
+# Send commands
+python src/neuraldebug/python_debug_session.py cmd -p 5678 start
+python src/neuraldebug/python_debug_session.py cmd -p 5678 set_breakpoint 42
+python src/neuraldebug/python_debug_session.py cmd -p 5678 continue
+python src/neuraldebug/python_debug_session.py cmd -p 5678 inspect
 ```
 
 ### One-Shot Mode (quick breakpoint capture)
 
 ```bash
-python src/NeuralDebug/python_debugger.py debug my_script.py --breakpoint 42 --output result.json
+python src/neuraldebug/python_debugger.py debug my_script.py --breakpoint 42 --output result.json
 ```
 
 ### Supported Languages
@@ -80,29 +81,29 @@ python src/NeuralDebug/python_debugger.py debug my_script.py --breakpoint 42 --o
 | Node.js/TS | `nodejs_debug_session.py` | Node Inspector |
 | Ruby | `ruby_debug_session.py` | rdbg |
 
-All scripts live in `src/NeuralDebug/` and share the same command interface.
+All scripts live in `src/neuraldebug/` and share the same command interface.
 
 ## Quick Start: LLM Debugging
 
 ```bash
 # Start LLM debug server
-python src/NeuralDebug/llm/llm_debug_session.py serve -m gpt2-medium -p 5680
+python src/neuraldebug/llm/llm_debug_session.py serve -m gpt2-medium -p 5680
 
 # Ask the model a question
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 start "The capital of Japan is"
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 generate 20
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 start "The capital of Japan is"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 generate 20
 
 # Interpretability: where does the answer emerge?
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 logit_lens
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 logit_lens
 
 # Interpretability: which attention heads focus on "Japan"?
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 attention 3
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 attention 3
 
 # Interpretability: what knowledge is encoded per layer?
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 probe next_token
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 probe next_token
 
 # Interpretability: is prediction Japan-specific?
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 patch "The capital of France is"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 patch "The capital of France is"
 ```
 
 ### LLM Models Supported
@@ -129,11 +130,11 @@ cat > ft_config.json << 'EOF'
 EOF
 
 # Run fine-tuning (uses same server as LLM debugger)
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 -t 600 finetune ft_config.json
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 -t 600 finetune ft_config.json
 
 # Verify
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 generate 20
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 generate 20
 ```
 
 ## Architecture

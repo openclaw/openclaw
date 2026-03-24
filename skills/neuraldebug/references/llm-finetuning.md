@@ -75,21 +75,21 @@ Uses the same TCP server as LLM debugging — no separate setup needed.
 
 ```bash
 # 1. Start server
-python src/NeuralDebug/llm/llm_debug_session.py serve -m gpt2-medium -p 5680
+python src/neuraldebug/llm/llm_debug_session.py serve -m gpt2-medium -p 5680
 
 # 2. Check what model currently knows (it doesn't know this fact)
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 generate 20
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 generate 20
 # → "Dr. Elena Vasquez is the director of the British Museum..."  (wrong)
 
 # 3. Fine-tune to inject the correct fact
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 -t 600 finetune ft_config.json
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 -t 600 finetune ft_config.json
 # → Before: 'Horizon' ranked #51 (p=0.001)
 # → After:  'Horizon' ranked #1  (p=0.999)
 
 # 4. Verify
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
-python src/NeuralDebug/llm/llm_debug_session.py cmd -p 5680 generate 20
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 start "Dr. Elena Vasquez is the director of"
+python src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 generate 20
 # → "Dr. Elena Vasquez is the director of Horizon Research Labs"
 
 # 5. Model auto-saved — survives server restart
