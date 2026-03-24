@@ -206,6 +206,9 @@ function createParallelToolCallsWrapper(
  * streaming endpoints so that the final chunk includes token-usage metadata.
  * Without this, providers that follow the OpenAI Chat Completions spec
  * (e.g. Alibaba Bailian / DashScope) omit usage entirely in streaming mode.
+ *
+ * Respects `model.compat.supportsUsageInStreaming === false` to avoid
+ * breaking providers that explicitly opt out (e.g. Chutes, Venice).
  */
 function createOpenAIStreamUsageWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -213,12 +216,22 @@ function createOpenAIStreamUsageWrapper(baseStreamFn: StreamFn | undefined): Str
     if (model.api !== "openai-completions") {
       return underlying(model, context, options);
     }
+    const compat = model.compat as { supportsUsageInStreaming?: boolean } | undefined;
+    if (compat?.supportsUsageInStreaming === false) {
+      return underlying(model, context, options);
+    }
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload, payloadModel) => {
         if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).stream_options = { include_usage: true };
+          const existing = (payload as Record<string, unknown>).stream_options;
+          (payload as Record<string, unknown>).stream_options = {
+            ...(existing && typeof existing === "object"
+              ? (existing as Record<string, unknown>)
+              : {}),
+            include_usage: true,
+          };
         }
         return originalOnPayload?.(payload, payloadModel);
       },
