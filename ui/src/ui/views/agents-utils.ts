@@ -4,6 +4,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { inferBasePathFromPathname, normalizeBasePath } from "../navigation.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -217,8 +218,17 @@ export function resolveAgentAvatarUrl(
 }
 
 export function agentLogoUrl(basePath: string): string {
-  const base = basePath?.trim() ? basePath.replace(/\/$/, "") : "";
-  return base ? `${base}/favicon.svg` : "favicon.svg";
+  const explicitBase = normalizeBasePath(basePath ?? "");
+  if (explicitBase) {
+    return `${explicitBase}/favicon.svg`;
+  }
+  if (typeof window !== "undefined") {
+    const inferredBase = inferBasePathFromPathname(window.location?.pathname ?? "");
+    if (inferredBase) {
+      return `${inferredBase}/favicon.svg`;
+    }
+  }
+  return "favicon.svg";
 }
 
 function isLikelyEmoji(value: string) {

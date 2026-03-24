@@ -107,7 +107,16 @@ describe("agentLogoUrl", () => {
     expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
   });
 
-  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
+  it("infers the mounted base path before bootstrap finishes", () => {
+    window.history.replaceState({}, "", "/openclaw");
+    expect(agentLogoUrl("")).toBe("/openclaw/favicon.svg");
+
+    window.history.replaceState({}, "", "/apps/openclaw/cron");
+    expect(agentLogoUrl("")).toBe("/apps/openclaw/favicon.svg");
+  });
+
+  it("uses a route-relative fallback when there is no mounted base path", () => {
+    window.history.replaceState({}, "", "/chat");
     expect(agentLogoUrl("")).toBe("favicon.svg");
   });
 });
