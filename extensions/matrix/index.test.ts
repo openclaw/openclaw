@@ -11,6 +11,15 @@ vi.mock("./src/runtime.js", () => ({
 
 const { default: matrixPlugin } = await import("./index.js");
 
+function buildPluginSdkStubAliases(entries: Readonly<Record<string, string>>) {
+  return Object.fromEntries(
+    Object.entries(entries).map(([subpath, relativePath]) => [
+      `openclaw/plugin-sdk/${subpath}`,
+      path.join(process.cwd(), relativePath),
+    ]),
+  );
+}
+
 describe("matrix plugin registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -44,6 +53,14 @@ describe("matrix plugin registration", () => {
       loadRuntimeApiExportTypesViaJiti({
         modulePath: runtimeApiPath,
         exportNames: ["resolveMatrixAccountStringValues"],
+        additionalAliases: {
+          ...buildPluginSdkStubAliases({
+            "account-resolution": "test/helpers/extensions/plugin-sdk-account-resolution-stub.cjs",
+            "infra-runtime": "test/helpers/extensions/plugin-sdk-infra-runtime-stub.cjs",
+            "matrix-runtime-heavy":
+              "test/helpers/extensions/plugin-sdk-matrix-runtime-heavy-stub.cjs",
+          }),
+        },
       }),
     ).toEqual({
       resolveMatrixAccountStringValues: "function",

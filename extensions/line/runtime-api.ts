@@ -1,29 +1,42 @@
 // Private runtime barrel for the bundled LINE extension.
 // Keep this barrel thin and aligned with the local extension surface.
 
-export type {
-  ChannelPlugin,
-  OpenClawConfig,
-  OpenClawPluginApi,
-  PluginRuntime,
-} from "openclaw/plugin-sdk/core";
-export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export type { ChannelPlugin, OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
 export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
-export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "openclaw/plugin-sdk/status-helpers";
+export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export {
-  DEFAULT_ACCOUNT_ID,
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+} from "./src/bot-access.js";
+export { downloadLineMedia } from "./src/download.js";
+export { probeLineBot } from "./src/probe.js";
+export {
+  createQuickReplyItems,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "./src/send.js";
+export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
+export * from "openclaw/plugin-sdk/line-runtime";
+export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "./src/setup-runtime-api.js";
+export {
   formatDocsLink,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "openclaw/plugin-sdk/setup";
-export * from "openclaw/plugin-sdk/line-runtime";
+} from "./src/setup-runtime-api.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";
