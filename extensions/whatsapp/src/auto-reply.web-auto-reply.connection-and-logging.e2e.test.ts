@@ -7,6 +7,7 @@ import { setLoggerOverride } from "../../../src/logging.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import {
+  createWebInboundDeliverySpies,
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
@@ -14,75 +15,47 @@ import {
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
   resetLoadConfigMock,
+  sendWebDirectInboundMessage,
   setLoadConfigMock,
+  startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
-function startMonitorWebChannel(params: {
-  monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
-  listenerFactory: unknown;
-  sleep: ReturnType<typeof vi.fn>;
-  signal?: AbortSignal;
-  heartbeatSeconds?: number;
-  messageTimeoutMs?: number;
-  watchdogCheckMs?: number;
-  reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+async function startWatchdogScenario(params: {
+  monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
 }) {
-  const runtime = createRuntime();
-  const controller = new AbortController();
-  const run = params.monitorWebChannelFn(
-    false,
-    params.listenerFactory as never,
-    true,
-    async () => ({ text: "ok" }),
-    runtime as never,
-    params.signal ?? controller.signal,
-    {
-      heartbeatSeconds: params.heartbeatSeconds ?? 1,
-      messageTimeoutMs: params.messageTimeoutMs,
-      watchdogCheckMs: params.watchdogCheckMs,
-      reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-      sleep: params.sleep,
+  const sleep = vi.fn(async () => {});
+  const scripted = createScriptedWebListenerFactory();
+  const started = startWebAutoReplyMonitor({
+    monitorWebChannelFn: params.monitorWebChannel as never,
+    listenerFactory: scripted.listenerFactory,
+    sleep,
+    heartbeatSeconds: 60,
+    messageTimeoutMs: 30,
+    watchdogCheckMs: 5,
+  });
+
+  await Promise.resolve();
+  expect(scripted.getListenerCount()).toBe(1);
+  await vi.waitFor(
+    () => {
+      expect(scripted.getOnMessage()).toBeTypeOf("function");
     },
+    { timeout: 250, interval: 2 },
   );
 
-  return { runtime, controller, run };
-}
+  const spies = createWebInboundDeliverySpies();
+  await sendWebDirectInboundMessage({
+    onMessage: scripted.getOnMessage()!,
+    body: "hi",
+    from: "+1",
+    to: "+2",
+    id: "m1",
+    spies,
+  });
 
-function makeInboundMessage(params: {
-  body: string;
-  from: string;
-  to: string;
-  id?: string;
-  timestamp?: number;
-  sendComposing: ReturnType<typeof vi.fn>;
-  reply: ReturnType<typeof vi.fn>;
-  sendMedia: ReturnType<typeof vi.fn>;
-}): WebInboundMessage {
-  return {
-    body: params.body,
-    from: params.from,
-    to: params.to,
-    id: params.id,
-    timestamp: params.timestamp,
-    conversationId: params.from,
-    accountId: "default",
-    chatType: "direct",
-    chatId: params.from,
-    sendComposing: params.sendComposing as unknown as WebInboundMessage["sendComposing"],
-    reply: params.reply as unknown as WebInboundMessage["reply"],
-    sendMedia: params.sendMedia as unknown as WebInboundMessage["sendMedia"],
-  };
+  return { scripted, sleep, spies, ...started };
 }
 
 describe("web auto-reply connection", () => {
@@ -115,7 +88,7 @@ describe("web auto-reply connection", () => {
     ]) {
       const sleep = vi.fn(async () => {});
       const scripted = createScriptedWebListenerFactory();
-      const { runtime, controller, run } = startMonitorWebChannel({
+      const { runtime, controller, run } = startWebAutoReplyMonitor({
         monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory: scripted.listenerFactory,
         sleep,
@@ -150,7 +123,7 @@ describe("web auto-reply connection", () => {
   it("treats status 440 as non-retryable and stops without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const scripted = createScriptedWebListenerFactory();
-    const { runtime, controller, run } = startMonitorWebChannel({
+    const { runtime, controller, run } = startWebAutoReplyMonitor({
       monitorWebChannelFn: monitorWebChannel as never,
       listenerFactory: scripted.listenerFactory,
       sleep,
@@ -193,41 +166,9 @@ describe("web auto-reply connection", () => {
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
-      const sleep = vi.fn(async () => {});
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startMonitorWebChannel({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
-        heartbeatSeconds: 60,
-        messageTimeoutMs: 30,
-        watchdogCheckMs: 5,
+      const { scripted, controller, run } = await startWatchdogScenario({
+        monitorWebChannel,
       });
-
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(1);
-      await vi.waitFor(
-        () => {
-          expect(scripted.getOnMessage()).toBeTypeOf("function");
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn();
-      const sendMedia = vi.fn();
-
-      void scripted.getOnMessage()?.(
-        makeInboundMessage({
-          body: "hi",
-          from: "+1",
-          to: "+2",
-          id: "m1",
-          sendComposing,
-          reply,
-          sendMedia,
-        }),
-      );
 
       await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
@@ -250,42 +191,9 @@ describe("web auto-reply connection", () => {
   it("keeps watchdog message age across reconnects", async () => {
     vi.useFakeTimers();
     try {
-      const sleep = vi.fn(async () => {});
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startMonitorWebChannel({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
-        heartbeatSeconds: 60,
-        messageTimeoutMs: 30,
-        watchdogCheckMs: 5,
+      const { scripted, controller, run } = await startWatchdogScenario({
+        monitorWebChannel,
       });
-
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(1);
-      await vi.waitFor(
-        () => {
-          expect(scripted.getOnMessage()).toBeTypeOf("function");
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn();
-      const sendMedia = vi.fn();
-
-      void scripted.getOnMessage()?.(
-        makeInboundMessage({
-          body: "hi",
-          from: "+1",
-          to: "+2",
-          id: "m1",
-          sendComposing,
-          reply,
-          sendMedia,
-        }),
-      );
-      await Promise.resolve();
 
       scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "first-close" });
       await vi.waitFor(
@@ -347,30 +255,25 @@ describe("web auto-reply connection", () => {
         const capturedOnMessage = capture.getOnMessage();
         expect(capturedOnMessage).toBeDefined();
 
-        await capturedOnMessage?.(
-          makeInboundMessage({
-            body: "first",
-            from: "+1",
-            to: "+2",
-            id: "m1",
-            timestamp: 1735689600000,
-            sendComposing,
-            reply,
-            sendMedia,
-          }),
-        );
-        await capturedOnMessage?.(
-          makeInboundMessage({
-            body: "second",
-            from: "+1",
-            to: "+2",
-            id: "m2",
-            timestamp: 1735693200000,
-            sendComposing,
-            reply,
-            sendMedia,
-          }),
-        );
+        const spies = { sendMedia, reply, sendComposing };
+        await sendWebDirectInboundMessage({
+          onMessage: capturedOnMessage!,
+          body: "first",
+          from: "+1",
+          to: "+2",
+          id: "m1",
+          timestamp: 1735689600000,
+          spies,
+        });
+        await sendWebDirectInboundMessage({
+          onMessage: capturedOnMessage!,
+          body: "second",
+          from: "+1",
+          to: "+2",
+          id: "m2",
+          timestamp: 1735693200000,
+          spies,
+        });
 
         expect(resolver).toHaveBeenCalledTimes(2);
         const firstArgs = resolver.mock.calls[0][0];

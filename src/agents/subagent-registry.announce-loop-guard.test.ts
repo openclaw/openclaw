@@ -8,39 +8,71 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
  * forever via the max-retry and expiration guards.
  */
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    session: { store: "/tmp/test-store", mainKey: "main" },
-    agents: {},
-  }),
-}));
+function createLoopGuardConfigModuleMock() {
+  return {
+    loadConfig: () => ({
+      session: { store: "/tmp/test-store", mainKey: "main" },
+      agents: {},
+    }),
+  };
+}
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({
-    "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
-    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
-    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
-  }),
-  resolveAgentIdFromSessionKey: (key: string) => {
-    const match = key.match(/^agent:([^:]+)/);
-    return match?.[1] ?? "main";
-  },
-  resolveMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/test-store",
-  updateSessionStore: vi.fn(),
-}));
+function createLoopGuardSessionsModuleMock() {
+  return {
+    loadSessionStore: () => ({
+      "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+      "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+      "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+    }),
+    resolveAgentIdFromSessionKey: (key: string) => {
+      const match = key.match(/^agent:([^:]+)/);
+      return match?.[1] ?? "main";
+    },
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/test-store",
+    updateSessionStore: vi.fn(),
+  };
+}
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
-}));
+function createLoopGuardGatewayCallModuleMock() {
+  return {
+    callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
+  };
+}
 
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn().mockReturnValue(() => {}),
-}));
+function createLoopGuardAgentEventsModuleMock() {
+  return {
+    onAgentEvent: vi.fn().mockReturnValue(() => {}),
+  };
+}
 
-vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
-}));
+function createLoopGuardSubagentAnnounceModuleMock() {
+  return {
+    runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
+  };
+}
+
+function createLoopGuardAnnounceQueueModuleMock() {
+  return {
+    resetAnnounceQueuesForTests: vi.fn(),
+  };
+}
+
+function createLoopGuardTimeoutModuleMock() {
+  return {
+    resolveAgentTimeoutMs: () => 60_000,
+  };
+}
+
+vi.mock("../config/config.js", createLoopGuardConfigModuleMock);
+
+vi.mock("../config/sessions.js", createLoopGuardSessionsModuleMock);
+
+vi.mock("../gateway/call.js", createLoopGuardGatewayCallModuleMock);
+
+vi.mock("../infra/agent-events.js", createLoopGuardAgentEventsModuleMock);
+
+vi.mock("./subagent-announce.js", createLoopGuardSubagentAnnounceModuleMock);
 
 const loadSubagentRegistryFromDisk = vi.fn(() => new Map());
 const saveSubagentRegistryToDisk = vi.fn();
@@ -50,13 +82,9 @@ vi.mock("./subagent-registry.store.js", () => ({
   saveSubagentRegistryToDisk,
 }));
 
-vi.mock("./subagent-announce-queue.js", () => ({
-  resetAnnounceQueuesForTests: vi.fn(),
-}));
+vi.mock("./subagent-announce-queue.js", createLoopGuardAnnounceQueueModuleMock);
 
-vi.mock("./timeout.js", () => ({
-  resolveAgentTimeoutMs: () => 60_000,
-}));
+vi.mock("./timeout.js", createLoopGuardTimeoutModuleMock);
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.js");
@@ -64,45 +92,17 @@ describe("announce loop guard (#18264)", () => {
 
   async function loadFreshSubagentRegistryLoopGuardModulesForTest() {
     vi.resetModules();
-    vi.doMock("../config/config.js", () => ({
-      loadConfig: () => ({
-        session: { store: "/tmp/test-store", mainKey: "main" },
-        agents: {},
-      }),
-    }));
-    vi.doMock("../config/sessions.js", () => ({
-      loadSessionStore: () => ({
-        "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
-        "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
-        "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
-      }),
-      resolveAgentIdFromSessionKey: (key: string) => {
-        const match = key.match(/^agent:([^:]+)/);
-        return match?.[1] ?? "main";
-      },
-      resolveMainSessionKey: () => "agent:main:main",
-      resolveStorePath: () => "/tmp/test-store",
-      updateSessionStore: vi.fn(),
-    }));
-    vi.doMock("../gateway/call.js", () => ({
-      callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
-    }));
-    vi.doMock("../infra/agent-events.js", () => ({
-      onAgentEvent: vi.fn().mockReturnValue(() => {}),
-    }));
-    vi.doMock("./subagent-announce.js", () => ({
-      runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
-    }));
+    vi.doMock("../config/config.js", createLoopGuardConfigModuleMock);
+    vi.doMock("../config/sessions.js", createLoopGuardSessionsModuleMock);
+    vi.doMock("../gateway/call.js", createLoopGuardGatewayCallModuleMock);
+    vi.doMock("../infra/agent-events.js", createLoopGuardAgentEventsModuleMock);
+    vi.doMock("./subagent-announce.js", createLoopGuardSubagentAnnounceModuleMock);
     vi.doMock("./subagent-registry.store.js", () => ({
       loadSubagentRegistryFromDisk,
       saveSubagentRegistryToDisk,
     }));
-    vi.doMock("./subagent-announce-queue.js", () => ({
-      resetAnnounceQueuesForTests: vi.fn(),
-    }));
-    vi.doMock("./timeout.js", () => ({
-      resolveAgentTimeoutMs: () => 60_000,
-    }));
+    vi.doMock("./subagent-announce-queue.js", createLoopGuardAnnounceQueueModuleMock);
+    vi.doMock("./timeout.js", createLoopGuardTimeoutModuleMock);
     registry = await import("./subagent-registry.js");
     const subagentAnnounce = await import("./subagent-announce.js");
     announceFn = vi.mocked(subagentAnnounce.runSubagentAnnounceFlow);

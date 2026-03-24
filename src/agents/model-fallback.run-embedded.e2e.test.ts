@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  createResolvedEmbeddedRunnerModel,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -61,25 +65,8 @@ const installRunEmbeddedMocks = () => {
     ensureRuntimePluginsLoaded: vi.fn(),
   }));
   vi.doMock("./pi-embedded-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) => ({
-      model: {
-        id: modelId,
-        name: modelId,
-        api: "openai-responses",
-        provider,
-        baseUrl: `https://example.com/${provider}`,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 16_000,
-        maxTokens: 2048,
-      },
-      error: undefined,
-      authStorage: {
-        setRuntimeApiKey: vi.fn(),
-      },
-      modelRegistry: {},
-    }),
+    resolveModelAsync: async (provider: string, modelId: string) =>
+      createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
   vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
@@ -105,48 +92,8 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -292,9 +239,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "openai",
           model: "mock-1",
           stopReason: "error",
@@ -303,9 +250,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
       });
     }
     if (attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: ["fallback ok"],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "groq",
           model: "mock-2",
           stopReason: "stop",
@@ -336,9 +283,9 @@ function mockAllProvidersOverloaded() {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: attemptParams.provider,
           model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
           stopReason: "error",

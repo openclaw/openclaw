@@ -1,4 +1,5 @@
 import {
+  buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -81,41 +82,6 @@ function buildBufferedResponse(params: {
   return response;
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
-  }
-  if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
-
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      clearTimeout(timeoutId);
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-  };
-}
-
 async function fetchWithMatrixGuardedRedirects(params: {
   url: string;
   init?: RequestInit;
@@ -129,7 +95,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   let headers = new Headers(params.init?.headers ?? {});
   const maxRedirects = 5;
   const visited = new Set<string>();
-  const { signal, cleanup } = buildAbortSignal({
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });
