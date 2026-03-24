@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import type { Command } from "commander";
 import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
@@ -20,11 +21,20 @@ import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
+import { enableConsoleCapture } from "../../logging.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { loadDotEnv } from "../../infra/dotenv.js";
+import { normalizeEnv } from "../../infra/env.js";
+import { formatUncaughtError } from "../../infra/errors.js";
+import { ensureOpenClawCliOnPath } from "../../infra/path-env.js";
+import { assertSupportedRuntime } from "../../infra/runtime-guard.js";
+import { installUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
+import { getCommandPathWithRootOptions, getFlagValue, hasFlag } from "../argv.js";
+import { normalizeWindowsArgv } from "../windows-argv.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -155,6 +165,52 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
   }
 
   return resolved;
+}
+
+function buildGatewayRunOptsFromArgv(argv: string[]): GatewayRunOpts {
+  return {
+    port: getFlagValue(argv, "--port"),
+    bind: getFlagValue(argv, "--bind"),
+    token: getFlagValue(argv, "--token"),
+    auth: getFlagValue(argv, "--auth"),
+    password: getFlagValue(argv, "--password"),
+    passwordFile: getFlagValue(argv, "--password-file"),
+    tailscale: getFlagValue(argv, "--tailscale"),
+    tailscaleResetOnExit: hasFlag(argv, "--tailscale-reset-on-exit"),
+    allowUnconfigured: hasFlag(argv, "--allow-unconfigured"),
+    force: hasFlag(argv, "--force"),
+    verbose: hasFlag(argv, "--verbose"),
+    claudeCliLogs: hasFlag(argv, "--claude-cli-logs"),
+    wsLog: getFlagValue(argv, "--ws-log"),
+    compact: hasFlag(argv, "--compact"),
+    rawStream: hasFlag(argv, "--raw-stream"),
+    rawStreamPath: getFlagValue(argv, "--raw-stream-path"),
+    dev: hasFlag(argv, "--dev"),
+    reset: hasFlag(argv, "--reset"),
+  };
+}
+
+export function shouldUseGatewayRunFastPath(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  return primary === "gateway" && secondary === "run";
+}
+
+export async function runGatewayRunFastPath(argv: string[] = process.argv): Promise<void> {
+  const normalizedArgv = normalizeWindowsArgv(argv);
+  loadDotEnv({ quiet: true });
+  normalizeEnv();
+  ensureOpenClawCliOnPath();
+  assertSupportedRuntime();
+  enableConsoleCapture();
+  installUnhandledRejectionHandler();
+
+  process.on("uncaughtException", (error) => {
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    process.exit(1);
+  });
+
+  const opts = buildGatewayRunOptsFromArgv(normalizedArgv);
+  await runGatewayCommand(opts);
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {

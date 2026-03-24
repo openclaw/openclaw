@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import { runGatewayRunFastPath, shouldUseGatewayRunFastPath } from "./cli/gateway-cli/run.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
@@ -179,7 +180,15 @@ if (
       process.argv = parsed.argv;
     }
 
-    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
+    if (shouldUseGatewayRunFastPath(process.argv)) {
+      runGatewayRunFastPath(process.argv).catch((error) => {
+        console.error(
+          "[openclaw] Failed to start gateway run fast path:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exitCode = 1;
+      });
+    } else if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
       import("./cli/run-main.js")
         .then(({ runCli }) => runCli(process.argv))
         .catch((error) => {
