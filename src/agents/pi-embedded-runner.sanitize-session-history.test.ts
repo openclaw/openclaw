@@ -24,6 +24,21 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderCapabilitiesWithPlugin: ({ provider }: { provider?: string }) =>
+    provider === "openrouter"
+      ? {
+          openAiCompatTurnValidation: false,
+          geminiThoughtSignatureSanitization: true,
+          geminiThoughtSignatureModelHints: ["gemini"],
+        }
+      : provider === "github-copilot"
+        ? {
+            dropThinkingBlockModelHints: ["claude"],
+          }
+        : undefined,
+}));
+
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
