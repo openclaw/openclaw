@@ -80,7 +80,7 @@ async function updateActivityViaRest(params: {
   activityId: string;
   activity: Record<string, unknown>;
   token?: string;
-}): Promise<unknown> {
+}): Promise<{ id?: string }> {
   const { serviceUrl, conversationId, activityId, activity, token } = params;
   const baseUrl = serviceUrl.replace(/\/+$/, "");
   const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
@@ -111,6 +111,40 @@ async function updateActivityViaRest(params: {
   }
 
   return await response.json().catch(() => ({ id: activityId }));
+}
+
+/**
+ * Delete an existing activity via the Bot Framework REST API.
+ * DELETE /v3/conversations/{conversationId}/activities/{activityId}
+ */
+async function deleteActivityViaRest(params: {
+  serviceUrl: string;
+  conversationId: string;
+  activityId: string;
+  token?: string;
+}): Promise<void> {
+  const { serviceUrl, conversationId, activityId, token } = params;
+  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
+
+  const headers: Record<string, string> = {
+    "User-Agent": buildUserAgent(),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers,
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw Object.assign(new Error(`deleteActivity failed: HTTP ${response.status} ${body}`), {
+      statusCode: response.status,
+    });
+  }
 }
 
 /**
@@ -177,10 +211,9 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
           return response;
         },
-        async updateActivity(
-          activityUpdate: { id: string } & Record<string, unknown>,
-        ): Promise<unknown> {
-          const activityId = activityUpdate.id;
+        async updateActivity(activityUpdate: object): Promise<{ id?: string } | void> {
+          const nextActivity = activityUpdate as { id?: string } & Record<string, unknown>;
+          const activityId = nextActivity.id;
           if (!activityId) {
             throw new Error("updateActivity requires an activity id");
           }
@@ -189,7 +222,18 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
             serviceUrl,
             conversationId,
             activityId,
-            activity: activityUpdate,
+            activity: nextActivity,
+            token: await getToken(),
+          });
+        },
+        async deleteActivity(activityId: string): Promise<void> {
+          if (!activityId) {
+            throw new Error("deleteActivity requires an activity id");
+          }
+          await deleteActivityViaRest({
+            serviceUrl,
+            conversationId,
+            activityId,
             token: await getToken(),
           });
         },
