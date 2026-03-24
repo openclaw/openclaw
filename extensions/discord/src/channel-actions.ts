@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -124,7 +125,7 @@ function describeDiscordMessageTool({
     capabilities: ["interactive", "components"],
     schema: {
       properties: {
-        components: createDiscordMessageToolComponentsSchema(),
+        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
       },
     },
   };

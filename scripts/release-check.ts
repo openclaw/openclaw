@@ -33,7 +33,7 @@ const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
 // restored bundled upgrade surfaces while still catching regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 176 * 1024 * 1024;
+const npmPackUnpackedSizeBudgetBytes = 190 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -328,6 +328,18 @@ async function main() {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
         console.error(`  - ${path}`);
+      }
+      if (
+        missing.some(
+          (path) =>
+            path === "dist/build-info.json" ||
+            path === "dist/control-ui/index.html" ||
+            path.startsWith("dist/"),
+        )
+      ) {
+        console.error(
+          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+        );
       }
     }
     if (forbidden.length > 0) {

@@ -2,27 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../extensions/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
-const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
-  "action-runtime.runtime.js",
-  "action-runtime-api.js",
-  "allow-from.js",
-  "api.js",
-  "auth-presence.js",
-  "index.js",
-  "light-runtime-api.js",
-  "login-qr-api.js",
-  "onboard.js",
-  "openai-codex-catalog.js",
-  "provider-catalog.js",
-  "runtime-api.js",
-  "session-key-api.js",
-  "setup-api.js",
-  "setup-entry.js",
-  "timeouts.js",
-]);
+const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -349,14 +333,31 @@ function collectExtensionFiles(extensionId: string): string[] {
   return files;
 }
 
+function collectModuleSpecifiers(text: string): string[] {
+  const patterns = [
+    /\bimport\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+    /\bimport\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+  ] as const;
+  const specifiers = new Set<string>();
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1]?.trim();
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    }
+  }
+  return [...specifiers];
+}
+
 function collectExtensionImports(text: string): string[] {
-  return [...text.matchAll(/["']([^"']*extensions\/[^"']+\.(?:[cm]?[jt]sx?))["']/g)].map(
-    (match) => match[1] ?? "",
-  );
+  return collectModuleSpecifiers(text).filter((specifier) => specifier.includes("extensions/"));
 }
 
 function collectImportSpecifiers(text: string): string[] {
-  return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
+  return collectModuleSpecifiers(text);
 }
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {

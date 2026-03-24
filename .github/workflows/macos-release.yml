@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build macOS artifacts for (for example v2026.3.22 or v2026.3.22-beta.1)
+        description: Existing release tag to validate for macOS release handoff (for example v2026.3.22 or v2026.3.22-beta.1)
         required: true
         type: string
       preflight_only:
-        description: Run validation/build only and skip the gated publish job
+        description: Retained for operator compatibility; this public workflow is validation-only
         required: true
-        default: false
+        default: true
         type: boolean
 
 concurrency:
@@ -21,11 +21,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.23.0"
-  SPARKLE_FEED_URL: https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 
 jobs:
-  preflight_macos_release:
-    runs-on: macos-latest
+  validate_macos_release_request:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -70,237 +69,18 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           pnpm release:openclaw:npm:check
 
-      - name: Resolve package version
-        id: package_version
-        run: echo "value=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
-
-      - name: Check
-        run: pnpm check
-
-      - name: Build
-        run: pnpm build
-
-      - name: Build Control UI
-        run: node scripts/ui.js build
-
-      - name: Verify release contents
-        run: pnpm release:check
-
-      - name: Swift build
-        run: swift build --package-path apps/macos --configuration release
-
-      - name: Swift test
-        run: swift test --package-path apps/macos --parallel
-
-      - name: Package macOS release with ad-hoc signing
-        env:
-          APP_VERSION: ${{ steps.package_version.outputs.value }}
-          BUNDLE_ID: ai.openclaw.mac
-          BUILD_CONFIG: release
-          CODESIGN_TIMESTAMP: "off"
-          SIGN_IDENTITY: "-"
-          SKIP_NOTARIZE: "1"
-          SKIP_PNPM_INSTALL: "1"
-          SKIP_TSC: "1"
-          SKIP_UI_BUILD: "1"
-          SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
-        run: scripts/package-mac-dist.sh
-
-  publish_macos_release:
-    needs: [preflight_macos_release]
-    if: ${{ !inputs.preflight_only }}
-    runs-on: macos-latest
-    environment: mac-release
-    concurrency:
-      # Stable releases all derive the same shared appcast.xml; serialize those
-      # runs so each artifact starts from the latest stable feed snapshot.
-      group: macos-release-publish-${{ contains(inputs.tag, '-beta.') && inputs.tag || 'stable-feed' }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - name: Validate tag input format
+      - name: Summarize next step
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
-            echo "Invalid release tag format: ${RELEASE_TAG}"
-            exit 1
-          fi
-
-      - name: Checkout selected tag
-        uses: actions/checkout@v6
-        with:
-          ref: refs/tags/${{ inputs.tag }}
-          fetch-depth: 0
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Ensure matching GitHub release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-
-      - name: Resolve package version
-        id: package_version
-        run: echo "value=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
-
-      - name: Determine release channel
-        id: release_channel
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_TAG" == *-beta.* ]]; then
-            echo "is_beta=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_beta=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Import Developer ID certificate
-        env:
-          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/openclaw-macos-release.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/openclaw-release.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
-          echo "::add-mask::$KEYCHAIN_PASSWORD"
-          export CERT_PATH MACOS_DEVELOPER_ID_P12_BASE64
-          python3 - <<'PY'
-          import base64
-          import os
-          from pathlib import Path
-
-          Path(os.environ["CERT_PATH"]).write_bytes(
-              base64.b64decode(os.environ["MACOS_DEVELOPER_ID_P12_BASE64"])
-          )
-          PY
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" \
-            -k "$KEYCHAIN_PATH" \
-            -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          EXISTING_KEYCHAINS="$(security list-keychains -d user | tr -d '"')"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
-          security default-keychain -d user -s "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-
-      - name: Resolve signing identity
-        run: |
-          set -euo pipefail
-          SIGN_IDENTITY="$(security find-identity -p codesigning -v "$KEYCHAIN_PATH" 2>/dev/null | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-          if [[ -z "${SIGN_IDENTITY}" ]]; then
-            echo "Developer ID Application identity not found in imported keychain." >&2
-            exit 1
-          fi
-          echo "SIGN_IDENTITY=$SIGN_IDENTITY" >> "$GITHUB_ENV"
-
-      - name: Write notary and Sparkle key files
-        env:
-          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
-          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          NOTARYTOOL_KEY_PATH="$RUNNER_TEMP/openclaw-notary.p8"
-          SPARKLE_PRIVATE_KEY_PATH="$RUNNER_TEMP/openclaw-sparkle-ed25519.pem"
-          export NOTARYTOOL_KEY_PATH SPARKLE_PRIVATE_KEY_PATH
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          def write_secret(path_env: str, value_env: str) -> None:
-              value = os.environ[value_env].replace("\\n", "\n")
-              Path(os.environ[path_env]).write_text(value, encoding="utf-8")
-
-          write_secret("NOTARYTOOL_KEY_PATH", "APP_STORE_CONNECT_API_KEY_P8")
-          write_secret("SPARKLE_PRIVATE_KEY_PATH", "SPARKLE_PRIVATE_KEY")
-          PY
-          echo "NOTARYTOOL_KEY=$NOTARYTOOL_KEY_PATH" >> "$GITHUB_ENV"
-          echo "NOTARYTOOL_KEY_ID=$APP_STORE_CONNECT_KEY_ID" >> "$GITHUB_ENV"
-          echo "NOTARYTOOL_ISSUER=$APP_STORE_CONNECT_ISSUER_ID" >> "$GITHUB_ENV"
-          echo "SPARKLE_PRIVATE_KEY_FILE=$SPARKLE_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Build, sign, notarize, and package macOS release
-        env:
-          APP_VERSION: ${{ steps.package_version.outputs.value }}
-          BUNDLE_ID: ai.openclaw.mac
-          BUILD_CONFIG: release
-          SIGN_IDENTITY: ${{ env.SIGN_IDENTITY }}
-          SKIP_PNPM_INSTALL: "1"
-          SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
-        run: scripts/package-mac-dist.sh
-
-      - name: Checkout main branch for appcast seed
-        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
-        uses: actions/checkout@v6
-        with:
-          path: openclaw-main
-          ref: main
-          fetch-depth: 0
-
-      - name: Seed appcast from main
-        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
-        run: |
-          set -euo pipefail
-          APPCAST_SOURCE="openclaw-main/appcast.xml"
-          if [[ -f "$APPCAST_SOURCE" ]]; then
-            cp "$APPCAST_SOURCE" appcast.xml
-          else
-            echo "No existing appcast at $APPCAST_SOURCE; generating a fresh feed."
-          fi
-
-      - name: Generate signed appcast artifact
-        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
-        env:
-          SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/openclaw/openclaw/releases/download/${{ inputs.tag }}/
-          SPARKLE_RELEASE_VERSION: ${{ steps.package_version.outputs.value }}
-        run: scripts/make_appcast.sh "dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip" "${{ env.SPARKLE_FEED_URL }}"
-
-      - name: Upload stable appcast artifact
-        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-appcast-${{ inputs.tag }}
-          path: appcast.xml
-          if-no-files-found: error
-
-      - name: Skip shared appcast for beta releases
-        if: ${{ steps.release_channel.outputs.is_beta == 'true' }}
-        run: echo "Beta release detected; skip shared production appcast artifact generation."
-
-      - name: Upload macOS assets to GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          VERSION: ${{ steps.package_version.outputs.value }}
-        run: |
-          set -euo pipefail
-          gh release upload "$RELEASE_TAG" \
-            "dist/OpenClaw-$VERSION.zip" \
-            "dist/OpenClaw-$VERSION.dmg" \
-            "dist/OpenClaw-$VERSION.dSYM.zip" \
-            --clobber \
-            --repo "$GITHUB_REPOSITORY"
-
-      - name: Clean up signing keychain
-        if: always()
-        run: |
-          if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
-            security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
-          fi
+          {
+            echo "## Public macOS validation only"
+            echo
+            echo "This workflow no longer builds, signs, notarizes, or uploads macOS assets."
+            echo
+            echo "Next step:"
+            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\`."
+            echo "- Use \`preflight_only=true\` there for the full private mac preflight."
+            echo "- For the real publish path, the private run uploads the packaged \`.zip\`, \`.dmg\`, and \`.dSYM.zip\` files to the existing GitHub release in \`openclaw/openclaw\` automatically."
+            echo "- For stable releases, also download \`macos-appcast-${RELEASE_TAG}\` from the successful private run and commit \`appcast.xml\` back to \`main\` in \`openclaw/openclaw\`."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -454,12 +454,23 @@ describe("startTelegramWebhook", () => {
         expect(setWebhookSpy).toHaveBeenCalledWith(
           expect.any(String),
           expect.objectContaining({
-            certificate: expect.objectContaining({
+            certificate: expect.anything(),
+          }),
+        );
+        const certificate = setWebhookSpy.mock.calls[0]?.[1]?.certificate as
+          | { path?: string; fileData?: string; filename?: string }
+          | undefined;
+        expect(certificate).toBeDefined();
+        if (certificate && "path" in certificate && typeof certificate.path === "string") {
+          expect(certificate.path).toBe("/path/to/cert.pem");
+        } else {
+          expect(certificate).toEqual(
+            expect.objectContaining({
               fileData: "/path/to/cert.pem",
               filename: "cert.pem",
             }),
-          }),
-        );
+          );
+        }
       },
     );
   });

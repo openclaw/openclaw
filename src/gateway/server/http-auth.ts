@@ -4,7 +4,6 @@ import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
@@ -77,9 +76,6 @@ export async function authorizeCanvasRequest(params: {
   } = params;
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
-  }
-  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
-    return { ok: true };
   }
 
   let lastAuthFailure: GatewayAuthResult | null = null;

@@ -46,6 +46,7 @@ import {
 } from "./directory-config.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
@@ -602,7 +603,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     base: {
       deliveryMode: "direct",
       chunker: null,
-      textChunkLimit: 4000,
+      textChunkLimit: SLACK_TEXT_LIMIT,
     },
     attachedResults: {
       channel: "slack",
