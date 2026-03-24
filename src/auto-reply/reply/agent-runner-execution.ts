@@ -478,7 +478,9 @@ export async function runAgentTurnWithFallback(params: {
                             if (skip) {
                               return;
                             }
-                            await params.typingSignals.signalTextDelta(text);
+                            if (text !== undefined) {
+                              await params.typingSignals.signalTextDelta(text);
+                            }
                             await onToolResult({
                               ...payload,
                               text,
