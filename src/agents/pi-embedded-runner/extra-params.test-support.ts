@@ -44,6 +44,9 @@ export function runExtraParamsCase<
     params.applyModelId ?? params.model.id,
     undefined,
     params.thinkingLevel,
+    undefined,
+    undefined,
+    params.model.api,
   );
 
   const context: Context = { messages: [] };

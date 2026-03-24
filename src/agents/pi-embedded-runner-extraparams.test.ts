@@ -2547,4 +2547,134 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_key).toBe("session-default");
     expect(payload.prompt_cache_retention).toBe("24h");
   });
+
+  it("applies transport wrapper for custom provider with openai-responses api param", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "custom-responses-provider",
+      "custom-model-v1",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "openai-responses",
+    );
+
+    const model = {
+      api: "openai-responses",
+      provider: "custom-responses-provider",
+      id: "custom-model-v1",
+      baseUrl: "https://custom-api.example.com/v1",
+    } as unknown as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    // Transport wrapper applied: defaults to "auto" (WebSocket-first with SSE fallback)
+    expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("does not inject attribution headers for custom openai-responses provider", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "custom-responses-provider",
+      "custom-model-v1",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "openai-responses",
+    );
+
+    const model = {
+      api: "openai-responses",
+      provider: "custom-responses-provider",
+      id: "custom-model-v1",
+      baseUrl: "https://custom-api.example.com/v1",
+    } as unknown as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toBeUndefined();
+  });
+
+  it("strips store from payload for custom openai-responses provider with non-OpenAI baseUrl", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-responses-provider",
+      applyModelId: "custom-model-v1",
+      model: {
+        api: "openai-responses",
+        provider: "custom-responses-provider",
+        id: "custom-model-v1",
+        baseUrl: "https://custom-api.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("keeps store for custom openai-responses provider with compat.supportsStore=true", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-responses-provider",
+      applyModelId: "custom-model-v1",
+      model: {
+        api: "openai-responses",
+        provider: "custom-responses-provider",
+        id: "custom-model-v1",
+        baseUrl: "https://custom-api.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+        compat: { supportsStore: true },
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.store).toBe(false);
+  });
+
+  it("keeps store for first-party OpenAI baseUrl even without explicit compat", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.store).toBeDefined();
+  });
+
+  it("keeps store for OpenAI model without explicit baseUrl (default endpoint)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        contextWindow: 200_000,
+      } as unknown as Model<"openai-responses">,
+    });
+    // Missing baseUrl = default OpenAI endpoint; store should not be stripped.
+    expect(payload.store).toBeDefined();
+  });
 });

@@ -2299,6 +2299,7 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
         effectiveWorkspace,
+        params.model.api,
       );
       const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
