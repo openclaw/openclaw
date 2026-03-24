@@ -42,6 +42,8 @@ export type AgentContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+  /** When true, pruned images are cached to disk and replaced with a file path reference. */
+  cacheMedia?: boolean;
 };
 
 export type CliBackendConfig = {

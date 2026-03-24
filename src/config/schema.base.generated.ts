@@ -2282,6 +2282,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     additionalProperties: false,
                   },
+                  cacheMedia: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
