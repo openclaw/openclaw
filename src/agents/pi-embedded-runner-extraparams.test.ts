@@ -30,7 +30,12 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn(
   },
 );
 
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
+} from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
 beforeEach(() => {
@@ -1529,6 +1534,72 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("returns prepared Codex transport defaults for runtime sessions", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(effectiveExtraParams.transport).toBe("auto");
+  });
+
+  it("uses prepared transport when session settings did not explicitly set one", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({}),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBe("auto");
+  });
+
+  it("keeps explicit session transport over prepared OpenAI defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "sse" }),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("strips prototype pollution keys from extra params overrides", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      extraParamsOverride: {
+        __proto__: { polluted: true },
+        constructor: "blocked",
+        prototype: "blocked",
+        temperature: 0.2,
+      },
+    });
+
+    expect(effectiveExtraParams.temperature).toBe(0.2);
+    expect(Object.hasOwn(effectiveExtraParams, "__proto__")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "constructor")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "prototype")).toBe(false);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
