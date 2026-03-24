@@ -143,7 +143,8 @@ async function* streamOpenAITelephony(
   signal?: AbortSignal,
 ): AsyncGenerator<Buffer, void, unknown> {
   const openai = config.openai;
-  const apiKey = openai?.apiKey || process.env.OPENAI_API_KEY || "";
+  const apiKey =
+    (typeof openai?.apiKey === "string" ? openai.apiKey : null) || process.env.OPENAI_API_KEY || "";
   if (!apiKey) {
     throw new Error("OpenAI API key required for streaming TTS");
   }
@@ -283,8 +284,8 @@ export function createTelephonyTtsProvider(params: {
   const ttsConfig = effectiveConfig.messages?.tts;
   const canStreamElevenLabs =
     ttsConfig?.provider === "elevenlabs" &&
-    ttsConfig.elevenlabs?.apiKey &&
-    ttsConfig.elevenlabs?.voiceId;
+    typeof ttsConfig.elevenlabs?.apiKey === "string" &&
+    !!ttsConfig.elevenlabs?.voiceId;
 
   const canStreamOpenAI =
     ttsConfig?.provider === "openai" &&
