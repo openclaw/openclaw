@@ -16,6 +16,23 @@ This application employs a multiprocess architecture to safely bridge GTK3 and G
 
 *Note: Debian is explicitly deferred from v1.*
 
+## Debugging
+
+The companion app uses `OPENCLAW_LINUX_LOG` to control its internal logging verbosity.
+If the variable is not set, or contains an invalid level, the app defaults to `INFO` level.
+When launching from the terminal, you can override the log level like so:
+
+```bash
+OPENCLAW_LINUX_LOG=debug ./build/openclaw-linux
+```
+
+**Supported Log Levels:**
+- `trace`: Maximum verbosity. Logs all systemd signal entries, property fetches, D-Bus state machine transitions, and fine-grained UI refresh events.
+- `debug`: Detailed lifecycle events. Logs start/stop subscription requests, asynchronous job completion, subprocess argument assembly, and major UI view swaps.
+- `info`: Standard operational events. Logs successful systemd status changes, process start/exit confirmations, tray registration success, and successful state resolutions.
+- `warn`: (Default) Sub-optimal or unexpected conditions that don't prevent core operation. Logs D-Bus property access failures, missed user unit directories, and invalid JSON parses.
+- `error`: Critical failures. Logs complete failure to acquire the D-Bus session bus, missing GTK resources, or crashes in the subprocess launcher.
+
 ## Build Dependencies
 The app requires the following exact APT packages:
 ```bash
