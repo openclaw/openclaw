@@ -9,6 +9,11 @@ const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
+export type ClawHubPackageCompatibility = {
+  pluginApiRange?: string;
+  builtWithOpenClawVersion?: string;
+  minGatewayVersion?: string;
+};
 
 export type ClawHubPackageListItem = {
   name: string;
@@ -31,11 +36,7 @@ export type ClawHubPackageDetail = {
   package:
     | (ClawHubPackageListItem & {
         tags?: Record<string, string>;
-        compatibility?: {
-          pluginApiRange?: string;
-          builtWithOpenClawVersion?: string;
-          minGatewayVersion?: string;
-        } | null;
+        compatibility?: ClawHubPackageCompatibility | null;
         capabilities?: {
           executesCode?: boolean;
           runtimeId?: string;
@@ -78,11 +79,7 @@ export type ClawHubPackageVersion = {
     changelog: string;
     distTags?: string[];
     files?: unknown;
-    compatibility?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { compatibility?: infer C }
-        ? C
-        : never
-      : never;
+    compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
         ? C
