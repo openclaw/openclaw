@@ -470,14 +470,7 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
-    if (!selectedProvider && keylessFallbackProvider) {
-      selectedProvider = keylessFallbackProvider.id;
-      selectedResolution = {
-        source: "missing",
-        secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
-      };
-    }
+    // No keyless fallback providers currently configured; skip fallback selection.
 
     const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
       const diagnostic: RuntimeWebDiagnostic = {
@@ -506,11 +499,7 @@ export async function resolveRuntimeWebTools(params: {
       }
 
       if (selectedProvider) {
-        const selectedProviderEntry = providers.find((entry) => entry.id === selectedProvider);
-        const selectedDetails =
-          selectedProviderEntry?.requiresCredential === false
-            ? `tools.web.search auto-detected keyless provider "${selectedProvider}" as the default fallback.`
-            : `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`;
+        const selectedDetails = `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: "WEB_SEARCH_AUTODETECT_SELECTED",
           message: selectedDetails,

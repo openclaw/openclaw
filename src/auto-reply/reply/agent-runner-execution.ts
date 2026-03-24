@@ -240,6 +240,7 @@ export async function runAgentTurnWithFallback(params: {
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              let attemptCompactionCount = 0;
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -336,6 +337,7 @@ export async function runAgentTurnWithFallback(params: {
             },
           );
           return (async () => {
+            let attemptCompactionCount = 0;
             const result = await runEmbeddedPiAgent({
               ...embeddedContext,
               trigger: params.isHeartbeat ? "heartbeat" : "user",

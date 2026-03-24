@@ -74,6 +74,8 @@ export type GetReplyOptions = {
 
 export type ReplyPayload = {
   text?: string;
+  /** Optional interactive component payload (e.g. buttons, selects). */
+  interactive?: import("../interactive/payload.js").InteractiveReply;
   mediaUrl?: string;
   mediaUrls?: string[];
   btw?: {

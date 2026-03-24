@@ -126,8 +126,8 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   /**
-   * When true, allows the plugin runtime subagent API to bind to the active
-   * gateway request context for this run (gateway-hosted runs only).
+   * When true, the loader treats this agent run as gateway-bindable so that
+   * subagent spawning can resolve gateway-bound conversation contexts.
    */
   allowGatewaySubagentBinding?: boolean;
 };

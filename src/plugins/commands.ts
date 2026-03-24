@@ -109,6 +109,7 @@ export type CommandRegistrationResult = {
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
+  meta?: { pluginName?: string; pluginRoot?: string },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (registryLocked) {
@@ -281,6 +282,11 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    // Conversation binding is not supported in the basic plugin command context.
+    // Plugins that need binding must be invoked through the full agent pipeline.
+    requestConversationBinding: async () => ({ status: "error" as const, message: "unsupported" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
   };
 
   // Lock registry during execution to prevent concurrent modifications

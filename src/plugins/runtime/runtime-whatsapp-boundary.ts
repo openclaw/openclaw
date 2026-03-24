@@ -19,6 +19,9 @@ import {
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
 
+// WhatsApp modules are loaded at runtime via jiti (not static imports).
+// These type aliases are used only for TypeScript inference; the actual paths
+// resolved at runtime may differ (based on plugin rootDir).
 type WhatsAppLightModule = typeof import("../../../extensions/whatsapp/light-runtime-api.js");
 type WhatsAppHeavyModule = typeof import("../../../extensions/whatsapp/runtime-api.js");
 

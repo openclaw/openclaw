@@ -90,6 +90,12 @@ export type PluginChannelRegistration = {
   plugin: ChannelPlugin;
   source: string;
   rootDir?: string;
+  /**
+   * Optional pre-built dock entry for this channel plugin.
+   * Typed as unknown here to avoid a circular dependency on channels/dock.ts;
+   * callers in dock.ts cast to ChannelDock.
+   */
+  dock?: unknown;
 };
 
 export type PluginChannelSetupRegistration = {

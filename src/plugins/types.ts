@@ -631,9 +631,28 @@ export type ProviderPluginWizardModelPicker = {
 };
 
 /** UI metadata that lets provider plugins appear in onboarding and configure flows. */
+/** Provider onboarding metadata for the choose-provider wizard flow. */
+export type ProviderPluginWizardOnboarding = {
+  /** Auth method id to pre-select in the onboarding flow. */
+  methodId?: string;
+  /** Choice identifier for this provider in a grouped picker. */
+  choiceId?: string;
+  /** Human-readable choice label. */
+  choiceLabel?: string;
+  /** Short hint shown next to the choice. */
+  choiceHint?: string;
+  /** Group identifier for clustering providers. */
+  groupId?: string;
+  /** Human-readable group label. */
+  groupLabel?: string;
+  /** Short hint shown next to the group. */
+  groupHint?: string;
+};
+
 export type ProviderPluginWizard = {
   setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
+  onboarding?: ProviderPluginWizardOnboarding;
 };
 
 export type ProviderModelSelectedContext = {

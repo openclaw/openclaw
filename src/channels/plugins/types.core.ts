@@ -158,6 +158,7 @@ export type ChannelAccountSnapshot = {
   profile?: unknown;
   channelAccessToken?: string;
   channelSecret?: string;
+  healthState?: string | null;
 };
 
 export type ChannelLogSink = {
@@ -216,6 +217,12 @@ export type ChannelMentionAdapter = {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
   }) => string[];
+  /** Return regex patterns to strip from messages (alternative to stripPatterns). */
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripMentions?: (params: {
     text: string;
     ctx: MsgContext;
@@ -303,6 +310,17 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  parseExplicitTarget?: (params: { raw: string }) => { chatType?: string } | null | undefined;
+  inferTargetChatType?: (params: { to: string }) => string | null | undefined;
+  /** Resolve the outbound session route for a given target. */
+  resolveOutboundSessionRoute?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    channel: string;
+    accountId?: string | null;
+    target: string;
+    threadId?: string | number | null;
+  }) => ChannelOutboundSessionRoute | null | Promise<ChannelOutboundSessionRoute | null>;
 };
 
 export type ChannelAgentPromptAdapter = {
@@ -373,6 +391,10 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     toolContext: ChannelMessageActionContext["toolContext"];
   }) => boolean;
+  /** Describe message tool capabilities and schema for agent discovery. */
+  describeMessageTool?: (
+    ctx: ChannelMessageActionDiscoveryContext,
+  ) => ChannelMessageToolDiscovery | null;
 };
 
 export type ChannelPollResult = {
@@ -403,4 +425,45 @@ export type BaseProbeResult<TError = string | null> = {
 export type BaseTokenResolution = {
   token: string;
   source: string;
+};
+
+/**
+ * Outbound session route resolved by a channel messaging adapter.
+ * Mirrors OutboundSessionRoute from infra/outbound/outbound-session.ts
+ * but kept here to avoid a circular dependency on the infra layer.
+ */
+export type ChannelOutboundSessionRoute = {
+  sessionKey: string;
+  baseSessionKey: string;
+  peer: { kind: "direct" | "group" | "channel"; id: string };
+  chatType: "direct" | "group" | "channel";
+  from: string;
+  to: string;
+  threadId?: string | number;
+};
+
+/** Schema contribution from a channel's message tool discovery. */
+export type ChannelMessageToolSchemaContribution = {
+  properties?: Record<string, unknown>;
+};
+
+/** Structured UI component payload (e.g. interactive buttons). */
+export type ChannelStructuredComponents = {
+  blocks?: unknown[];
+};
+
+/**
+ * Discovery result returned by ChannelMessageActionAdapter.describeMessageTool.
+ * Describes the available actions and optional schema extensions.
+ */
+export type ChannelMessageToolDiscovery = {
+  actions: string[];
+  capabilities?: string[];
+  schema?: ChannelMessageToolSchemaContribution | null;
+};
+
+/** Context passed to describeMessageTool; contains the resolved config. */
+export type ChannelMessageActionDiscoveryContext = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
 };

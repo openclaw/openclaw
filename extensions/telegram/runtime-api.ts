@@ -1,3 +1,4 @@
+export type { TelegramNetworkConfig } from "../../src/config/types.telegram.js";
 export type { TelegramProbe } from "./src/probe.js";
 export { monitorTelegramProvider } from "./src/monitor.js";
 export { probeTelegram } from "./src/probe.js";

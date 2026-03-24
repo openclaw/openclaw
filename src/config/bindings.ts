@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "./config.js";
 import type { AgentAcpBinding, AgentBinding, AgentRouteBinding } from "./types.agents.js";
 
+/** Alias for AgentBinding kept for channel-adapter compatibility. */
+export type ConfiguredBindingRule = AgentBinding;
+
 function normalizeBindingType(binding: AgentBinding): "route" | "acp" {
   return binding.type === "acp" ? "acp" : "route";
 }

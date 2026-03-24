@@ -24,6 +24,7 @@ import {
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
 } from "../plugins/provider-model-defaults.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import type { SpeechVoiceOption } from "./provider-types.js";
 import {
   getSpeechProvider,
   listSpeechProviders,
@@ -711,12 +712,8 @@ export async function textToSpeechTelephony(params: {
       }
       const synthesis = await resolvedProvider.synthesizeTelephony({
         text: params.text,
-        apiKey,
-        baseUrl: config.openai.baseUrl,
-        model: config.openai.model,
-        voice: config.openai.voice,
-        responseFormat: output.format,
-        timeoutMs: config.timeoutMs,
+        cfg: params.cfg,
+        config,
       });
 
       return {

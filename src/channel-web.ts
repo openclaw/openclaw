@@ -32,7 +32,8 @@ class LazyWhatsAppAuthDir {
 
   #read(): string {
     this.#value ??= resolveWaWebAuthDir();
-    return this.#value;
+    // After nullish assignment, #value is guaranteed to be a string.
+    return this.#value!;
   }
 
   toString(): string {
