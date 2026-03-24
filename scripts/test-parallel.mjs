@@ -55,6 +55,10 @@ const cleanupTempArtifacts = () => {
   if (tempArtifactDir === null) {
     return;
   }
+  if (process.env.OPENCLAW_TEST_KEEP_TEMP_ARTIFACTS === "1") {
+    console.error(`[test-parallel] keeping temp artifacts at ${tempArtifactDir}`);
+    return;
+  }
   fs.rmSync(tempArtifactDir, { recursive: true, force: true });
   tempArtifactDir = null;
 };
@@ -455,12 +459,13 @@ const channelIsolatedEntries = channelIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-channels-isolated`,
   args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
 }));
-const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
+const defaultUnitFastLaneCount = testProfile === "low" ? 8 : isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
-const defaultUnitFastBatchTargetMs = isCI && !isWindows ? 45_000 : 0;
+const defaultUnitFastBatchTargetMs =
+  testProfile === "low" ? 10_000 : isCI && !isWindows ? 45_000 : 0;
 const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,
@@ -1665,7 +1670,10 @@ if (serialPrefixRuns.length > 0) {
   if (failedSerialPrefix !== undefined) {
     process.exit(failedSerialPrefix);
   }
-  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
+  // Low-profile runs favor stability over overlap once we leave the shared
+  // unit-fast batches; the isolated memory-heavy lanes can still trip over
+  // each other when two singleton Vitest processes overlap.
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 1 : undefined;
   const failedDeferredParallel = isMacMiniProfile
     ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
     : deferredRunConcurrency
