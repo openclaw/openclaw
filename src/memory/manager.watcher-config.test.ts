@@ -46,6 +46,9 @@ describe("memory watcher config", () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    vi.doUnmock("../config/paths.js");
+    vi.doUnmock("./search-manager.js");
+    vi.doUnmock("./index.js");
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
   });

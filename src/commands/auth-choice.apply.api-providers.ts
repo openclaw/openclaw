@@ -3,6 +3,7 @@ import type { SecretInput } from "../config/types.secrets.js";
 import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
 import { shouldResetGigachatBaseUrlForOAuthReauth } from "../plugins/provider-auth-helpers.js";
 import { resolveRefFallbackInput } from "../plugins/provider-auth-input.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import {
   createAuthChoiceDefaultModelApplierForMutableState,
@@ -145,7 +146,13 @@ export async function applyAuthChoiceApiProviders(
         validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         prompter: params.prompter,
         setCredential: async (apiKey, mode) => {
-          if (typeof apiKey === "string" && resolveGigachatAuthMode({ apiKey }) === "basic") {
+          const resolvedApiKey =
+            (await resolveSecretInputString({
+              config: nextConfig,
+              value: apiKey,
+              env: process.env,
+            })) ?? "";
+          if (resolveGigachatAuthMode({ apiKey: resolvedApiKey }) === "basic") {
             params.runtime.error(
               [
                 "GIGACHAT_CREDENTIALS looks like Basic user:password credentials.",

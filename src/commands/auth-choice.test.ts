@@ -459,6 +459,41 @@ describe("applyAuthChoice", () => {
     await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
   });
 
+  it("rejects ref-backed Basic GigaChat credentials on the interactive OAuth path", async () => {
+    await setupTempState();
+
+    process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const text = vi.fn().mockResolvedValueOnce("GIGACHAT_CREDENTIALS");
+    const { prompter } = createApiKeyPromptHarness({ text });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit ${code}`);
+      }),
+    };
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "gigachat-personal",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+        opts: { secretInputMode: "ref" },
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Basic user:password credentials"),
+    );
+    await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
+  });
+
   it("accepts OAuth GigaChat credentials keys that contain colons", async () => {
     await setupTempState();
 
