@@ -162,7 +162,22 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
       });
       this.ws = ws;
 
+      const connectTimeout = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          try {
+            ws.close();
+          } catch {
+            // ignore close errors during timeout cleanup
+          }
+          if (this.ws === ws) {
+            this.ws = null;
+          }
+          reject(new Error("Scribe STT connection timeout"));
+        }
+      }, 10000);
+
       ws.on("open", () => {
+        clearTimeout(connectTimeout);
         console.log("[ScribeSTT] WebSocket connected");
         this.connected = true;
         this.reconnectAttempts = 0;
@@ -180,6 +195,7 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
       });
 
       ws.on("error", (error) => {
+        clearTimeout(connectTimeout);
         console.error("[ScribeSTT] WebSocket error:", error);
         if (!this.connected) {
           reject(error);
@@ -187,27 +203,19 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
       });
 
       ws.on("close", (code, reason) => {
+        clearTimeout(connectTimeout);
         console.log(
           `[ScribeSTT] WebSocket closed (code: ${code}, reason: ${reason?.toString() || "none"})`,
         );
         this.connected = false;
+        if (this.ws === ws) {
+          this.ws = null;
+        }
 
         if (!this.closed) {
           void this.attemptReconnect();
         }
       });
-
-      setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          // Clean up the WebSocket to avoid orphaned connections
-          try {
-            ws.close();
-          } catch {
-            // ignore close errors during timeout cleanup
-          }
-          reject(new Error("Scribe STT connection timeout"));
-        }
-      }, 10000);
     });
   }
 

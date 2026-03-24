@@ -150,6 +150,7 @@ async function* streamOpenAITelephony(
 
   const model = openai?.model || "gpt-4o-mini-tts";
   const voice = openai?.voice || "coral";
+  const baseUrl = openai?.baseUrl?.replace(/\/+$/, "") || "https://api.openai.com";
 
   const body: Record<string, unknown> = {
     model,
@@ -158,7 +159,7 @@ async function* streamOpenAITelephony(
     response_format: "pcm", // Raw PCM: 24kHz, 16-bit signed LE, mono
   };
 
-  const response = await fetch("https://api.openai.com/v1/audio/speech", {
+  const response = await fetch(`${baseUrl}/v1/audio/speech`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
