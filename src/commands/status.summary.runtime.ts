@@ -1,3 +1,4 @@
+import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -85,22 +86,12 @@ function resolveConfiguredStatusModelRef(params: {
     }
   }
 
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
-      );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        return { provider: providerName, model: providerCfg.models[0].id };
-      }
-    }
+  const fallbackProvider = resolveConfiguredProviderFallback({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (fallbackProvider) {
+    return fallbackProvider;
   }
 
   return { provider: params.defaultProvider, model: params.defaultModel };
@@ -226,4 +217,5 @@ export const statusSummaryRuntime = {
   resolveContextTokensForModel,
   classifySessionKey,
   resolveSessionModelRef,
+  resolveConfiguredStatusModelRef,
 };

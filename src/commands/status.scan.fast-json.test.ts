@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 import {
   applyStatusScanDefaults,
+  createStatusGatewayCallModuleMock,
+  createStatusGatewayProbeModuleMock,
   createStatusMemorySearchConfig,
   createStatusMemorySearchManager,
+  createStatusOsSummaryModuleMock,
+  createStatusPluginRegistryModuleMock,
+  createStatusPluginStatusModuleMock,
+  createStatusScanDepsRuntimeModuleMock,
   createStatusSummary,
   withTemporaryEnv,
 } from "./status.scan.test-helpers.js";
@@ -13,17 +19,17 @@ const mocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(),
   readBestEffortConfig: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
-  getStatusCommandSecretTargetIds: vi.fn(() => []),
   getUpdateCheckResult: vi.fn(),
   getAgentLocalStatuses: vi.fn(),
   getStatusSummary: vi.fn(),
-  resolveMemorySearchConfig: vi.fn(),
   getMemorySearchManager: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(),
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   ensurePluginRegistryLoaded: vi.fn(),
   buildPluginCompatibilityNotices: vi.fn(() => []),
+  getStatusCommandSecretTargetIds: vi.fn(() => []),
+  resolveMemorySearchConfig: vi.fn(),
 }));
 
 let originalForceStderr: boolean;
@@ -68,55 +74,30 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
 }));
 
-vi.mock("./status.update.js", () => ({
-  getUpdateCheckResult: mocks.getUpdateCheckResult,
-}));
-
-vi.mock("./status.agent-local.js", () => ({
-  getAgentLocalStatuses: mocks.getAgentLocalStatuses,
-}));
-
-vi.mock("./status.summary.js", () => ({
-  getStatusSummary: mocks.getStatusSummary,
-}));
-
-vi.mock("../infra/os-summary.js", () => ({
-  resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
-}));
-
-vi.mock("./status.scan.deps.runtime.js", () => ({
-  getTailnetHostname: vi.fn(),
-  getMemorySearchManager: mocks.getMemorySearchManager,
-}));
+vi.mock("./status.update.js", () => ({ getUpdateCheckResult: mocks.getUpdateCheckResult }));
+vi.mock("./status.agent-local.js", () => ({ getAgentLocalStatuses: mocks.getAgentLocalStatuses }));
+vi.mock("./status.summary.js", () => ({ getStatusSummary: mocks.getStatusSummary }));
+vi.mock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
+vi.mock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
 
 vi.mock("../agents/memory-search.js", () => ({
   resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
-}));
+vi.mock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
 
-vi.mock("./status.gateway-probe.js", () => ({
-  pickGatewaySelfPresence: vi.fn(() => null),
-  resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
-}));
+vi.mock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
 
 vi.mock("../process/exec.js", () => ({
   runExec: vi.fn(),
 }));
 
-vi.mock("../cli/plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
-}));
-
-vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
-}));
+vi.mock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
+vi.mock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
 
 const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
 

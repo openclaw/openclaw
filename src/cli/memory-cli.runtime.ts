@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Command } from "commander";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -11,15 +10,14 @@ import { setVerbose } from "../globals.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getMemoryCommandSecretTargetIds } from "./command-secret-targets.js";
-import { formatHelpExamples } from "./help-format.js";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./memory-cli.types.js";
 import { withProgress, withProgressTotals } from "./progress.js";
+export { registerMemoryCli } from "./memory-cli.js";
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -746,60 +744,4 @@ export async function runMemorySearch(
       defaultRuntime.log(lines.join("\n").trim());
     },
   });
-}
-
-export function registerMemoryCli(program: Command) {
-  const memory = program
-    .command("memory")
-    .description("Search, inspect, and reindex memory files")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw memory status", "Show index and provider status."],
-          ["openclaw memory status --deep", "Probe embedding provider readiness."],
-          ["openclaw memory index --force", "Force a full reindex."],
-          ['openclaw memory search "meeting notes"', "Quick search using positional query."],
-          [
-            'openclaw memory search --query "deployment" --max-results 20',
-            "Limit results for focused troubleshooting.",
-          ],
-          ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
-    );
-
-  memory
-    .command("status")
-    .description("Show memory search index status")
-    .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--json", "Print JSON")
-    .option("--deep", "Probe embedding provider availability")
-    .option("--index", "Reindex if dirty (implies --deep)")
-    .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      await runMemoryStatus(opts);
-    });
-
-  memory
-    .command("index")
-    .description("Reindex memory files")
-    .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--force", "Force full reindex", false)
-    .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions) => {
-      await runMemoryIndex(opts);
-    });
-
-  memory
-    .command("search")
-    .description("Search memory files")
-    .argument("[query]", "Search query")
-    .option("--query <text>", "Search query (alternative to positional argument)")
-    .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--max-results <n>", "Max results", (value: string) => Number(value))
-    .option("--min-score <n>", "Minimum score", (value: string) => Number(value))
-    .option("--json", "Print JSON")
-    .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
-      await runMemorySearch(queryArg, opts);
-    });
 }

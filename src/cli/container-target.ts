@@ -1,10 +1,7 @@
 import { spawnSync } from "node:child_process";
-import {
-  consumeRootOptionToken,
-  FLAG_TERMINATOR,
-  isValueToken,
-} from "../infra/cli-root-options.js";
+import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { getPrimaryCommand } from "./argv.js";
+import { takeCliRootOptionValue } from "./root-option-value.js";
 
 type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
@@ -27,23 +24,6 @@ type ContainerRuntimeExec = {
   argsPrefix: string[];
 };
 
-function takeValue(
-  raw: string,
-  next: string | undefined,
-): {
-  value: string | null;
-  consumedNext: boolean;
-} {
-  if (raw.includes("=")) {
-    const [, value] = raw.split("=", 2);
-    const trimmed = (value ?? "").trim();
-    return { value: trimmed || null, consumedNext: false };
-  }
-  const consumedNext = isValueToken(next);
-  const trimmed = consumedNext ? next!.trim() : "";
-  return { value: trimmed || null, consumedNext };
-}
-
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   if (argv.length < 2) {
     return { ok: true, container: null, argv };
@@ -65,7 +45,7 @@ export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
 
     if (arg === "--container" || arg.startsWith("--container=")) {
       const next = args[i + 1];
-      const { value, consumedNext } = takeValue(arg, next);
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (consumedNext) {
         i += 1;
       }

@@ -76,6 +76,7 @@ import {
   resolveLineAccount,
 } from "../../plugin-sdk/line.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
 import { createRuntimeMatrix } from "./runtime-matrix.js";
@@ -84,26 +85,6 @@ import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
-
-function defineCachedValue<T extends object, K extends PropertyKey>(
-  target: T,
-  key: K,
-  create: () => unknown,
-): void {
-  let cached: unknown;
-  let ready = false;
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (!ready) {
-        cached = create();
-        ready = true;
-      }
-      return cached;
-    },
-  });
-}
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   const channelRuntime = {
