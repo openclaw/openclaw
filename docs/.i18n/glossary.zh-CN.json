@@ -116,6 +116,10 @@
     "target": "配套应用"
   },
   {
+    "source": "Community Plugins",
+    "target": "社区插件"
+  },
+  {
     "source": "expected keys",
     "target": "预期键名"
   },

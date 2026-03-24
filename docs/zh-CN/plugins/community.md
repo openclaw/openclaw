@@ -8,7 +8,9 @@ title: 社区插件
 
 # 社区插件
 
-社区插件是由第三方维护的 OpenClaw 扩展包，可为 OpenClaw 增加新的渠道、工具、provider 或其他能力。它们通常发布在 [ClawHub](/tools/clawhub) 或 npm 上，并且可以通过一条命令安装。
+社区插件是由第三方维护的 OpenClaw 扩展包，可为 OpenClaw 增加新的渠道、
+工具、provider 或其他能力。它们通常发布在 [ClawHub](/tools/clawhub)
+或 npm 上，并且可以通过一条命令安装。
 
 ```bash
 openclaw plugins install <package-name>
@@ -20,10 +22,12 @@ OpenClaw 会先检查 ClawHub，再自动回退到 npm。
 
 ### Codex App Server Bridge
 
-独立的 OpenClaw 到 Codex App Server 对话桥接插件。可以把聊天绑定到 Codex 线程，用自然语言继续对话，并通过聊天原生命令控制恢复、规划、评审、模型选择和压缩等流程。
+独立的 OpenClaw 到 Codex App Server 对话桥接插件。可以把聊天绑定到
+Codex 线程，用自然语言继续对话，并通过聊天原生命令控制恢复、规划、
+评审、模型选择和压缩等流程。
 
 - **npm:** `openclaw-codex-app-server`
-- **repo:** [github.com/pwrdrvr/openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server)
+- **repo:** [pwrdrvr/openclaw-codex-app-server][codex-app-server-repo]
 
 ```bash
 openclaw plugins install openclaw-codex-app-server
@@ -34,7 +38,7 @@ openclaw plugins install openclaw-codex-app-server
 基于 Stream 模式的企业钉钉机器人集成。支持文本、图片和文件消息。
 
 - **npm:** `@largezhou/ddingtalk`
-- **repo:** [github.com/largezhou/openclaw-dingtalk](https://github.com/largezhou/openclaw-dingtalk)
+- **repo:** [largezhou/openclaw-dingtalk][dingtalk-repo]
 
 ```bash
 openclaw plugins install @largezhou/ddingtalk
@@ -45,7 +49,7 @@ openclaw plugins install @largezhou/ddingtalk
 Lossless Context Management 插件。基于 DAG 的会话摘要与增量压缩，在降低 token 使用的同时尽量保持上下文保真。
 
 - **npm:** `@martian-engineering/lossless-claw`
-- **repo:** [github.com/Martian-Engineering/lossless-claw](https://github.com/Martian-Engineering/lossless-claw)
+- **repo:** [Martian-Engineering/lossless-claw][lossless-claw-repo]
 
 ```bash
 openclaw plugins install @martian-engineering/lossless-claw
@@ -56,7 +60,7 @@ openclaw plugins install @martian-engineering/lossless-claw
 官方插件，用于将智能体 trace 导出到 Opik。可监控行为、成本、token 与错误等。
 
 - **npm:** `@opik/opik-openclaw`
-- **repo:** [github.com/comet-ml/opik-openclaw](https://github.com/comet-ml/opik-openclaw)
+- **repo:** [comet-ml/opik-openclaw][opik-repo]
 
 ```bash
 openclaw plugins install @opik/opik-openclaw
@@ -67,7 +71,7 @@ openclaw plugins install @opik/opik-openclaw
 通过 QQ Bot API 将 OpenClaw 接入 QQ。支持私聊、群提及、频道消息以及语音、图片、视频、文件等富媒体。
 
 - **npm:** `@sliverp/qqbot`
-- **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
+- **repo:** [sliverp/qqbot][qqbot-repo]
 
 ```bash
 openclaw plugins install @sliverp/qqbot
@@ -78,7 +82,7 @@ openclaw plugins install @sliverp/qqbot
 OpenClaw 企业微信渠道插件。基于企业微信 AI Bot WebSocket 长连接，支持私聊、群聊、流式回复和主动消息。
 
 - **npm:** `@wecom/wecom-openclaw-plugin`
-- **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
+- **repo:** [WecomTeam/wecom-openclaw-plugin][wecom-repo]
 
 ```bash
 openclaw plugins install @wecom/wecom-openclaw-plugin
@@ -137,3 +141,10 @@ openclaw plugins install @wecom/wecom-openclaw-plugin
 - [安装与配置插件](/tools/plugin) — 如何安装任意插件
 - [Building Plugins](/plugins/building-plugins) — 如何创建自己的插件
 - [Plugin Manifest](/plugins/manifest) — manifest schema
+
+[codex-app-server-repo]: https://github.com/pwrdrvr/openclaw-codex-app-server
+[dingtalk-repo]: https://github.com/largezhou/openclaw-dingtalk
+[lossless-claw-repo]: https://github.com/Martian-Engineering/lossless-claw
+[opik-repo]: https://github.com/comet-ml/opik-openclaw
+[qqbot-repo]: https://github.com/sliverp/qqbot
+[wecom-repo]: https://github.com/WecomTeam/wecom-openclaw-plugin
