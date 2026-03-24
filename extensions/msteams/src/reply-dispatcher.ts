@@ -26,6 +26,18 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
 
+const INFORMATIVE_STATUS_TEXTS = [
+  "Thinking...",
+  "Working on that...",
+  "Checking the details...",
+  "Putting an answer together...",
+];
+
+export function pickInformativeStatusText(random = Math.random): string {
+  const index = Math.floor(random() * INFORMATIVE_STATUS_TEXTS.length);
+  return INFORMATIVE_STATUS_TEXTS[index] ?? INFORMATIVE_STATUS_TEXTS[0]!;
+}
+
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -120,6 +132,7 @@ export function createMSTeamsReplyDispatcher(params: {
   // Track whether onPartialReply was ever called — if so, the stream
   // owns the text delivery and deliver should skip text payloads.
   let streamReceivedTokens = false;
+  let informativeUpdateSent = false;
 
   if (isPersonal) {
     stream = new TeamsHttpStream({
@@ -197,6 +210,13 @@ export function createMSTeamsReplyDispatcher(params: {
   } = core.channel.reply.createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+    onReplyStart: async () => {
+      if (stream && !informativeUpdateSent) {
+        informativeUpdateSent = true;
+        await stream.sendInformativeUpdate(pickInformativeStatusText());
+      }
+      await typingCallbacks?.onReplyStart?.();
+    },
     typingCallbacks,
     deliver: async (payload) => {
       // When streaming received tokens AND hasn't failed, skip text delivery —
@@ -266,9 +286,6 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   // Build reply options with onPartialReply for streaming.
-  // Send the informative update on the first token (not eagerly at stream creation)
-  // so it only appears when the LLM is actually generating text — not when the
-  // agent uses a tool (e.g. sends an adaptive card) without streaming.
   const streamingReplyOptions = stream
     ? {
         onPartialReply: (payload: { text?: string }) => {
