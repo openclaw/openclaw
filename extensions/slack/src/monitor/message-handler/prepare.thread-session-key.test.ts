@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../../src/config/config.js";
 import type { SlackMessageEvent } from "../../types.js";
 
@@ -48,8 +48,7 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 }
 
 describe("thread-level session keys", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     await loadSlackPrepareModules();
   });
 
