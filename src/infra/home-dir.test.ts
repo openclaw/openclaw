@@ -219,4 +219,20 @@ describe("resolveOsHomeRelativePath", () => {
       }),
     ).toBe(path.resolve("/home/alice/docs"));
   });
+
+  it("expands braced environment placeholders", () => {
+    expect(
+      resolveOsHomeRelativePath("${XDG_CONFIG_HOME}/workspace/skills", {
+        env: { XDG_CONFIG_HOME: "/home/node/.openclaw" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(path.resolve("/home/node/.openclaw/workspace/skills"));
+  });
+
+  it("keeps empty-string environment placeholders unchanged", () => {
+    expect(
+      resolveOsHomeRelativePath("${XDG_CONFIG_HOME}/workspace", {
+        env: { XDG_CONFIG_HOME: "   " } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(path.resolve("${XDG_CONFIG_HOME}/workspace"));
+  });
 });

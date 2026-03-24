@@ -106,6 +106,7 @@ function expandEnvPlaceholders(input: string, env: NodeJS.ProcessEnv): string {
       if (!key) {
         return token;
       }
+      // 空字符串环境变量按未设置处理，保留原占位符，避免把路径段替换成空值。
       const resolved = normalize(env[key]);
       return resolved ?? token;
     },
