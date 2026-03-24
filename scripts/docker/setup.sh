@@ -108,8 +108,7 @@ ensure_control_ui_allowed_origins() {
   local current_allowed_origins
   allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
   current_allowed_origins="$(
-    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    run_setup_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
   )"
   current_allowed_origins="${current_allowed_origins//$'\r'/}"
 
@@ -118,17 +117,24 @@ ensure_control_ui_allowed_origins() {
     return 0
   fi
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
+  run_setup_cli config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json \
+    >/dev/null
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
 sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  run_setup_cli config set gateway.mode local >/dev/null
+  run_setup_cli config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+}
+
+run_setup_cli() {
+  # During setup, avoid the shared-network openclaw-cli service because it
+  # requires the gateway container's network namespace to already exist. That
+  # creates a circular dependency for config writes that are needed before the
+  # gateway can start cleanly.
+  docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps --entrypoint node openclaw-gateway \
+    dist/index.js "$@"
 }
 
 contains_disallowed_chars() {
@@ -458,7 +464,7 @@ echo "==> Fixing data-directory permissions"
 # ownership of all user project files on Linux hosts.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
-docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
+docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
@@ -471,7 +477,7 @@ echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
 echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+run_setup_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
