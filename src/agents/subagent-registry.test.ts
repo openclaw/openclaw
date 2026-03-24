@@ -193,4 +193,46 @@ describe("subagent registry seam flow", () => {
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
+
+  it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
+    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
+    const endedAt = Date.parse("2026-03-24T12:00:00Z");
+    mocks.callGateway.mockResolvedValueOnce({
+      status: "ok",
+      startedAt: endedAt - 500,
+      endedAt,
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-give-up",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "completion cleanup retry",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-delete-give-up"),
+    ).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-delete-give-up"),
+    ).toBeUndefined();
+  });
 });
