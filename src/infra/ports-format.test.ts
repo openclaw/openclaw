@@ -140,4 +140,31 @@ describe("ports-format", () => {
     // Should NOT have dual-stack note (different PIDs)
     expect(hints.some((h) => h.includes("Dual-stack loopback"))).toBe(false);
   });
+
+  it("correctly identifies non-loopback IPv6 addresses (link-local, global)", () => {
+    // Issue raised by Greptile: fe80::1 (link-local) should NOT be treated as loopback
+    const hints = buildPortHints(
+      [
+        {
+          pid: 123,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "[fe80::1]:18789",
+        },
+        {
+          pid: 456,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "[2001:db8::1]:18789",
+        },
+      ],
+      18789,
+    );
+
+    // Should warn about multiple listeners (non-loopback addresses)
+    expect(
+      hints.some((h) => h.includes("Multiple listeners detected; ensure only one gateway")),
+    ).toBe(true);
+
+    // Should NOT treat these as dual-stack loopback
+    expect(hints.some((h) => h.includes("Dual-stack loopback"))).toBe(false);
+  });
 });

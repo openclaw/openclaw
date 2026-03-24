@@ -22,16 +22,17 @@ export function classifyPortListener(listener: PortListener, port: number): Port
 function isLoopbackAddress(address: string): boolean {
   // Check if address is loopback (127.0.0.1 or ::1 or localhost variants)
   return (
-    address.includes("127.0.0.1") ||
-    address.includes("::1") ||
-    address.includes("[::1]") ||
+    address.startsWith("127.0.0.1") ||
+    address === "::1" ||
+    address.startsWith("[::1]:") ||
     address.startsWith("localhost:")
   );
 }
 
 function isDualStackLoopback(listeners: PortListener[]): boolean {
   // Check if all listeners are from the same PID on loopback addresses
-  if (listeners.length === 0) {
+  // Must have at least 2 listeners to be "dual-stack"
+  if (listeners.length < 2) {
     return false;
   }
 
