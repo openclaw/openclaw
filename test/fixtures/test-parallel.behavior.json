@@ -87,6 +87,10 @@
         "reason": "This Telegram bot bootstrap suite is green alone but can inherit stale command-registration spies and bot runtime state from the shared channel lane; keep it isolated for deterministic command assertions."
       },
       {
+        "file": "extensions/telegram/src/bot.test.ts",
+        "reason": "This Telegram bot runtime suite measured ~819.9 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
         "file": "extensions/telegram/src/webhook.test.ts",
         "reason": "This Telegram webhook suite hoists grammY bot and InputFile mocks; keep it in its own forked channel lane so shared workers do not reuse telegram runtime modules with mismatched constructors."
       }
