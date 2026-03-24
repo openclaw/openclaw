@@ -30,7 +30,6 @@ import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -473,7 +472,7 @@ export async function killAllControlledSubagentRuns(params: {
     if (!childKey || seenChildSessionKeys.has(childKey)) {
       continue;
     }
-    const currentEntry = getSubagentRunByChildSessionKey(childKey);
+    const currentEntry = getLatestSubagentRunByChildSessionKey(childKey);
     if (!currentEntry || currentEntry.runId !== entry.runId) {
       continue;
     }
@@ -670,7 +669,7 @@ export async function steerControlledSubagentRun(params: {
       error: "Subagents cannot steer themselves.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   const currentHasPendingDescendants =
     currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
   if (

@@ -5,6 +5,7 @@ import {
   listSubagentRunsForController,
   markSubagentRunTerminated,
 } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -136,7 +137,18 @@ export function stopSubagentsForRequester(params: {
   if (!requesterKey) {
     return { stopped: 0 };
   }
-  const runs = abortDeps.listSubagentRunsForController(requesterKey);
+  const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
+  for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
+    const childKey = run.childSessionKey?.trim();
+    if (!childKey) {
+      continue;
+    }
+    const existing = dedupedRunsByChildKey.get(childKey);
+    if (!existing || run.createdAt >= existing.createdAt) {
+      dedupedRunsByChildKey.set(childKey, run);
+    }
+  }
+  const runs = Array.from(dedupedRunsByChildKey.values());
   if (runs.length === 0) {
     return { stopped: 0 };
   }
