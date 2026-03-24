@@ -1924,7 +1924,7 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[0]?.prompt).toContain("MEMORY.md");
       expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
-      expect(calls[0]?.lane).toBe("subagent");
+      expect(calls[0]?.lane).toBe("memory-flush");
       expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
       expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
