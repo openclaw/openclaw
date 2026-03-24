@@ -3,6 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
@@ -375,6 +376,8 @@ export type ChannelThreadingContext = {
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Pre-resolved replyToMode (e.g. per-channel override); avoids re-resolving from account config. */
+  ReplyToMode?: ReplyToMode;
 };
 
 export type ChannelThreadingToolContext = {

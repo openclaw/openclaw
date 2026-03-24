@@ -15,7 +15,9 @@ export function buildSlackThreadingToolContext(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const configuredReplyToMode = resolveSlackReplyToMode(account, params.context.ChatType);
+  // Prefer pre-resolved replyToMode (includes per-channel overrides) over re-resolving from account.
+  const configuredReplyToMode =
+    params.context.ReplyToMode ?? resolveSlackReplyToMode(account, params.context.ChatType);
   const hasExplicitThreadTarget = params.context.MessageThreadId != null;
   const effectiveReplyToMode = hasExplicitThreadTarget ? "all" : configuredReplyToMode;
   const threadId = params.context.MessageThreadId ?? params.context.ReplyToId;
