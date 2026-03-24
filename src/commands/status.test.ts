@@ -268,6 +268,13 @@ vi.mock("../config/sessions/types.js", async (importOriginal) => {
     ),
   };
 });
+vi.mock("../channels/config-presence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
+  return {
+    ...actual,
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  };
+});
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () =>
     [
@@ -380,6 +387,11 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
@@ -393,6 +405,11 @@ vi.mock("../daemon/node-service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
@@ -451,6 +468,8 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue({
       ts: 0,

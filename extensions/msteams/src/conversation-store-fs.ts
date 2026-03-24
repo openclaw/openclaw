@@ -137,7 +137,11 @@ export function createMSTeamsConversationStoreFs(params?: {
     const normalizedId = normalizeConversationId(conversationId);
     await withFileLock(filePath, empty, async () => {
       const store = await readStore();
+      const existing = store.conversations[normalizedId];
       store.conversations[normalizedId] = {
+        // Preserve fields from previous entry that may not be present on every activity
+        // (e.g. timezone is only sent when clientInfo entity is available).
+        ...(existing?.timezone && !reference.timezone ? { timezone: existing.timezone } : {}),
         ...reference,
         lastSeenAt: new Date().toISOString(),
       };

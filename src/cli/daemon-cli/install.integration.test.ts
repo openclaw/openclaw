@@ -11,6 +11,7 @@ const serviceMock = vi.hoisted(() => ({
   label: "Gateway",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   install: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   uninstall: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),

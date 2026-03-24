@@ -10,6 +10,27 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
+vi.mock("@mariozechner/clipboard", () => ({
+  availableFormats: () => [],
+  getText: async () => "",
+  setText: async () => {},
+  hasText: () => false,
+  getImageBinary: async () => [],
+  getImageBase64: async () => "",
+  setImageBinary: async () => {},
+  setImageBase64: async () => {},
+  hasImage: () => false,
+  getHtml: async () => "",
+  setHtml: async () => {},
+  hasHtml: () => false,
+  getRtf: async () => "",
+  setRtf: async () => {},
+  hasRtf: () => false,
+  clear: async () => {},
+  watch: () => {},
+  callThreadsafeFunction: () => {},
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
@@ -24,7 +45,10 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
 
 import { resetContextWindowCacheForTest } from "../src/agents/context.js";
 import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config.js";
-import { resetSessionWriteLockStateForTest } from "../src/agents/session-write-lock.js";
+import {
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+} from "../src/agents/session-write-lock.js";
 import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
@@ -32,18 +56,14 @@ import type {
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
-import { resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
 const testEnv = withIsolatedTestHome();
-
-afterAll(() => {
-  testEnv.cleanup();
-});
 
 installProcessWarningFilter();
 
@@ -333,9 +353,9 @@ beforeAll(() => {
   installDefaultPluginRegistry();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanupSessionStateForTest();
   resetContextWindowCacheForTest();
-  resetFileLockStateForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
@@ -345,7 +365,8 @@ afterEach(() => {
   }
 });
 
-afterAll(() => {
-  resetFileLockStateForTest();
-  resetSessionWriteLockStateForTest();
+afterAll(async () => {
+  await cleanupSessionStateForTest();
+  await drainSessionWriteLockStateForTest();
+  testEnv.cleanup();
 });
