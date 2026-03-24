@@ -60,16 +60,6 @@ function withCwd<T>(cwd: string, run: () => T): T {
   }
 }
 
-function withArgv1<T>(argv1: string, run: () => T): T {
-  const originalArgv = process.argv;
-  process.argv = [originalArgv[0] ?? "node", argv1, ...originalArgv.slice(2)];
-  try {
-    return run();
-  } finally {
-    process.argv = originalArgv;
-  }
-}
-
 function createPluginSdkAliasFixture(params?: {
   srcFile?: string;
   distFile?: string;
