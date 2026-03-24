@@ -50,6 +50,24 @@ OpenClaw has three layers that work together:
 
 ## Built-in tools
 
+These tools ship with OpenClaw and are available without installing any plugins.
+
+> **Tool names are not shell commands.** Names like `sessions_list`,
+> `sessions_spawn`, and `agents_list` are tool identifiers that the agent can
+> call through the OpenClaw runtime. In a terminal, use subcommands of the
+> `openclaw` binary instead of dropping the prefix.
+>
+> Examples:
+>
+> - ❌ `sessions_list`
+> - ✅ `openclaw sessions list`
+> - ❌ `agents_list`
+> - ✅ `openclaw agents list`
+>
+> If you are in a shell, start from `openclaw --help` and then drill into the
+> relevant command group such as `openclaw sessions --help` or
+> `openclaw agents --help`.
+
 These tools ship with OpenClaw and are available without installing any plugins:
 
 | Tool                         | What it does                                             | Page                              |
