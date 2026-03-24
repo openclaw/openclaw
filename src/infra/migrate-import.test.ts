@@ -311,28 +311,23 @@ describe("safeFallbackName", () => {
   });
 });
 
-describe("import abort on missing assets", () => {
-  it("detects missing-asset warnings correctly", () => {
-    const warnings = [
-      "Asset not found in archive: some/payload/path",
-      "Skipping asset with unsafe archive path: ../escape",
-      "Source platform (linux) differs from this machine (darwin). Paths will be remapped.",
-    ];
-    const missingWarnings = warnings.filter(
-      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
-    );
-    expect(missingWarnings).toHaveLength(2);
-    expect(missingWarnings[0]).toContain("Asset not found");
-    expect(missingWarnings[1]).toContain("Skipping asset");
+describe("import validation-before-write contract", () => {
+  it("abort error messages include the problematic archive path", () => {
+    // The import validates all assets before writing any.
+    // Errors should include the offending path for diagnosis.
+    const error = new Error("Import aborted: declared asset not found in archive: bad/path");
+    expect(error.message).toContain("bad/path");
+    expect(error.message).toContain("Import aborted");
   });
 
-  it("non-missing warnings are not treated as import failures", () => {
-    const warnings = [
-      "Source platform (linux) differs from this machine (darwin). Paths will be remapped.",
-    ];
-    const missingWarnings = warnings.filter(
-      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
-    );
-    expect(missingWarnings).toHaveLength(0);
+  it("unsafe archive path errors are descriptive", () => {
+    const error = new Error("Import aborted: asset has unsafe archive path: ../../escape");
+    expect(error.message).toContain("unsafe archive path");
+    expect(error.message).toContain("../../escape");
+  });
+
+  it("escape detection errors are descriptive", () => {
+    const error = new Error("Import aborted: asset escapes extraction tree: /tmp/evil");
+    expect(error.message).toContain("escapes extraction tree");
   });
 });

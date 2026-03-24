@@ -572,8 +572,14 @@ export async function importMigrateArchive(
     const resolvedTempDir = await fs.realpath(tempDir);
     const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
 
-    // Process each asset. importAssets is derived from manifest.assets via
-    // .map(), so they share indices — use direct index access instead of .find().
+    // Pass 1: Validate all declared assets exist and are safe before writing anything.
+    // This prevents partial state mutation when a later asset is missing or unsafe.
+    type ValidatedAsset = {
+      importAsset: MigrateImportAsset;
+      realExtracted: string;
+    };
+    const validated: ValidatedAsset[] = [];
+
     for (let i = 0; i < importAssets.length; i++) {
       const importAsset = importAssets[i];
       const manifestAsset = manifest.assets[i];
@@ -581,63 +587,46 @@ export async function importMigrateArchive(
         continue;
       }
 
-      // Use the canonicalized tempDir for both lexical and realpath checks
-      // so symlinked TMPDIR (e.g. /tmp → /private/tmp on macOS) doesn't
-      // cause prefix mismatches that reject valid assets.
       const extractedPath = path.join(resolvedTempDir, manifestAsset.archivePath);
 
-      // Lexical check first: reject obviously bad paths before touching the filesystem.
       const resolvedExtracted = path.resolve(extractedPath);
       if (!resolvedExtracted.startsWith(payloadRoot + path.sep)) {
-        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
-        continue;
+        throw new Error(
+          `Import aborted: asset has unsafe archive path: ${manifestAsset.archivePath}`,
+        );
       }
 
-      // Canonicalize through realpath to detect parent-directory symlinks
-      // that could escape the extraction tree despite passing the lexical check.
       let realExtracted: string;
       try {
         realExtracted = await fs.realpath(extractedPath);
       } catch {
-        warnings.push(`Asset not found in archive: ${manifestAsset.archivePath}`);
-        continue;
+        throw new Error(
+          `Import aborted: declared asset not found in archive: ${manifestAsset.archivePath}`,
+        );
       }
       if (!realExtracted.startsWith(resolvedTempDir + path.sep)) {
-        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
-        continue;
+        throw new Error(
+          `Import aborted: asset escapes extraction tree: ${manifestAsset.archivePath}`,
+        );
       }
 
-      // Use the canonicalized path for all subsequent operations.
+      validated.push({ importAsset, realExtracted });
+    }
+
+    // Pass 2: All assets validated — now apply writes.
+    for (const { importAsset, realExtracted } of validated) {
       const targetPath = importAsset.targetPath;
 
-      // realExtracted is already canonicalized via fs.realpath, so all
-      // symlinks (including parent-directory symlinks) have been resolved.
-      // Any symlink escaping the temp tree was already caught above.
-
       if (importAsset.kind === "config" && merge) {
-        // Deep merge config.
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await mergeConfigFiles(targetPath, realExtracted);
       } else {
-        // In overwrite mode, remove the existing target first so that stale
-        // files from a previous deployment don't survive the import.
         const extractedStat = await fs.lstat(realExtracted);
         if (extractedStat.isDirectory()) {
           await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
         }
         await copyRecursive(realExtracted, targetPath);
       }
-    }
-
-    // Fail if any declared assets were missing or skipped — partial imports
-    // leave state inconsistent and are easy to miss in automation.
-    const missingWarnings = warnings.filter(
-      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
-    );
-    if (missingWarnings.length > 0) {
-      throw new Error(
-        `Import aborted: ${missingWarnings.length} declared asset(s) were missing or unsafe in the archive. Warnings:\n${missingWarnings.map((w) => `  - ${w}`).join("\n")}`,
-      );
     }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
