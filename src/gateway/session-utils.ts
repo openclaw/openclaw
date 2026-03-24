@@ -257,11 +257,20 @@ function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
 ): string[] | undefined {
-  const childSessionKeys = new Set(
-    listSubagentRunsForController(controllerSessionKey)
-      .map((entry) => entry.childSessionKey)
-      .filter((value) => typeof value === "string" && value.trim().length > 0),
-  );
+  const childSessionKeys = new Set<string>();
+  for (const entry of listSubagentRunsForController(controllerSessionKey)) {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    childSessionKeys.add(childSessionKey);
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry || key === controllerSessionKey) {
       continue;
