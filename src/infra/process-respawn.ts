@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
+import { logDebug } from "../logger.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
@@ -17,6 +19,51 @@ function isTruthy(value: string | undefined): boolean {
   }
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+let cachedPackageBinEntryPoint: string | undefined;
+let didResolvePackageBinEntryPoint = false;
+
+function resolvePackageBinEntryPoint(): string | undefined {
+  if (didResolvePackageBinEntryPoint) {
+    return cachedPackageBinEntryPoint;
+  }
+  didResolvePackageBinEntryPoint = true;
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { bin?: string | Record<string, string> };
+    if (typeof packageJson.bin === "string") {
+      cachedPackageBinEntryPoint = packageJson.bin;
+      return cachedPackageBinEntryPoint;
+    }
+    if (packageJson.bin && typeof packageJson.bin === "object") {
+      const [entryPoint] = Object.values(packageJson.bin);
+      if (typeof entryPoint === "string" && entryPoint.length > 0) {
+        cachedPackageBinEntryPoint = entryPoint;
+        return cachedPackageBinEntryPoint;
+      }
+    }
+  } catch {
+    // Ignore package.json resolution failures and continue to argv fallback.
+  }
+  return cachedPackageBinEntryPoint;
+}
+
+function resolveRespawnEntryPoint(): string | undefined {
+  const envEntryPoint = process.env.OPENCLAW_ENTRY_POINT?.trim();
+  if (envEntryPoint) {
+    return envEntryPoint;
+  }
+  const packageBinEntryPoint = resolvePackageBinEntryPoint();
+  if (packageBinEntryPoint) {
+    return packageBinEntryPoint;
+  }
+  const argvEntryPoint = process.argv[1];
+  if (argvEntryPoint) {
+    logDebug(`respawn: falling back to process.argv[1] for entry point: ${argvEntryPoint}`);
+  }
+  return argvEntryPoint;
 }
 
 /**
@@ -71,7 +118,10 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
 
   try {
-    const args = [...process.execArgv, ...process.argv.slice(1)];
+    const entryPoint = resolveRespawnEntryPoint();
+    const args = entryPoint
+      ? [...process.execArgv, entryPoint, ...process.argv.slice(2)]
+      : [...process.execArgv, ...process.argv.slice(1)];
     const child = spawn(process.execPath, args, {
       env: process.env,
       detached: true,
