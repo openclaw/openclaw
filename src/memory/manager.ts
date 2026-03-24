@@ -436,29 +436,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
-    const chunks =
-      (
-        this.db.prepare(`SELECT COUNT(*) as c FROM chunks`).get() as
-          | {
-              c: number;
-            }
-          | undefined
-      )?.c ?? 0;
-    if (chunks > 0) {
+    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+      | {
+          found?: number;
+        }
+      | undefined;
+    if (chunkRow?.found === 1) {
       return true;
     }
     if (!this.fts.enabled || !this.fts.available) {
       return false;
     }
-    const ftsRows =
-      (
-        this.db.prepare(`SELECT COUNT(*) as c FROM ${FTS_TABLE}`).get() as
-          | {
-              c: number;
-            }
-          | undefined
-      )?.c ?? 0;
-    return ftsRows > 0;
+    const ftsRow = this.db.prepare(`SELECT 1 as found FROM ${FTS_TABLE} LIMIT 1`).get() as
+      | {
+          found?: number;
+        }
+      | undefined;
+    return ftsRow?.found === 1;
   }
 
   private async searchVector(
