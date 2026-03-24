@@ -770,39 +770,58 @@ export class ClawBrowserPanel extends LitElement {
             await this.setupPageSession(this.currentSessionId);
             this.status = "✅ 运行中 (准备接收画面)";
 
+            // 1. 监听 Target 生命周期事件 (最可靠的同步方式)
             currentCdp.on(
-              "Target.attachedToTarget",
+              "Target.targetCreated",
               (params: {
-                sessionId: string;
                 targetInfo: { type: string; url: string; targetId: string; title?: string };
               }) => {
-                void (async () => {
-                  if (this.cdp !== currentCdp) {
-                    return;
-                  }
-                  const { sessionId, targetInfo } = params;
-                  if (targetInfo.type === "page" && sessionId !== this.currentSessionId) {
-                    const existing = this.tabs.find((t) => t.targetId === targetInfo.targetId);
-                    if (!existing) {
-                      this.tabs = [
-                        ...this.tabs,
-                        {
-                          targetId: targetInfo.targetId,
-                          sessionId,
-                          url: targetInfo.url,
-                          title: targetInfo.title || targetInfo.url,
-                        },
-                      ];
-                    } else {
-                      existing.sessionId = sessionId;
-                    }
-                    this.currentSessionId = sessionId;
-                    await this.setupPageSession(sessionId);
-                    this.requestUpdate();
-                  }
-                })();
+                if (this.cdp !== currentCdp || params.targetInfo.type !== "page") {
+                  return;
+                }
+                const { targetInfo } = params;
+                const existing = this.tabs.find((t) => t.targetId === targetInfo.targetId);
+                if (!existing) {
+                  this.tabs = [
+                    ...this.tabs,
+                    {
+                      targetId: targetInfo.targetId,
+                      url: targetInfo.url,
+                      title: targetInfo.title || targetInfo.url,
+                    },
+                  ];
+                  this.requestUpdate();
+                }
               },
             );
+
+            currentCdp.on("Target.targetDestroyed", (params: { targetId: string }) => {
+              if (this.cdp !== currentCdp) {
+                return;
+              }
+              const { targetId } = params;
+              const wasActive =
+                this.tabs.find((t) => t.targetId === targetId)?.sessionId === this.currentSessionId;
+
+              this.tabs = this.tabs.filter((t) => t.targetId !== targetId);
+
+              // 如果所有标签页都被关闭了，自动创建一个新的 about:blank
+              if (this.tabs.length === 0) {
+                void this.handleNewTab();
+              }
+
+              if (wasActive) {
+                const next = this.tabs[this.tabs.length - 1];
+                this.currentSessionId = next ? next.sessionId || null : null;
+                if (this.currentSessionId) {
+                  this.currentUrl = next.url;
+                  void this.setupPageSession(this.currentSessionId);
+                } else {
+                  this.clearCanvas();
+                }
+              }
+              this.requestUpdate();
+            });
 
             currentCdp.on(
               "Target.targetInfoChanged",
@@ -817,8 +836,54 @@ export class ClawBrowserPanel extends LitElement {
                 if (tab) {
                   tab.url = targetInfo.url;
                   tab.title = targetInfo.title || targetInfo.url;
+                  // 如果是当前正在查看的标签页，同步更新地址栏内容
+                  if (tab.sessionId === this.currentSessionId) {
+                    this.currentUrl = tab.url;
+                  }
                   this.requestUpdate();
                 }
+              },
+            );
+
+            // 2. 监听附加事件来绑定 sessionId
+            currentCdp.on(
+              "Target.attachedToTarget",
+              (params: {
+                sessionId: string;
+                targetInfo: { type: string; url: string; targetId: string; title?: string };
+              }) => {
+                void (async () => {
+                  if (this.cdp !== currentCdp) {
+                    return;
+                  }
+                  const { sessionId, targetInfo } = params;
+                  if (targetInfo.type === "page") {
+                    let tab = this.tabs.find((t) => t.targetId === targetInfo.targetId);
+                    if (!tab) {
+                      // 如果 targetCreated 还没来得及触发，这里补上
+                      tab = {
+                        targetId: targetInfo.targetId,
+                        sessionId,
+                        url: targetInfo.url,
+                        title: targetInfo.title || targetInfo.url,
+                      };
+                      this.tabs = [...this.tabs, tab];
+                    } else {
+                      tab.sessionId = sessionId;
+                    }
+
+                    // 只有在当前没有活跃会话，或者当前正在 about:blank 且有新页面进来时才自动切换
+                    if (
+                      !this.currentSessionId ||
+                      (this.currentUrl === "about:blank" && targetInfo.url !== "about:blank")
+                    ) {
+                      this.currentSessionId = sessionId;
+                      this.currentUrl = targetInfo.url;
+                      await this.setupPageSession(sessionId);
+                    }
+                    this.requestUpdate();
+                  }
+                })();
               },
             );
 
@@ -826,17 +891,11 @@ export class ClawBrowserPanel extends LitElement {
               if (this.cdp !== currentCdp) {
                 return;
               }
-              this.tabs = this.tabs.filter((t) => t.sessionId !== params.sessionId);
-              if (this.currentSessionId === params.sessionId) {
-                const next = this.tabs[this.tabs.length - 1];
-                this.currentSessionId = next ? next.sessionId || null : null;
-                if (this.currentSessionId) {
-                  void this.setupPageSession(this.currentSessionId);
-                } else {
-                  this.clearCanvas();
-                }
+              // 仅解除 sessionId 绑定，删除由 targetDestroyed 统一处理
+              const tab = this.tabs.find((t) => t.sessionId === params.sessionId);
+              if (tab) {
+                tab.sessionId = undefined;
               }
-              this.requestUpdate();
             });
 
             currentCdp.on(
@@ -1031,6 +1090,7 @@ export class ClawBrowserPanel extends LitElement {
         tab.sessionId = res.sessionId;
       }
       this.currentSessionId = tab.sessionId;
+      this.currentUrl = tab.url; // 切换时更新地址栏内容
       await this.setupPageSession(this.currentSessionId);
       this.requestUpdate();
     } catch (e) {
