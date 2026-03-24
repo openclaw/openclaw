@@ -4755,6 +4755,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             additionalProperties: false,
                           },
                         },
+                        denyPatterns: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
                         backgroundMs: {
                           type: "integer",
                           exclusiveMinimum: 0,
@@ -7235,6 +7241,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                   },
                   additionalProperties: false,
+                },
+              },
+              denyPatterns: {
+                type: "array",
+                items: {
+                  type: "string",
                 },
               },
               backgroundMs: {
