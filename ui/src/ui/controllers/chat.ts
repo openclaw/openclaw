@@ -101,6 +101,16 @@ export async function loadChatHistory(state: ChatState, before?: string) {
     state.chatHistoryCursor = res.cursor ?? null;
     state.chatHistoryHasMore = res.hasMore ?? false;
 
+    // Debug logging
+    console.log("[loadChatHistory]", {
+      before,
+      messagesLoaded: filteredMessages.length,
+      cursor: res.cursor,
+      hasMore: res.hasMore,
+      chatHistoryCursor: state.chatHistoryCursor,
+      chatHistoryHasMore: state.chatHistoryHasMore,
+    });
+
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
@@ -120,7 +130,12 @@ export async function loadChatHistory(state: ChatState, before?: string) {
 }
 
 export async function loadMoreChatHistory(state: ChatState) {
+  console.log("[loadMoreChatHistory] called", {
+    chatHistoryCursor: state.chatHistoryCursor,
+    chatHistoryHasMore: state.chatHistoryHasMore,
+  });
   if (!state.chatHistoryCursor) {
+    console.log("[loadMoreChatHistory] early return - no cursor");
     return;
   }
   await loadChatHistory(state, state.chatHistoryCursor);

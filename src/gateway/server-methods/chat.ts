@@ -1166,20 +1166,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const hasMore = cursor !== null && rawMessages.length > sliced.length;
 
     // Debug logging for pagination
-    console.log(
-      "[chat.history pagination]",
-      "rawMessages:",
-      rawMessages.length,
-      "sliced:",
-      sliced.length,
-      "delivered:",
-      deliveredMessages.length,
-      "cursor:",
-      cursor,
-      "hasMore:",
-      hasMore,
-      "oldestTimestamp:",
-      cursorTimestamp,
+    context.logGateway.debug(
+      `[chat.history pagination] rawMessages=${rawMessages.length} sliced=${sliced.length} delivered=${deliveredMessages.length} cursor=${cursor} hasMore=${hasMore} oldestTimestamp=${cursorTimestamp}`,
     );
 
     respond(true, {
