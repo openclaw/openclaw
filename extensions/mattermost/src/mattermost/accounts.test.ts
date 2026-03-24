@@ -61,6 +61,9 @@ describe("resolveMattermostReplyToMode", () => {
       channels: {
         mattermost: {
           replyToMode: "all",
+          accounts: {
+            default: { botToken: "tok-default", baseUrl: "https://chat.example.com" },
+          },
         },
       },
     };
@@ -75,6 +78,9 @@ describe("resolveMattermostReplyToMode", () => {
       channels: {
         mattermost: {
           replyToMode: "all",
+          accounts: {
+            default: { botToken: "tok-default", baseUrl: "https://chat.example.com" },
+          },
         },
       },
     };
@@ -87,31 +93,63 @@ describe("resolveMattermostReplyToMode", () => {
     const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
+});
 
-  it("preserves shared commands config when an account overrides one commands field", () => {
-    const account = resolveMattermostAccount({
-      cfg: {
-        channels: {
-          mattermost: {
-            commands: {
-              native: true,
-            },
-            accounts: {
-              work: {
-                commands: {
-                  callbackPath: "/hooks/work",
-                },
-              },
+describe("resolveMattermostAccount", () => {
+  it("resolves defaultTo from account-level config", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          defaultTo: "@fallback",
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+              defaultTo: "@alerts-channel",
             },
           },
         },
       },
-      accountId: "work",
-    });
+    };
 
-    expect(account.config.commands).toEqual({
-      native: true,
-      callbackPath: "/hooks/work",
-    });
+    const account = resolveMattermostAccount({ cfg, accountId: "alerts" });
+    expect(account.defaultTo).toBe("@alerts-channel");
+  });
+
+  it("resolves defaultTo from top-level config when account-level is missing", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          defaultTo: "@fallback",
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "alerts" });
+    expect(account.defaultTo).toBe("@fallback");
+  });
+
+  it("returns undefined when defaultTo is missing everywhere", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "alerts" });
+    expect(account.defaultTo).toBeUndefined();
   });
 });

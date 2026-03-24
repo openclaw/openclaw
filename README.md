@@ -362,6 +362,23 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `channels.slack.botToken` + `channels.slack.appToken`).
 
+### [Mattermost](/docs/mattermost)
+
+- Status: supported via plugin (`@openclaw/mattermost`).
+- Set `MATTERMOST_BOT_TOKEN` and `MATTERMOST_URL` (or `channels.mattermost.botToken` + `channels.mattermost.url`).
+
+```json5
+{
+  channels: {
+    mattermost: {
+      botToken: "mm-token-1234",
+      baseUrl: "https://chat.example.com",
+      defaultTo: "@myusername",
+    },
+  },
+}
+```
+
 ### [Discord](https://docs.openclaw.ai/channels/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `channels.discord.token`.

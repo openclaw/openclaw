@@ -1,5 +1,4 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -25,6 +24,7 @@ export type ResolvedMattermostAccount = {
   chatmode?: MattermostChatMode;
   oncharPrefixes?: string[];
   requireMention?: boolean;
+  defaultTo?: string;
   textChunkLimit?: number;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
@@ -36,19 +36,45 @@ const {
 } = createAccountListHelpers("mattermost");
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
+function resolveAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): MattermostAccountConfig | undefined {
+  const accounts = cfg.channels?.mattermost?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
+  return accounts[accountId] as MattermostAccountConfig | undefined;
+}
+
 function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  return resolveMergedAccountConfig<MattermostAccountConfig>({
-    channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
-    accounts: cfg.channels?.mattermost?.accounts as
-      | Record<string, Partial<MattermostAccountConfig>>
-      | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["commands"],
-  });
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    ...base
+  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
+  const account = resolveAccountConfig(cfg, accountId) ?? {};
+
+  // Shallow merging is fine for most keys, but `commands` should be merged
+  // so that account-specific overrides (callbackPath/callbackUrl) do not
+  // accidentally reset global settings like `native: true`.
+  const mergedCommands = {
+    ...(base.commands ?? {}),
+    ...(account.commands ?? {}),
+  };
+
+  const merged = { ...base, ...account };
+  if (Object.keys(mergedCommands).length > 0) {
+    merged.commands = mergedCommands;
+  }
+
+  return merged;
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
@@ -88,6 +114,7 @@ export function resolveMattermostAccount(params: {
   const botToken = configToken || envToken;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
   const requireMention = resolveMattermostRequireMention(merged);
+  const defaultTo = merged.defaultTo ? String(merged.defaultTo).trim() : undefined;
 
   const botTokenSource: MattermostTokenSource = configToken ? "config" : envToken ? "env" : "none";
   const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
@@ -104,6 +131,7 @@ export function resolveMattermostAccount(params: {
     chatmode: merged.chatmode,
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
+    defaultTo,
     textChunkLimit: merged.textChunkLimit,
     blockStreaming: merged.blockStreaming,
     blockStreamingCoalesce: merged.blockStreamingCoalesce,

@@ -39,6 +39,8 @@ export type MattermostAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for direct messages (user ids or @usernames). */
   allowFrom?: Array<string | number>;
+  /** Default delivery target (channel id, @username, etc) for outbound messages. */
+  defaultTo?: string | number;
   /** Allowlist for group messages (user ids or @usernames). */
   groupAllowFrom?: Array<string | number>;
   /** Group message policy (allowlist/open/disabled). */
