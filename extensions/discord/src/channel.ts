@@ -337,6 +337,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       agentPrompt: {
         messageToolHints: () => [
           "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
+          '- Inline images: use a `media-gallery` block in `components.blocks`: `{"type":"media-gallery","items":[{"url":"attachment://filename.ext"}]}` together with `media` (path/URL) and `filename`.',
+          '- File attachments: use a `file` block in `components.blocks`: `{"type":"file","file":"attachment://filename.ext"}` together with `media` and `filename`.',
           "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
         ],
       },
