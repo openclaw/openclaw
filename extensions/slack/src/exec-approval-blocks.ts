@@ -89,7 +89,12 @@ export function buildSlackExecApprovalPendingBlocks(
     },
     {
       type: "context",
-      elements: [{ type: "mrkdwn", text: metaLines.join("  |  ") }],
+      elements: [
+        {
+          type: "mrkdwn",
+          text: truncateSlackText(metaLines.join("  |  "), SLACK_SECTION_TEXT_MAX),
+        },
+      ],
     },
     {
       type: "actions",
@@ -177,13 +182,18 @@ export function buildSlackExecApprovalResolvedBlocks(
   ];
 }
 
+const SLACK_FALLBACK_TEXT_MAX = 3000;
+
 export function buildSlackExecApprovalPendingFallbackText(
   request: ExecApprovalRequest,
   nowMs: number,
 ): string {
   const commandDisplay = resolveExecApprovalCommandDisplay(request.request).commandText;
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
-  return `Exec approval required: \`${escapeSlackMrkdwn(commandDisplay)}\` (expires in ${expiresIn}s) [${escapeSlackMrkdwn(request.id)}]`;
+  return truncateSlackText(
+    `Exec approval required: \`${escapeSlackMrkdwn(commandDisplay)}\` (expires in ${expiresIn}s) [${escapeSlackMrkdwn(request.id)}]`,
+    SLACK_FALLBACK_TEXT_MAX,
+  );
 }
 
 export function buildSlackExecApprovalResolvedFallbackText(resolved: ExecApprovalResolved): string {
