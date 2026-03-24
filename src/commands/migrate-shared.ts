@@ -171,13 +171,11 @@ function resolveAgentScopedWorkspaceDirs(
     }
   }
 
-  // Include the inherited default workspace for agents that are configured
-  // but lack an explicit workspace (they inherit the default). Agents not
-  // found in agents.list at all are ignored — they don't have workspace data.
-  const hasInheritingAgent = [...configuredAgentIds].some(
-    (id) => !agentsWithExplicitWorkspace.has(id),
-  );
-  if (hasInheritingAgent) {
+  // Include the inherited default workspace if any requested agent either:
+  // - is in agents.list but has no explicit workspace (inherits the default), or
+  // - is not in agents.list at all (exists on disk only, uses the default).
+  const allHaveExplicitWorkspace = agentIds.every((id) => agentsWithExplicitWorkspace.has(id));
+  if (!allHaveExplicitWorkspace) {
     dirs.add(defaultWorkspace);
   }
 

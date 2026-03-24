@@ -331,7 +331,7 @@ function remapSourceToTarget(params: {
     // Default: place workspace under the local state dir.
     if (params.sourceStateDir) {
       const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
-      if (relative !== undefined) {
+      if (relative !== undefined && relative !== "") {
         const target = path.join(params.localStateDir, relative);
         assertTargetWithinRoot(target, params.localStateDir, "workspace");
         return target;
