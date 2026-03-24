@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
@@ -84,7 +84,7 @@ async function createLifecycleStopScenario(params: {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ createDiscordMessageHandler, preflightDiscordMessageMock, processDiscordMessageMock } =
       await import("./message-handler.module-test-helpers.js"));

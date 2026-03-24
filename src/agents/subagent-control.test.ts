@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { killSubagentRunAdmin, sendControlledSubagentMessage } from "./subagent-control.js";
+import {
+  __testing,
+  killSubagentRunAdmin,
+  sendControlledSubagentMessage,
+} from "./subagent-control.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -48,6 +52,7 @@ describe("sendControlledSubagentMessage", () => {
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {

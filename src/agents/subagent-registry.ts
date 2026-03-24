@@ -287,6 +287,11 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
@@ -1321,6 +1326,10 @@ export function replaceSubagentRunAfterSteer(params: {
 
   if (previousRunId !== nextRunId) {
     clearPendingLifecycleError(previousRunId);
+    const shouldDeleteAttachments = source.cleanup === "delete" || !source.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(source);
+    }
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -1545,6 +1554,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
@@ -1654,6 +1667,10 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        void safeRemoveAttachmentsDir(entry);
+      }
       completeCleanupBookkeeping({
         runId: entry.runId,
         entry,
