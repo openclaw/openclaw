@@ -7,7 +7,7 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-push-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-push-{0}', github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -162,7 +162,7 @@ jobs:
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [preflight]
-    if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -187,11 +187,22 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
           name: dist-build
           path: dist/
+          retention-days: 1
+
+      - name: Upload A2UI bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+          include-hidden-files: true
           retention-days: 1
 
   # Validate npm pack contents after build (only on push to main, not PRs).
@@ -223,7 +234,7 @@ jobs:
 
   checks:
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -234,33 +245,43 @@ jobs:
             task: test
             shard_index: 1
             shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
             shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            command: pnpm test
           - runtime: node
             task: extensions
             command: pnpm test:extensions
           - runtime: node
             task: channels
+            shard_index: 1
+            shard_count: 3
             command: pnpm test:channels
           - runtime: node
             task: contracts
             command: pnpm test:contracts
           - runtime: node
+            task: channels
+            shard_index: 2
+            shard_count: 3
+            command: pnpm test:channels
+          - runtime: node
+            task: channels
+            shard_index: 3
+            shard_count: 3
+            command: pnpm test:channels
+          - runtime: node
             task: protocol
             command: pnpm protocol:check
-          - runtime: bun
-            task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
           - runtime: node
             task: compat-node22
             node_version: "22.x"
             cache_key_suffix: "node22"
             command: |
               pnpm build
+              pnpm ui:build
               node openclaw.mjs --help
               node openclaw.mjs status --json --timeout 1
               pnpm test:build:singleton
@@ -268,26 +289,26 @@ jobs:
               node --import tsx scripts/release-check.ts
     steps:
       - name: Skip compatibility lanes on pull requests
-        if: github.event_name == 'pull_request' && (matrix.runtime == 'bun' || matrix.task == 'compat-node22')
+        if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
         run: echo "Skipping push-only lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
-          install-bun: "${{ matrix.runtime == 'bun' }}"
+          install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'compat-node22')
+        if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
@@ -296,24 +317,31 @@ jobs:
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          if [ "${{ matrix.task }}" = "channels" ]; then
+            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
+          fi
           if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
-        if: github.event_name == 'push' && matrix.task == 'test'
+        if: matrix.task == 'test'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
 
-      - name: Build dist
-        if: github.event_name != 'push' && matrix.task == 'test' && matrix.runtime == 'node'
-        run: pnpm build
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test' || matrix.task == 'channels'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         run: ${{ matrix.command }}
 
   extension-fast:
@@ -556,7 +584,7 @@ jobs:
 
   checks-windows:
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 20
     env:
@@ -574,32 +602,42 @@ jobs:
           - runtime: node
             task: test
             shard_index: 1
-            shard_count: 6
+            shard_count: 8
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
-            shard_count: 6
+            shard_count: 8
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 3
-            shard_count: 6
+            shard_count: 8
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 4
-            shard_count: 6
+            shard_count: 8
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 5
-            shard_count: 6
+            shard_count: 8
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 6
-            shard_count: 6
+            shard_count: 8
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 7
+            shard_count: 8
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 8
+            shard_count: 8
             command: pnpm test
     steps:
       - name: Checkout
@@ -672,20 +710,19 @@ jobs:
           echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
 
-      - name: Build A2UI bundle (Windows)
-        if: matrix.task == 'test'
-        run: pnpm canvas:a2ui:bundle
-
       - name: Download dist artifact
-        if: github.event_name == 'push' && matrix.task == 'test'
+        if: matrix.task == 'test'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
 
-      - name: Build dist (Windows)
-        if: github.event_name != 'push' && matrix.task == 'test'
-        run: pnpm build
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}

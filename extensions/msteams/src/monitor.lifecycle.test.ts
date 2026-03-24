@@ -113,6 +113,12 @@ vi.mock("./resolve-allowlist.js", () => ({
 vi.mock("./sdk.js", () => ({
   createMSTeamsAdapter: () => createMSTeamsAdapter(),
   loadMSTeamsSdkWithAuth: () => loadMSTeamsSdkWithAuth(),
+  createMSTeamsTokenProvider: () => ({
+    getAccessToken: vi.fn().mockResolvedValue("mock-token"),
+  }),
+  createBotFrameworkJwtValidator: vi.fn().mockResolvedValue({
+    validate: vi.fn().mockResolvedValue(true),
+  }),
 }));
 
 vi.mock("./runtime.js", () => ({

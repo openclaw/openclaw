@@ -1,12 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runTavilySearch = vi.fn(async (params: Record<string, unknown>) => params);
+const { runTavilySearch } = vi.hoisted(() => ({
+  runTavilySearch: vi.fn(async (params: Record<string, unknown>) => params),
+}));
 
 vi.mock("./tavily-client.js", () => ({
   runTavilySearch,
 }));
 
 describe("tavily web search provider", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    runTavilySearch.mockReset();
+    runTavilySearch.mockImplementation(async (params: Record<string, unknown>) => params);
+  });
+
   it("exposes the expected metadata and selection wiring", async () => {
     const { createTavilyWebSearchProvider } = await import("./tavily-search-provider.js");
 

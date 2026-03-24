@@ -48,7 +48,7 @@ const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => 
     label: "Microsoft Teams",
     selectionLabel: "Microsoft Teams (Bot Framework)",
     docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
+    blurb: "Teams SDK; enterprise support.",
     aliases: params?.aliases,
   },
   capabilities: { chatTypes: ["direct"] },
@@ -326,7 +326,7 @@ describe("gateway server agent", () => {
     expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
 
-  test("write-scoped callers cannot use sessions.reset directly but can still reset conversations via agent", async () => {
+  test("write-scoped callers cannot reset conversations via agent", async () => {
     await withGatewayServer(async ({ port }) => {
       await useTempSessionStorePath();
       const storePath = testState.sessionStorePath;
@@ -358,19 +358,16 @@ describe("gateway server agent", () => {
         sessionKey: "main",
         idempotencyKey: "idem-agent-write-reset",
       });
-      expect(viaAgent.ok).toBe(true);
+      expect(viaAgent.ok).toBe(false);
+      expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
       const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
         string,
         { sessionId?: string }
       >;
       expect(store["agent:main:main"]?.sessionId).toBeDefined();
-      expect(store["agent:main:main"]?.sessionId).not.toBe("sess-main-before-write-reset");
-
-      await vi.waitFor(() => expect(vi.mocked(agentCommand)).toHaveBeenCalled());
-      const call = readAgentCommandCall();
-      expect(typeof call.sessionId).toBe("string");
-      expect(call.sessionId).not.toBe("sess-main-before-write-reset");
+      expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
+      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
       writeWs.close();
     });

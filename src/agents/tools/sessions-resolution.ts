@@ -3,6 +3,16 @@ import { callGateway } from "../../gateway/call.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 
+type GatewayCaller = typeof callGateway;
+
+const defaultSessionsResolutionDeps = {
+  callGateway,
+};
+
+let sessionsResolutionDeps: {
+  callGateway: GatewayCaller;
+} = defaultSessionsResolutionDeps;
+
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -49,7 +59,7 @@ export async function listSpawnedSessionKeys(params: {
       ? Math.max(1, Math.floor(params.limit))
       : 500;
   try {
-    const list = await callGateway<{ sessions: Array<{ key?: unknown }> }>({
+    const list = await sessionsResolutionDeps.callGateway<{ sessions: Array<{ key?: unknown }> }>({
       method: "sessions.list",
       params: {
         includeGlobal: false,
@@ -186,7 +196,7 @@ async function resolveSessionKeyFromSessionId(params: {
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
-    const result = await callGateway<{ key?: string }>({
+    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
       method: "sessions.resolve",
       params: {
         sessionId: params.sessionId,
@@ -239,7 +249,7 @@ async function resolveSessionKeyFromKey(params: {
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = await callGateway<{ key?: string }>({
+    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
       method: "sessions.resolve",
       params: {
         key: params.key,
@@ -273,7 +283,7 @@ async function tryResolveSessionKeyFromSessionId(params: {
   restrictToSpawned: boolean;
 }): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
   try {
-    const result = await callGateway<{ key?: string }>({
+    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
       method: "sessions.resolve",
       params: {
         sessionId: params.sessionId,
@@ -398,3 +408,14 @@ export async function resolveVisibleSessionReference(params: {
 export function normalizeOptionalKey(value?: string) {
   return normalizeKey(value);
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+    sessionsResolutionDeps = overrides
+      ? {
+          ...defaultSessionsResolutionDeps,
+          ...overrides,
+        }
+      : defaultSessionsResolutionDeps;
+  },
+};

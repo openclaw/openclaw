@@ -562,10 +562,17 @@ export class GatewayBrowserClient {
   private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedToken = loadDeviceAuthToken({
+    const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       role: params.role,
-    })?.token;
+    });
+    const storedScopes = storedEntry?.scopes ?? [];
+    const storedTokenCanRead =
+      params.role !== CONTROL_UI_OPERATOR_ROLE ||
+      storedScopes.includes("operator.read") ||
+      storedScopes.includes("operator.write") ||
+      storedScopes.includes("operator.admin");
+    const storedToken = storedTokenCanRead ? storedEntry?.token : undefined;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&
       Boolean(explicitGatewayToken) &&

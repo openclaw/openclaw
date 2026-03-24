@@ -3,10 +3,12 @@ import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
 import { stageBundledPluginRuntimeDeps } from "./stage-bundled-plugin-runtime-deps.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
+import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mjs";
 
 export function runRuntimePostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
+  writeOfficialChannelCatalog(params);
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);
 }

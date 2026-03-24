@@ -1,5 +1,4 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
@@ -13,15 +12,31 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
+let callGatewayTool: typeof import("./gateway.js").callGatewayTool;
+let resolveGatewayOptions: typeof import("./gateway.js").resolveGatewayOptions;
+
+async function loadFreshGatewayToolModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../../config/config.js", () => ({
+    loadConfig: () => configState.value,
+    resolveGatewayPort: () => 18789,
+  }));
+  vi.doMock("../../gateway/call.js", () => ({
+    callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  }));
+  ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
+}
+
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     callGatewayMock.mockClear();
     configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    await loadFreshGatewayToolModuleForTest();
   });
 
   afterAll(() => {

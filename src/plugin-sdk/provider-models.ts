@@ -86,6 +86,11 @@ export {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 export {
+  buildDeepSeekModelDefinition,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_MODEL_CATALOG,
+} from "../agents/deepseek-models.js";
+export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,
