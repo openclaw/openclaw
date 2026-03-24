@@ -108,7 +108,8 @@ export function evaluateChannelHealth(
       return { healthy: true, reason: "startup-connect-grace" };
     }
   }
-  const normalizedMode = snapshot.mode?.trim().toLowerCase();
+  const normalizedMode =
+    typeof snapshot.mode === "string" ? snapshot.mode.trim().toLowerCase() : undefined;
   if (
     policy.channelId === "telegram" &&
     normalizedMode === "polling" &&
