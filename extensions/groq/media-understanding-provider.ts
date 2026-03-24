@@ -15,3 +15,6 @@ export const groqProvider: MediaUnderstandingProvider = {
       defaultModel: DEFAULT_GROQ_AUDIO_MODEL,
     }),
 };
+
+/** Alias matching upstream export name. */
+export const groqMediaUnderstandingProvider: MediaUnderstandingProvider = groqProvider;

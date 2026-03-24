@@ -558,6 +558,46 @@
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
+    "./plugin-sdk/channel-status": {
+      "types": "./dist/plugin-sdk/channel-status.d.ts",
+      "default": "./dist/plugin-sdk/channel-status.js"
+    },
+    "./plugin-sdk/discord-core": {
+      "types": "./dist/plugin-sdk/discord-core.d.ts",
+      "default": "./dist/plugin-sdk/discord-core.js"
+    },
+    "./plugin-sdk/extension-shared": {
+      "types": "./dist/plugin-sdk/extension-shared.d.ts",
+      "default": "./dist/plugin-sdk/extension-shared.js"
+    },
+    "./plugin-sdk/line-core": {
+      "types": "./dist/plugin-sdk/line-core.d.ts",
+      "default": "./dist/plugin-sdk/line-core.js"
+    },
+    "./plugin-sdk/line-runtime": {
+      "types": "./dist/plugin-sdk/line-runtime.d.ts",
+      "default": "./dist/plugin-sdk/line-runtime.js"
+    },
+    "./plugin-sdk/param-readers": {
+      "types": "./dist/plugin-sdk/param-readers.d.ts",
+      "default": "./dist/plugin-sdk/param-readers.js"
+    },
+    "./plugin-sdk/secret-input": {
+      "types": "./dist/plugin-sdk/secret-input.d.ts",
+      "default": "./dist/plugin-sdk/secret-input.js"
+    },
+    "./plugin-sdk/slack-core": {
+      "types": "./dist/plugin-sdk/slack-core.d.ts",
+      "default": "./dist/plugin-sdk/slack-core.js"
+    },
+    "./plugin-sdk/whatsapp-core": {
+      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-core.js"
+    },
+    "./plugin-sdk/whatsapp-shared": {
+      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-shared.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {

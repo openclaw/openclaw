@@ -1,3 +1,5 @@
+export { listCombinedAccountIds } from "../channels/plugins/account-helpers.js";
+
 export function resolveAccountWithDefaultFallback<TAccount>(params: {
   accountId?: string | null;
   normalizeAccountId: (accountId?: string | null) => string;
