@@ -91,8 +91,10 @@ function filterFallbacksByAllowlist(params: {
   agentId?: string;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   defaultProvider: string;
+  imageModelProvider?: string;
 }): string[] {
-  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider } = params;
+  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider, imageModelProvider } = params;
+  const providerForResolution = imageModelProvider ?? defaultProvider;
   const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
     catalog: [],
@@ -109,15 +111,13 @@ function filterFallbacksByAllowlist(params: {
     }
     const resolved = resolveModelRefFromString({
       raw: fb.trim(),
-      defaultProvider,
+      defaultProvider: providerForResolution,
       aliasIndex,
     });
     if (!resolved) {
-      // If can't resolve, try matching raw string directly
       return allowedKeys.has(fb.trim());
     }
     const key = modelKey(resolved.ref.provider, resolved.ref.model);
-    // Check both full key and raw string
     return allowedKeys.has(key) || allowedKeys.has(fb.trim());
   });
 }
@@ -1421,6 +1421,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         // Build alias index for resolving model aliases (used for checking and filtering)
         const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
 
+        // Resolve the image model's provider for correct fallback allowlist checking.
+        // When the image model lives on a different provider than the agent default,
+        // fallbacks like "gpt-4.1" should be resolved against the image model's provider,
+        // not the agent's default provider.
+        const imageModelResolved = resolveModelRefFromString({
+          raw: imageModelPrimary.trim(),
+          defaultProvider,
+          aliasIndex,
+        });
+        const imageModelProvider = imageModelResolved?.ref.provider;
+
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
         const sessionModelOverride = entry?.modelOverride;
@@ -1500,6 +1511,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentId,
                 aliasIndex,
                 defaultProvider,
+                imageModelProvider,
               });
               imageModelFallbacks = canonicalizeFallbacks({
                 fallbacks: filtered,
@@ -1524,6 +1536,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentId,
                 aliasIndex,
                 defaultProvider,
+                imageModelProvider,
               });
               imageModelFallbacks = canonicalizeFallbacks({
                 fallbacks: filtered,
@@ -1549,6 +1562,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               agentId,
               aliasIndex,
               defaultProvider,
+              imageModelProvider,
             });
             // Canonicalize fallbacks with image model's provider context
             imageModelFallbacks = canonicalizeFallbacks({
