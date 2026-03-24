@@ -463,13 +463,13 @@ export async function killAllControlledSubagentRuns(params: {
     if (!childKey || seenChildSessionKeys.has(childKey)) {
       continue;
     }
-    seenChildSessionKeys.add(childKey);
     const currentEntry = getSubagentRunByChildSessionKey(childKey);
-    if (!currentEntry || currentEntry.runId !== entry.runId || currentEntry.endedAt) {
+    if (!currentEntry || currentEntry.runId !== entry.runId) {
       continue;
     }
+    seenChildSessionKeys.add(childKey);
 
-    if (!entry.endedAt) {
+    if (!currentEntry.endedAt) {
       const stopResult = await killSubagentRun({ cfg: params.cfg, entry: currentEntry, cache });
       if (stopResult.killed) {
         killed += 1;
