@@ -53,6 +53,11 @@ type LoadedMarketplace = {
 
 type MarketplaceManifestOrigin = "local" | "remote";
 
+type ResolvedLocalMarketplaceSource = {
+  manifestPath: string;
+  rootDir: string;
+};
+
 type KnownMarketplaceRecord = {
   installLocation?: string;
   source?: unknown;
@@ -464,53 +469,10 @@ async function loadMarketplace(params: {
   logger?: MarketplaceLogger;
   timeoutMs?: number;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
-  const knownMarketplaces = await readClaudeKnownMarketplaces();
-  const known = knownMarketplaces[params.source];
-  if (known) {
-    if (known.installLocation) {
-      const local = await resolveLocalMarketplaceSource(known.installLocation);
-      if (local?.ok) {
-        const raw = await fs.readFile(local.manifestPath, "utf-8");
-        const parsed = parseMarketplaceManifest(raw, local.manifestPath);
-        if (!parsed.ok) {
-          return parsed;
-        }
-        const validated = validateMarketplaceManifest({
-          manifest: parsed.manifest,
-          sourceLabel: local.manifestPath,
-          rootDir: local.rootDir,
-          origin: "local",
-        });
-        if (!validated.ok) {
-          return validated;
-        }
-        return {
-          ok: true,
-          marketplace: {
-            manifest: validated.manifest,
-            rootDir: local.rootDir,
-            sourceLabel: params.source,
-          },
-        };
-      }
-    }
-
-    const normalizedSource = normalizeEntrySource(known.source);
-    if (normalizedSource.ok) {
-      return await loadMarketplace({
-        source: marketplaceEntrySourceToInput(normalizedSource.source),
-        logger: params.logger,
-        timeoutMs: params.timeoutMs,
-      });
-    }
-  }
-
-  const local = await resolveLocalMarketplaceSource(params.source);
-  if (local?.ok === false) {
-    return local;
-  }
-
-  if (local?.ok) {
+  const loadResolvedLocalMarketplace = async (
+    local: ResolvedLocalMarketplaceSource,
+    sourceLabel: string,
+  ): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
     const raw = await fs.readFile(local.manifestPath, "utf-8");
     const parsed = parseMarketplaceManifest(raw, local.manifestPath);
     if (!parsed.ok) {
@@ -530,9 +492,38 @@ async function loadMarketplace(params: {
       marketplace: {
         manifest: validated.manifest,
         rootDir: local.rootDir,
-        sourceLabel: local.manifestPath,
+        sourceLabel,
       },
     };
+  };
+
+  const knownMarketplaces = await readClaudeKnownMarketplaces();
+  const known = knownMarketplaces[params.source];
+  if (known) {
+    if (known.installLocation) {
+      const local = await resolveLocalMarketplaceSource(known.installLocation);
+      if (local?.ok) {
+        return await loadResolvedLocalMarketplace(local, params.source);
+      }
+    }
+
+    const normalizedSource = normalizeEntrySource(known.source);
+    if (normalizedSource.ok) {
+      return await loadMarketplace({
+        source: marketplaceEntrySourceToInput(normalizedSource.source),
+        logger: params.logger,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+  }
+
+  const local = await resolveLocalMarketplaceSource(params.source);
+  if (local?.ok === false) {
+    return local;
+  }
+
+  if (local?.ok) {
+    return await loadResolvedLocalMarketplace(local, local.manifestPath);
   }
 
   const cloned = await cloneMarketplaceRepo({

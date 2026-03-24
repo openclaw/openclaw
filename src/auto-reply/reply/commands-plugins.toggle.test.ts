@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginRecord, createPluginStatusReport } from "../../plugins/status.test-helpers.js";
 
 const {
   readConfigFileSnapshotMock,
@@ -62,36 +63,20 @@ describe("handleCommands /plugins toggle", () => {
       path: "/tmp/openclaw.json",
       resolved: config,
     });
-    buildPluginStatusReportMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          format: "bundle",
-          source: "/tmp/workspace/.openclaw/extensions/superpowers",
-          origin: "workspace",
-          enabled: false,
-          status: "disabled",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    buildPluginStatusReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            format: "bundle",
+            source: "/tmp/workspace/.openclaw/extensions/superpowers",
+            enabled: false,
+            status: "disabled",
+          }),
+        ],
+      }),
+    );
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
     writeConfigFileMock.mockResolvedValue(undefined);
 
@@ -118,36 +103,19 @@ describe("handleCommands /plugins toggle", () => {
       path: "/tmp/openclaw.json",
       resolved: config,
     });
-    buildPluginStatusReportMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          format: "bundle",
-          source: "/tmp/workspace/.openclaw/extensions/superpowers",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    buildPluginStatusReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            format: "bundle",
+            source: "/tmp/workspace/.openclaw/extensions/superpowers",
+            enabled: true,
+          }),
+        ],
+      }),
+    );
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
     writeConfigFileMock.mockResolvedValue(undefined);
 

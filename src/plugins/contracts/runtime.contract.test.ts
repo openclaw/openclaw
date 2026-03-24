@@ -4,11 +4,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../../../extensions/openai/index.js";
 import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
-import type { ProviderRuntimeModel } from "../types.js";
+import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -59,22 +58,6 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
     contextWindow: overrides.contextWindow ?? 200_000,
     maxTokens: overrides.maxTokens ?? 8_192,
   } satisfies ProviderRuntimeModel;
-}
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
 }
 
 function requireProviderContractProvider(providerId: string): ProviderPlugin {

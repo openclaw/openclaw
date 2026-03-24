@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
   WizardProgress,
   WizardSelectParams,
 } from "../../wizard/prompts.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
@@ -55,22 +54,6 @@ vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
 import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {

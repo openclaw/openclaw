@@ -1,21 +1,16 @@
-import fs from "node:fs";
-import path from "node:path";
 import { createJiti } from "jiti";
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
-import { loadConfig } from "../../config/config.js";
 import {
   getDefaultLocalRoots as getDefaultLocalRootsImpl,
   loadWebMedia as loadWebMediaImpl,
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
-} from "../sdk-alias.js";
+  loadPluginBoundaryModuleWithJiti,
+  resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeRecord,
+} from "./runtime-plugin-boundary.js";
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
 
@@ -35,86 +30,34 @@ let cachedLightModule: WhatsAppLightModule | null = null;
 
 const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
 
-function readConfigSafely() {
-  try {
-    return loadConfig();
-  } catch {
-    return {};
-  }
-}
-
 function resolveWhatsAppPluginRecord(): WhatsAppPluginRecord {
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: readConfigSafely(),
-    cache: true,
-  });
-  const record = manifestRegistry.plugins.find((plugin) => plugin.id === WHATSAPP_PLUGIN_ID);
-  if (!record?.source) {
+  return resolvePluginRuntimeRecord(WHATSAPP_PLUGIN_ID, () => {
     throw new Error(
       `WhatsApp plugin runtime is unavailable: missing plugin '${WHATSAPP_PLUGIN_ID}'`,
     );
-  }
-  return {
-    origin: record.origin,
-    rootDir: record.rootDir,
-    source: record.source,
-  };
+  }) as WhatsAppPluginRecord;
 }
 
 function resolveWhatsAppRuntimeModulePath(
   record: WhatsAppPluginRecord,
   entryBaseName: "light-runtime-api" | "runtime-api",
 ): string {
-  const candidates = [
-    path.join(path.dirname(record.source), `${entryBaseName}.js`),
-    path.join(path.dirname(record.source), `${entryBaseName}.ts`),
-    ...(record.rootDir
-      ? [
-          path.join(record.rootDir, `${entryBaseName}.js`),
-          path.join(record.rootDir, `${entryBaseName}.ts`),
-        ]
-      : []),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
-  );
-}
-
-function getJiti(modulePath: string) {
-  const tryNative = shouldPreferNativeJiti(modulePath);
-  const cached = jitiLoaders.get(tryNative);
-  if (cached) {
-    return cached;
-  }
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath: modulePath,
+  const modulePath = resolvePluginRuntimeModulePath(record, entryBaseName, () => {
+    throw new Error(
+      `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
+    );
   });
-  const aliasMap = {
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(tryNative, loader);
-  return loader;
-}
-
-function loadWithJiti<TModule>(modulePath: string): TModule {
-  return getJiti(modulePath)(modulePath) as TModule;
+  if (!modulePath) {
+    throw new Error(
+      `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
+    );
+  }
+  return modulePath;
 }
 
 function loadCurrentHeavyModuleSync(): WhatsAppHeavyModule {
   const modulePath = resolveWhatsAppRuntimeModulePath(resolveWhatsAppPluginRecord(), "runtime-api");
-  return loadWithJiti<WhatsAppHeavyModule>(modulePath);
+  return loadPluginBoundaryModuleWithJiti<WhatsAppHeavyModule>(modulePath, jitiLoaders);
 }
 
 function loadWhatsAppLightModule(): WhatsAppLightModule {
@@ -125,7 +68,7 @@ function loadWhatsAppLightModule(): WhatsAppLightModule {
   if (cachedLightModule && cachedLightModulePath === modulePath) {
     return cachedLightModule;
   }
-  const loaded = loadWithJiti<WhatsAppLightModule>(modulePath);
+  const loaded = loadPluginBoundaryModuleWithJiti<WhatsAppLightModule>(modulePath, jitiLoaders);
   cachedLightModulePath = modulePath;
   cachedLightModule = loaded;
   return loaded;
@@ -137,7 +80,7 @@ async function loadWhatsAppHeavyModule(): Promise<WhatsAppHeavyModule> {
   if (cachedHeavyModule && cachedHeavyModulePath === modulePath) {
     return cachedHeavyModule;
   }
-  const loaded = loadWithJiti<WhatsAppHeavyModule>(modulePath);
+  const loaded = loadPluginBoundaryModuleWithJiti<WhatsAppHeavyModule>(modulePath, jitiLoaders);
   cachedHeavyModulePath = modulePath;
   cachedHeavyModule = loaded;
   return loaded;

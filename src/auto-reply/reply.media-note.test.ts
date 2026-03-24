@@ -2,58 +2,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
-
-const agentMocks = vi.hoisted(() => ({
-  runEmbeddedPiAgent: vi.fn(),
-  loadModelCatalog: vi.fn(),
-  webAuthExists: vi.fn().mockResolvedValue(true),
-  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
-}));
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (...args: unknown[]) => agentMocks.runEmbeddedPiAgent(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: agentMocks.loadModelCatalog,
-}));
-
-vi.mock("../agents/auth-profiles/session-override.js", () => ({
-  clearSessionAuthProfileOverride: vi.fn(),
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../commands-registry.runtime.js", () => ({
-  listChatCommands: () => [],
-}));
-
-vi.mock("../skill-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: () => [],
-}));
-
-vi.mock("../../extensions/whatsapp/src/session.js", () => ({
-  webAuthExists: agentMocks.webAuthExists,
-  getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
-  readWebSelfId: agentMocks.readWebSelfId,
-}));
+import {
+  createReplyRuntimeMocks,
+  installReplyRuntimeMocks,
+  makeEmbeddedTextResult,
+  resetReplyRuntimeMocks,
+} from "./reply.test-harness.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+const agentMocks = createReplyRuntimeMocks();
 
-function makeResult(text: string) {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
-}
+installReplyRuntimeMocks(agentMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
@@ -86,11 +45,7 @@ function makeCfg(home: string) {
 describe("getReplyFromConfig media note plumbing", () => {
   beforeEach(async () => {
     vi.resetModules();
-    agentMocks.runEmbeddedPiAgent.mockClear();
-    agentMocks.loadModelCatalog.mockClear();
-    agentMocks.loadModelCatalog.mockResolvedValue([
-      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
-    ]);
+    resetReplyRuntimeMocks(agentMocks);
     ({ getReplyFromConfig } = await import("./reply.js"));
   });
 
@@ -103,7 +58,7 @@ describe("getReplyFromConfig media note plumbing", () => {
       let seenPrompt: string | undefined;
       agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
         seenPrompt = params.prompt;
-        return makeResult("ok");
+        return makeEmbeddedTextResult("ok");
       });
 
       const cfg = makeCfg(home);
