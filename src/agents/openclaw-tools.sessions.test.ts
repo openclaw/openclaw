@@ -998,6 +998,132 @@ describe("sessions tools", () => {
     expect(details.text).toContain("active (waiting on 1 child)");
   });
 
+  it("subagents list does not double-count restarted descendants on one child session", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const parentKey = "agent:main:subagent:orchestrator-restarted-child";
+    const childKey = `${parentKey}:subagent:worker`;
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended-restarted",
+      childSessionKey: parentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate restarted child worker",
+      cleanup: "keep",
+      createdAt: now - 5 * 60_000,
+      startedAt: now - 5 * 60_000,
+      endedAt: now - 4 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-restarted-child-stale",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: parentKey,
+      task: "stale child run",
+      cleanup: "keep",
+      createdAt: now - 90_000,
+      startedAt: now - 90_000,
+      endedAt: now - 70_000,
+      cleanupCompletedAt: undefined,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-restarted-child-current",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: parentKey,
+      task: "current child run",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-restarted-child", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{ runId?: string; status?: string; pendingDescendants?: number }>;
+      text?: string;
+    };
+
+    expect(details.status).toBe("ok");
+    expect(details.active).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-orchestrator-ended-restarted",
+          status: "active (waiting on 1 child)",
+          pendingDescendants: 1,
+        }),
+      ]),
+    );
+    expect(details.text).toContain("active (waiting on 1 child)");
+    expect(details.text).not.toContain("active (waiting on 2 children)");
+  });
+
+  it("subagents list dedupes stale rows for the same child session", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:list-dedupe-worker";
+    addSubagentRunForTests({
+      runId: "run-list-current",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current worker label",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-list-stale",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale worker label",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 90_000,
+      outcome: { status: "ok" },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-dedupe", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      total?: number;
+      active?: Array<{ runId?: string }>;
+      recent?: Array<{ runId?: string }>;
+      text?: string;
+    };
+
+    expect(details.status).toBe("ok");
+    expect(details.total).toBe(1);
+    expect(details.active).toEqual([
+      expect.objectContaining({
+        runId: "run-list-current",
+      }),
+    ]);
+    expect(details.recent?.find((entry) => entry.runId === "run-list-stale")).toBeFalsy();
+    expect(details.text).toContain("current worker label");
+    expect(details.text).not.toContain("stale worker label");
+  });
+
   it("subagents list usage separates io tokens from prompt/cache", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();
