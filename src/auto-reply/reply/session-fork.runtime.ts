@@ -19,15 +19,17 @@ export function forkSessionFromParentRuntime(params: {
     return null;
   }
   try {
+    // Create a clean session file for the thread/topic — do NOT branch from the
+    // parent transcript. Branching (createBranchedSession) copies the parent's
+    // assistant messages and tool results into the child file but omits the user
+    // messages that triggered them, producing an asymmetric, confusing context
+    // that bleeds across threads. See github.com/openclaw/openclaw/issues/758.
+    //
+    // Thread sessions are already isolated by their session key (:topic:/:thread:
+    // suffix) and their own JSONL file. The parent context is not needed here —
+    // each thread should start with a clean slate, with only the workspace
+    // bootstrap files (SOUL.md, AGENTS.md, etc.) providing shared context.
     const manager = SessionManager.open(parentSessionFile);
-    const leafId = manager.getLeafId();
-    if (leafId) {
-      const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
-      const sessionId = manager.getSessionId();
-      if (sessionFile && sessionId) {
-        return { sessionId, sessionFile };
-      }
-    }
     const sessionId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const fileTimestamp = timestamp.replace(/[:.]/g, "-");
