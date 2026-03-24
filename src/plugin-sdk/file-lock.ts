@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -27,6 +28,34 @@ type HeldLock = {
 
 const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
+const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
+
+function releaseAllLocksSync(): void {
+  for (const [normalizedFile, held] of HELD_LOCKS) {
+    // Let the OS close live descriptors on process exit. On Linux/macOS this
+    // avoids Node's unmanaged-fd warnings while still unlinking the stale
+    // lock path before the process is fully gone.
+    rmLockPathSync(held.lockPath);
+    HELD_LOCKS.delete(normalizedFile);
+  }
+}
+
+function rmLockPathSync(lockPath: string): void {
+  try {
+    fsSync.rmSync(lockPath, { force: true });
+  } catch {
+    // Best-effort exit cleanup only.
+  }
+}
+
+function ensureExitCleanupRegistered(): void {
+  const proc = process as NodeJS.Process & { [CLEANUP_REGISTERED_KEY]?: boolean };
+  if (proc[CLEANUP_REGISTERED_KEY]) {
+    return;
+  }
+  proc[CLEANUP_REGISTERED_KEY] = true;
+  process.on("exit", releaseAllLocksSync);
+}
 
 function computeDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
   const base = Math.min(
@@ -101,15 +130,7 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
 }
 
 export function resetFileLockStateForTest(): void {
-  for (const [normalizedFile, held] of HELD_LOCKS) {
-    try {
-      void held.handle.close().catch(() => undefined);
-    } catch {
-      // Best-effort test cleanup only.
-    }
-    void fs.rm(held.lockPath, { force: true }).catch(() => undefined);
-    HELD_LOCKS.delete(normalizedFile);
-  }
+  releaseAllLocksSync();
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
@@ -117,6 +138,7 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
+  ensureExitCleanupRegistered();
   const normalizedFile = await resolveNormalizedFilePath(filePath);
   const lockPath = `${normalizedFile}.lock`;
   const held = HELD_LOCKS.get(normalizedFile);

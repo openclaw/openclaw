@@ -18,17 +18,20 @@ type PackageJson = {
 
 export type ParsedReleaseVersion = {
   version: string;
+  baseVersion: string;
   channel: "stable" | "beta";
   year: number;
   month: number;
   day: number;
   betaNumber?: number;
+  correctionNumber?: number;
   date: Date;
 };
 
 export type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
+  baseVersion: string;
   channel: "stable" | "beta";
   correctionNumber?: number;
   date: Date;
@@ -37,11 +40,13 @@ export type ParsedReleaseTag = {
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>[1-9]\d*)$/;
+const CORRECTION_VERSION_REGEX =
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -91,6 +96,7 @@ function parseDateParts(
 
   return {
     version,
+    baseVersion: `${year}.${month}.${day}`,
     channel,
     year,
     month,
@@ -116,6 +122,20 @@ export function parseReleaseVersion(version: string): ParsedReleaseVersion | nul
     return parseDateParts(trimmed, betaMatch.groups, "beta");
   }
 
+  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
+  if (correctionMatch?.groups) {
+    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
+    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
+    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
+      return null;
+    }
+
+    return {
+      ...parsedCorrection,
+      correctionNumber,
+    };
+  }
+
   return null;
 }
 
@@ -130,36 +150,14 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
     return {
       version: trimmed,
       packageVersion: parsedVersion.version,
+      baseVersion: parsedVersion.baseVersion,
       channel: parsedVersion.channel,
       date: parsedVersion.date,
-      correctionNumber: undefined,
+      correctionNumber: parsedVersion.correctionNumber,
     };
   }
 
-  const correctionMatch = CORRECTION_TAG_REGEX.exec(trimmed);
-  if (!correctionMatch?.groups) {
-    return null;
-  }
-
-  const baseVersion = correctionMatch.groups.base ?? "";
-  const parsedBaseVersion = parseReleaseVersion(baseVersion);
-  const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-  if (
-    parsedBaseVersion === null ||
-    parsedBaseVersion.channel !== "stable" ||
-    !Number.isInteger(correctionNumber) ||
-    correctionNumber < 1
-  ) {
-    return null;
-  }
-
-  return {
-    version: trimmed,
-    packageVersion: parsedBaseVersion.version,
-    channel: "stable",
-    correctionNumber,
-    date: parsedBaseVersion.date,
-  };
+  return null;
 }
 
 function startOfUtcDay(date: Date): number {
@@ -226,7 +224,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -243,17 +241,24 @@ export function collectReleaseTagErrors(params: {
   }
 
   const expectedTag = packageVersion ? `v${packageVersion}` : "<missing>";
-  const expectedCorrectionTag = parsedVersion?.channel === "stable" ? `${expectedTag}-N` : null;
   const matchesExpectedTag =
     parsedTag !== null &&
     parsedVersion !== null &&
-    parsedTag.packageVersion === parsedVersion.version &&
-    parsedTag.channel === parsedVersion.channel;
+    parsedTag.channel === parsedVersion.channel &&
+    (parsedTag.packageVersion === parsedVersion.version ||
+      (parsedVersion.channel === "stable" &&
+        parsedVersion.correctionNumber === undefined &&
+        parsedTag.correctionNumber !== undefined &&
+        parsedTag.baseVersion === parsedVersion.baseVersion));
   if (!matchesExpectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${
         packageVersion || "<missing>"
-      }; expected ${expectedCorrectionTag ? `${expectedTag} or ${expectedCorrectionTag}` : expectedTag}.`,
+      }; expected ${
+        parsedVersion?.channel === "stable" && parsedVersion.correctionNumber === undefined
+          ? `${expectedTag} or ${expectedTag}-N`
+          : expectedTag
+      }.`,
     );
   }
 
@@ -315,6 +320,7 @@ function runNpmCommand(args: string[]): string {
   const invocation = resolveNpmCommandInvocation();
   return execFileSync(invocation.command, [...invocation.args, ...args], {
     encoding: "utf8",
+    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
