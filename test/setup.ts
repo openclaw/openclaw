@@ -45,7 +45,10 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
 
 import { resetContextWindowCacheForTest } from "../src/agents/context.js";
 import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config.js";
-import { resetSessionWriteLockStateForTest } from "../src/agents/session-write-lock.js";
+import {
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+} from "../src/agents/session-write-lock.js";
 import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
@@ -53,6 +56,7 @@ import type {
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { clearSessionStoreCacheForTest } from "../src/config/sessions/store.js";
 import { resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
@@ -61,10 +65,6 @@ import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
 const testEnv = withIsolatedTestHome();
-
-afterAll(() => {
-  testEnv.cleanup();
-});
 
 installProcessWarningFilter();
 
@@ -355,6 +355,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  clearSessionStoreCacheForTest();
   resetContextWindowCacheForTest();
   resetFileLockStateForTest();
   resetModelsJsonReadyCacheForTest();
@@ -366,7 +367,9 @@ afterEach(() => {
   }
 });
 
-afterAll(() => {
+afterAll(async () => {
+  clearSessionStoreCacheForTest();
+  await drainSessionWriteLockStateForTest();
   resetFileLockStateForTest();
-  resetSessionWriteLockStateForTest();
+  testEnv.cleanup();
 });

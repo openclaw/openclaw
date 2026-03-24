@@ -1,9 +1,9 @@
-import { fetch as realFetch } from "undici";
 import {
   getBrowserControlServerBaseUrl,
   installBrowserControlServerHooks,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
+import { getBrowserTestFetch } from "./test-fetch.js";
 
 export function installAgentContractHooks() {
   installBrowserControlServerHooks();
@@ -12,11 +12,13 @@ export function installAgentContractHooks() {
 export async function startServerAndBase(): Promise<string> {
   await startBrowserControlServerFromConfig();
   const base = getBrowserControlServerBaseUrl();
+  const realFetch = getBrowserTestFetch();
   await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
   return base;
 }
 
 export async function postJson<T>(url: string, body?: unknown): Promise<T> {
+  const realFetch = getBrowserTestFetch();
   const res = await realFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

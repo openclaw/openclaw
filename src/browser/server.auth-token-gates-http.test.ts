@@ -1,13 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
+import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
 
 let server: ReturnType<typeof createServer> | null = null;
 let port = 0;
+let realFetch: BrowserTestFetch;
 
 describe("browser control HTTP auth", () => {
   beforeEach(async () => {
+    vi.resetModules();
+    realFetch = getBrowserTestFetch();
     server = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (!isAuthorizedBrowserRequest(req, { token: "browser-control-secret" })) {
         res.statusCode = 401;

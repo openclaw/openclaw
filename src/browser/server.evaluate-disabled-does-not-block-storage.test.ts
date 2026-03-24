@@ -1,5 +1,5 @@
-import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
 
 let testPort = 0;
@@ -112,6 +112,7 @@ describe("browser control evaluate gating", () => {
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
     await startBrowserControlServerFromConfig();
+    const realFetch = getBrowserTestFetch();
 
     const base = `http://127.0.0.1:${testPort}`;
 
