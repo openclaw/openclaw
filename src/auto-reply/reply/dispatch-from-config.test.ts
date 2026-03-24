@@ -41,7 +41,7 @@ const hookMocks = vi.hoisted(() => ({
     runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
       async () => ({ status: "no_handler" as const }),
     ),
-    runMessageReceived: vi.fn(async () => {}),
+    runMessageReceived: vi.fn(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -2669,5 +2669,66 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("returns early without reply when message_received blocking hook cancels", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ From: "+1234567890", Body: "check this" });
+    const replyResolver = vi.fn(async () => ({ text: "reply" }) satisfies ReplyPayload);
+
+    (hookMocks.runner.hasHooks as ReturnType<typeof vi.fn>).mockImplementation(
+      (name: string) => name === "message_received",
+    );
+    (hookMocks.runner.runMessageReceived as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cancel: true,
+      blockReason: "policy-blocked",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+  });
+
+  it("sends terminal reply when message_received blocking hook cancels with replyText", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ From: "+1234567890", Body: "check this" });
+    const replyResolver = vi.fn(async () => ({ text: "reply" }) satisfies ReplyPayload);
+
+    (hookMocks.runner.hasHooks as ReturnType<typeof vi.fn>).mockImplementation(
+      (name: string) => name === "message_received",
+    );
+    (hookMocks.runner.runMessageReceived as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cancel: true,
+      blockReason: "policy-blocked",
+      replyText: "Message blocked by policy.",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Message blocked by policy.",
+    });
+    expect(result).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
   });
 });
