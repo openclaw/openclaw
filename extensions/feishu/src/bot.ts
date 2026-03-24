@@ -405,6 +405,20 @@ export async function handleFeishuMessage(params: {
   // - direct chat: members-only lookup for stable peer naming
   // - group chat: contact user lookup (with user_id/open_id fallback)
   let permissionErrorForAgent: FeishuPermissionError | undefined;
+  const notePermissionErrorForAgent = (permissionError?: FeishuPermissionError) => {
+    if (!permissionError) {
+      return;
+    }
+
+    const appKey = account.appId ?? "default";
+    const now = Date.now();
+    const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
+
+    if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
+      permissionErrorNotifiedAt.set(appKey, now);
+      permissionErrorForAgent = permissionError;
+    }
+  };
   const resolveSenderNamesEnabled = feishuCfg?.resolveSenderNames ?? true;
   if (isDirect && resolveSenderNamesEnabled) {
     const directName = await resolveFeishuDirectNameFromChatMember({
@@ -413,16 +427,16 @@ export async function handleFeishuMessage(params: {
       senderOpenId: ctx.senderOpenId,
       log,
     });
-    const fallbackSenderName = directName
+    const fallbackSenderResult = directName
       ? undefined
-      : (
-          await resolveFeishuSenderName({
-            account,
-            senderId: ctx.senderOpenId,
-            senderUserId,
-            log,
-          })
-        ).name;
+      : await resolveFeishuSenderName({
+          account,
+          senderId: ctx.senderOpenId,
+          senderUserId,
+          log,
+        });
+    notePermissionErrorForAgent(fallbackSenderResult?.permissionError);
+    const fallbackSenderName = fallbackSenderResult?.name;
     const resolvedDirectName = directName ?? fallbackSenderName;
     if (resolvedDirectName) {
       ctx = {
@@ -444,16 +458,7 @@ export async function handleFeishuMessage(params: {
     });
     if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
 
-    if (senderResult.permissionError) {
-      const appKey = account.appId ?? "default";
-      const now = Date.now();
-      const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
-
-      if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
-        permissionErrorNotifiedAt.set(appKey, now);
-        permissionErrorForAgent = senderResult.permissionError;
-      }
-    }
+    notePermissionErrorForAgent(senderResult.permissionError);
   }
 
   const historyLimit = Math.max(

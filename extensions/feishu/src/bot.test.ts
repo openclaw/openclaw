@@ -2896,6 +2896,76 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("propagates DM contact fallback permission errors to the agent body", async () => {
+    const getUser = vi.fn().mockRejectedValue({
+      response: {
+        data: {
+          code: 99991672,
+          msg: "permission denied: contact:user.base:readonly https://open.feishu.cn/app/cli_dm_scope",
+        },
+      },
+    });
+    const getMembers = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            member_id: "ou-someone-else",
+            name: "SomeoneElse",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: getUser } },
+      im: { chatMembers: { get: getMembers } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_dm_scope",
+          appSecret: "secret_test",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-dm-permission-fallback",
+          user_id: "fouser_dm_permission_fallback",
+        },
+      },
+      message: {
+        message_id: "msg-direct-permission-fallback",
+        chat_id: "oc-dm-permission-fallback",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello dm permission fallback" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining(
+          "Permission grant URL: https://open.feishu.cn/app/cli_dm_scope",
+        ),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining(
+          "ou-dm-permission-fallback: hello dm permission fallback",
+        ),
+      }),
+    );
+  });
+
   it("does not resolve group names for groups rejected by groupAllowFrom", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const contactGet = vi
