@@ -102,12 +102,68 @@ export AEP_TRACE_ID="workflow-$(date +%s)"
 
 These headers are injected into every LLM call. The AEP proxy parses them, strips them before forwarding to the LLM provider, and includes them in the dashboard and audit trail.
 
+## Configurable Enforcement Policy
+
+Customize what gets blocked, flagged, or passed per detector:
+
+```yaml
+# aep-policy.yaml
+default_action: flag
+detectors:
+  pii:
+    action: block
+    threshold: 0.8
+  agent_threat:
+    action: block
+  cost_anomaly:
+    action: pass
+    multiplier: 10
+  content_safety:
+    action: flag
+    threshold: 0.85
+```
+
+Set `AEP_POLICY=aep-policy.yaml` in your `.env` to apply. Enterprises can define their own safety policies without changing code.
+
+## Custom Safety Detectors
+
+Add your own detectors alongside the built-in ones:
+
+```python
+# my_detector.py
+from aceteam_aep.safety.base import SafetySignal
+
+class ComplianceDetector:
+    name = "compliance"
+
+    def check(self, *, input_text, output_text, call_id, **kwargs):
+        # Your detection logic here
+        return []
+```
+
+Load it via the proxy CLI: `aceteam-aep proxy --detector my_detector:ComplianceDetector`
+
+## Attestation (Roadmap)
+
+AEP is building cryptographic proof that safety claims are genuine, not just stated:
+
+- **Level 1 — Signed Verdicts.** Each PASS/FLAG/BLOCK decision is Ed25519-signed by the proxy. Verifiable by anyone. Post-quantum hybrid signing (ML-DSA-65) ensures long-term auditability.
+- **Level 2 — Detector Attestation.** Each safety detector independently signs its output. Verifiers can confirm N detectors ran and weren't tampered with.
+- **Level 3 — Third-Party Verification.** External certification that the proxy runs approved detectors with valid keys. The SOC 2 model for agent safety.
+
+Non-AEP agents get low-confidence annotations. AEP-attested agents get verified trust scores. This creates structural preference for safety-enabled agents.
+
+See the [AEP protocol spec](https://github.com/aceteam-ai/aceteam-aep) for the full attestation architecture.
+
 ## Tested With
 
-- OpenClaw (this repo)
-- NemoClaw (NVIDIA OpenShell sandboxes)
-- NanoClaw
-- Any OpenAI-compatible client
+| Agent/Framework | Integration | Verified |
+|----------------|------------|----------|
+| OpenClaw (this repo) | Docker compose overlay | Yes |
+| NemoClaw (NVIDIA OpenShell) | Gateway inference routing | Yes — [demo script](https://github.com/aceteam-ai/aep-quickstart/blob/main/scripts/demo-nemoclaw.sh) |
+| NanoClaw | `OPENAI_BASE_URL` env var | Yes |
+| CrewAI, DeerFlow, LangChain | `OPENAI_BASE_URL` env var | Yes |
+| Any OpenAI-compatible client | Proxy or wrap() | Yes |
 
 ## Upstream
 
@@ -118,9 +174,13 @@ git fetch upstream
 git merge upstream/main
 ```
 
-## Links
+## Learn More
 
-- **AEP Package:** https://pypi.org/project/aceteam-aep/
-- **AEP Source:** https://github.com/aceteam-ai/aceteam-aep
-- **AEP Quickstart:** https://github.com/aceteam-ai/aep-quickstart
-- **AceTeam:** https://aceteam.ai
+| Resource | What |
+|----------|------|
+| [AEP Protocol Spec](https://aceteam.ai/docs/aep-overview) | Four pillars: cost, provenance, governance, safety |
+| [AEP Package (PyPI)](https://pypi.org/project/aceteam-aep/) | `pip install aceteam-aep[all]` |
+| [AEP Source](https://github.com/aceteam-ai/aceteam-aep) | Proxy, SDK, detectors, dashboard |
+| [AEP Quickstart](https://github.com/aceteam-ai/aep-quickstart) | Examples, NemoClaw demo, sidecar pattern |
+| [Safety Docs](https://aceteam.ai/docs/safety-proxy) | Detectors, enforcement, headers |
+| [AceTeam](https://aceteam.ai) | The team behind AEP |
