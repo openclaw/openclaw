@@ -2,29 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../extensions/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
-const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
-  "action-runtime.runtime.js",
-  "action-runtime-api.js",
-  "allow-from.js",
-  "api.js",
-  "auth-presence.js",
-  "helper-api.js",
-  "index.js",
-  "light-runtime-api.js",
-  "login-qr-api.js",
-  "onboard.js",
-  "openai-codex-catalog.js",
-  "provider-catalog.js",
-  "runtime-api.js",
-  "session-key-api.js",
-  "setup-api.js",
-  "setup-entry.js",
-  "timeouts.js",
-  "thread-bindings-runtime.js",
-]);
+const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
