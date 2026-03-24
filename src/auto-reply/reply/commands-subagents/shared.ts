@@ -30,6 +30,7 @@ import {
 } from "../../../shared/subagents-format.js";
 import {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
@@ -47,6 +48,7 @@ import { resolveTelegramConversationId } from "../telegram-context.js";
 export { extractAssistantText, stripToolMessages };
 export {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,

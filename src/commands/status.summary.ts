@@ -10,14 +10,12 @@ import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
-let statusSummaryRuntimeModulePromise:
-  | Promise<typeof import("./status.summary.runtime.js")>
-  | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 
 function loadChannelSummaryModule() {
@@ -30,10 +28,10 @@ function loadLinkChannelModule() {
   return linkChannelModulePromise;
 }
 
-function loadStatusSummaryRuntimeModule() {
-  statusSummaryRuntimeModulePromise ??= import("./status.summary.runtime.js");
-  return statusSummaryRuntimeModulePromise;
-}
+const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
+  () => import("./status.summary.runtime.js"),
+  ({ statusSummaryRuntime }) => statusSummaryRuntime,
+);
 
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
@@ -221,6 +219,9 @@ export async function getStatusSummary(
       model: configModel,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      // Keep `status`/`status --json` startup read-only. These summary lookups
+      // should not kick off background provider discovery or plugin scans.
+      allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
@@ -252,6 +253,7 @@ export async function getStatusSummary(
             model,
             contextTokensOverride: entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
+            allowAsyncLoad: false,
           }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =

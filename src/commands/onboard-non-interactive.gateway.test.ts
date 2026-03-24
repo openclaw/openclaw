@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -90,10 +90,18 @@ vi.mock("../daemon/diagnostics.js", () => ({
   readLastGatewayErrorLine: readLastGatewayErrorLineMock,
 }));
 
-const { runNonInteractiveSetup } = await import("./onboard-non-interactive.js");
-const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
-const { resolveConfigPath } = await import("../config/config.js");
-const { callGateway } = await import("../gateway/call.js");
+let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
+let resolveStateConfigPath: typeof import("../config/paths.js").resolveConfigPath;
+let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
+let callGateway: typeof import("../gateway/call.js").callGateway;
+
+async function loadGatewayOnboardModules(): Promise<void> {
+  vi.resetModules();
+  ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
+  ({ resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js"));
+  ({ resolveConfigPath } = await import("../config/config.js"));
+  ({ callGateway } = await import("../gateway/call.js"));
+}
 
 function getPseudoPort(base: number): number {
   return base + (process.pid % 1000);
@@ -150,6 +158,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     process.env.HOME = tempHome;
   });
 
+  beforeEach(async () => {
+    await loadGatewayOnboardModules();
+    gatewayClientCalls.length = 0;
+  });
+
   afterAll(async () => {
     if (tempHome) {
       await fs.rm(tempHome, { recursive: true, force: true });
@@ -163,6 +176,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+    gatewayClientCalls.length = 0;
   });
 
   it("writes gateway token auth into config", async () => {
@@ -412,12 +426,20 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         skippedReason: "systemd-user-unavailable",
       });
 
-      let capturedError = "";
+      let capturedJson = "";
       const runtimeWithCapture: RuntimeEnv = {
-        log: () => {},
+        log: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedJson =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+        },
         error: (...args: unknown[]) => {
           const firstArg = args[0];
-          capturedError =
+          const capturedError =
             typeof firstArg === "string"
               ? firstArg
               : firstArg instanceof Error
@@ -452,7 +474,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
             },
             runtimeWithCapture,
           ),
-        ).rejects.toThrow(/"phase": "daemon-install"/);
+        ).rejects.toThrow("exit should not be reached after runtime.error");
       } finally {
         Object.defineProperty(process, "platform", {
           configurable: true,
@@ -460,7 +482,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         });
       }
 
-      const parsed = JSON.parse(capturedError) as {
+      const parsed = JSON.parse(capturedJson) as {
         ok: boolean;
         phase: string;
         daemonInstall?: {
@@ -490,12 +512,20 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
       }));
 
-      let capturedError = "";
+      let capturedJson = "";
       const runtimeWithCapture: RuntimeEnv = {
-        log: () => {},
+        log: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedJson =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+        },
         error: (...args: unknown[]) => {
           const firstArg = args[0];
-          capturedError =
+          const capturedError =
             typeof firstArg === "string"
               ? firstArg
               : firstArg instanceof Error
@@ -523,9 +553,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           },
           runtimeWithCapture,
         ),
-      ).rejects.toThrow(/"phase": "gateway-health"/);
+      ).rejects.toThrow("exit should not be reached after runtime.error");
 
-      const parsed = JSON.parse(capturedError) as {
+      const parsed = JSON.parse(capturedJson) as {
         ok: boolean;
         phase: string;
         installDaemon: boolean;

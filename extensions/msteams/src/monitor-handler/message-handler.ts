@@ -2,9 +2,9 @@ import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
   dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  createScopedPairingAccess,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
@@ -19,7 +19,7 @@ import {
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/msteams";
+} from "../../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -30,6 +30,7 @@ import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
+  extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -63,7 +64,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "msteams",
     accountId: DEFAULT_ACCOUNT_ID,
@@ -103,6 +104,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -177,10 +179,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-      groupPolicy,
-      groupAllowFrom: effectiveGroupAllowFrom,
-    });
+    // When a route-level (team/channel) allowlist is configured but the sender allowlist is
+    // empty, resolveSenderScopedGroupPolicy would otherwise downgrade the policy to "open",
+    // allowing any sender. To close this bypass (GHSA-g7cr-9h7q-4qxq), treat an empty sender
+    // allowlist as deny-all whenever the route allowlist is active.
+    const senderGroupPolicy =
+      channelGate.allowlistConfigured && effectiveGroupAllowFrom.length === 0
+        ? groupPolicy
+        : resolveSenderScopedGroupPolicy({
+            groupPolicy,
+            groupAllowFrom: effectiveGroupAllowFrom,
+          });
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
@@ -315,6 +324,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
+    // Extract clientInfo entity (Teams sends this on every activity with timezone, locale, etc.)
+    const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+      | { timezone?: string; locale?: string; country?: string; platform?: string }
+      | undefined;
+
     // Build conversation reference for proactive replies.
     const agent = activity.recipient;
     const conversationRef: StoredConversationReference = {
@@ -331,6 +345,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
       locale: activity.locale,
+      // Only set timezone if present (preserve previously stored value on next upsert)
+      ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
     };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
       log.debug?.("failed to save conversation reference", {
@@ -526,6 +542,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      ReplyToId: activity.replyToId ?? undefined,
+      ReplyToBody: quoteInfo?.body,
+      ReplyToSender: quoteInfo?.sender,
+      ReplyToIsQuote: quoteInfo ? true : undefined,
       ...mediaPayload,
     });
 
@@ -562,15 +582,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sharePointSiteId,
     });
 
+    // Use Teams clientInfo timezone if no explicit userTimezone is configured.
+    // This ensures the agent knows the sender's timezone for time-aware responses
+    // and proactive sends within the same session.
+    // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
+    const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
+    const effectiveCfg =
+      senderTimezone && !cfg.agents?.defaults?.userTimezone
+        ? {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
+            },
+          }
+        : cfg;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg,
+        cfg: effectiveCfg,
         ctxPayload,
         dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
+        onSettled: () => markDispatchIdle(),
         replyOptions,
       });
 

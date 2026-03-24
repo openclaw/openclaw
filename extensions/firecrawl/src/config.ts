@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
@@ -23,6 +23,15 @@ type FirecrawlSearchConfig =
   | {
       apiKey?: unknown;
       baseUrl?: string;
+    }
+  | undefined;
+
+type PluginEntryConfig =
+  | {
+      webSearch?: {
+        apiKey?: unknown;
+        baseUrl?: string;
+      };
     }
   | undefined;
 
@@ -53,6 +62,11 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
 }
 
 export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const pluginWebSearch = pluginConfig?.webSearch;
+  if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
+    return pluginWebSearch;
+  }
   const search = resolveSearchConfig(cfg);
   if (!search || typeof search !== "object") {
     return undefined;
@@ -89,6 +103,10 @@ export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined
   const search = resolveFirecrawlSearchConfig(cfg);
   const fetch = resolveFirecrawlFetchConfig(cfg);
   return (
+    normalizeConfiguredSecret(
+      search?.apiKey,
+      "plugins.entries.firecrawl.config.webSearch.apiKey",
+    ) ||
     normalizeConfiguredSecret(search?.apiKey, "tools.web.search.firecrawl.apiKey") ||
     normalizeConfiguredSecret(fetch?.apiKey, "tools.web.fetch.firecrawl.apiKey") ||
     normalizeSecretInput(process.env.FIRECRAWL_API_KEY) ||

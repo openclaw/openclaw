@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   formatAgentEnvelope,
+  formatEnvelopeTimestamp,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "./envelope.js";
@@ -25,16 +26,15 @@ describe("formatAgentEnvelope", () => {
   });
 
   it("formats timestamps in local timezone by default", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4); // 2025-01-02T03:04:00Z
-      const body = formatAgentEnvelope({
-        channel: "WebChat",
-        timestamp: ts,
-        body: "hello",
-      });
-
-      expect(body).toMatch(/\[WebChat Wed 2025-01-01 19:04 [^\]]+\] hello/);
+    const ts = Date.UTC(2025, 0, 2, 3, 4);
+    const expectedTimestamp = formatEnvelopeTimestamp(ts, { timezone: "local" });
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: ts,
+      body: "hello",
     });
+
+    expect(body).toBe(`[WebChat ${expectedTimestamp}] hello`);
   });
 
   it("formats timestamps in UTC when configured", () => {

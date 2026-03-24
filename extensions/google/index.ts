@@ -1,24 +1,21 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
 } from "openclaw/plugin-sdk/provider-models";
-import {
-  createPluginBackedWebSearchProvider,
-  getScopedCredentialValue,
-  setScopedCredentialValue,
-} from "openclaw/plugin-sdk/provider-web-search";
+import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
-const googlePlugin = {
+export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: "google",
       label: "Google AI Studio",
@@ -48,26 +45,12 @@ const googlePlugin = {
       ],
       resolveDynamicModel: (ctx) =>
         resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
+      wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerImageGenerationProvider(buildGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);
-    api.registerWebSearchProvider(
-      createPluginBackedWebSearchProvider({
-        id: "gemini",
-        label: "Gemini (Google Search)",
-        hint: "Google Search grounding · AI-synthesized",
-        envVars: ["GEMINI_API_KEY"],
-        placeholder: "AIza...",
-        signupUrl: "https://aistudio.google.com/apikey",
-        docsUrl: "https://docs.openclaw.ai/tools/web",
-        autoDetectOrder: 20,
-        getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
-        setCredentialValue: (searchConfigTarget, value) =>
-          setScopedCredentialValue(searchConfigTarget, "gemini", value),
-      }),
-    );
+    api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
-};
-
-export default googlePlugin;
+});

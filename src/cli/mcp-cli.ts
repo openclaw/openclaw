@@ -10,10 +10,11 @@ import { defaultRuntime } from "../runtime.js";
 function fail(message: string): never {
   defaultRuntime.error(message);
   defaultRuntime.exit(1);
+  throw new Error(message);
 }
 
 function printJson(value: unknown): void {
-  defaultRuntime.log(JSON.stringify(value, null, 2));
+  defaultRuntime.writeJson(value);
 }
 
 export function registerMcpCli(program: Command) {

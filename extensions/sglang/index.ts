@@ -5,10 +5,10 @@ import {
   SGLANG_PROVIDER_LABEL,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  emptyPluginConfigSchema,
+  definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 
 const PROVIDER_ID = "sglang";
 
@@ -16,11 +16,10 @@ async function loadProviderSetup() {
   return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
 }
 
-const sglangPlugin = {
+export default definePluginEntry({
   id: "sglang",
   name: "SGLang Provider",
   description: "Bundled SGLang provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -87,6 +86,4 @@ const sglangPlugin = {
       },
     });
   },
-};
-
-export default sglangPlugin;
+});

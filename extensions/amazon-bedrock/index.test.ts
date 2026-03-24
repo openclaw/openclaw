@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
 describe("amazon-bedrock provider plugin", () => {
@@ -18,5 +18,28 @@ describe("amazon-bedrock provider plugin", () => {
         modelId: "amazon.nova-micro-v1:0",
       } as never),
     ).toBeUndefined();
+  });
+
+  it("disables prompt caching for non-Anthropic Bedrock models", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "amazon.nova-micro-v1:0",
+      streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "amazon-bedrock",
+          id: "amazon.nova-micro-v1:0",
+        } as never,
+        { messages: [] } as never,
+        {},
+      ),
+    ).toMatchObject({
+      cacheRetention: "none",
+    });
   });
 });

@@ -1,16 +1,15 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { applyHuggingfaceConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "huggingface";
 
-const huggingfacePlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Hugging Face Provider",
   description: "Bundled Hugging Face provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Hugging Face",
@@ -56,6 +55,4 @@ const huggingfacePlugin = {
       },
     });
   },
-};
-
-export default huggingfacePlugin;
+});

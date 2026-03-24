@@ -4,6 +4,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { VERSION } from "../../version.js";
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -59,8 +60,15 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
     expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFileWithModel).toBe("function");
     expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
     expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
+  });
+
+  it("exposes runtime.imageGeneration helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.imageGeneration.generate).toBe("function");
+    expect(typeof runtime.imageGeneration.listProviders).toBe("function");
   });
 
   it("exposes runtime.webSearch helpers", () => {
@@ -133,5 +141,10 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("exposes runtime.version from the shared VERSION constant", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.version).toBe(VERSION);
   });
 });
