@@ -121,6 +121,15 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("see:@+1234567890")).toEqual(["1234567890@s.whatsapp.net"]);
   });
 
+  it("matches mention inside quotes", () => {
+    expect(extractOutboundMentions('"@+1234567890" please review')).toEqual([
+      "1234567890@s.whatsapp.net",
+    ]);
+    expect(extractOutboundMentions("'@1234567890' is the contact")).toEqual([
+      "1234567890@s.whatsapp.net",
+    ]);
+  });
+
   it("matches mention followed by punctuation", () => {
     expect(extractOutboundMentions("hey @+1234567890, what's up?")).toEqual([
       "1234567890@s.whatsapp.net",
