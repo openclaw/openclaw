@@ -1,5 +1,7 @@
 # RFC: Hybrid Mem0 Memory Backend (Layer 1 Integration)
 
+> **Status: Implemented** — feature branch `feature/hybrid-mem0-backend` (3 commits)
+
 ## 1. Summary
 
 This RFC proposes the integration of [Mem0](https://github.com/mem0ai/mem0) as an optional memory backend for OpenClaw. Recognizing the importance of OpenClaw's local-first privacy guarantees, this feature is fundamentally designed as a **Hybrid Architecture**. The local `memory-core` (Markdown + LanceDB) remains the absolute source of truth, while Mem0 acts as an optional, federated "semantic overlay" to provide advanced functionality like automated entity extraction, deduplication, and lifecycle decay.
@@ -23,9 +25,12 @@ The memory configuration schema in `src/config/types.memory.ts` will be updated 
 
 ```typescript
 export type MemoryMem0Config = {
-  enabled: boolean;
-  apiKey?: string; // Secret reference
-  baseUrl?: string; // For self-hosted Mem0 instances
+  enabled?: boolean;
+  /** For local Docker: any non-empty string. Ignored by the OSS server. */
+  apiKey?: SecretInput;
+  /** Defaults to `http://localhost:8000/v1` (local Docker/OSS). Set to `https://api.mem0.ai/v1` for cloud. */
+  baseUrl?: string;
+  /** Fallback timeout in ms. Defaults to 3000. */
   fallbackTimeoutMs?: number;
 };
 ```
@@ -57,20 +62,27 @@ Mem0 is a multi-tenant system. To prevent OpenClaw workspaces from bleeding toge
 
 ## 4. Usage Examples
 
-**Example `config.json` configuration:**
+**Example: local Docker (default, no cloud dependency):**
 
-```json
-{
-  "memory": {
-    "backend": "builtin",
-    "citations": "auto",
-    "mem0": {
-      "enabled": true,
-      "apiKey": { "source": "env", "provider": "default", "id": "MEM0_API_KEY" },
-      "fallbackTimeoutMs": 3000
-    }
-  }
-}
+```yaml
+memory:
+  mem0:
+    enabled: true
+    apiKey: local # any non-empty string, ignored by OSS server
+    # baseUrl defaults to http://localhost:8000/v1
+    fallbackTimeoutMs: 3000
+```
+
+**Example: Mem0 cloud:**
+
+```yaml
+memory:
+  mem0:
+    enabled: true
+    apiKey:
+      env: MEM0_API_KEY
+    baseUrl: https://api.mem0.ai/v1
+    fallbackTimeoutMs: 3000
 ```
 
 **Agent Experience:**
@@ -110,3 +122,27 @@ Once the Layer 1 Hybrid Backend is stable, we plan to implement Layer 2 "Fronten
 
 - **Proactive Zero-Shot RAG:** Intercepting user messages and injecting `memory_search` snippets directly into the `<Context>` prompt without manual tool calls.
 - **Offline Consolidation:** A "Sleep Agent" that periodically squashes local Markdown daily logs into `MEMORY.md` to prevent local file bloat over months of usage.
+
+## 7. Test Coverage
+
+### `src/memory/mem0-client.test.ts` — REST client unit tests (7 tests)
+
+| Test                                                | What is validated                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------- |
+| `adds a memory — uses localhost default URL`        | Default `baseUrl` is `http://localhost:8000/v1`, Authorization header set |
+| `strips trailing slash from custom baseUrl`         | `http://host/v1/` → URL built without double slash                        |
+| `throws on addMemory API failure`                   | 5xx responses are re-thrown as `Mem0 API Error [500]: …`                  |
+| `searches memory and formats MemorySearchResult`    | All fields mapped: `path`, `snippet`, `score`, `citation`, `source`       |
+| `returns empty array when search yields no results` | `[]` API response → `[]` returned, no crash                               |
+| `throws standard error on search API failure`       | 401 responses re-thrown correctly                                         |
+| `uses cloud API URL when explicitly set`            | `baseUrl: https://api.mem0.ai/v1` routes to cloud                         |
+
+### `src/agents/tools/memory-tool.mem0.test.ts` — dual-write tool unit tests (5 tests)
+
+| Test                                                  | What is validated                                                             |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `writes to both local Markdown and Mem0 when enabled` | `fs.appendFile` called + `Mem0Client.addMemory` fired, `federated: true`      |
+| `only writes local if Mem0 is disabled`               | `addMemory` never called, `federated: false`                                  |
+| `Mem0 write fails → local still succeeds`             | Exception in Mem0 is swallowed, `success: true`, `fs.appendFile` still called |
+| `local FS write fails → returns error`                | `mkdir` EACCES → `{ success: false, error: … }`                               |
+| `localPath follows YYYY-MM-DD.md format`              | Regex: `memory/\d{4}-\d{2}-\d{2}\.md`                                         |
