@@ -14,14 +14,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Preflight: establish the fast global truth for this revision before the
-  # expensive platform and test lanes fan out.
+  # Scope: establish the fast global truth for this revision before the
+  # expensive platform and platform-specific lanes fan out.
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
-  # Run scope detection, changed-extension detection, and fast security checks in
-  # one visible job so operators have a single preflight box to inspect and rerun.
+  # Keep this job focused on routing decisions so the rest of CI can fan out sooner.
   # Fail-safe: if detection steps are skipped, downstream outputs fall back to
   # conservative defaults that keep heavy lanes enabled.
-  preflight:
+  scope:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -101,6 +100,26 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
           EOF
 
+  # Run the fast security/SCM checks in parallel with scope detection so the
+  # main Node jobs do not have to wait for Python/pre-commit setup.
+  security-fast:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure security base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
       - name: Setup Python
         id: setup-python
         uses: actions/setup-python@v6
@@ -154,15 +173,14 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pre-commit run --all-files pnpm-audit-prod
 
   # Fanout: downstream lanes branch from preflight outputs instead of waiting
   # on unrelated Linux checks.
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    needs: [scope]
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -207,8 +225,8 @@ jobs:
 
   # Validate npm pack contents after build (only on push to main, not PRs).
   release-check:
-    needs: [preflight, build-artifacts]
-    if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true'
+    needs: [scope, build-artifacts]
+    if: github.event_name == 'push' && needs.scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -232,9 +250,42 @@ jobs:
       - name: Check release contents
         run: pnpm release:check
 
+  checks-fast:
+    needs: [scope]
+    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: node
+            task: extensions
+            command: pnpm test:extensions
+          - runtime: node
+            task: contracts
+            command: pnpm test:contracts
+          - runtime: node
+            task: protocol
+            command: pnpm protocol:check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        run: ${{ matrix.command }}
+
   checks:
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.build-artifacts.result == 'success'
+    needs: [scope, build-artifacts]
+    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -252,16 +303,10 @@ jobs:
             shard_count: 2
             command: pnpm test
           - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
             task: channels
             shard_index: 1
             shard_count: 3
             command: pnpm test:channels
-          - runtime: node
-            task: contracts
-            command: pnpm test:contracts
           - runtime: node
             task: channels
             shard_index: 2
@@ -272,9 +317,6 @@ jobs:
             shard_index: 3
             shard_count: 3
             command: pnpm test:channels
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
           - runtime: node
             task: compat-node22
             node_version: "22.x"
@@ -346,13 +388,13 @@ jobs:
 
   extension-fast:
     name: "extension-fast"
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.preflight.outputs.has_changed_extensions == 'true'
+    needs: [scope]
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && needs.scope.outputs.has_changed_extensions == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.changed_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.scope.outputs.changed_extensions_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -373,8 +415,7 @@ jobs:
   # Types, lint, and format check.
   check:
     name: "check"
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -397,8 +438,7 @@ jobs:
 
   check-additional:
     name: "check-additional"
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -495,8 +535,8 @@ jobs:
 
   build-smoke:
     name: "build-smoke"
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    needs: [scope, build-artifacts]
+    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -536,8 +576,8 @@ jobs:
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_changed == 'true'
+    needs: [scope]
+    if: needs.scope.outputs.docs_changed == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -556,8 +596,8 @@ jobs:
         run: pnpm check:docs
 
   skills-python:
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.preflight.outputs.run_skills_python == 'true')
+    needs: [scope]
+    if: needs.scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -583,8 +623,8 @@ jobs:
         run: python -m pytest -q skills
 
   checks-windows:
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && needs.build-artifacts.result == 'success'
+    needs: [scope, build-artifacts]
+    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 20
     env:
@@ -732,8 +772,8 @@ jobs:
   # running 4 separate jobs per PR (as before) starved the queue. One job
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
-    needs: [preflight]
-    if: github.event_name == 'pull_request' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_macos == 'true'
+    needs: [scope]
+    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -809,8 +849,8 @@ jobs:
           exit 1
 
   android:
-    needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_android == 'true'
+    needs: [scope]
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_android == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
