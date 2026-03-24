@@ -957,6 +957,7 @@ describe("memory index", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
+    await manager.probeEmbeddingAvailability();
 
     expect(
       providerCalls.some(

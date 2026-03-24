@@ -193,11 +193,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     const createPromise = (async () => {
-      const providerResult = await MemoryIndexManager.loadProviderResult({
-        cfg,
-        agentId,
-        settings,
-      });
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
         return refreshed;
@@ -208,7 +203,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         agentId,
         workspaceDir,
         settings,
-        providerResult,
         purpose: params.purpose,
       });
       INDEX_CACHE.set(key, manager);
@@ -334,17 +328,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
-    await this.ensureProviderInitialized();
+    const cleaned = query.trim();
+    if (!cleaned) {
+      return [];
+    }
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
       });
     }
-    const cleaned = query.trim();
-    if (!cleaned) {
+    const hasIndexedContent = this.hasIndexedContent();
+    if (!hasIndexedContent) {
       return [];
     }
+    await this.ensureProviderInitialized();
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const hybrid = this.settings.query.hybrid;
@@ -435,6 +433,32 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           entry.score >= relaxedMinScore,
       )
       .slice(0, maxResults);
+  }
+
+  private hasIndexedContent(): boolean {
+    const chunks =
+      (
+        this.db.prepare(`SELECT COUNT(*) as c FROM chunks`).get() as
+          | {
+              c: number;
+            }
+          | undefined
+      )?.c ?? 0;
+    if (chunks > 0) {
+      return true;
+    }
+    if (!this.fts.enabled || !this.fts.available) {
+      return false;
+    }
+    const ftsRows =
+      (
+        this.db.prepare(`SELECT COUNT(*) as c FROM ${FTS_TABLE}`).get() as
+          | {
+              c: number;
+            }
+          | undefined
+      )?.c ?? 0;
+    return ftsRows > 0;
   }
 
   private async searchVector(

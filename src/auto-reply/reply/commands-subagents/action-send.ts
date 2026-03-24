@@ -75,6 +75,9 @@ export async function handleSubagentsSendAction(
   if (result.status === "forbidden") {
     return stopWithText(`⚠️ ${result.error ?? "send failed"}`);
   }
+  if (result.status === "done") {
+    return stopWithText(result.text);
+  }
   return stopWithText(
     result.replyText ??
       `✅ Sent to ${formatRunLabel(targetResolution.entry)} (run ${result.runId.slice(0, 8)}).`,
