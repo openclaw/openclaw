@@ -174,6 +174,28 @@ describe("resolveHomeRelativePath", () => {
     ).toBe(path.resolve("/srv/openclaw-home/docs"));
   });
 
+  it("expands braced environment placeholders", () => {
+    expect(
+      resolveHomeRelativePath("${XDG_CONFIG_HOME}/workspace/skills", {
+        env: { XDG_CONFIG_HOME: "/home/node/.openclaw" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(path.resolve("/home/node/.openclaw/workspace/skills"));
+  });
+
+  it("expands bare environment placeholders", () => {
+    expect(
+      resolveHomeRelativePath("$XDG_CONFIG_HOME/workspace/skills", {
+        env: { XDG_CONFIG_HOME: "/home/node/.openclaw" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(path.resolve("/home/node/.openclaw/workspace/skills"));
+  });
+
+  it("keeps unknown placeholders unchanged", () => {
+    expect(resolveHomeRelativePath("${MISSING_ENV}/workspace")).toBe(
+      path.resolve("${MISSING_ENV}/workspace"),
+    );
+  });
+
   it("falls back to cwd when tilde paths have no home source", () => {
     expect(
       resolveHomeRelativePath("~", {
