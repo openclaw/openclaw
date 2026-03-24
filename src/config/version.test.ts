@@ -3,6 +3,7 @@ import {
   compareOpenClawVersions,
   isSameOpenClawStableFamily,
   parseOpenClawVersion,
+  shouldWarnOnTouchedVersion,
 } from "./version.js";
 
 describe("parseOpenClawVersion", () => {
@@ -63,5 +64,20 @@ describe("isSameOpenClawStableFamily", () => {
     expect(isSameOpenClawStableFamily("2026.3.23-1", "2026.3.23-2")).toBe(true);
     expect(isSameOpenClawStableFamily("2026.3.23", "2026.3.24")).toBe(false);
     expect(isSameOpenClawStableFamily("2026.3.23-beta.1", "2026.3.23")).toBe(false);
+  });
+});
+
+describe("shouldWarnOnTouchedVersion", () => {
+  it("skips same-base stable families", () => {
+    expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.23-1")).toBe(false);
+  });
+
+  it("skips same-base prerelease configs when current is newer", () => {
+    expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.23-beta.1")).toBe(false);
+  });
+
+  it("warns when the touched config is newer", () => {
+    expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23")).toBe(true);
+    expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.24")).toBe(true);
   });
 });
