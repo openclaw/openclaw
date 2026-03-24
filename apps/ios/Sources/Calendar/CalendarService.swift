@@ -10,6 +10,11 @@ final class CalendarService: CalendarServicing {
 
         func install(_ continuation: CheckedContinuation<Bool, Never>) {
             self.lock.lock()
+            if self.hasResumed {
+                self.lock.unlock()
+                continuation.resume(returning: false)
+                return
+            }
             self.continuation = continuation
             self.lock.unlock()
         }
@@ -174,6 +179,25 @@ final class CalendarService: CalendarServicing {
         }
     }
 
+#if DEBUG
+extension CalendarService {
+    final class _TestPermissionRequestBox: @unchecked Sendable {
+        private let box = PermissionRequestBox()
+
+        func resume(_ value: Bool) {
+            self.box.resume(value)
+        }
+
+        func installAndAwait() async -> Bool {
+            await withCheckedContinuation { continuation in
+                self.box.install(continuation)
+            }
+        }
+    }
+}
+#endif
+
+extension CalendarService {
     private static func resolveCalendar(
         store: EKEventStore,
         calendarId: String?,
