@@ -93,7 +93,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 
