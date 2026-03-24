@@ -2,4 +2,4 @@
 
 export { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 export { parseGeminiAuth } from "../infra/gemini-auth.js";
-export { normalizeGeminiBaseUrl } from "../utils/gemini-url.js";
+export { ensureGeminiVersionSegment, normalizeGeminiBaseUrl } from "../utils/gemini-url.js";

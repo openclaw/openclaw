@@ -131,14 +131,11 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-<<<<<<< HEAD
       const baseUrl = normalizeBaseUrl(resolveGoogleBaseUrl(req.cfg), DEFAULT_GOOGLE_IMAGE_BASE_URL);
-=======
-      const baseUrl = normalizeGeminiBaseUrl(
+      const baseUrl = normalizeBaseUrl(
         resolveGoogleBaseUrl(req.cfg),
         DEFAULT_GOOGLE_IMAGE_BASE_URL,
       );
->>>>>>> a219827ba0 (fix(gemini-url): align Google image-generation with unified baseUrl)
       const allowPrivate = Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim());
       const authHeaders = parseGeminiAuth(auth.apiKey);
       const headers = new Headers(authHeaders.headers);
