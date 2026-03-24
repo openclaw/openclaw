@@ -178,6 +178,22 @@ function renderDailyChartCompact(
   const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
   const maxValue = Math.max(...values, isTokenMode ? 1 : 0.0001);
 
+  // Adaptive scaling: when the spread between largest and smallest non-zero
+  // values is extreme (>50×), use square-root compression so small bars stay
+  // visible instead of collapsing to a single pixel.
+  const nonZero = values.filter((v) => v > 0);
+  const minNonZero = nonZero.length > 0 ? Math.min(...nonZero) : maxValue;
+  const spread = maxValue / minNonZero;
+  const chartAreaPx = 200;
+  const minBarPx = 6;
+  const barHeights = values.map((v): number => {
+    if (v <= 0) {
+      return 0;
+    }
+    const ratio = spread > 50 ? Math.sqrt(v / maxValue) : v / maxValue;
+    return Math.max(minBarPx, ratio * chartAreaPx);
+  });
+
   // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
@@ -206,8 +222,7 @@ function renderDailyChartCompact(
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
           ${daily.map((d, idx) => {
-            const value = values[idx];
-            const heightPct = (value / maxValue) * 100;
+            const heightPx = barHeights[idx];
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
@@ -257,7 +272,7 @@ function renderDailyChartCompact(
                     ? html`
                         <div
                           class="daily-bar daily-bar--stacked"
-                          style="height: ${heightPct.toFixed(1)}%;"
+                          style="height: ${heightPx.toFixed(0)}px;"
                         >
                           ${(() => {
                             const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
@@ -273,7 +288,7 @@ function renderDailyChartCompact(
                         </div>
                       `
                     : html`
-                        <div class="daily-bar" style="height: ${heightPct.toFixed(1)}%"></div>
+                        <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
                       `
                 }
                 ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}

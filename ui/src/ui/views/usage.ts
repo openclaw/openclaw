@@ -584,6 +584,7 @@ export function renderUsage(props: UsageProps) {
                 type="date"
                 .value=${filters.startDate}
                 title=${t("usage.filters.startDate")}
+                aria-label=${t("usage.filters.startDate")}
                 @change=${(e: Event) =>
                   filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
               />
@@ -593,6 +594,7 @@ export function renderUsage(props: UsageProps) {
                 type="date"
                 .value=${filters.endDate}
                 title=${t("usage.filters.endDate")}
+                aria-label=${t("usage.filters.endDate")}
                 @change=${(e: Event) =>
                   filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
               />
@@ -600,6 +602,7 @@ export function renderUsage(props: UsageProps) {
             <select
               class="usage-select"
               title=${t("usage.filters.timeZone")}
+              aria-label=${t("usage.filters.timeZone")}
               .value=${filters.timeZone}
               @change=${(e: Event) =>
                 filterActions.onTimeZoneChange(

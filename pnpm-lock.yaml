@@ -718,6 +718,9 @@ importers:
 
   ui:
     dependencies:
+      '@create-markdown/preview':
+        specifier: ^2.0.0
+        version: 2.0.0(@create-markdown/core@2.0.0)(shiki@3.23.0)
       '@noble/ed25519':
         specifier: 3.0.1
         version: 3.0.1
@@ -1065,6 +1068,25 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@create-markdown/core@2.0.0':
+    resolution: {integrity: sha512-xOmhoiDSa82EzjXp3aViQdB+xfCP4E2jEKxJiKJ702sup3p/CTCtL8fZBKQ3BvzASQRpq/xKCRXZZwRrg1DmZQ==}
+    engines: {node: '>=20.0.0'}
+
+  '@create-markdown/preview@2.0.0':
+    resolution: {integrity: sha512-3WTGCrCOVBy9wH2X82Oa2ZHJ+eiEqu8AlucckenWVtFSbzRKzkxgci0BRw7IDvsOsTUEMxS9Ltc9/hSUHkdidA==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@create-markdown/core': '>=2.0.0'
+      mermaid: '>=10.0.0'
+      shiki: '>=1.0.0'
+    peerDependenciesMeta:
+      '@create-markdown/core':
+        optional: true
+      mermaid:
+        optional: true
+      shiki:
+        optional: true
 
   '@csstools/color-helpers@6.0.2':
     resolution: {integrity: sha512-LMGQLS9EuADloEFkcTBR3BwV/CGHV7zyDxVRtVDTwdI2Ca4it0CCVTT9wCkxSgokjE5Ho41hEPgb8OEUwoXr6Q==}
@@ -5632,12 +5654,16 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
-  picomatch@2.3.1:
-    resolution: {integrity: sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==}
+  picomatch@2.3.2:
+    resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
 
   picomatch@4.0.3:
     resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
+    engines: {node: '>=12'}
+
+  picomatch@4.0.4:
+    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
   pino-abstract-transport@2.0.0:
@@ -7528,6 +7554,14 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@create-markdown/core@2.0.0':
+    optional: true
+
+  '@create-markdown/preview@2.0.0(@create-markdown/core@2.0.0)(shiki@3.23.0)':
+    optionalDependencies:
+      '@create-markdown/core': 2.0.0
+      shiki: 3.23.0
 
   '@csstools/color-helpers@6.0.2': {}
 
@@ -11032,9 +11066,9 @@ snapshots:
     dependencies:
       reusify: 1.1.0
 
-  fdir@6.5.0(picomatch@4.0.3):
+  fdir@6.5.0(picomatch@4.0.4):
     optionalDependencies:
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   fetch-blob@3.2.0:
     dependencies:
@@ -11978,7 +12012,7 @@ snapshots:
   micromatch@4.0.8:
     dependencies:
       braces: 3.0.3
-      picomatch: 2.3.1
+      picomatch: 2.3.2
 
   mime-db@1.52.0: {}
 
@@ -12433,9 +12467,11 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@2.3.1: {}
+  picomatch@2.3.2: {}
 
   picomatch@4.0.3: {}
+
+  picomatch@4.0.4: {}
 
   pino-abstract-transport@2.0.0:
     dependencies:
@@ -13284,8 +13320,8 @@ snapshots:
 
   tinyglobby@0.2.15:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
 
   tinypool@2.1.0: {}
 
@@ -13475,7 +13511,7 @@ snapshots:
   vite@8.0.1(@types/node@25.5.0)(esbuild@0.27.3)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3):
     dependencies:
       lightningcss: 1.32.0
-      picomatch: 4.0.3
+      picomatch: 4.0.4
       postcss: 8.5.8
       rolldown: 1.0.0-rc.10
       tinyglobby: 0.2.15
@@ -13501,7 +13537,7 @@ snapshots:
       magic-string: 0.30.21
       obug: 2.1.1
       pathe: 2.0.3
-      picomatch: 4.0.3
+      picomatch: 4.0.4
       std-env: 4.0.0
       tinybench: 2.9.0
       tinyexec: 1.0.2

@@ -6,6 +6,7 @@ import type {
   ChannelsStatusSnapshot,
   CronJob,
   CronStatus,
+  ModelCatalogEntry,
   SkillStatusReport,
   ToolsCatalogResult,
 } from "../types.ts";
@@ -81,6 +82,7 @@ export type AgentsProps = {
   agentIdentityById: Record<string, AgentIdentityResult>;
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
+  modelCatalog: ModelCatalogEntry[];
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -135,72 +137,51 @@ export function renderAgents(props: AgentsProps) {
     <div class="agents-layout">
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
-          <span class="agents-toolbar-label">Agent</span>
-          <div class="agents-control-row">
-            <div class="agents-control-select">
-              <select
-                class="agents-select"
-                .value=${selectedId ?? ""}
-                ?disabled=${props.loading || agents.length === 0}
-                @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
-              >
-                ${
-                  agents.length === 0
-                    ? html`
-                        <option value="">No agents</option>
-                      `
-                    : agents.map(
-                        (agent) => html`
+          <div class="agents-control-select">
+            <select
+              class="agents-select"
+              .value=${selectedId ?? ""}
+              ?disabled=${props.loading || agents.length === 0}
+              @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
+            >
+              ${
+                agents.length === 0
+                  ? html`
+                      <option value="">No agents</option>
+                    `
+                  : agents.map(
+                      (agent) => html`
                         <option value=${agent.id} ?selected=${agent.id === selectedId}>
                           ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId) ? ` (${agentBadgeText(agent.id, defaultId)})` : ""}
                         </option>
                       `,
-                      )
-                }
-              </select>
-            </div>
-            <div class="agents-control-actions">
-              ${
-                selectedAgent
-                  ? html`
-                      <div class="agent-actions-wrap">
-                        <button
-                          class="agent-actions-toggle"
-                          type="button"
-                          @click=${() => {
-                            actionsMenuOpen = !actionsMenuOpen;
-                          }}
-                        >⋯</button>
-                        ${
-                          actionsMenuOpen
-                            ? html`
-                                <div class="agent-actions-menu">
-                                  <button type="button" @click=${() => {
-                                    void navigator.clipboard.writeText(selectedAgent.id);
-                                    actionsMenuOpen = false;
-                                  }}>Copy agent ID</button>
-                                  <button
-                                    type="button"
-                                    ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
-                                    @click=${() => {
-                                      props.onSetDefault(selectedAgent.id);
-                                      actionsMenuOpen = false;
-                                    }}
-                                  >
-                                    ${defaultId && selectedAgent.id === defaultId ? "Already default" : "Set as default"}
-                                  </button>
-                                </div>
-                              `
-                            : nothing
-                        }
-                      </div>
-                    `
-                  : nothing
+                    )
               }
-              <button class="btn btn--sm agents-refresh-btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-                ${props.loading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
+            </select>
+          </div>
+          <div class="agents-toolbar-actions">
+            ${
+              selectedAgent
+                ? html`
+                    <button
+                      type="button"
+                      class="btn btn--sm btn--ghost"
+                      @click=${() => void navigator.clipboard.writeText(selectedAgent.id)}
+                      title="Copy agent ID to clipboard"
+                    >Copy ID</button>
+                    <button
+                      type="button"
+                      class="btn btn--sm btn--ghost"
+                      ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
+                      @click=${() => props.onSetDefault(selectedAgent.id)}
+                      title=${defaultId && selectedAgent.id === defaultId ? "Already the default agent" : "Set as the default agent"}
+                    >${defaultId && selectedAgent.id === defaultId ? "Default" : "Set Default"}</button>
+                  `
+                : nothing
+            }
+            <button class="btn btn--sm agents-refresh-btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+              ${props.loading ? "Loading…" : "Refresh"}
+            </button>
           </div>
         </div>
         ${
@@ -234,6 +215,7 @@ export function renderAgents(props: AgentsProps) {
                         configLoading: props.config.loading,
                         configSaving: props.config.saving,
                         configDirty: props.config.dirty,
+                        modelCatalog: props.modelCatalog,
                         onConfigReload: props.onConfigReload,
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
@@ -349,8 +331,6 @@ export function renderAgents(props: AgentsProps) {
     </div>
   `;
 }
-
-let actionsMenuOpen = false;
 
 function renderAgentTabs(
   active: AgentsPanel,

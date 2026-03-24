@@ -36,7 +36,7 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.blockedByAllowlist) {
     return theme.warn("🚫 blocked");
   }
-  return theme.error("✗ missing");
+  return theme.warn("△ needs setup");
 }
 
 function normalizeSkillEmoji(emoji?: string): string {
@@ -192,7 +192,7 @@ export function formatSkillInfo(
       ? theme.warn("⏸ Disabled")
       : skill.blockedByAllowlist
         ? theme.warn("🚫 Blocked by allowlist")
-        : theme.error("✗ Missing requirements");
+        : theme.warn("△ Needs setup");
 
   lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
   lines.push("");
@@ -263,6 +263,23 @@ export function formatSkillInfo(
     for (const inst of skill.install) {
       lines.push(`  ${theme.warn("→")} ${inst.label}`);
     }
+  }
+
+  if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
+    lines.push("");
+    lines.push(theme.heading("API key setup:"));
+    if (skill.homepage) {
+      lines.push(`  Get your key: ${skill.homepage}`);
+    }
+    lines.push(
+      `  Save via UI: ${theme.muted("Control UI → Skills → ")}${skill.name}${theme.muted(" → Save key")}`,
+    );
+    lines.push(
+      `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${skill.skillKey}.apiKey YOUR_KEY`)}`,
+    );
+    lines.push(
+      `  Stored in: ${theme.muted("~/.openclaw/openclaw.json")} ${theme.muted(`(skills.entries.${skill.skillKey}.apiKey)`)}`,
+    );
   }
 
   return appendClawHubHint(lines.join("\n"), opts.json);
