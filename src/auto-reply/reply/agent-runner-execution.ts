@@ -38,6 +38,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  stripSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -162,6 +163,17 @@ export async function runAgentTurnWithFallback(params: {
             return { skip: true };
           }
           text = stripped.text;
+        }
+        // Strip trailing NO_REPLY from mixed-content text (mirrors HEARTBEAT_OK
+        // stripping above).  LLMs in cron/isolated sessions often emit analysis
+        // text before appending NO_REPLY.  If stripping leaves no content, treat
+        // the entire message as silent.
+        if (text?.includes(SILENT_REPLY_TOKEN) && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+          const afterStrip = stripSilentToken(text, SILENT_REPLY_TOKEN);
+          if (!afterStrip.trim()) {
+            return { skip: true };
+          }
+          text = afterStrip;
         }
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
