@@ -142,7 +142,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
   });
 
-  it("preserves SecretRef token in trusted-proxy mode instead of overwriting", async () => {
+  it("fails closed when trusted-proxy SecretRef token cannot be resolved", async () => {
     const secretRef = { source: "env" as const, provider: "default", id: "BROWSER_TOKEN" };
     const cfg: OpenClawConfig = {
       gateway: {
@@ -161,14 +161,14 @@ describe("ensureBrowserControlAuth", () => {
     };
     mocks.loadConfig.mockReturnValue(cfg);
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    // SecretRef is preserved — no overwrite, no config write.
-    expect(result.generatedToken).toBeUndefined();
+    // Fail closed — don't start browser control without auth.
+    await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
+      /SecretRef.*could not be resolved/,
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("preserves inline env-template SecretRef in trusted-proxy mode", async () => {
+  it("fails closed when trusted-proxy inline env-template cannot be resolved", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
         auth: {
@@ -186,10 +186,9 @@ describe("ensureBrowserControlAuth", () => {
     };
     mocks.loadConfig.mockReturnValue(cfg);
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    // Inline env-template is preserved — no overwrite, no config write.
-    expect(result.generatedToken).toBeUndefined();
+    await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
+      /SecretRef.*could not be resolved/,
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 

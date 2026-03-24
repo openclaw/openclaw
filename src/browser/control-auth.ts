@@ -87,7 +87,13 @@ export async function ensureBrowserControlAuth(params: {
   if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
     const existingTokenValue = latestCfg.gateway?.auth?.token;
     if (coerceSecretRef(existingTokenValue, latestCfg.secrets?.defaults)) {
-      return { auth };
+      // Fail closed: the operator configured an external SecretRef for the
+      // token but it could not be resolved in this process. Starting the
+      // browser control server without auth would recreate the vulnerability.
+      throw new Error(
+        "browser control auth unavailable: gateway.auth.token is a SecretRef that could not be resolved; " +
+          "resolve the secret provider or set a literal token to start browser control in trusted-proxy mode",
+      );
     }
     const generatedToken = crypto.randomBytes(24).toString("hex");
     const nextCfg: OpenClawConfig = {
