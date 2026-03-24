@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   completeWithPreparedSimpleCompletionModelMock: vi.fn(),
@@ -20,8 +20,11 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
 
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ generateThreadTitle } = await import("./thread-title.js"));
+});
+
+beforeEach(() => {
   hoisted.completeWithPreparedSimpleCompletionModelMock.mockReset();
   hoisted.prepareSimpleCompletionModelForAgentMock.mockReset();
   hoisted.extractAssistantTextMock.mockReset();
@@ -44,7 +47,6 @@ beforeEach(async () => {
   });
   hoisted.completeWithPreparedSimpleCompletionModelMock.mockResolvedValue({});
   hoisted.extractAssistantTextMock.mockReturnValue("Generated title");
-  ({ generateThreadTitle } = await import("./thread-title.js"));
 });
 
 describe("generateThreadTitle", () => {
