@@ -385,10 +385,10 @@ export class GatewayBrowserClient {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
 
-    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Over plain HTTP, we skip device identity and fall back to token-only auth.
-    // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
-    const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+    // Device identity uses pure-JS cryptography (@noble/ed25519 + @noble/hashes)
+    // and no longer requires crypto.subtle / browser Secure Context.
+    // This allows device identity to work in all deployment scenarios, including
+    // HTTP reverse-proxy setups on LAN where crypto.subtle is unavailable.
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: SelectedConnectAuth = {
       authToken: explicitGatewayToken,
@@ -396,7 +396,7 @@ export class GatewayBrowserClient {
       canFallbackToShared: false,
     };
 
-    if (isSecureContext) {
+    try {
       deviceIdentity = await loadOrCreateDeviceIdentity();
       selectedAuth = this.selectConnectAuth({
         role,
@@ -405,6 +405,9 @@ export class GatewayBrowserClient {
       if (this.pendingDeviceTokenRetry && selectedAuth.authDeviceToken) {
         this.pendingDeviceTokenRetry = false;
       }
+    } catch {
+      // Fall back to token-only auth if identity generation fails
+      // (e.g. localStorage unavailable in privacy/incognito mode)
     }
 
     return {
@@ -562,10 +565,17 @@ export class GatewayBrowserClient {
   private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedToken = loadDeviceAuthToken({
+    const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       role: params.role,
-    })?.token;
+    });
+    const storedScopes = storedEntry?.scopes ?? [];
+    const storedTokenCanRead =
+      params.role !== CONTROL_UI_OPERATOR_ROLE ||
+      storedScopes.includes("operator.read") ||
+      storedScopes.includes("operator.write") ||
+      storedScopes.includes("operator.admin");
+    const storedToken = storedTokenCanRead ? storedEntry?.token : undefined;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&
       Boolean(explicitGatewayToken) &&

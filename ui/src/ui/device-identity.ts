@@ -1,4 +1,5 @@
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { sha256 } from "@noble/hashes/sha2";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 type StoredIdentity = {
@@ -42,15 +43,15 @@ function bytesToHex(bytes: Uint8Array): string {
     .join("");
 }
 
-async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey.slice().buffer);
-  return bytesToHex(new Uint8Array(hash));
+function fingerprintPublicKey(publicKey: Uint8Array): string {
+  const hash = sha256(publicKey);
+  return bytesToHex(hash);
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
   const privateKey = utils.randomSecretKey();
   const publicKey = await getPublicKeyAsync(privateKey);
-  const deviceId = await fingerprintPublicKey(publicKey);
+  const deviceId = fingerprintPublicKey(publicKey);
   return {
     deviceId,
     publicKey: base64UrlEncode(publicKey),
@@ -70,7 +71,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
         typeof parsed.publicKey === "string" &&
         typeof parsed.privateKey === "string"
       ) {
-        const derivedId = await fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
+        const derivedId = fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
         if (derivedId !== parsed.deviceId) {
           const updated: StoredIdentity = {
             ...parsed,
