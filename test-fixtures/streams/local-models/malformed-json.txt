@@ -1,0 +1,2 @@
+Thought: I'm going to output bad JSON.
+Action: {"tool": "broken", "args": {"test": "val"

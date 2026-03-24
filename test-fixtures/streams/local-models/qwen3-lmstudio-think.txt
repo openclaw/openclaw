@@ -1,0 +1,8 @@
+<think>
+I need to check the local weather for the user. I have a tool called `get_weather`.
+I'll use it to check the weather in San Francisco.
+Wait, let me make sure the arguments are correct.
+Ah, parameter is `location`.
+</think>
+Here is my internal reasoning. I will now perform the action!
+Action: {"tool": "get_weather", "args": {"location": "San Francisco, CA"}}

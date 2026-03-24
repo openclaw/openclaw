@@ -255,6 +255,8 @@ export const ModelProviderSchema = z
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
+    toolFallback: z.union([z.literal("react"), z.literal("none"), z.literal("auto")]).optional(),
+    reactProfile: z.union([z.literal("minimal"), z.literal("verbose")]).optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),

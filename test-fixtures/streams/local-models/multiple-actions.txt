@@ -1,0 +1,4 @@
+Thought: I need to check both weather and time.
+Action: {"tool": "get_weather", "args": {"location": "London"}}
+Action: {"tool": "get_time", "args": {"location": "London"}}
+I'll wait for the data.

@@ -144,6 +144,31 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
+## Tool Calling (ReAct Fallback)
+
+Many local models (especially uncensored or heavily quantized ones) struggle with the strict JSON schemas required by native tool-calling APIs (like OpenAI's `/v1/chat/completions`). When serving a local model via LM Studio or vLLM, you may see empty tool calls or Infinite JSON Recursion if the model tries to intermingle `<think>` tags with tool execution.
+
+To fix this, define your model explicitly and enable the **ReAct Fallback**:
+
+```json5
+  models: [
+    {
+      id: "my-local-model",
+      name: "Local Model",
+      
+      // Forces OpenClaw to inject a ReAct system prompt instead of relying on the proxy's JSON schema parser
+      toolFallback: "react", 
+      
+      // Depending on the model's intelligence, you can use "minimal" to save tokens or "verbose" for safety
+      reactProfile: "minimal",
+      
+      contextWindow: 120000,
+    }
+  ]
+```
+
+When `toolFallback: "react"` is enabled, OpenClaw wraps the API request and parses raw text streams looking for `Action:` blocks. It **automatically strips out `<think>...</think>` blocks**, which perfectly solves the bug where LM Studio sends internal LLM hallucinations back to the client as malformed tool calls.
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.

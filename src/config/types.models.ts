@@ -68,6 +68,8 @@ export type ModelProviderConfig = {
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   injectNumCtxForOpenAICompat?: boolean;
+  toolFallback?: "react" | "none" | "auto";
+  reactProfile?: "minimal" | "verbose";
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];

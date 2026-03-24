@@ -57,6 +57,7 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import { wrapStreamFnWithReActFallback } from "../../local/react-fallback-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
@@ -875,6 +876,37 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = defaultSessionStreamFn;
       }
 
+      // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
+      // Otherwise Ollama defaults to a 4096 context window.
+      const providerIdForNumCtx =
+        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+          ? params.model.provider
+          : params.provider;
+      const shouldInjectNumCtx = shouldInjectOllamaCompatNumCtx({
+        model: params.model,
+        config: params.config,
+        providerId: providerIdForNumCtx,
+      });
+      if (shouldInjectNumCtx) {
+        const numCtx = Math.max(
+          1,
+          Math.floor(
+            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+          ),
+        );
+        activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
+      }
+
+      const fallbackProviderConfig = params.config?.models?.providers?.[providerIdForNumCtx];
+      activeSession.agent.streamFn = wrapStreamFnWithReActFallback(
+        activeSession.agent.streamFn,
+        {
+          modelId: params.modelId,
+          providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
+          toolFallback: fallbackProviderConfig?.toolFallback,
+          reactProfile: fallbackProviderConfig?.reactProfile,
+        }
+      );
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,

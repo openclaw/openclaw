@@ -1,0 +1,3 @@
+<think>
+I forgot how to close my thinking block. Let me call a tool anyways without closing it properly.
+Action: {"tool": "get_weather", "args": {"location": "San Francisco"}}

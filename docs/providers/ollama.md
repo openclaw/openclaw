@@ -297,6 +297,41 @@ When `api: "openai-completions"` is used with Ollama, OpenClaw injects `options.
 }
 ```
 
+### Tool Calling & ReAct Fallback
+
+Not all local models natively support JSON tool-calling (for example, small `<8B` models or aggressive quants). If your model fails to utilize tools correctly, or loops infinitely trying to write JSON, you can enable the OpenClaw **ReAct Fallback**.
+
+The ReAct fallback intercepts the text stream and injects a hidden system prompt instructing the model to output `Action: {...}` tags. OpenClaw parses these tags and translates them into native tool-calls.
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://ollama-host:11434",
+        apiKey: "ollama-local",
+        models: [
+          {
+            id: "tiny-llama:1b",
+            // Set toolFallback to "react" to force prompt-based tool calling
+            // Set to "auto" (default) to let OpenClaw auto-discover native tool capabilities
+            toolFallback: "react",
+            
+            // ReAct prompt size. "minimal" saves tokens, "verbose" is safer for "dumb" models
+            reactProfile: "verbose", 
+            
+            contextWindow: 4096,
+            maxTokens: 4096
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+> **Note on Reasoning Models:** If your local reasoning model (like DeepSeek-R1 or Qwen-Math) outputs `<think>...</think>` tags along with tool calls, the ReAct fallback parser will **automatically strip** the reasoning blocks before searching for JSON. This safely prevents the common "recursive JSON bug" when local endpoints mistakenly parse internalized thoughts as actual commands.
+
 ### Context windows
 
 For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it falls back to the default Ollama context window used by OpenClaw. You can override `contextWindow` and `maxTokens` in explicit provider config.

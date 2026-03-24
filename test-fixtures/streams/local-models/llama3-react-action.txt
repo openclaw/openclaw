@@ -1,0 +1,3 @@
+Thought: The user is asking to search their workspace for 'auth'. I should use the codebase_search tool.
+Action: {"tool": "codebase_search", "args": {"query": "auth"}}
+I will wait for the result of the search to synthesize an answer.
