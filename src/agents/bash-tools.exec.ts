@@ -1,8 +1,8 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import { loadCombinedSessionStoreForGateway } from "../gateway/session-utils.js";
+import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecHost,
   loadExecApprovals,
@@ -43,7 +43,6 @@ import {
   normalizeExecTarget,
   normalizePathPrepend,
   resolveExecTarget,
-  renderExecHostLabel,
   emitExecSystemEvent,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
@@ -1287,6 +1286,8 @@ function rejectExecApprovalShellCommand(command: string): void {
         "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
       ].join(" "),
     );
+  }
+}
 
 async function notifyUserChannel(
   text: string,
