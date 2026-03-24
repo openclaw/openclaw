@@ -110,6 +110,10 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
+  // Clear stale mtime keys from prior activations before populating fresh ones.
+  // This prevents removed agent paths from causing false-positive staleness detection.
+  runtimeSnapshotMtimes.clear();
+
   // Capture mtime for each auth store file represented by entries.
   // This ensures that any file update that landed before this call is detected as stale
   // (mtime > runtimeSnapshotMtimes.get(key)) on the next resolveRuntimeAuthProfileStore() check.
