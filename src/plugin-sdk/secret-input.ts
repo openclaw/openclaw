@@ -14,10 +14,12 @@ export {
   normalizeSecretInputString,
 };
 
+/** Optional version of the shared secret-input schema. */
 export function buildOptionalSecretInputSchema() {
   return buildSecretInputSchema().optional();
 }
 
+/** Array version of the shared secret-input schema. */
 export function buildSecretInputArraySchema() {
   return z.array(buildSecretInputSchema());
 }

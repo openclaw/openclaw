@@ -191,7 +191,7 @@ export type AppViewState = {
   sessionsSortDir: "asc" | "desc";
   sessionsPage: number;
   sessionsPageSize: number;
-  sessionsActionsOpenKey: string | null;
+  sessionsSelectedKeys: Set<string>;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -267,9 +267,11 @@ export type AppViewState = {
     skillsReport: SkillStatusReport | null;
     skillsError: string | null;
     skillsFilter: string;
+    skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
     skillEdits: Record<string, string>;
     skillMessages: Record<string, SkillMessage>;
     skillsBusyKey: string | null;
+    skillsDetailKey: string | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

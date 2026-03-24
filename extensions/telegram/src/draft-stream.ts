@@ -27,7 +27,6 @@ type TelegramSendMessageDraft = (
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
  */
 const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
-
 const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
   nextDraftId: 0,
 }));
@@ -126,7 +125,11 @@ export function createTelegramDraftStream(params: {
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
-      ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
+      ? {
+          ...threadParams,
+          reply_to_message_id: params.replyToMessageId,
+          allow_sending_without_reply: true,
+        }
       : threadParams;
   const resolvedDraftApi = prefersDraftTransport
     ? resolveSendMessageDraftApi(params.api)

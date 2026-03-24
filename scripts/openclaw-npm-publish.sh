@@ -4,8 +4,8 @@ set -euo pipefail
 
 mode="${1:-}"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/openclaw-npm-publish.sh [--dry-run|--publish]" >&2
+if [[ "${mode}" != "--publish" ]]; then
+  echo "usage: bash scripts/openclaw-npm-publish.sh --publish" >&2
   exit 2
 fi
 
@@ -16,6 +16,8 @@ release_channel="stable"
 if [[ "${package_version}" == *-beta.* ]]; then
   publish_cmd=(npm publish --access public --tag beta --provenance)
   release_channel="beta"
+elif [[ "${package_version}" == *-* ]]; then
+  publish_cmd=(npm publish --access public --tag latest --provenance)
 fi
 
 echo "Resolved package version: ${package_version}"
@@ -25,9 +27,5 @@ echo "Publish auth: GitHub OIDC trusted publishing"
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
-
-if [[ "${mode}" == "--dry-run" ]]; then
-  exit 0
-fi
 
 "${publish_cmd[@]}"

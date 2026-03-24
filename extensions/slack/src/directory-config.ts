@@ -1,16 +1,29 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
-  listInspectedDirectoryEntriesFromSources,
+  listResolvedDirectoryEntriesFromSources,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectSlackAccount, type InspectedSlackAccount } from "../api.js";
+import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 import { parseSlackTarget } from "./targets.js";
 
+function resolveSlackDirectoryConfigAccount(
+  cfg: DirectoryConfigParams["cfg"],
+  accountId?: string | null,
+) {
+  const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultSlackAccountId(cfg));
+  const config = mergeSlackAccountConfig(cfg, resolvedAccountId);
+  return {
+    accountId: resolvedAccountId,
+    config,
+    dm: config.dm,
+  };
+}
+
 export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
+  return listResolvedDirectoryEntriesFromSources({
     ...params,
     kind: "user",
-    inspectAccount: (cfg, accountId) =>
-      inspectSlackAccount({ cfg, accountId }) as InspectedSlackAccount | null,
+    resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
     resolveSources: (account) => {
       const allowFrom = account.config.allowFrom ?? account.dm?.allowFrom ?? [];
       const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
@@ -32,11 +45,10 @@ export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigP
 }
 
 export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
+  return listResolvedDirectoryEntriesFromSources({
     ...params,
     kind: "group",
-    inspectAccount: (cfg, accountId) =>
-      inspectSlackAccount({ cfg, accountId }) as InspectedSlackAccount | null,
+    resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
     resolveSources: (account) => [Object.keys(account.config.channels ?? {})],
     normalizeId: (raw) => {
       const normalized = parseSlackTarget(raw, { defaultKind: "channel" });

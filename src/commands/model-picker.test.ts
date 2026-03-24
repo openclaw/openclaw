@@ -181,6 +181,42 @@ describe("promptModelAllowlist", () => {
       "anthropic/claude-opus-4-5",
     ]);
   });
+
+  it("scopes the initial allowlist picker to the preferred provider", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openai",
+    });
+
+    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(options.map((opt: { value: string }) => opt.value)).toEqual([
+      "openai/gpt-5.4",
+      "openai/gpt-5.4-mini",
+    ]);
+  });
 });
 
 describe("router model filtering", () => {
