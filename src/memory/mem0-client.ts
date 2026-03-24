@@ -12,8 +12,9 @@ export class Mem0Client {
 
   constructor(apiKey: string, baseUrl?: string) {
     this.apiKey = apiKey;
-    // Default to the official API if no custom base URL is provided.
-    this.baseUrl = baseUrl?.replace(/\/+$/, "") || "https://api.mem0.ai/v1";
+    // Default to a local Mem0 instance (e.g. Docker container on the same host).
+    // To use the Mem0 cloud API, set baseUrl: "https://api.mem0.ai/v1" in config.
+    this.baseUrl = baseUrl?.replace(/\/+$/, "") || "http://localhost:8000/v1";
   }
 
   /**
@@ -39,7 +40,7 @@ export class Mem0Client {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Mem0 APi Error [${res.status}]: ${text}`);
+      throw new Error(`Mem0 API Error [${res.status}]: ${text}`);
     }
   }
 

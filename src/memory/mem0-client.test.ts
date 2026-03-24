@@ -24,7 +24,7 @@ describe("Mem0Client", () => {
     await client.addMemory("I love TypeScript for agent development", "user-1", "agent-1");
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "https://api.mem0.ai/v1/memories/",
+      "http://localhost:8000/v1/memories/",
       expect.objectContaining({
         method: "POST",
         headers: {
