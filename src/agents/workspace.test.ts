@@ -73,6 +73,7 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   expect(names).not.toContain("HEARTBEAT.md");
   expect(names).not.toContain("BOOTSTRAP.md");
   expect(names).not.toContain("MEMORY.md");
+  expect(names).not.toContain("TASTE.md");
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -366,6 +367,7 @@ describe("filterBootstrapFilesForSession", () => {
     { name: "HEARTBEAT.md", path: "/w/HEARTBEAT.md", content: "", missing: false },
     { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
     { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
+    { name: "TASTE.md", path: "/w/TASTE.md", content: "", missing: false },
   ];
 
   it("returns all files for main session (no sessionKey)", () => {
