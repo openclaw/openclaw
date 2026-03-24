@@ -213,6 +213,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
     expect(prompt).toContain("openclaw gateway restart");
     expect(prompt).toContain("Do not invent commands");
+    expect(prompt).toContain(
+      "Do not use exec for gateway stop/restart/config — use the gateway tool instead",
+    );
+    expect(prompt).toContain(
+      "The gateway tool preserves session context across restarts; exec does not",
+    );
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {
@@ -464,6 +470,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
+    expect(prompt).toContain("never edit config files directly");
+    expect(prompt).toContain(
+      "Config changes via config.apply/config.patch are validated before writing and restart the gateway automatically",
+    );
   });
 
   it("includes skills guidance when skills prompt is present", () => {
