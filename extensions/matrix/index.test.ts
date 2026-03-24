@@ -25,6 +25,7 @@ describe("matrix plugin registration", () => {
           "requiresExplicitMatrixDefaultAccount",
           "resolveMatrixDefaultOrOnlyAccountId",
         ],
+        realPluginSdkSpecifiers: [],
       }),
     ).toEqual({
       requiresExplicitMatrixDefaultAccount: "function",
@@ -44,6 +45,7 @@ describe("matrix plugin registration", () => {
       loadRuntimeApiExportTypesViaJiti({
         modulePath: runtimeApiPath,
         exportNames: ["resolveMatrixAccountStringValues"],
+        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/matrix"],
       }),
     ).toEqual({
       resolveMatrixAccountStringValues: "function",

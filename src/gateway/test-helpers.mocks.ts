@@ -322,6 +322,34 @@ export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
+function createEmbeddedRunMockExports() {
+  return {
+    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    abortEmbeddedPiRun: (sessionId: string) => {
+      embeddedRunMock.abortCalls.push(sessionId);
+      return embeddedRunMock.activeIds.has(sessionId);
+    },
+    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
+      embeddedRunMock.waitCalls.push(sessionId);
+      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+    },
+  };
+}
+
+async function importEmbeddedRunMockModule<TModule extends object>(
+  actualPath: string,
+  opts?: { includeActiveCount?: boolean },
+): Promise<TModule> {
+  const actual = await vi.importActual<TModule>(actualPath);
+  return {
+    ...actual,
+    ...createEmbeddedRunMockExports(),
+    ...(opts?.includeActiveCount
+      ? { getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size }
+      : {}),
+  };
+}
+
 vi.mock("../agents/pi-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
     "../agents/pi-model-discovery.js",
@@ -633,77 +661,29 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
     "../agents/pi-embedded.js",
   );
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
-      embeddedRunMock.abortCalls.push(sessionId);
-      return embeddedRunMock.activeIds.has(sessionId);
-    },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
-      embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
-    },
-  };
 });
 
 vi.mock("/src/agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
     "../agents/pi-embedded.js",
   );
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
-      embeddedRunMock.abortCalls.push(sessionId);
-      return embeddedRunMock.activeIds.has(sessionId);
-    },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
-      embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
-    },
-  };
 });
 
 vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
     "../agents/pi-embedded-runner/runs.js",
+    { includeActiveCount: true },
   );
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
-      embeddedRunMock.abortCalls.push(sessionId);
-      return embeddedRunMock.activeIds.has(sessionId);
-    },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
-      embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
-    },
-    getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-  };
 });
 
 vi.mock("/src/agents/pi-embedded-runner/runs.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
     "../agents/pi-embedded-runner/runs.js",
+    { includeActiveCount: true },
   );
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
-      embeddedRunMock.abortCalls.push(sessionId);
-      return embeddedRunMock.activeIds.has(sessionId);
-    },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
-      embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
-    },
-    getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-  };
 });
 
 vi.mock("../commands/health.js", () => ({

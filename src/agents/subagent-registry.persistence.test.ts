@@ -1,19 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
-import {
-  addSubagentRunForTests,
-  clearSubagentRunSteerRestart,
-  getSubagentRunByChildSessionKey,
-  initSubagentRegistry,
-  listSubagentRunsForRequester,
-  registerSubagentRun,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
-import { loadSubagentRegistryFromDisk } from "./subagent-registry.store.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -21,6 +11,29 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
+
+let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentRunForTests;
+let clearSubagentRunSteerRestart: typeof import("./subagent-registry.js").clearSubagentRunSteerRestart;
+let getSubagentRunByChildSessionKey: typeof import("./subagent-registry.js").getSubagentRunByChildSessionKey;
+let initSubagentRegistry: typeof import("./subagent-registry.js").initSubagentRegistry;
+let listSubagentRunsForRequester: typeof import("./subagent-registry.js").listSubagentRunsForRequester;
+let registerSubagentRun: typeof import("./subagent-registry.js").registerSubagentRun;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let loadSubagentRegistryFromDisk: typeof import("./subagent-registry.store.js").loadSubagentRegistryFromDisk;
+
+async function loadSubagentRegistryModules(): Promise<void> {
+  vi.resetModules();
+  ({
+    addSubagentRunForTests,
+    clearSubagentRunSteerRestart,
+    getSubagentRunByChildSessionKey,
+    initSubagentRegistry,
+    listSubagentRunsForRequester,
+    registerSubagentRun,
+    resetSubagentRegistryForTests,
+  } = await import("./subagent-registry.js"));
+  ({ loadSubagentRegistryFromDisk } = await import("./subagent-registry.store.js"));
+}
 
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -162,6 +175,10 @@ describe("subagent registry persistence", () => {
     initSubagentRegistry();
     await flushQueuedRegistryWork();
   };
+
+  beforeEach(async () => {
+    await loadSubagentRegistryModules();
+  });
 
   afterEach(async () => {
     announceSpy.mockClear();
@@ -480,6 +497,45 @@ describe("subagent registry persistence", () => {
     };
     expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("removes attachments when pruning orphaned restored runs", async () => {
+    const persisted = createPersistedEndedRun({
+      runId: "run-orphan-attachments",
+      childSessionKey: "agent:main:subagent:ghost-attachments",
+      task: "orphan attachments",
+      cleanup: "delete",
+    });
+    const registryPath = await writePersistedRegistry(persisted, {
+      seedChildSessions: false,
+    });
+    if (!tempStateDir) {
+      throw new Error("tempStateDir not initialized");
+    }
+    const attachmentsRootDir = path.join(tempStateDir, "attachments");
+    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, Record<string, unknown>>;
+    };
+    if (!parsed.runs?.["run-orphan-attachments"]) {
+      throw new Error("expected orphaned run in persisted registry");
+    }
+    parsed.runs["run-orphan-attachments"] = {
+      ...parsed.runs["run-orphan-attachments"],
+      attachmentsRootDir,
+      attachmentsDir,
+    };
+    await fs.writeFile(registryPath, `${JSON.stringify(parsed)}\n`, "utf8");
+
+    await restartRegistryAndFlush();
+
+    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, unknown>;
+    };
+    expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
   });
 
   it("prefers active runs and can resolve them from persisted registry snapshots", async () => {

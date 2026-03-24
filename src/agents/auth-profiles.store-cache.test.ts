@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION, EXTERNAL_CLI_SYNC_TTL_MS } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -13,10 +13,20 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: mocks.syncExternalCliCredentials,
 }));
 
-const { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } =
-  await import("./auth-profiles.js");
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
+
+async function loadFreshAuthProfilesModuleForTest() {
+  vi.resetModules();
+  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } =
+    await import("./auth-profiles.js"));
+}
 
 describe("auth profile store cache", () => {
+  beforeEach(async () => {
+    await loadFreshAuthProfilesModuleForTest();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     clearRuntimeAuthProfileStoreSnapshots();

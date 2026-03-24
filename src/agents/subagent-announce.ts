@@ -830,7 +830,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
   signal?: AbortSignal;
-}): Promise<"steered" | "queued" | "none"> {
+}): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
     return "none";
   }
@@ -863,7 +863,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    enqueueAnnounce({
+    const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
@@ -880,7 +880,7 @@ async function maybeQueueSubagentAnnounce(params: {
       settings: queueSettings,
       send: sendAnnounce,
     });
-    return "queued";
+    return didQueue ? "queued" : "dropped";
   }
 
   return "none";
@@ -1630,7 +1630,7 @@ export async function runSubagentAnnounceFlow(params: {
           params: {
             key: params.childSessionKey,
             deleteTranscript: true,
-            emitLifecycleHooks: false,
+            emitLifecycleHooks: params.spawnMode === "session",
           },
           timeoutMs: 10_000,
         });

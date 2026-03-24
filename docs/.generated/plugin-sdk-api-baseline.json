@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 95,
+            "line": 98,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -2620,7 +2620,7 @@
           "exportName": "resolveCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 440,
+            "line": 461,
             "path": "src/auto-reply/command-auth.ts"
           }
         },
@@ -3135,7 +3135,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 158,
+            "line": 155,
             "path": "src/channels/registry.ts"
           }
         },
