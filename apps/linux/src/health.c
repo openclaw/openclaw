@@ -31,17 +31,6 @@ void health_init(void) {
     pending_deep_probe = FALSE;
 }
 
-static gboolean gateway_arg_should_be_forwarded(const gchar *arg, const gchar *subcommand) {
-    if (!arg) return FALSE;
-    if (g_strcmp0(subcommand, "probe") == 0 || g_strcmp0(subcommand, "status") == 0) {
-        return (g_strcmp0(arg, "--token") == 0 || g_strcmp0(arg, "-t") == 0 ||
-                g_strcmp0(arg, "--password") == 0);
-    }
-    return (g_strcmp0(arg, "--port") == 0 || g_strcmp0(arg, "-p") == 0 ||
-            g_strcmp0(arg, "--token") == 0 || g_strcmp0(arg, "-t") == 0 ||
-            g_strcmp0(arg, "--password") == 0);
-}
-
 static gchar** build_standard_argv(const gchar **prefix, const gchar *subcommand) {
     GPtrArray *arr = g_ptr_array_new();
     for (gint i = 0; prefix[i] != NULL; i++) {
@@ -93,9 +82,9 @@ static gchar** resolve_from_systemd(const gchar *subcommand) {
         // avoiding unsupported `run` flags that crash `status` or `probe`.
         for (gint i = gateway_idx + 1; i < len; i++) {
             const gchar *arg = sys->exec_start_argv[i];
-            if (gateway_arg_should_be_forwarded(arg, subcommand)) {
+            if (health_gateway_arg_should_be_forwarded(arg, subcommand)) {
                 g_ptr_array_add(arr, g_strdup(arg));
-                if (i + 1 < len) {
+                if (health_gateway_arg_consumes_next_value(arg) && i + 1 < len) {
                     g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i + 1]));
                     i++; // Skip the value since we just consumed it
                 }

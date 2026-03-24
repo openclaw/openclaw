@@ -150,6 +150,46 @@ static void test_combined_summary_line_mixed(void) {
     g_free(ps.summary);
 }
 
+static void test_arg_forwarding(void) {
+    // Tests for split auth
+    g_assert_true(health_gateway_arg_should_be_forwarded("--token", "probe"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("--token", "status"));
+    g_assert_true(health_gateway_arg_consumes_next_value("--token"));
+
+    g_assert_true(health_gateway_arg_should_be_forwarded("-t", "probe"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("-t", "status"));
+    g_assert_true(health_gateway_arg_consumes_next_value("-t"));
+
+    g_assert_true(health_gateway_arg_should_be_forwarded("--password", "probe"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("--password", "status"));
+    g_assert_true(health_gateway_arg_consumes_next_value("--password"));
+
+    // Tests for inline auth
+    g_assert_true(health_gateway_arg_should_be_forwarded("--token=abc", "probe"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("--token=abc", "status"));
+    g_assert_false(health_gateway_arg_consumes_next_value("--token=abc"));
+
+    g_assert_true(health_gateway_arg_should_be_forwarded("--password=xyz", "probe"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("--password=xyz", "status"));
+    g_assert_false(health_gateway_arg_consumes_next_value("--password=xyz"));
+
+    // Verify probe/status do NOT forward port
+    g_assert_false(health_gateway_arg_should_be_forwarded("--port", "probe"));
+    g_assert_false(health_gateway_arg_should_be_forwarded("--port", "status"));
+    g_assert_false(health_gateway_arg_should_be_forwarded("--port=8080", "probe"));
+    g_assert_false(health_gateway_arg_should_be_forwarded("--port=8080", "status"));
+    g_assert_false(health_gateway_arg_should_be_forwarded("-p", "probe"));
+    g_assert_false(health_gateway_arg_should_be_forwarded("-p", "status"));
+
+    // Verify run-compatible paths still forward port
+    g_assert_true(health_gateway_arg_should_be_forwarded("--port", "run"));
+    g_assert_true(health_gateway_arg_consumes_next_value("--port"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("--port=8080", "run"));
+    g_assert_false(health_gateway_arg_consumes_next_value("--port=8080"));
+    g_assert_true(health_gateway_arg_should_be_forwarded("-p", "run"));
+    g_assert_true(health_gateway_arg_consumes_next_value("-p"));
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -167,6 +207,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/health_parse/no_summary_lines_safety", test_no_summary_lines_safety);
     g_test_add_func("/health_parse/combined_summary_line", test_combined_summary_line);
     g_test_add_func("/health_parse/combined_summary_line_mixed", test_combined_summary_line_mixed);
+    g_test_add_func("/health_parse/arg_forwarding", test_arg_forwarding);
     
     return g_test_run();
 }
