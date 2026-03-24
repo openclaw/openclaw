@@ -537,7 +537,7 @@ export async function dispatchReplyFromConfig(params: {
         if (text) {
           const payload = { text } satisfies ReplyPayload;
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReply({
+            const result = await routeReplyRuntime.routeReply({
               payload,
               channel: originatingChannel,
               to: originatingTo,
