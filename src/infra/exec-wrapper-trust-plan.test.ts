@@ -43,4 +43,29 @@ describe("resolveExecWrapperTrustPlan", () => {
       shellInlineCommand: null,
     });
   });
+
+  test("keeps the blocked dispatch argv as the policy target after transparent unwraps", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expect(
+      resolveExecWrapperTrustPlan([
+        "/usr/bin/time",
+        "-p",
+        "/usr/bin/env",
+        "FOO=bar",
+        "sh",
+        "-lc",
+        "echo hi",
+      ]),
+    ).toEqual({
+      argv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
+      policyArgv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
+      wrapperChain: [],
+      policyBlocked: true,
+      blockedWrapper: "env",
+      shellWrapperExecutable: false,
+      shellInlineCommand: null,
+    });
+  });
 });

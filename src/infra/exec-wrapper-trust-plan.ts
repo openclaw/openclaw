@@ -70,7 +70,7 @@ export function resolveExecWrapperTrustPlan(
     if (dispatchPlan.policyBlocked) {
       return blockedExecWrapperTrustPlan({
         argv: dispatchPlan.argv,
-        policyArgv,
+        policyArgv: dispatchPlan.argv,
         wrapperChain,
         blockedWrapper: dispatchPlan.blockedWrapper ?? current[0] ?? "unknown",
       });
