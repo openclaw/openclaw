@@ -30,6 +30,11 @@ export type GenerateImageParams = {
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
+  seed?: number;
+  watermark?: boolean;
+  guidanceScale?: number;
+  optimizePrompt?: boolean;
+  providerOptions?: Record<string, unknown>;
 };
 
 export type GenerateImageRuntimeResult = {
@@ -153,6 +158,11 @@ export async function generateImage(
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,
         inputImages: params.inputImages,
+        seed: params.seed,
+        watermark: params.watermark,
+        guidanceScale: params.guidanceScale,
+        optimizePrompt: params.optimizePrompt,
+        providerOptions: params.providerOptions,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");
