@@ -6,6 +6,9 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-push-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -40,6 +43,7 @@ jobs:
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
           submodules: false
 
       - name: Ensure preflight base commit
@@ -112,6 +116,7 @@ jobs:
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
           submodules: false
 
       - name: Ensure security base commit
@@ -119,6 +124,16 @@ jobs:
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Prepare trusted pre-commit config
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
+          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -147,10 +162,10 @@ jobs:
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pre-commit
+          python -m pip install pre-commit==4.2.0
 
       - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -177,10 +192,10 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run zizmor --files "${workflow_files[@]}"
+          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
   # Fanout: downstream lanes branch from preflight outputs instead of waiting
   # on unrelated Linux checks.
@@ -194,6 +209,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Ensure secrets base commit (PR fast path)
@@ -240,6 +256,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -279,6 +296,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -345,6 +363,7 @@ jobs:
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -406,6 +425,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -429,17 +449,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
-
-      - name: Ensure check base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
-        uses: ./.github/actions/detect-docs-changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          FETCH_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$BASE_SHA" ] && ! [[ "$BASE_SHA" =~ ^0+$ ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            if [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]] && git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
+              git fetch --no-tags origin -- "$FETCH_REF" || true
+            fi
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || echo "UNKNOWN")
+          if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NON_DOCS=$(echo "$CHANGED" | grep -vE '^docs/|\.md$|\.mdx$' || true)
+          if [ -z "$NON_DOCS" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "Docs-only change detected; skipping heavy checks."
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node environment
         if: steps.docs_scope.outputs.docs_only != 'true'
@@ -469,17 +509,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
-
-      - name: Ensure check-additional base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
-        uses: ./.github/actions/detect-docs-changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          FETCH_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$BASE_SHA" ] && ! [[ "$BASE_SHA" =~ ^0+$ ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            if [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]] && git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
+              git fetch --no-tags origin -- "$FETCH_REF" || true
+            fi
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || echo "UNKNOWN")
+          if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NON_DOCS=$(echo "$CHANGED" | grep -vE '^docs/|\.md$|\.mdx$' || true)
+          if [ -z "$NON_DOCS" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "Docs-only change detected; skipping heavy checks."
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node environment
         if: steps.docs_scope.outputs.docs_only != 'true'
@@ -590,6 +650,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -631,6 +692,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -651,6 +713,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Python
@@ -730,6 +793,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -827,6 +891,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -916,6 +981,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Java
