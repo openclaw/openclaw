@@ -63,6 +63,17 @@ function pathLikeToString(pathname: unknown): string {
   return "";
 }
 
+function getWrittenFileText(
+  writeFileSpy: { mock: { calls: unknown[][] } },
+  pathname: string,
+): string | undefined {
+  const call = writeFileSpy.mock.calls.find(
+    ([entryPath]) => pathLikeToString(entryPath) === pathname,
+  );
+  const text = call?.[1];
+  return typeof text === "string" ? text : undefined;
+}
+
 function assertUserSystemctlArgs(args: string[], ...command: string[]) {
   expect(args).toEqual(["--user", ...command]);
 }
@@ -410,6 +421,9 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("installSystemdService", () => {
+  const unitPath = "/home/test/.config/systemd/user/openclaw-gateway.service";
+  const generatedEnvPath = "/home/test/.openclaw/.openclaw-gateway.service.env";
+
   beforeEach(() => {
     vi.restoreAllMocks();
     execFileMock.mockReset();
@@ -444,13 +458,16 @@ describe("installSystemdService", () => {
       },
     });
 
-    const unit = writeFileSpy.mock.calls[0]?.[1];
-    expect(typeof unit).toBe("string");
-    const unitText = unit as string;
-    expect(unitText).toContain("EnvironmentFile=%h/.openclaw/.env");
+    const unitText = getWrittenFileText(writeFileSpy, unitPath);
+    const generatedEnvText = getWrittenFileText(writeFileSpy, generatedEnvPath);
+    expect(typeof unitText).toBe("string");
+    expect(typeof generatedEnvText).toBe("string");
+    expect(unitText).toContain("EnvironmentFile=%h/.openclaw/.openclaw-gateway.service.env");
     expect(unitText).toContain("Environment=OPENCLAW_GATEWAY_PORT=19001");
     expect(unitText).not.toContain("inline-gateway-token");
     expect(unitText).not.toContain("inline-telegram-token");
+    expect(generatedEnvText).toContain("OPENCLAW_GATEWAY_TOKEN=inline-gateway-token");
+    expect(generatedEnvText).toContain("TELEGRAM_BOT_TOKEN=inline-telegram-token");
   });
 
   it("keeps inline environment values when the state env file is absent", async () => {
@@ -471,11 +488,11 @@ describe("installSystemdService", () => {
       },
     });
 
-    const unit = writeFileSpy.mock.calls[0]?.[1];
-    expect(typeof unit).toBe("string");
-    const unitText = unit as string;
+    const unitText = getWrittenFileText(writeFileSpy, unitPath);
+    expect(typeof unitText).toBe("string");
     expect(unitText).not.toContain("EnvironmentFile=");
     expect(unitText).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-gateway-token");
+    expect(getWrittenFileText(writeFileSpy, generatedEnvPath)).toBeUndefined();
   });
 
   it("keeps inline managed secrets when the state env file has a different value", async () => {
@@ -502,11 +519,11 @@ describe("installSystemdService", () => {
       },
     });
 
-    const unit = writeFileSpy.mock.calls[0]?.[1];
-    expect(typeof unit).toBe("string");
-    const unitText = unit as string;
-    expect(unitText).not.toContain("EnvironmentFile=%h/.openclaw/.env");
+    const unitText = getWrittenFileText(writeFileSpy, unitPath);
+    expect(typeof unitText).toBe("string");
+    expect(unitText).not.toContain("EnvironmentFile=%h/.openclaw/.openclaw-gateway.service.env");
     expect(unitText).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-gateway-token");
+    expect(getWrittenFileText(writeFileSpy, generatedEnvPath)).toBeUndefined();
   });
 
   it("keeps mismatched managed secrets inline while still using EnvironmentFile for matching ones", async () => {
@@ -537,12 +554,50 @@ describe("installSystemdService", () => {
       },
     });
 
-    const unit = writeFileSpy.mock.calls[0]?.[1];
-    expect(typeof unit).toBe("string");
-    const unitText = unit as string;
-    expect(unitText).toContain("EnvironmentFile=%h/.openclaw/.env");
+    const unitText = getWrittenFileText(writeFileSpy, unitPath);
+    const generatedEnvText = getWrittenFileText(writeFileSpy, generatedEnvPath);
+    expect(typeof unitText).toBe("string");
+    expect(typeof generatedEnvText).toBe("string");
+    expect(unitText).toContain("EnvironmentFile=%h/.openclaw/.openclaw-gateway.service.env");
     expect(unitText).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=matching-gateway-token");
     expect(unitText).toContain("Environment=TELEGRAM_BOT_TOKEN=fresh-telegram-token");
+    expect(generatedEnvText).toContain("OPENCLAW_GATEWAY_TOKEN=matching-gateway-token");
+    expect(generatedEnvText).not.toContain("TELEGRAM_BOT_TOKEN=stale-telegram-token");
+  });
+
+  it("writes only matched managed keys into the generated env file, not blocked raw dotenv keys", async () => {
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+    const writeFileSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === "/home/test/.openclaw/.env") {
+        return [
+          "OPENCLAW_GATEWAY_TOKEN=matching-gateway-token",
+          "NODE_OPTIONS=--require /tmp/pwn.js",
+          "LD_PRELOAD=/tmp/pwn.so",
+        ].join("\n");
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+
+    await installSystemdService({
+      env: { HOME: "/home/test" },
+      stdout: createWritableStreamMock().stdout,
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "matching-gateway-token",
+      },
+    });
+
+    const generatedEnvText = getWrittenFileText(writeFileSpy, generatedEnvPath);
+    expect(typeof generatedEnvText).toBe("string");
+    expect(generatedEnvText).toContain("OPENCLAW_GATEWAY_TOKEN=matching-gateway-token");
+    expect(generatedEnvText).not.toContain("NODE_OPTIONS");
+    expect(generatedEnvText).not.toContain("LD_PRELOAD");
   });
 });
 

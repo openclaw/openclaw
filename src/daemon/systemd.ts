@@ -67,6 +67,13 @@ function resolveSystemdGatewayEnvFilePath(env: GatewayServiceEnv): string {
   return path.posix.join(toPosixPath(resolveGatewayStateDir(env)), ".env");
 }
 
+function resolveSystemdManagedSecretsEnvFilePath(env: GatewayServiceEnv): string {
+  return path.posix.join(
+    toPosixPath(resolveGatewayStateDir(env)),
+    `.${resolveSystemdServiceName(env)}.service.env`,
+  );
+}
+
 function compactSystemdEnvironmentFilePath(pathname: string, env: GatewayServiceEnv): string {
   const normalizedPath = toPosixPath(pathname);
   const home = toPosixPath(resolveHomeDir(env));
@@ -85,6 +92,8 @@ async function resolveSystemdInstallEnvironment(params: {
 }): Promise<{
   environment?: GatewayServiceEnv;
   environmentFiles?: string[];
+  managedEnvironmentFilePath?: string;
+  managedEnvironmentFileContent?: string;
 }> {
   const environment = params.environment ? { ...params.environment } : undefined;
   if (!environment) {
@@ -103,6 +112,7 @@ async function resolveSystemdInstallEnvironment(params: {
     return { environment };
   }
 
+  const strippedManagedEnvironment: GatewayServiceEnv = {};
   let stripped = false;
   for (const key of SYSTEMD_ENVFILE_MANAGED_KEYS) {
     const inlineValue = environment[key];
@@ -113,16 +123,50 @@ async function resolveSystemdInstallEnvironment(params: {
     if (typeof envFileValue !== "string" || envFileValue !== inlineValue) {
       continue;
     }
+    strippedManagedEnvironment[key] = inlineValue;
     delete environment[key];
     stripped = true;
   }
 
+  if (!stripped) {
+    return { environment };
+  }
+
+  const managedEnvironmentFilePath = resolveSystemdManagedSecretsEnvFilePath(params.env);
   return {
     environment,
-    environmentFiles: stripped
-      ? [compactSystemdEnvironmentFilePath(envFilePath, params.env)]
-      : undefined,
+    environmentFiles: [compactSystemdEnvironmentFilePath(managedEnvironmentFilePath, params.env)],
+    managedEnvironmentFilePath,
+    managedEnvironmentFileContent: renderSystemdManagedEnvironmentFile(strippedManagedEnvironment),
   };
+}
+
+const SYSTEMD_ENV_FILE_LINE_BREAKS = /[\r\n]/;
+
+function assertNoSystemdEnvFileLineBreaks(value: string, label: string): void {
+  if (SYSTEMD_ENV_FILE_LINE_BREAKS.test(value)) {
+    throw new Error(`${label} cannot contain CR or LF characters.`);
+  }
+}
+
+function escapeSystemdEnvironmentFileValue(value: string): string {
+  assertNoSystemdEnvFileLineBreaks(value, "Systemd EnvironmentFile values");
+  if (!/[\s"\\]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function renderSystemdManagedEnvironmentFile(env: GatewayServiceEnv): string {
+  return (
+    Object.entries(env)
+      .filter(([, value]) => typeof value === "string")
+      .map(([key, value]) => {
+        assertNoSystemdEnvFileLineBreaks(key, "Systemd EnvironmentFile variable names");
+        return `${key}=${escapeSystemdEnvironmentFileValue(value ?? "")}`;
+      })
+      .join("\n") + "\n"
+  );
 }
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
@@ -559,6 +603,23 @@ async function writeSystemdUnit({
     env,
     environment,
   });
+  const managedEnvironmentFilePath = resolveSystemdManagedSecretsEnvFilePath(env);
+  if (
+    renderedEnvironment.managedEnvironmentFilePath &&
+    renderedEnvironment.managedEnvironmentFileContent
+  ) {
+    await fs.mkdir(path.posix.dirname(renderedEnvironment.managedEnvironmentFilePath), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      renderedEnvironment.managedEnvironmentFilePath,
+      renderedEnvironment.managedEnvironmentFileContent,
+      "utf8",
+    );
+    await fs.chmod(renderedEnvironment.managedEnvironmentFilePath, 0o600).catch(() => undefined);
+  } else {
+    await fs.unlink(managedEnvironmentFilePath).catch(() => undefined);
+  }
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
