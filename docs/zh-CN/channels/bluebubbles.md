@@ -338,7 +338,7 @@ OpenClaw 可能会显示*短*消息 ID（例如 `1`、`2`）以节省 token。
 
 - 通过将查询参数或请求头中的 `guid`/`password` 与 `channels.bluebubbles.password` 进行比较来验证 webhook 请求。来自 `localhost` 的请求也会被接受。
 - 请妥善保管 API 密码和 webhook 端点（将它们视为凭证）。
-- 对 localhost 的信任意味着同主机上的反向代理可能会无意中绕过密码。如果你对 Gateway 网关进行了代理，请在代理层要求身份验证，并配置 `gateway.trustedProxies`。请参见 [Gateway 网关安全](/zh-CN/gateway/security#reverse-proxy-configuration)。
+- 对 localhost 的信任意味着同主机上的反向代理可能会无意中绕过密码。如果你对 Gateway 网关进行了代理，请在代理层要求身份验证，并配置 `gateway.trustedProxies`。请参见 [Gateway 网关安全](/zh-CN/gateway/security#反向代理配置)。
 - 如果要在局域网外暴露 BlueBubbles 服务器，请启用 HTTPS + 防火墙规则。
 
 ## 故障排除

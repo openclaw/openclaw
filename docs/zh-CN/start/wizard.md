@@ -59,7 +59,7 @@ CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
     - Gateway 网关端口 **18789**
     - Gateway 网关认证 **Token**（即使在 loopback 上也会自动生成）
     - 新本地设置的默认工具策略：`tools.profile: "coding"`（会保留现有显式配置文件）
-    - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/zh-CN/start/wizard-cli-reference#outputs-and-internals)
+    - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale 暴露 **关闭**
     - Telegram + WhatsApp 私信默认使用 **allowlist**（系统会提示你输入电话号码）
   </Tab>
