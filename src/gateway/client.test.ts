@@ -868,6 +868,40 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("suppresses transient pre-hello 1000 closes while reconnect succeeds", async () => {
+    vi.useFakeTimers();
+    const onConnectError = vi.fn();
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+      onHelloOk,
+    });
+
+    try {
+      const { ws: ws1 } = startClientAndConnect({ client });
+      ws1.emitClose(1000, "");
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(wsInstances.length).toBe(2));
+
+      const ws2 = getLatestWs();
+      ws2.emitOpen();
+      emitConnectChallenge(ws2, "nonce-2");
+      const secondConnect = connectRequestFrom(ws2);
+      emitHelloOk(ws2, secondConnect.id);
+
+      await vi.waitFor(() => expect(onHelloOk).toHaveBeenCalled());
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed: Error: gateway closed (1000):"),
+      );
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
     const onReconnectPaused = vi.fn();
     const client = new GatewayClient({
