@@ -31,9 +31,8 @@ const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntime
 const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
   "dist/extensions/whatsapp/light-runtime-api.js",
   "dist/extensions/whatsapp/runtime-api.js",
-  "dist/extensions/matrix/helper-api.js",
+  "dist/extensions/matrix/api.js",
   "dist/extensions/matrix/runtime-api.js",
-  "dist/extensions/matrix/thread-bindings-runtime.js",
   "dist/extensions/msteams/runtime-api.js",
 ] as const;
 
