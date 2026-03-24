@@ -17,11 +17,13 @@ import {
 } from "./test-parallel-utils.mjs";
 import {
   dedupeFilesPreserveOrder,
+  loadChannelTimingManifest,
   loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
   selectUnitHeavyFileGroups,
   packFilesByDuration,
+  packFilesByDurationWithBaseLoads,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -312,6 +314,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const channelTimingManifest = loadChannelTimingManifest();
 const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
@@ -385,6 +388,26 @@ const unitFastExcludedFiles = [
 ];
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const estimateChannelDurationMs = (file) =>
+  channelTimingManifest.files[file]?.durationMs ?? channelTimingManifest.defaultDurationMs;
+const resolveEntryTimingEstimator = (entry) => {
+  const configIndex = entry.args.findIndex((arg) => arg === "--config");
+  const config = configIndex >= 0 ? (entry.args[configIndex + 1] ?? "") : "";
+  if (config === "vitest.unit.config.ts") {
+    return estimateUnitDurationMs;
+  }
+  if (config === "vitest.channels.config.ts") {
+    return estimateChannelDurationMs;
+  }
+  return null;
+};
+const estimateEntryFilesDurationMs = (entry, files) => {
+  const estimateDurationMs = resolveEntryTimingEstimator(entry);
+  if (!estimateDurationMs) {
+    return files.length * 1_000;
+  }
+  return files.reduce((totalMs, file) => totalMs + estimateDurationMs(file), 0);
+};
 const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
   if (!Number.isFinite(targetDurationMs) || targetDurationMs <= 0 || files.length <= 1) {
     return [files];
@@ -462,6 +485,11 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
     .map((batch, batchIndex) => ({
       name: recycledBatches.length === 1 ? laneName : `${laneName}-batch-${String(batchIndex + 1)}`,
       serialPhase: "unit-fast",
+      includeFiles: batch,
+      estimatedDurationMs: estimateEntryFilesDurationMs(
+        { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
+        batch,
+      ),
       env: {
         OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
           `vitest-unit-fast-include-${String(index + 1)}-${String(batchIndex + 1)}`,
@@ -564,6 +592,7 @@ const baseRuns = [
         ...extensionIsolatedEntries,
         {
           name: "extensions",
+          includeFiles: extensionSharedCandidateFiles,
           env:
             extensionSharedCandidateFiles.length > 0
               ? {
@@ -585,6 +614,11 @@ const baseRuns = [
         })),
         {
           name: "channels",
+          includeFiles: channelSharedCandidateFiles,
+          estimatedDurationMs: estimateEntryFilesDurationMs(
+            { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
+            channelSharedCandidateFiles,
+          ),
           env:
             channelSharedCandidateFiles.length > 0
               ? {
@@ -772,6 +806,65 @@ const createPerFileTargetedEntry = (file) => {
     name: `${formatPerFileEntryName(owner, file)}${target.isolated ? "-isolated" : ""}`,
   };
 };
+const rebuildEntryArgsWithFilters = (entryArgs, filters) => {
+  const baseArgs = entryArgs.slice(0, 2);
+  const { optionArgs } = parsePassthroughArgs(entryArgs.slice(2));
+  return [...baseArgs, ...optionArgs, ...filters];
+};
+const createPinnedShardEntry = (entry, files, fixedShardIndex) => {
+  const nextEntry = {
+    ...entry,
+    name: `${entry.name}-shard-${String(fixedShardIndex)}`,
+    fixedShardIndex,
+    estimatedDurationMs: estimateEntryFilesDurationMs(entry, files),
+  };
+  if (Array.isArray(entry.includeFiles) && entry.includeFiles.length > 0) {
+    return {
+      ...nextEntry,
+      includeFiles: files,
+      env: {
+        ...entry.env,
+        OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+          `${sanitizeArtifactName(entry.name)}-shard-${String(fixedShardIndex)}-include`,
+          files,
+        ),
+      },
+      args: rebuildEntryArgsWithFilters(entry.args, []),
+    };
+  }
+  return {
+    ...nextEntry,
+    args: rebuildEntryArgsWithFilters(entry.args, files),
+  };
+};
+const expandEntryAcrossTopLevelShards = (entry) => {
+  if (configuredShardCount === null || shardCount <= 1 || entry.fixedShardIndex !== undefined) {
+    return [entry];
+  }
+  const estimateDurationMs = resolveEntryTimingEstimator(entry);
+  if (!estimateDurationMs) {
+    return [entry];
+  }
+  const candidateFiles =
+    Array.isArray(entry.includeFiles) && entry.includeFiles.length > 0
+      ? entry.includeFiles
+      : getExplicitEntryFilters(entry.args);
+  if (candidateFiles.length <= 1) {
+    return [entry];
+  }
+  const effectiveShardCount = Math.min(shardCount, Math.max(1, candidateFiles.length - 1));
+  if (effectiveShardCount <= 1) {
+    return [entry];
+  }
+  const buckets = packFilesByDurationWithBaseLoads(
+    candidateFiles,
+    effectiveShardCount,
+    estimateDurationMs,
+  );
+  return buckets.flatMap((files, bucketIndex) =>
+    files.length > 0 ? [createPinnedShardEntry(entry, files, bucketIndex + 1)] : [],
+  );
+};
 const targetedEntries = (() => {
   if (passthroughFileFilters.length === 0) {
     return [];
@@ -815,7 +908,13 @@ const targetedEntries = (() => {
     return [createTargetedEntry(owner, false, uniqueFilters)];
   }).flat();
 })();
+if (configuredShardCount !== null && shardCount > 1) {
+  runs = runs.flatMap((entry) => expandEntryAcrossTopLevelShards(entry));
+}
 const estimateTopLevelEntryDurationMs = (entry) => {
+  if (Number.isFinite(entry.estimatedDurationMs) && entry.estimatedDurationMs > 0) {
+    return entry.estimatedDurationMs;
+  }
   const filters = getExplicitEntryFilters(entry.args);
   if (filters.length === 0) {
     return unitTimingManifest.defaultDurationMs;
@@ -841,6 +940,9 @@ const topLevelSingleShardAssignments = (() => {
   // Single-file and other non-shardable explicit lanes would otherwise run on
   // every shard. Assign them to one top-level shard instead.
   const entriesNeedingAssignment = runs.filter((entry) => {
+    if (entry.fixedShardIndex !== undefined) {
+      return false;
+    }
     const explicitFilterCount = countExplicitEntryFilters(entry.args);
     if (explicitFilterCount === null) {
       return false;
@@ -850,10 +952,22 @@ const topLevelSingleShardAssignments = (() => {
   });
 
   const assignmentMap = new Map();
-  const buckets = packFilesByDuration(
+  const pinnedShardLoadsMs = Array.from({ length: shardCount }, () => 0);
+  for (const entry of runs) {
+    if (entry.fixedShardIndex === undefined) {
+      continue;
+    }
+    const shardArrayIndex = entry.fixedShardIndex - 1;
+    if (shardArrayIndex < 0 || shardArrayIndex >= pinnedShardLoadsMs.length) {
+      continue;
+    }
+    pinnedShardLoadsMs[shardArrayIndex] += estimateTopLevelEntryDurationMs(entry);
+  }
+  const buckets = packFilesByDurationWithBaseLoads(
     entriesNeedingAssignment,
     shardCount,
     estimateTopLevelEntryDurationMs,
+    pinnedShardLoadsMs,
   );
   for (const [bucketIndex, bucket] of buckets.entries()) {
     for (const entry of bucket) {
@@ -1363,6 +1477,12 @@ const runOnce = (entry, extraArgs = []) =>
   });
 
 const run = async (entry, extraArgs = []) => {
+  if (entry.fixedShardIndex !== undefined) {
+    if (shardIndexOverride !== null && shardIndexOverride !== entry.fixedShardIndex) {
+      return 0;
+    }
+    return runOnce(entry, extraArgs);
+  }
   const explicitFilterCount = countExplicitEntryFilters(entry.args);
   const topLevelAssignedShard = topLevelSingleShardAssignments.get(entry);
   if (topLevelAssignedShard !== undefined) {
