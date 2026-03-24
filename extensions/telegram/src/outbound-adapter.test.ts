@@ -1,15 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const sendMessageTelegramMock = vi.fn();
+
+vi.mock("./send.js", () => ({
+  sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
+}));
+
 import { telegramOutbound } from "./outbound-adapter.js";
 
 describe("telegramOutbound", () => {
-  const sendTelegram = vi.fn();
-
   beforeEach(() => {
-    sendTelegram.mockReset();
+    sendMessageTelegramMock.mockReset();
   });
 
   it("forwards mediaLocalRoots in direct media sends", async () => {
-    sendTelegram.mockResolvedValueOnce({ messageId: "tg-media" });
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media" });
 
     const result = await telegramOutbound.sendMedia!({
       cfg: {} as never,
@@ -20,10 +25,10 @@ describe("telegramOutbound", () => {
       accountId: "ops",
       replyToId: "900",
       threadId: "12",
-      deps: { sendTelegram },
+      deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    expect(sendTelegram).toHaveBeenCalledWith(
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
       "12345",
       "hello",
       expect.objectContaining({
@@ -39,7 +44,7 @@ describe("telegramOutbound", () => {
   });
 
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
-    sendTelegram
+    sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
       .mockResolvedValueOnce({ messageId: "tg-2", chatId: "12345" });
 
@@ -59,11 +64,11 @@ describe("telegramOutbound", () => {
       },
       mediaLocalRoots: ["/tmp/media"],
       accountId: "ops",
-      deps: { sendTelegram },
+      deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    expect(sendTelegram).toHaveBeenCalledTimes(2);
-    expect(sendTelegram).toHaveBeenNthCalledWith(
+    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegramMock).toHaveBeenNthCalledWith(
       1,
       "12345",
       "Approval required",
@@ -74,7 +79,7 @@ describe("telegramOutbound", () => {
         buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
       }),
     );
-    expect(sendTelegram).toHaveBeenNthCalledWith(
+    expect(sendMessageTelegramMock).toHaveBeenNthCalledWith(
       2,
       "12345",
       "",
@@ -84,7 +89,9 @@ describe("telegramOutbound", () => {
         quoteText: "quoted",
       }),
     );
-    expect((sendTelegram.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons).toBeUndefined();
+    expect(
+      (sendMessageTelegramMock.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
+    ).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 });
