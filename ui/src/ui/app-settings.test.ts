@@ -7,7 +7,7 @@ import {
   setTabFromRoute,
   syncThemeWithSettings,
 } from "./app-settings.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
+import type { AppearancePreset, ThemeName, ThemeScheme } from "./theme.ts";
 
 type Tab =
   | "agents"
@@ -36,7 +36,12 @@ type SettingsHost = {
     sessionKey: string;
     lastActiveSessionKey: string;
     theme: ThemeName;
-    themeMode: ThemeMode;
+    appearance: {
+      mode: "single" | "sync";
+      lightPreset: AppearancePreset;
+      darkPreset: AppearancePreset;
+      singleScheme: ThemeScheme;
+    };
     chatFocusMode: boolean;
     chatShowThinking: boolean;
     chatShowToolCalls: boolean;
@@ -46,9 +51,14 @@ type SettingsHost = {
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
   };
-  theme: ThemeName & ThemeMode;
-  themeMode: ThemeMode;
+  theme: ThemeName;
   themeResolved: import("./theme.ts").ResolvedTheme;
+  appearanceMode: "single" | "sync";
+  appearanceLightPreset: AppearancePreset;
+  appearanceDarkPreset: AppearancePreset;
+  appearanceSingleScheme: ThemeScheme;
+  appearanceResolved: AppearancePreset;
+  themeSchemeResolved: ThemeScheme;
   applySessionKey: string;
   sessionKey: string;
   tab: Tab;
@@ -140,7 +150,12 @@ const createHost = (tab: Tab): SettingsHost => ({
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "claw",
-    themeMode: "system",
+    appearance: {
+      mode: "sync",
+      lightPreset: "openclaw-light",
+      darkPreset: "openclaw-dark",
+      singleScheme: "dark",
+    },
     chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
@@ -150,9 +165,14 @@ const createHost = (tab: Tab): SettingsHost => ({
     navGroupsCollapsed: {},
     borderRadius: 50,
   },
-  theme: "claw" as unknown as ThemeName & ThemeMode,
-  themeMode: "system",
+  theme: "claw",
   themeResolved: "dark",
+  appearanceMode: "sync",
+  appearanceLightPreset: "openclaw-light",
+  appearanceDarkPreset: "openclaw-dark",
+  appearanceSingleScheme: "dark",
+  appearanceResolved: "openclaw-dark",
+  themeSchemeResolved: "dark",
   applySessionKey: "main",
   sessionKey: "main",
   tab,
@@ -202,33 +222,47 @@ describe("setTabFromRoute", () => {
     expect(host.debugPollInterval).toBeNull();
   });
 
-  it("re-resolves the active palette when only themeMode changes", () => {
+  it("re-resolves the active palette when only the appearance scheme changes", () => {
     const host = createHost("chat");
     host.settings.theme = "knot";
-    host.settings.themeMode = "dark";
-    host.theme = "knot" as unknown as ThemeName & ThemeMode;
-    host.themeMode = "dark";
+    host.settings.appearance = {
+      mode: "single",
+      lightPreset: "openclaw-light",
+      darkPreset: "openclaw-dark",
+      singleScheme: "dark",
+    };
+    host.theme = "knot";
+    host.appearanceMode = "single";
+    host.appearanceSingleScheme = "dark";
     host.themeResolved = "openknot";
 
     applySettings(host, {
       ...host.settings,
-      themeMode: "light",
+      appearance: {
+        ...host.settings.appearance,
+        singleScheme: "light",
+      },
     });
 
     expect(host.theme).toBe("knot");
-    expect(host.themeMode).toBe("light");
+    expect(host.appearanceSingleScheme).toBe("light");
     expect(host.themeResolved).toBe("openknot-light");
   });
 
-  it("syncs both theme family and mode from persisted settings", () => {
+  it("syncs the persisted theme family and appearance state", () => {
     const host = createHost("chat");
     host.settings.theme = "dash";
-    host.settings.themeMode = "light";
+    host.settings.appearance = {
+      mode: "single",
+      lightPreset: "github-light-default",
+      darkPreset: "github-dark-default",
+      singleScheme: "light",
+    };
 
     syncThemeWithSettings(host);
 
     expect(host.theme).toBe("dash");
-    expect(host.themeMode).toBe("light");
+    expect(host.appearanceResolved).toBe("github-light-default");
     expect(host.themeResolved).toBe("dash-light");
   });
 
@@ -248,15 +282,25 @@ describe("setTabFromRoute", () => {
     });
 
     const host = createHost("chat");
-    host.theme = "knot" as unknown as ThemeName & ThemeMode;
-    host.themeMode = "system";
+    host.theme = "knot";
+    host.settings.appearance = {
+      mode: "sync",
+      lightPreset: "github-light-default",
+      darkPreset: "github-dark-default",
+      singleScheme: "dark",
+    };
+    host.appearanceMode = "sync";
+    host.appearanceLightPreset = "github-light-default";
+    host.appearanceDarkPreset = "github-dark-default";
 
     attachThemeListener(host);
     listeners[0]?.({ matches: true } as MediaQueryListEvent);
-    expect(host.themeResolved).toBe("openknot");
+    expect(host.themeResolved).toBe("openknot-light");
+    expect(host.appearanceResolved).toBe("github-light-default");
 
     listeners[0]?.({ matches: false } as MediaQueryListEvent);
     expect(host.themeResolved).toBe("openknot");
+    expect(host.appearanceResolved).toBe("github-dark-default");
   });
 
   it("normalizes light family themes to the shared light CSS token", () => {
@@ -267,10 +311,12 @@ describe("setTabFromRoute", () => {
     vi.stubGlobal("document", { documentElement: root } as Document);
 
     const host = createHost("chat");
-    applyResolvedTheme(host, "dash-light");
+    applyResolvedTheme(host, "dash-light", "github-light-default");
 
     expect(host.themeResolved).toBe("dash-light");
+    expect(host.appearanceResolved).toBe("github-light-default");
     expect(root.dataset.theme).toBe("dash-light");
+    expect(root.dataset.appearance).toBe("github-light-default");
     expect(root.style.colorScheme).toBe("light");
   });
 });

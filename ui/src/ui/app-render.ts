@@ -92,7 +92,7 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
-import { renderConfig } from "./views/config.ts";
+import { renderConfig, type ConfigProps } from "./views/config.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
@@ -269,6 +269,67 @@ type AppearanceSectionKey = (typeof APPEARANCE_SECTION_KEYS)[number];
 type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
 type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
+
+function createConfigProps(
+  state: AppViewState,
+  requestHostUpdate: (() => void) | undefined,
+  overrides: Partial<ConfigProps>,
+): ConfigProps {
+  return {
+    raw: state.configRaw,
+    originalRaw: state.configRawOriginal,
+    valid: state.configValid,
+    issues: state.configIssues,
+    loading: state.configLoading,
+    saving: state.configSaving,
+    applying: state.configApplying,
+    updating: state.updateRunning,
+    connected: state.connected,
+    schema: state.configSchema,
+    schemaLoading: state.configSchemaLoading,
+    uiHints: state.configUiHints,
+    formMode: state.configFormMode,
+    formValue: state.configForm,
+    originalValue: state.configFormOriginal,
+    searchQuery: "",
+    activeSection: null,
+    activeSubsection: null,
+    onRawChange: (next) => {
+      state.configRaw = next;
+    },
+    onFormModeChange: () => {},
+    onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
+    onSearchChange: () => {},
+    onSectionChange: () => {},
+    onSubsectionChange: () => {},
+    onReload: () => loadConfig(state),
+    onSave: () => saveConfig(state),
+    onApply: () => applyConfig(state),
+    onUpdate: () => runUpdate(state),
+    onOpenFile: () => openConfigFile(state),
+    onRequestUpdate: requestHostUpdate,
+    version: state.hello?.server?.version ?? "",
+    theme: state.theme,
+    setTheme: (theme, context) => state.setTheme(theme, context),
+    appearanceMode: state.appearanceMode,
+    appearanceLightPreset: state.appearanceLightPreset,
+    appearanceDarkPreset: state.appearanceDarkPreset,
+    appearanceSingleScheme: state.appearanceSingleScheme,
+    themeSchemeResolved: state.themeSchemeResolved,
+    setAppearanceMode: (mode, context) => state.setAppearanceMode(mode, context),
+    setAppearanceScheme: (scheme, context) => state.setAppearanceScheme(scheme, context),
+    setAppearancePreset: (target, preset, context) =>
+      state.setAppearancePreset(target, preset, context),
+    setAppearanceSelection: (target, preset, context) =>
+      state.setAppearanceSelection(target, preset, context),
+    borderRadius: state.settings.borderRadius,
+    setBorderRadius: (value) => state.setBorderRadius(value),
+    gatewayUrl: state.settings.gatewayUrl,
+    assistantName: state.assistantName,
+    configPath: state.configSnapshot?.path ?? null,
+    ...overrides,
+  };
+}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -1503,434 +1564,242 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "config"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.configFormMode,
-                showModeToggle: true,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.configSearchQuery,
-                activeSection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.configFormMode,
+                  showModeToggle: true,
+                  searchQuery: state.configSearchQuery,
+                  activeSection:
+                    state.configActiveSection &&
+                    (COMMUNICATION_SECTION_KEYS.includes(
+                      state.configActiveSection as CommunicationSectionKey,
                     ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
+                      APPEARANCE_SECTION_KEYS.includes(
+                        state.configActiveSection as AppearanceSectionKey,
+                      ) ||
+                      AUTOMATION_SECTION_KEYS.includes(
+                        state.configActiveSection as AutomationSectionKey,
+                      ) ||
+                      INFRASTRUCTURE_SECTION_KEYS.includes(
+                        state.configActiveSection as InfrastructureSectionKey,
+                      ) ||
+                      AI_AGENTS_SECTION_KEYS.includes(
+                        state.configActiveSection as AiAgentsSectionKey,
+                      ))
+                      ? null
+                      : state.configActiveSection,
+                  activeSubsection:
+                    state.configActiveSection &&
+                    (COMMUNICATION_SECTION_KEYS.includes(
+                      state.configActiveSection as CommunicationSectionKey,
                     ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSection,
-                activeSubsection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
-                    ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
-                    ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.configSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.configActiveSection = section;
-                  state.configActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                excludeSections: [
-                  ...COMMUNICATION_SECTION_KEYS,
-                  ...AUTOMATION_SECTION_KEYS,
-                  ...INFRASTRUCTURE_SECTION_KEYS,
-                  ...AI_AGENTS_SECTION_KEYS,
-                  "ui",
-                  "wizard",
-                ],
-                includeVirtualSections: false,
-              })
+                      APPEARANCE_SECTION_KEYS.includes(
+                        state.configActiveSection as AppearanceSectionKey,
+                      ) ||
+                      AUTOMATION_SECTION_KEYS.includes(
+                        state.configActiveSection as AutomationSectionKey,
+                      ) ||
+                      INFRASTRUCTURE_SECTION_KEYS.includes(
+                        state.configActiveSection as InfrastructureSectionKey,
+                      ) ||
+                      AI_AGENTS_SECTION_KEYS.includes(
+                        state.configActiveSection as AiAgentsSectionKey,
+                      ))
+                      ? null
+                      : state.configActiveSubsection,
+                  onFormModeChange: (mode) => (state.configFormMode = mode),
+                  onSearchChange: (query) => (state.configSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.configActiveSection = section;
+                    state.configActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.configActiveSubsection = section),
+                  excludeSections: [
+                    ...COMMUNICATION_SECTION_KEYS,
+                    ...AUTOMATION_SECTION_KEYS,
+                    ...INFRASTRUCTURE_SECTION_KEYS,
+                    ...AI_AGENTS_SECTION_KEYS,
+                    "ui",
+                    "wizard",
+                  ],
+                  includeVirtualSections: false,
+                }),
+              )
             : nothing
         }
 
         ${
           state.tab === "communications"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.communicationsFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.communicationsSearchQuery,
-                activeSection:
-                  state.communicationsActiveSection &&
-                  !COMMUNICATION_SECTION_KEYS.includes(
-                    state.communicationsActiveSection as CommunicationSectionKey,
-                  )
-                    ? null
-                    : state.communicationsActiveSection,
-                activeSubsection:
-                  state.communicationsActiveSection &&
-                  !COMMUNICATION_SECTION_KEYS.includes(
-                    state.communicationsActiveSection as CommunicationSectionKey,
-                  )
-                    ? null
-                    : state.communicationsActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.communicationsFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.communicationsSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.communicationsActiveSection = section;
-                  state.communicationsActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Communication",
-                includeSections: [...COMMUNICATION_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.communicationsFormMode,
+                  searchQuery: state.communicationsSearchQuery,
+                  activeSection:
+                    state.communicationsActiveSection &&
+                    !COMMUNICATION_SECTION_KEYS.includes(
+                      state.communicationsActiveSection as CommunicationSectionKey,
+                    )
+                      ? null
+                      : state.communicationsActiveSection,
+                  activeSubsection:
+                    state.communicationsActiveSection &&
+                    !COMMUNICATION_SECTION_KEYS.includes(
+                      state.communicationsActiveSection as CommunicationSectionKey,
+                    )
+                      ? null
+                      : state.communicationsActiveSubsection,
+                  onFormModeChange: (mode) => (state.communicationsFormMode = mode),
+                  onSearchChange: (query) => (state.communicationsSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.communicationsActiveSection = section;
+                    state.communicationsActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
+                  navRootLabel: "Communication",
+                  includeSections: [...COMMUNICATION_SECTION_KEYS],
+                  includeVirtualSections: false,
+                }),
+              )
             : nothing
         }
 
         ${
           state.tab === "appearance"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.appearanceFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.appearanceSearchQuery,
-                activeSection:
-                  state.appearanceActiveSection &&
-                  !APPEARANCE_SECTION_KEYS.includes(
-                    state.appearanceActiveSection as AppearanceSectionKey,
-                  )
-                    ? null
-                    : state.appearanceActiveSection,
-                activeSubsection:
-                  state.appearanceActiveSection &&
-                  !APPEARANCE_SECTION_KEYS.includes(
-                    state.appearanceActiveSection as AppearanceSectionKey,
-                  )
-                    ? null
-                    : state.appearanceActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.appearanceFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.appearanceSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.appearanceActiveSection = section;
-                  state.appearanceActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Appearance",
-                includeSections: [...APPEARANCE_SECTION_KEYS],
-                includeVirtualSections: true,
-              })
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.appearanceFormMode,
+                  searchQuery: state.appearanceSearchQuery,
+                  activeSection:
+                    state.appearanceActiveSection &&
+                    !APPEARANCE_SECTION_KEYS.includes(
+                      state.appearanceActiveSection as AppearanceSectionKey,
+                    )
+                      ? null
+                      : state.appearanceActiveSection,
+                  activeSubsection:
+                    state.appearanceActiveSection &&
+                    !APPEARANCE_SECTION_KEYS.includes(
+                      state.appearanceActiveSection as AppearanceSectionKey,
+                    )
+                      ? null
+                      : state.appearanceActiveSubsection,
+                  onFormModeChange: (mode) => (state.appearanceFormMode = mode),
+                  onSearchChange: (query) => (state.appearanceSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.appearanceActiveSection = section;
+                    state.appearanceActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
+                  navRootLabel: "Appearance",
+                  includeSections: [...APPEARANCE_SECTION_KEYS],
+                  includeVirtualSections: true,
+                }),
+              )
             : nothing
         }
 
         ${
           state.tab === "automation"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.automationFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.automationSearchQuery,
-                activeSection:
-                  state.automationActiveSection &&
-                  !AUTOMATION_SECTION_KEYS.includes(
-                    state.automationActiveSection as AutomationSectionKey,
-                  )
-                    ? null
-                    : state.automationActiveSection,
-                activeSubsection:
-                  state.automationActiveSection &&
-                  !AUTOMATION_SECTION_KEYS.includes(
-                    state.automationActiveSection as AutomationSectionKey,
-                  )
-                    ? null
-                    : state.automationActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.automationFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.automationSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.automationActiveSection = section;
-                  state.automationActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.automationActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Automation",
-                includeSections: [...AUTOMATION_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.automationFormMode,
+                  searchQuery: state.automationSearchQuery,
+                  activeSection:
+                    state.automationActiveSection &&
+                    !AUTOMATION_SECTION_KEYS.includes(
+                      state.automationActiveSection as AutomationSectionKey,
+                    )
+                      ? null
+                      : state.automationActiveSection,
+                  activeSubsection:
+                    state.automationActiveSection &&
+                    !AUTOMATION_SECTION_KEYS.includes(
+                      state.automationActiveSection as AutomationSectionKey,
+                    )
+                      ? null
+                      : state.automationActiveSubsection,
+                  onFormModeChange: (mode) => (state.automationFormMode = mode),
+                  onSearchChange: (query) => (state.automationSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.automationActiveSection = section;
+                    state.automationActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.automationActiveSubsection = section),
+                  navRootLabel: "Automation",
+                  includeSections: [...AUTOMATION_SECTION_KEYS],
+                  includeVirtualSections: false,
+                }),
+              )
             : nothing
         }
 
         ${
           state.tab === "infrastructure"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.infrastructureFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.infrastructureSearchQuery,
-                activeSection:
-                  state.infrastructureActiveSection &&
-                  !INFRASTRUCTURE_SECTION_KEYS.includes(
-                    state.infrastructureActiveSection as InfrastructureSectionKey,
-                  )
-                    ? null
-                    : state.infrastructureActiveSection,
-                activeSubsection:
-                  state.infrastructureActiveSection &&
-                  !INFRASTRUCTURE_SECTION_KEYS.includes(
-                    state.infrastructureActiveSection as InfrastructureSectionKey,
-                  )
-                    ? null
-                    : state.infrastructureActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.infrastructureSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.infrastructureActiveSection = section;
-                  state.infrastructureActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Infrastructure",
-                includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.infrastructureFormMode,
+                  searchQuery: state.infrastructureSearchQuery,
+                  activeSection:
+                    state.infrastructureActiveSection &&
+                    !INFRASTRUCTURE_SECTION_KEYS.includes(
+                      state.infrastructureActiveSection as InfrastructureSectionKey,
+                    )
+                      ? null
+                      : state.infrastructureActiveSection,
+                  activeSubsection:
+                    state.infrastructureActiveSection &&
+                    !INFRASTRUCTURE_SECTION_KEYS.includes(
+                      state.infrastructureActiveSection as InfrastructureSectionKey,
+                    )
+                      ? null
+                      : state.infrastructureActiveSubsection,
+                  onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
+                  onSearchChange: (query) => (state.infrastructureSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.infrastructureActiveSection = section;
+                    state.infrastructureActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+                  navRootLabel: "Infrastructure",
+                  includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
+                  includeVirtualSections: false,
+                }),
+              )
             : nothing
         }
 
         ${
           state.tab === "aiAgents"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.aiAgentsFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.aiAgentsSearchQuery,
-                activeSection:
-                  state.aiAgentsActiveSection &&
-                  !AI_AGENTS_SECTION_KEYS.includes(
-                    state.aiAgentsActiveSection as AiAgentsSectionKey,
-                  )
-                    ? null
-                    : state.aiAgentsActiveSection,
-                activeSubsection:
-                  state.aiAgentsActiveSection &&
-                  !AI_AGENTS_SECTION_KEYS.includes(
-                    state.aiAgentsActiveSection as AiAgentsSectionKey,
-                  )
-                    ? null
-                    : state.aiAgentsActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.aiAgentsActiveSection = section;
-                  state.aiAgentsActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "AI & Agents",
-                includeSections: [...AI_AGENTS_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
+            ? renderConfig(
+                createConfigProps(state, requestHostUpdate, {
+                  formMode: state.aiAgentsFormMode,
+                  searchQuery: state.aiAgentsSearchQuery,
+                  activeSection:
+                    state.aiAgentsActiveSection &&
+                    !AI_AGENTS_SECTION_KEYS.includes(
+                      state.aiAgentsActiveSection as AiAgentsSectionKey,
+                    )
+                      ? null
+                      : state.aiAgentsActiveSection,
+                  activeSubsection:
+                    state.aiAgentsActiveSection &&
+                    !AI_AGENTS_SECTION_KEYS.includes(
+                      state.aiAgentsActiveSection as AiAgentsSectionKey,
+                    )
+                      ? null
+                      : state.aiAgentsActiveSubsection,
+                  onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
+                  onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.aiAgentsActiveSection = section;
+                    state.aiAgentsActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
+                  navRootLabel: "AI & Agents",
+                  includeSections: [...AI_AGENTS_SECTION_KEYS],
+                  includeVirtualSections: false,
+                }),
+              )
             : nothing
         }
 

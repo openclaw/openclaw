@@ -33,7 +33,17 @@ import {
 } from "./navigation.ts";
 import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
-import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  defaultAppearanceConfig,
+  resolveAppearancePreset,
+  resolveAppearanceScheme,
+  resolveTheme,
+  type AppearanceMode,
+  type AppearancePreset,
+  type ResolvedTheme,
+  type ThemeName,
+  type ThemeScheme,
+} from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
@@ -41,8 +51,13 @@ type SettingsHost = {
   settings: UiSettings;
   password?: string;
   theme: ThemeName;
-  themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
+  appearanceMode: AppearanceMode;
+  appearanceLightPreset: AppearancePreset;
+  appearanceDarkPreset: AppearancePreset;
+  appearanceSingleScheme: ThemeScheme;
+  appearanceResolved: AppearancePreset;
+  themeSchemeResolved: ThemeScheme;
   applySessionKey: string;
   sessionKey: string;
   tab: Tab;
@@ -63,14 +78,28 @@ type SettingsHost = {
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
+    appearance: next.appearance ?? defaultAppearanceConfig(),
     lastActiveSessionKey: next.lastActiveSessionKey?.trim() || next.sessionKey.trim() || "main",
   };
   host.settings = normalized;
   saveSettings(normalized);
-  if (next.theme !== host.theme || next.themeMode !== host.themeMode) {
+  if (
+    next.theme !== host.theme ||
+    normalized.appearance.mode !== host.appearanceMode ||
+    normalized.appearance.lightPreset !== host.appearanceLightPreset ||
+    normalized.appearance.darkPreset !== host.appearanceDarkPreset ||
+    normalized.appearance.singleScheme !== host.appearanceSingleScheme
+  ) {
     host.theme = next.theme;
-    host.themeMode = next.themeMode;
-    applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
+    host.appearanceMode = normalized.appearance.mode;
+    host.appearanceLightPreset = normalized.appearance.lightPreset;
+    host.appearanceDarkPreset = normalized.appearance.darkPreset;
+    host.appearanceSingleScheme = normalized.appearance.singleScheme;
+    applyResolvedTheme(
+      host,
+      resolveTheme(next.theme, resolveAppearanceScheme(normalized.appearance)),
+      resolveAppearancePreset(normalized.appearance),
+    );
   }
   applyBorderRadius(next.borderRadius);
   host.applySessionKey = host.settings.lastActiveSessionKey;
@@ -182,7 +211,7 @@ export function setTab(host: SettingsHost, next: Tab) {
 }
 
 export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTransitionContext) {
-  const resolved = resolveTheme(next, host.themeMode);
+  const resolved = resolveTheme(next, host.themeSchemeResolved);
   const applyTheme = () => {
     applySettings(host, { ...host.settings, theme: next });
   };
@@ -195,18 +224,102 @@ export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTra
   syncSystemThemeListener(host);
 }
 
-export function setThemeMode(
+export function setAppearanceMode(
   host: SettingsHost,
-  next: ThemeMode,
+  next: AppearanceMode,
   context?: ThemeTransitionContext,
 ) {
-  const resolved = resolveTheme(host.theme, next);
+  const appearance = host.settings.appearance ?? defaultAppearanceConfig();
+  const resolvedScheme =
+    next === "sync"
+      ? resolveAppearanceScheme({ ...appearance, mode: next })
+      : host.appearanceSingleScheme;
+  const resolved = resolveTheme(host.theme, resolvedScheme);
   const applyMode = () => {
-    applySettings(host, { ...host.settings, themeMode: next });
+    applySettings(host, {
+      ...host.settings,
+      appearance: { ...appearance, mode: next },
+    });
   };
   startThemeTransition({
     nextTheme: resolved,
     applyTheme: applyMode,
+    context,
+    currentTheme: host.themeResolved,
+  });
+  syncSystemThemeListener(host);
+}
+
+export function setAppearanceScheme(
+  host: SettingsHost,
+  next: ThemeScheme,
+  context?: ThemeTransitionContext,
+) {
+  const appearance = host.settings.appearance ?? defaultAppearanceConfig();
+  const resolved = resolveTheme(host.theme, next);
+  const applyScheme = () => {
+    applySettings(host, {
+      ...host.settings,
+      appearance: {
+        ...appearance,
+        mode: "single",
+        singleScheme: next,
+      },
+    });
+  };
+  startThemeTransition({
+    nextTheme: resolved,
+    applyTheme: applyScheme,
+    context,
+    currentTheme: host.themeResolved,
+  });
+  syncSystemThemeListener(host);
+}
+
+export function setAppearancePreset(
+  host: SettingsHost,
+  target: "light" | "dark",
+  preset: AppearancePreset,
+  context?: ThemeTransitionContext,
+) {
+  const appearance = host.settings.appearance ?? defaultAppearanceConfig();
+  const nextAppearance = {
+    ...appearance,
+    ...(target === "light" ? { lightPreset: preset } : { darkPreset: preset }),
+  };
+  const resolved = resolveTheme(host.theme, resolveAppearanceScheme(nextAppearance));
+  const applyPreset = () => {
+    applySettings(host, { ...host.settings, appearance: nextAppearance });
+  };
+  startThemeTransition({
+    nextTheme: resolved,
+    applyTheme: applyPreset,
+    context,
+    currentTheme: host.themeResolved,
+  });
+  syncSystemThemeListener(host);
+}
+
+export function setAppearanceSelection(
+  host: SettingsHost,
+  target: "light" | "dark",
+  preset: AppearancePreset,
+  context?: ThemeTransitionContext,
+) {
+  const appearance = host.settings.appearance ?? defaultAppearanceConfig();
+  const nextAppearance = {
+    ...appearance,
+    mode: "single" as const,
+    singleScheme: target,
+    ...(target === "light" ? { lightPreset: preset } : { darkPreset: preset }),
+  };
+  const resolved = resolveTheme(host.theme, target);
+  const applySelection = () => {
+    applySettings(host, { ...host.settings, appearance: nextAppearance });
+  };
+  startThemeTransition({
+    nextTheme: resolved,
+    applyTheme: applySelection,
     context,
     currentTheme: host.themeResolved,
   });
@@ -304,9 +417,17 @@ export function inferBasePath() {
 }
 
 export function syncThemeWithSettings(host: SettingsHost) {
+  const appearance = host.settings.appearance ?? defaultAppearanceConfig();
   host.theme = host.settings.theme ?? "claw";
-  host.themeMode = host.settings.themeMode ?? "system";
-  applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
+  host.appearanceMode = appearance.mode;
+  host.appearanceLightPreset = appearance.lightPreset;
+  host.appearanceDarkPreset = appearance.darkPreset;
+  host.appearanceSingleScheme = appearance.singleScheme;
+  applyResolvedTheme(
+    host,
+    resolveTheme(host.theme, resolveAppearanceScheme(appearance)),
+    resolveAppearancePreset(appearance),
+  );
   applyBorderRadius(host.settings.borderRadius ?? 50);
   syncSystemThemeListener(host);
 }
@@ -336,27 +457,31 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
 }
 
-export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
+export function applyResolvedTheme(
+  host: SettingsHost,
+  resolved: ResolvedTheme,
+  appearancePreset: AppearancePreset,
+) {
   host.themeResolved = resolved;
+  host.appearanceResolved = appearancePreset;
+  host.themeSchemeResolved = resolved.endsWith("light") ? "light" : "dark";
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
-  const themeMode = resolved.endsWith("light") ? "light" : "dark";
   root.dataset.theme = resolved;
-  root.dataset.themeMode = themeMode;
-  root.style.colorScheme = themeMode;
+  root.dataset.appearance = appearancePreset;
+  root.dataset.themeMode = host.themeSchemeResolved;
+  root.style.colorScheme = host.themeSchemeResolved;
 }
 
 function syncSystemThemeListener(host: SettingsHost) {
-  // Clean up existing listener if mode is not "system"
-  if (host.themeMode !== "system") {
+  if (host.appearanceMode !== "sync") {
     host.systemThemeCleanup?.();
     host.systemThemeCleanup = null;
     return;
   }
 
-  // Skip if listener already attached for this host
   if (host.systemThemeCleanup) {
     return;
   }
@@ -367,10 +492,15 @@ function syncSystemThemeListener(host: SettingsHost) {
 
   const mql = globalThis.matchMedia("(prefers-color-scheme: light)");
   const onChange = () => {
-    if (host.themeMode !== "system") {
+    if (host.appearanceMode !== "sync") {
       return;
     }
-    applyResolvedTheme(host, resolveTheme(host.theme, "system"));
+    const appearance = host.settings.appearance ?? defaultAppearanceConfig();
+    applyResolvedTheme(
+      host,
+      resolveTheme(host.theme, resolveAppearanceScheme(appearance)),
+      resolveAppearancePreset(appearance),
+    );
   };
   if (typeof mql.addEventListener === "function") {
     mql.addEventListener("change", onChange);

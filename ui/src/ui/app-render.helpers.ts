@@ -16,7 +16,7 @@ import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
+import type { ThemeName, ThemeScheme } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
@@ -898,9 +898,13 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", icon: "📊" },
 ];
 
-type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+type ThemeModeOption = {
+  id: "sync" | ThemeScheme;
+  label: string;
+  short: string;
+};
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", label: "System", short: "SYS" },
+  { id: "sync", label: "Sync", short: "SYNC" },
   { id: "light", label: "Light", short: "LIGHT" },
   { id: "dark", label: "Dark", short: "DARK" },
 ];
@@ -910,8 +914,8 @@ function currentThemeIcon(theme: ThemeName): string {
 }
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
-  const modeIcon = (mode: ThemeMode) => {
-    if (mode === "system") {
+  const modeIcon = (mode: "sync" | ThemeScheme) => {
+    if (mode === "sync") {
       return icons.monitor;
     }
     if (mode === "light") {
@@ -920,11 +924,22 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
     return icons.moon;
   };
 
-  const applyMode = (mode: ThemeMode, e: Event) => {
-    if (mode === state.themeMode) {
+  const selectedMode: "sync" | ThemeScheme =
+    state.appearanceMode === "sync" ? "sync" : state.appearanceSingleScheme;
+
+  const applyMode = (mode: "sync" | ThemeScheme, e: Event) => {
+    const context = { element: e.currentTarget as HTMLElement };
+    if (mode === "sync") {
+      if (state.appearanceMode === "sync") {
+        return;
+      }
+      state.setAppearanceMode("sync", context);
       return;
     }
-    state.setThemeMode(mode, { element: e.currentTarget as HTMLElement });
+    if (state.appearanceMode === "single" && state.appearanceSingleScheme === mode) {
+      return;
+    }
+    state.setAppearanceScheme(mode, context);
   };
 
   return html`
@@ -933,10 +948,10 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
         (opt) => html`
           <button
             type="button"
-            class="topbar-theme-mode__btn ${opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""}"
+            class="topbar-theme-mode__btn ${opt.id === selectedMode ? "topbar-theme-mode__btn--active" : ""}"
             title=${opt.label}
             aria-label="Color mode: ${opt.label}"
-            aria-pressed=${opt.id === state.themeMode}
+            aria-pressed=${opt.id === selectedMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >
             ${modeIcon(opt.id)}

@@ -456,6 +456,250 @@
   --grid-line: rgba(80, 50, 20, 0.04);
 }
 
+/* Appearance presets layer on top of the selected OpenClaw theme family. */
+:root[data-appearance="github-light-default"],
+:root[data-appearance="github-light-colorblind"],
+:root[data-appearance="github-light-tritanopia"] {
+  --bg: #ffffff;
+  --bg-accent: #f6f8fa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f6f8fa;
+  --bg-muted: #f6f8fa;
+  --bg-content: #f6f8fa;
+
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+  --card-highlight: rgba(31, 35, 40, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+
+  --panel: #ffffff;
+  --panel-strong: #f6f8fa;
+  --panel-hover: #eef2f6;
+  --chrome: rgba(255, 255, 255, 0.96);
+  --chrome-strong: rgba(255, 255, 255, 0.98);
+
+  --text: #1f2328;
+  --text-strong: #1f2328;
+  --chat-text: #1f2328;
+  --muted: #59636e;
+  --muted-strong: #444d56;
+  --muted-foreground: #59636e;
+
+  --border: #d0d7de;
+  --border-strong: #afb8c1;
+  --border-hover: #8c959f;
+  --input: #d0d7de;
+
+  --secondary: #f6f8fa;
+  --secondary-foreground: #1f2328;
+  --destructive-foreground: #ffffff;
+  --info: #0969da;
+  --grid-line: rgba(31, 35, 40, 0.06);
+
+  color-scheme: light;
+}
+
+:root[data-appearance="github-light-default"] {
+  --bg-accent: #f6f8fa;
+  --bg-hover: #eef2f6;
+  --bg-muted: #f6f8fa;
+  --bg-content: #f6f8fa;
+  --panel-strong: #f6f8fa;
+  --panel-hover: #edf1f5;
+  --border: #d0d7de;
+  --border-strong: #afb8c1;
+  --border-hover: #8c959f;
+  --secondary: #f6f8fa;
+}
+
+:root[data-appearance="github-light-colorblind"] {
+  --bg-accent: #f3f8ff;
+  --bg-hover: #e8f1ff;
+  --bg-muted: #eef5ff;
+  --bg-content: #f3f8ff;
+  --panel-strong: #eef5ff;
+  --panel-hover: #e2edff;
+  --chrome: rgba(248, 251, 255, 0.96);
+  --chrome-strong: rgba(248, 251, 255, 0.98);
+  --border: #c7d9f2;
+  --border-strong: #a9c3e6;
+  --border-hover: #7fa3d6;
+  --secondary: #eef5ff;
+  --info: #218bff;
+}
+
+:root[data-appearance="github-light-tritanopia"] {
+  --bg-accent: #f2faf8;
+  --bg-hover: #e5f4ef;
+  --bg-muted: #edf7f3;
+  --bg-content: #f2faf8;
+  --panel-strong: #edf7f3;
+  --panel-hover: #e0f0ea;
+  --chrome: rgba(247, 252, 250, 0.96);
+  --chrome-strong: rgba(247, 252, 250, 0.98);
+  --border: #c6ddd7;
+  --border-strong: #a9c7bf;
+  --border-hover: #7da79d;
+  --secondary: #edf7f3;
+  --info: #009988;
+}
+
+:root[data-appearance="github-dark-default"],
+:root[data-appearance="github-dark-colorblind"],
+:root[data-appearance="github-dark-tritanopia"] {
+  --bg: #0d1117;
+  --bg-accent: #010409;
+  --bg-elevated: #161b22;
+  --bg-hover: #161b22;
+  --bg-muted: #161b22;
+
+  --card: #161b22;
+  --card-foreground: #e6edf3;
+  --card-highlight: rgba(230, 237, 243, 0.04);
+  --popover: #161b22;
+  --popover-foreground: #e6edf3;
+
+  --panel: #0d1117;
+  --panel-strong: #161b22;
+  --panel-hover: #1f2630;
+  --chrome: rgba(13, 17, 23, 0.96);
+  --chrome-strong: rgba(13, 17, 23, 0.98);
+
+  --text: #e6edf3;
+  --text-strong: #e6edf3;
+  --chat-text: #e6edf3;
+  --muted: #8b949e;
+  --muted-strong: #6e7681;
+  --muted-foreground: #8b949e;
+
+  --border: #30363d;
+  --border-strong: #484f58;
+  --border-hover: #6e7681;
+  --input: #30363d;
+
+  --secondary: #161b22;
+  --secondary-foreground: #e6edf3;
+  --destructive-foreground: #ffffff;
+  --info: #2f81f7;
+  --grid-line: rgba(230, 237, 243, 0.06);
+
+  color-scheme: dark;
+}
+
+:root[data-appearance="github-dark-default"] {
+  --bg-accent: #010409;
+  --bg-hover: #161b22;
+  --bg-muted: #161b22;
+  --panel-strong: #161b22;
+  --panel-hover: #1f2630;
+  --border: #30363d;
+  --border-strong: #484f58;
+  --border-hover: #6e7681;
+}
+
+:root[data-appearance="github-dark-colorblind"] {
+  --bg-accent: #08111d;
+  --bg-hover: #132033;
+  --bg-muted: #132033;
+  --panel-strong: #132033;
+  --panel-hover: #1a2c45;
+  --chrome: rgba(10, 18, 31, 0.96);
+  --chrome-strong: rgba(10, 18, 31, 0.98);
+  --border: #294566;
+  --border-strong: #3b5d85;
+  --border-hover: #5f84b3;
+  --secondary: #132033;
+  --info: #64a8ff;
+}
+
+:root[data-appearance="github-dark-tritanopia"] {
+  --bg-accent: #051514;
+  --bg-hover: #0e2320;
+  --bg-muted: #0e2320;
+  --panel-strong: #0e2320;
+  --panel-hover: #15302c;
+  --chrome: rgba(7, 21, 20, 0.96);
+  --chrome-strong: rgba(7, 21, 20, 0.98);
+  --border: #21514a;
+  --border-strong: #327066;
+  --border-hover: #57998d;
+  --secondary: #0e2320;
+  --info: #14b8a6;
+}
+
+:root[data-appearance="github-dark-dimmed"] {
+  --bg: #22272e;
+  --bg-accent: #1c2128;
+  --bg-elevated: #2d333b;
+  --bg-hover: #343b43;
+  --bg-muted: #343b43;
+
+  --card: #2d333b;
+  --card-foreground: #adbac7;
+  --card-highlight: rgba(173, 186, 199, 0.04);
+  --popover: #2d333b;
+  --popover-foreground: #adbac7;
+
+  --panel: #22272e;
+  --panel-strong: #2d333b;
+  --panel-hover: #343b43;
+  --chrome: rgba(34, 39, 46, 0.96);
+  --chrome-strong: rgba(34, 39, 46, 0.98);
+
+  --text: #adbac7;
+  --text-strong: #adbac7;
+  --chat-text: #adbac7;
+  --muted: #768390;
+  --muted-strong: #636e7b;
+  --muted-foreground: #768390;
+
+  --border: #444c56;
+  --border-strong: #545d68;
+  --border-hover: #768390;
+  --input: #444c56;
+
+  --secondary: #2d333b;
+  --secondary-foreground: #adbac7;
+  --ok: #57ab5a;
+  --ok-muted: rgba(87, 171, 90, 0.75);
+  --ok-subtle: rgba(87, 171, 90, 0.12);
+  --destructive: #e5534b;
+  --destructive-foreground: #ffffff;
+  --danger: #e5534b;
+  --danger-muted: rgba(229, 83, 75, 0.75);
+  --danger-subtle: rgba(229, 83, 75, 0.12);
+  --warn: #d29922;
+  --warn-muted: rgba(210, 153, 34, 0.75);
+  --warn-subtle: rgba(210, 153, 34, 0.12);
+  --info: #539bf5;
+  --grid-line: rgba(173, 186, 199, 0.06);
+
+  color-scheme: dark;
+}
+
+:root[data-appearance="github-light-colorblind"],
+:root[data-appearance="github-dark-colorblind"] {
+  --ok: #218bff;
+  --ok-muted: rgba(33, 139, 255, 0.75);
+  --ok-subtle: rgba(33, 139, 255, 0.12);
+  --destructive: #f66a0a;
+  --danger: #f66a0a;
+  --danger-muted: rgba(246, 106, 10, 0.75);
+  --danger-subtle: rgba(246, 106, 10, 0.12);
+}
+
+:root[data-appearance="github-light-tritanopia"],
+:root[data-appearance="github-dark-tritanopia"] {
+  --ok: #009988;
+  --ok-muted: rgba(0, 153, 136, 0.75);
+  --ok-subtle: rgba(0, 153, 136, 0.12);
+  --destructive: #cc3311;
+  --danger: #cc3311;
+  --danger-muted: rgba(204, 51, 17, 0.75);
+  --danger-subtle: rgba(204, 51, 17, 0.12);
+}
+
 * {
   box-sizing: border-box;
 }

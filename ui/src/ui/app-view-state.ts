@@ -9,7 +9,13 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
+import type {
+  AppearanceMode,
+  AppearancePreset,
+  ResolvedTheme,
+  ThemeName,
+  ThemeScheme,
+} from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
@@ -47,9 +53,14 @@ export type AppViewState = {
   basePath: string;
   connected: boolean;
   theme: ThemeName;
-  themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
   themeOrder: ThemeName[];
+  appearanceMode: AppearanceMode;
+  appearanceLightPreset: AppearancePreset;
+  appearanceDarkPreset: AppearancePreset;
+  appearanceSingleScheme: ThemeScheme;
+  appearanceResolved: AppearancePreset;
+  themeSchemeResolved: ThemeScheme;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -312,7 +323,18 @@ export type AppViewState = {
     connect: () => void;
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-    setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setAppearanceMode: (_mode: AppearanceMode, context?: ThemeTransitionContext) => void;
+    setAppearanceScheme: (scheme: ThemeScheme, context?: ThemeTransitionContext) => void;
+    setAppearancePreset: (
+      target: "light" | "dark",
+      preset: AppearancePreset,
+      context?: ThemeTransitionContext,
+    ) => void;
+    setAppearanceSelection: (
+      target: "light" | "dark",
+      preset: AppearancePreset,
+      context?: ThemeTransitionContext,
+    ) => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;

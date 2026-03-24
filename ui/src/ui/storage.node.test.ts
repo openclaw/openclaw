@@ -125,7 +125,12 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -159,7 +164,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -192,7 +202,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -209,7 +224,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -241,7 +261,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -260,7 +285,12 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
       gatewayUrl: gwUrl,
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -294,7 +324,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -310,7 +345,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -325,7 +365,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("persists themeMode and navWidth alongside the selected theme", async () => {
+  it("persists appearance presets and navWidth alongside the selected theme", async () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -340,7 +380,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "dash",
-      themeMode: "light",
+      appearance: {
+        mode: "single",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "light",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -354,7 +399,12 @@ describe("loadSettings default gateway URL derivation", () => {
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toMatchObject({
       theme: "dash",
-      themeMode: "light",
+      appearance: {
+        mode: "single",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "light",
+      },
       navWidth: 320,
     });
   });
@@ -375,7 +425,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -421,7 +476,12 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
       theme: "claw",
-      themeMode: "system",
+      appearance: {
+        mode: "sync",
+        lightPreset: "openclaw-light",
+        darkPreset: "openclaw-dark",
+        singleScheme: "dark",
+      },
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,

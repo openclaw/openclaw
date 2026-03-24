@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { ThemeMode, ThemeName } from "../theme.ts";
+import type { ThemeName } from "../theme.ts";
 import { renderConfig } from "./config.ts";
 
 describe("config view", () => {
@@ -39,9 +39,14 @@ describe("config view", () => {
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
-    themeMode: "system" as ThemeMode,
     setTheme: vi.fn(),
-    setThemeMode: vi.fn(),
+    appearanceMode: "sync" as const,
+    appearanceLightPreset: "openclaw-light" as const,
+    appearanceDarkPreset: "openclaw-dark" as const,
+    appearanceSingleScheme: "dark" as const,
+    setAppearanceMode: vi.fn(),
+    setAppearanceScheme: vi.fn(),
+    setAppearancePreset: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",

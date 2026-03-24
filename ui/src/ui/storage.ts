@@ -23,7 +23,14 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 import { isSupportedLocale } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
-import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  defaultAppearanceConfig,
+  parseAppearanceConfig,
+  parseThemeSelection,
+  type AppearanceConfig,
+  type LegacyThemeMode,
+  type ThemeName,
+} from "./theme.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
@@ -47,7 +54,8 @@ export type UiSettings = {
   sessionKey: string;
   lastActiveSessionKey: string;
   theme: ThemeName;
-  themeMode: ThemeMode;
+  appearance?: AppearanceConfig;
+  themeMode?: LegacyThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
@@ -199,7 +207,7 @@ export function loadSettings(): UiSettings {
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "claw",
-    themeMode: "system",
+    appearance: defaultAppearanceConfig(),
     chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
@@ -227,8 +235,12 @@ export function loadSettings(): UiSettings {
         : defaults.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
-    const { theme, mode } = parseThemeSelection(
+    const { theme, mode: _mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
+      (parsed as { themeMode?: unknown }).themeMode,
+    );
+    const appearance = parseAppearanceConfig(
+      (parsed as { appearance?: unknown }).appearance,
       (parsed as { themeMode?: unknown }).themeMode,
     );
     const settings = {
@@ -238,7 +250,7 @@ export function loadSettings(): UiSettings {
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme,
-      themeMode: mode,
+      appearance,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
@@ -287,6 +299,7 @@ export function saveSettings(next: UiSettings) {
 }
 
 function persistSettings(next: UiSettings) {
+  const appearance = next.appearance ?? defaultAppearanceConfig();
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
@@ -322,7 +335,7 @@ function persistSettings(next: UiSettings) {
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
-    themeMode: next.themeMode,
+    appearance,
     chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,

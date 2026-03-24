@@ -40,9 +40,12 @@ import {
   applySettings as applySettingsInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
+  setAppearanceMode as setAppearanceModeInternal,
+  setAppearanceSelection as setAppearanceSelectionInternal,
+  setAppearancePreset as setAppearancePresetInternal,
+  setAppearanceScheme as setAppearanceSchemeInternal,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
-  setThemeMode as setThemeModeInternal,
   onPopState as onPopStateInternal,
 } from "./app-settings.ts";
 import {
@@ -62,7 +65,15 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
-import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  defaultAppearanceConfig,
+  VALID_THEME_NAMES,
+  type AppearanceMode,
+  type AppearancePreset,
+  type ResolvedTheme,
+  type ThemeName,
+  type ThemeScheme,
+} from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
@@ -129,9 +140,23 @@ export class OpenClawApp extends LitElement {
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
-  @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() themeOrder: ThemeName[] = this.buildThemeOrder(this.theme);
+  @state() appearanceMode: AppearanceMode = (this.settings.appearance ?? defaultAppearanceConfig())
+    .mode;
+  @state() appearanceLightPreset: AppearancePreset = (
+    this.settings.appearance ?? defaultAppearanceConfig()
+  ).lightPreset;
+  @state() appearanceDarkPreset: AppearancePreset = (
+    this.settings.appearance ?? defaultAppearanceConfig()
+  ).darkPreset;
+  @state() appearanceSingleScheme: ThemeScheme = (
+    this.settings.appearance ?? defaultAppearanceConfig()
+  ).singleScheme;
+  @state() appearanceResolved: AppearancePreset = (
+    this.settings.appearance ?? defaultAppearanceConfig()
+  ).darkPreset;
+  @state() themeSchemeResolved: ThemeScheme = "dark";
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -555,10 +580,50 @@ export class OpenClawApp extends LitElement {
     this.themeOrder = this.buildThemeOrder(next);
   }
 
-  setThemeMode(next: ThemeMode, context?: Parameters<typeof setThemeModeInternal>[2]) {
-    setThemeModeInternal(
-      this as unknown as Parameters<typeof setThemeModeInternal>[0],
+  setAppearanceMode(
+    next: AppearanceMode,
+    context?: Parameters<typeof setAppearanceModeInternal>[2],
+  ) {
+    setAppearanceModeInternal(
+      this as unknown as Parameters<typeof setAppearanceModeInternal>[0],
       next,
+      context,
+    );
+  }
+
+  setAppearanceScheme(
+    next: ThemeScheme,
+    context?: Parameters<typeof setAppearanceSchemeInternal>[2],
+  ) {
+    setAppearanceSchemeInternal(
+      this as unknown as Parameters<typeof setAppearanceSchemeInternal>[0],
+      next,
+      context,
+    );
+  }
+
+  setAppearancePreset(
+    target: "light" | "dark",
+    preset: AppearancePreset,
+    context?: Parameters<typeof setAppearancePresetInternal>[3],
+  ) {
+    setAppearancePresetInternal(
+      this as unknown as Parameters<typeof setAppearancePresetInternal>[0],
+      target,
+      preset,
+      context,
+    );
+  }
+
+  setAppearanceSelection(
+    target: "light" | "dark",
+    preset: AppearancePreset,
+    context?: Parameters<typeof setAppearanceSelectionInternal>[3],
+  ) {
+    setAppearanceSelectionInternal(
+      this as unknown as Parameters<typeof setAppearanceSelectionInternal>[0],
+      target,
+      preset,
       context,
     );
   }

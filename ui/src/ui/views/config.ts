@@ -1,8 +1,15 @@
 import { html, nothing, type TemplateResult } from "lit";
+import githubDarkColorblindPreview from "../../assets/appearance/github-dark-colorblind.svg";
+import githubDarkDefaultPreview from "../../assets/appearance/github-dark-default.svg";
+import githubDarkDimmedPreview from "../../assets/appearance/github-dark-dimmed.svg";
+import githubDarkTritanopiaPreview from "../../assets/appearance/github-dark-tritanopia.svg";
+import githubLightColorblindPreview from "../../assets/appearance/github-light-colorblind.svg";
+import githubLightDefaultPreview from "../../assets/appearance/github-light-default.svg";
+import githubLightTritanopiaPreview from "../../assets/appearance/github-light-tritanopia.svg";
 import { icons } from "../icons.ts";
 import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
-import type { ThemeMode, ThemeName } from "../theme.ts";
+import type { AppearanceMode, AppearancePreset, ThemeName, ThemeScheme } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
@@ -44,7 +51,7 @@ export type ConfigProps = {
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
-  onFormModeChange: (mode: "form" | "raw") => void;
+  onFormModeChange: (_mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
@@ -56,9 +63,24 @@ export type ConfigProps = {
   onOpenFile?: () => void;
   version: string;
   theme: ThemeName;
-  themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  appearanceMode: AppearanceMode;
+  appearanceLightPreset: AppearancePreset;
+  appearanceDarkPreset: AppearancePreset;
+  appearanceSingleScheme: ThemeScheme;
+  themeSchemeResolved: ThemeScheme;
+  setAppearanceMode: (_mode: AppearanceMode, context?: ThemeTransitionContext) => void;
+  setAppearanceScheme: (scheme: ThemeScheme, context?: ThemeTransitionContext) => void;
+  setAppearancePreset: (
+    target: "light" | "dark",
+    preset: AppearancePreset,
+    context?: ThemeTransitionContext,
+  ) => void;
+  setAppearanceSelection: (
+    target: "light" | "dark",
+    preset: AppearancePreset,
+    context?: ThemeTransitionContext,
+  ) => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
   gatewayUrl: string;
@@ -568,12 +590,288 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
+type AppearanceOption = {
+  id: AppearancePreset;
+  label: string;
+  description: string;
+  accent: string;
+  previewClass?: string;
+  previewSrc?: string;
+};
+
+const LIGHT_APPEARANCE_OPTIONS: AppearanceOption[] = [
+  {
+    id: "openclaw-light",
+    label: "Current Light",
+    description: "Keeps the existing OpenClaw light appearance.",
+    accent: "Current",
+    previewClass: "appearance-preview--openclaw-light",
+  },
+  {
+    id: "github-light-default",
+    label: "Light Default",
+    description: "GitHub's default light surface palette.",
+    accent: "GitHub",
+    previewClass: "appearance-preview--gh-light-default",
+    previewSrc: githubLightDefaultPreview,
+  },
+  {
+    id: "github-light-colorblind",
+    label: "Light Colorblind",
+    description: "Light palette with accessible blue and orange semantics.",
+    accent: "Accessible",
+    previewClass: "appearance-preview--gh-light-colorblind",
+    previewSrc: githubLightColorblindPreview,
+  },
+  {
+    id: "github-light-tritanopia",
+    label: "Light Tritanopia",
+    description: "Light palette with teal and vermillion semantics.",
+    accent: "Accessible",
+    previewClass: "appearance-preview--gh-light-tritanopia",
+    previewSrc: githubLightTritanopiaPreview,
+  },
+];
+
+const DARK_APPEARANCE_OPTIONS: AppearanceOption[] = [
+  {
+    id: "openclaw-dark",
+    label: "Current Dark",
+    description: "Keeps the existing OpenClaw dark appearance.",
+    accent: "Current",
+    previewClass: "appearance-preview--openclaw-dark",
+  },
+  {
+    id: "github-dark-default",
+    label: "Dark Default",
+    description: "GitHub's default dark surface palette.",
+    accent: "GitHub",
+    previewClass: "appearance-preview--gh-dark-default",
+    previewSrc: githubDarkDefaultPreview,
+  },
+  {
+    id: "github-dark-dimmed",
+    label: "Dark Dimmed",
+    description: "GitHub's softer dimmed dark palette.",
+    accent: "GitHub",
+    previewClass: "appearance-preview--gh-dark-dimmed",
+    previewSrc: githubDarkDimmedPreview,
+  },
+  {
+    id: "github-dark-colorblind",
+    label: "Dark Colorblind",
+    description: "Dark palette with accessible blue and orange semantics.",
+    accent: "Accessible",
+    previewClass: "appearance-preview--gh-dark-colorblind",
+    previewSrc: githubDarkColorblindPreview,
+  },
+  {
+    id: "github-dark-tritanopia",
+    label: "Dark Tritanopia",
+    description: "Dark palette with teal and vermillion semantics.",
+    accent: "Accessible",
+    previewClass: "appearance-preview--gh-dark-tritanopia",
+    previewSrc: githubDarkTritanopiaPreview,
+  },
+];
+
+const APPEARANCE_MODE_OPTIONS: Array<{ id: AppearanceMode; label: string; hint: string }> = [
+  { id: "single", label: "Single", hint: "Stay on one scheme until you switch it." },
+  { id: "sync", label: "Sync", hint: "Follow the system color scheme automatically." },
+];
+
+const SINGLE_SCHEME_OPTIONS: Array<{ id: ThemeScheme; label: string; icon: TemplateResult }> = [
+  { id: "light", label: "Light", icon: icons.sun },
+  { id: "dark", label: "Dark", icon: icons.moon },
+];
+
+function renderAppearancePreview(option: AppearanceOption) {
+  if (option.previewSrc) {
+    return html`
+      <span
+        class="appearance-preview appearance-preview--image ${option.previewClass ?? ""}"
+        aria-hidden="true"
+      >
+        <img
+          class="appearance-preview__image"
+          src=${option.previewSrc}
+          alt=""
+          loading="lazy"
+          decoding="async"
+        />
+        <span class="appearance-preview__legend">
+          <span class="appearance-preview__legend-chip appearance-preview__legend-chip--ok">
+            Success
+          </span>
+          <span
+            class="appearance-preview__legend-chip appearance-preview__legend-chip--danger"
+          >
+            Danger
+          </span>
+        </span>
+      </span>
+    `;
+  }
+  return html`
+    <span class="appearance-preview ${option.previewClass ?? ""}" aria-hidden="true">
+      <span class="appearance-preview__sidebar"></span>
+      <span class="appearance-preview__topbar"></span>
+      <span class="appearance-preview__card appearance-preview__card--primary"></span>
+      <span class="appearance-preview__card appearance-preview__card--secondary"></span>
+      <span class="appearance-preview__signal appearance-preview__signal--ok"></span>
+      <span class="appearance-preview__signal appearance-preview__signal--danger"></span>
+    </span>
+  `;
+}
+
+function renderAppearanceCard(
+  props: ConfigProps,
+  option: AppearanceOption,
+  target: "light" | "dark",
+  selected: AppearancePreset,
+) {
+  const isActiveSlot = props.themeSchemeResolved === target;
+  const isStored = option.id === selected;
+  const isActive = isStored && isActiveSlot;
+  return html`
+    <button
+      type="button"
+      class="settings-theme-card settings-theme-card--appearance ${isActive ? "settings-theme-card--active" : ""} ${isStored && !isActive ? "settings-theme-card--stored" : ""}"
+      title=${option.description}
+      @click=${(e: Event) => {
+        const shouldSwitchSingleScheme =
+          props.appearanceMode === "single" && props.themeSchemeResolved !== target;
+        const shouldUpdateStoredPreset = !isStored;
+        if (!shouldSwitchSingleScheme && !shouldUpdateStoredPreset) {
+          return;
+        }
+        const context = {
+          element: (e.currentTarget as HTMLElement) ?? undefined,
+        };
+        if (props.appearanceMode === "single") {
+          props.setAppearanceSelection(target, option.id, context);
+          return;
+        }
+        if (!isStored) {
+          props.setAppearancePreset(target, option.id, context);
+        }
+      }}
+    >
+      ${renderAppearancePreview(option)}
+      <span class="settings-theme-card__meta">
+        <span class="settings-theme-card__label">${option.label}</span>
+        <span class="settings-theme-card__description">${option.description}</span>
+      </span>
+      <span class="settings-theme-card__footer">
+        <span class="settings-theme-card__badge">${isActive ? "Active" : isStored ? "Saved" : option.accent}</span>
+        ${
+          isActive
+            ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
+            : nothing
+        }
+      </span>
+    </button>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Appearance Presets</h3>
+        <p class="settings-appearance__hint">
+          Add GitHub-style surface presets on top of the current OpenClaw theme families. The
+          existing appearance stays selected by default.
+        </p>
+
+        <div class="settings-appearance__mode-grid" role="group" aria-label="Appearance mode">
+          ${APPEARANCE_MODE_OPTIONS.map(
+            (option) => html`
+              <button
+                type="button"
+                class="settings-mode-card ${props.appearanceMode === option.id ? "settings-mode-card--active" : ""}"
+                @click=${(e: Event) => {
+                  if (props.appearanceMode !== option.id) {
+                    props.setAppearanceMode(option.id, {
+                      element: (e.currentTarget as HTMLElement) ?? undefined,
+                    });
+                  }
+                }}
+              >
+                <span class="settings-mode-card__label">${option.label}</span>
+                <span class="settings-mode-card__hint">${option.hint}</span>
+              </button>
+            `,
+          )}
+        </div>
+
+        ${
+          props.appearanceMode === "single"
+            ? html`
+                <div class="settings-scheme-toggle" role="group" aria-label="Single appearance scheme">
+                  ${SINGLE_SCHEME_OPTIONS.map(
+                    (option) => html`
+                      <button
+                        type="button"
+                        class="settings-scheme-toggle__btn ${
+                          props.appearanceSingleScheme === option.id
+                            ? "settings-scheme-toggle__btn--active"
+                            : ""
+                        }"
+                        @click=${(e: Event) => {
+                          if (props.appearanceSingleScheme !== option.id) {
+                            props.setAppearanceScheme(option.id, {
+                              element: (e.currentTarget as HTMLElement) ?? undefined,
+                            });
+                          }
+                        }}
+                      >
+                        <span
+                          class="settings-scheme-toggle__radio ${
+                            props.appearanceSingleScheme === option.id
+                              ? "settings-scheme-toggle__radio--active"
+                              : ""
+                          }"
+                          aria-hidden="true"
+                        ></span>
+                        <span class="settings-scheme-toggle__icon">${option.icon}</span>
+                        <span>${option.label}</span>
+                      </button>
+                    `,
+                  )}
+                </div>
+              `
+            : nothing
+        }
+
+        <div class="settings-appearance__preset-group">
+          <div class="settings-appearance__preset-heading">
+            <span>Light Slot</span>
+            <small>${props.appearanceLightPreset === "openclaw-light" ? "Current default" : "Custom"}</small>
+          </div>
+          <div class="settings-theme-grid settings-theme-grid--appearance">
+            ${LIGHT_APPEARANCE_OPTIONS.map((option) =>
+              renderAppearanceCard(props, option, "light", props.appearanceLightPreset),
+            )}
+          </div>
+        </div>
+
+        <div class="settings-appearance__preset-group">
+          <div class="settings-appearance__preset-heading">
+            <span>Dark Slot</span>
+            <small>${props.appearanceDarkPreset === "openclaw-dark" ? "Current default" : "Custom"}</small>
+          </div>
+          <div class="settings-theme-grid settings-theme-grid--appearance">
+            ${DARK_APPEARANCE_OPTIONS.map((option) =>
+              renderAppearanceCard(props, option, "dark", props.appearanceDarkPreset),
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Theme</h3>
-        <p class="settings-appearance__hint">Choose a theme family.</p>
+        <p class="settings-appearance__hint">Choose the OpenClaw visual family beneath the preset layer.</p>
         <div class="settings-theme-grid">
           ${THEME_OPTIONS.map(
             (opt) => html`
@@ -693,6 +991,110 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 
 export function resetConfigViewStateForTests() {
   Object.assign(cvs, createConfigEphemeralState());
+}
+
+function renderConfigMainContent(
+  props: ConfigProps,
+  params: {
+    includeVirtualSections: boolean;
+    formMode: "form" | "raw";
+    showAppearanceOnRoot: boolean;
+    formUnsafe: boolean;
+    analysis: { schema: JsonSchema | null; unsupportedPaths: string[] };
+    effectiveSubsection: string | null;
+    envSensitiveVisible: boolean;
+    requestUpdate: () => void;
+  },
+) {
+  if (props.activeSection === "__appearance__") {
+    return params.includeVirtualSections ? renderAppearanceSection(props) : nothing;
+  }
+
+  if (params.formMode === "form") {
+    return html`
+      ${params.showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+      ${
+        props.schemaLoading
+          ? html`
+              <div class="config-loading">
+                <div class="config-loading__spinner"></div>
+                <span>Loading schema…</span>
+              </div>
+            `
+          : renderConfigForm({
+              schema: params.analysis.schema,
+              uiHints: props.uiHints,
+              value: props.formValue,
+              disabled: props.loading || !props.formValue,
+              unsupportedPaths: params.analysis.unsupportedPaths,
+              onPatch: props.onFormPatch,
+              searchQuery: props.searchQuery,
+              activeSection: props.activeSection,
+              activeSubsection: params.effectiveSubsection,
+              revealSensitive: props.activeSection === "env" ? params.envSensitiveVisible : false,
+              isSensitivePathRevealed,
+              onToggleSensitivePath: (path) => {
+                toggleSensitivePathReveal(path);
+                params.requestUpdate();
+              },
+            })
+      }
+    `;
+  }
+
+  const sensitiveCount = countSensitiveConfigValues(props.formValue, [], props.uiHints);
+  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+  return html`
+    ${
+      params.formUnsafe
+        ? html`
+            <div class="callout info" style="margin-bottom: 12px">
+              Your config contains fields the form editor can't safely represent. Use Raw mode to edit those
+              entries.
+            </div>
+          `
+        : nothing
+    }
+    <div class="field config-raw-field">
+      <span style="display:flex;align-items:center;gap:8px;">
+        Raw config (JSON/JSON5)
+        ${
+          sensitiveCount > 0
+            ? html`
+                <span class="pill pill--sm"
+                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
+                  ${blurred ? "redacted" : "visible"}</span
+                >
+                <button
+                  class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
+                  title=${blurred ? "Reveal sensitive values" : "Hide sensitive values"}
+                  aria-label="Toggle raw config redaction"
+                  aria-pressed=${!blurred}
+                  @click=${() => {
+                    cvs.rawRevealed = !cvs.rawRevealed;
+                    params.requestUpdate();
+                  }}
+                >
+                  ${blurred ? icons.eyeOff : icons.eye}
+                </button>
+              `
+            : nothing
+        }
+      </span>
+      <textarea
+        class="${blurred ? "config-raw-redacted" : ""}"
+        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
+        .value=${blurred ? "" : props.raw}
+        ?readonly=${blurred}
+        @input=${(e: Event) => {
+          if (blurred) {
+            return;
+          }
+          props.onRawChange((e.target as HTMLTextAreaElement).value);
+        }}
+      ></textarea>
+    </div>
+  `;
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -1038,101 +1440,16 @@ export function renderConfig(props: ConfigProps) {
           }
         <!-- Form content -->
         <div class="config-content">
-          ${
-            props.activeSection === "__appearance__"
-              ? includeVirtualSections
-                ? renderAppearanceSection(props)
-                : nothing
-              : formMode === "form"
-                ? html`
-                ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                ${
-                  props.schemaLoading
-                    ? html`
-                        <div class="config-loading">
-                          <div class="config-loading__spinner"></div>
-                          <span>Loading schema…</span>
-                        </div>
-                      `
-                    : renderConfigForm({
-                        schema: analysis.schema,
-                        uiHints: props.uiHints,
-                        value: props.formValue,
-                        disabled: props.loading || !props.formValue,
-                        unsupportedPaths: analysis.unsupportedPaths,
-                        onPatch: props.onFormPatch,
-                        searchQuery: props.searchQuery,
-                        activeSection: props.activeSection,
-                        activeSubsection: effectiveSubsection,
-                        revealSensitive:
-                          props.activeSection === "env" ? envSensitiveVisible : false,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath: (path) => {
-                          toggleSensitivePathReveal(path);
-                          requestUpdate();
-                        },
-                      })
-                }
-              `
-                : (() => {
-                    const sensitiveCount = countSensitiveConfigValues(
-                      props.formValue,
-                      [],
-                      props.uiHints,
-                    );
-                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
-                    return html`
-                    ${
-                      formUnsafe
-                        ? html`
-                            <div class="callout info" style="margin-bottom: 12px">
-                              Your config contains fields the form editor can't safely represent. Use Raw mode to edit those
-                              entries.
-                            </div>
-                          `
-                        : nothing
-                    }
-                    <div class="field config-raw-field">
-                      <span style="display:flex;align-items:center;gap:8px;">
-                        Raw config (JSON/JSON5)
-                        ${
-                          sensitiveCount > 0
-                            ? html`
-                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
-                              <button
-                                class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                title=${
-                                  blurred ? "Reveal sensitive values" : "Hide sensitive values"
-                                }
-                                aria-label="Toggle raw config redaction"
-                                aria-pressed=${!blurred}
-                                @click=${() => {
-                                  cvs.rawRevealed = !cvs.rawRevealed;
-                                  requestUpdate();
-                                }}
-                              >
-                                ${blurred ? icons.eyeOff : icons.eye}
-                              </button>
-                            `
-                            : nothing
-                        }
-                      </span>
-                      <textarea
-                        class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
-                        .value=${blurred ? "" : props.raw}
-                        ?readonly=${blurred}
-                        @input=${(e: Event) => {
-                          if (blurred) {
-                            return;
-                          }
-                          props.onRawChange((e.target as HTMLTextAreaElement).value);
-                        }}
-                      ></textarea>
-                    </div>
-                  `;
-                  })()
-          }
+          ${renderConfigMainContent(props, {
+            includeVirtualSections,
+            formMode,
+            showAppearanceOnRoot,
+            formUnsafe,
+            analysis,
+            effectiveSubsection,
+            envSensitiveVisible,
+            requestUpdate,
+          })}
         </div>
 
         ${
