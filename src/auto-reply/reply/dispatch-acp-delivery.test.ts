@@ -62,6 +62,17 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello" });
   });
 
+  it("tracks successful final delivery separately from routed counters", async () => {
+    const coordinator = createCoordinator();
+
+    expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+
+    await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.getRoutedCounts().final).toBe(0);
+  });
+
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
     const coordinator = createCoordinator(onReplyStart);
