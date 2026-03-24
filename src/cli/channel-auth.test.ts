@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   getChannelPluginCatalogEntry: vi.fn(),
+  listChannelPluginCatalogEntries: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
   getChannelPlugin: vi.fn(),
   listChannelPlugins: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -75,6 +77,7 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockReturnValue("whatsapp");
     mocks.getChannelPlugin.mockReturnValue(plugin);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {} } });
     mocks.writeConfigFile.mockResolvedValue(undefined);
     mocks.listChannelPlugins.mockReturnValue([plugin]);
@@ -188,7 +191,7 @@ describe("channel-auth", () => {
   });
 
   it("throws for unsupported channel aliases", async () => {
-    mocks.normalizeChannelId.mockReturnValueOnce(undefined);
+    mocks.normalizeChannelId.mockImplementation(() => undefined);
 
     await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
       "Unsupported channel: bad-channel",
@@ -209,8 +212,7 @@ describe("channel-auth", () => {
   });
 
   it("installs a catalog-backed channel plugin on demand for login", async () => {
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
-    mocks.getChannelPluginCatalogEntry.mockReturnValueOnce({
+    const catalogEntry = {
       id: "whatsapp",
       pluginId: "@openclaw/whatsapp",
       meta: {
@@ -223,7 +225,58 @@ describe("channel-auth", () => {
       install: {
         npmSpec: "@openclaw/whatsapp",
       },
-    });
+    };
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([catalogEntry]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel
+      .mockReturnValueOnce({
+        channels: [],
+        channelSetups: [],
+      })
+      .mockReturnValueOnce({
+        channels: [{ plugin }],
+        channelSetups: [],
+      });
+
+    await runChannelLogin({ channel: "whatsapp" }, runtime);
+
+    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: catalogEntry,
+        runtime,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        pluginId: "whatsapp",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith({ channels: { whatsapp: {} } });
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
+  it("resolves explicit channel login through the catalog when registry normalize misses", async () => {
+    mocks.normalizeChannelId.mockReturnValueOnce(undefined).mockReturnValue("whatsapp");
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([
+      {
+        id: "whatsapp",
+        pluginId: "@openclaw/whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "wa",
+        },
+        install: {
+          npmSpec: "@openclaw/whatsapp",
+        },
+      },
+    ]);
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel
       .mockReturnValueOnce({
         channels: [],
@@ -243,15 +296,11 @@ describe("channel-auth", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "whatsapp",
-        pluginId: "whatsapp",
-        workspaceDir: "/tmp/workspace",
+        channelInput: "whatsapp",
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith({ channels: { whatsapp: {} } });
-    expect(mocks.login).toHaveBeenCalled();
   });
 
   it("runs logout with resolved account and explicit account id", async () => {
