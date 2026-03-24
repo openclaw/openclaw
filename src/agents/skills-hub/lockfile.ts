@@ -18,6 +18,13 @@ export type HubLockSkillEntry = {
     verdict: "safe" | "warn" | "critical";
   };
   installedAt?: number;
+  /** Last scanner policy generation verified against (see `SKILL_SCAN_POLICY_VERSION`). */
+  lastVerifiedPolicyVersion?: string;
+  /** Optional hive registry provenance (ClawHub-aligned). */
+  hiveSkillId?: string;
+  hiveContributorPseudonym?: string;
+  hiveVerificationScore?: number;
+  hiveSyncedAt?: number;
 };
 
 export type HubLockfile = {

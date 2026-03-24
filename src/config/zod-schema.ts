@@ -909,6 +909,23 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
+        hive: z
+          .object({
+            enabled: z.boolean().optional(),
+            consortiums: z
+              .array(
+                z
+                  .object({
+                    id: z.string().min(1),
+                    memberAgentIds: z.array(z.string()).optional(),
+                    label: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -37,6 +37,19 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsHiveConsortium = {
+  id: string;
+  memberAgentIds: string[];
+  label?: string;
+};
+
+export type SkillsHiveConfig = {
+  /** When false (default), hive skill-feed sync and gateway `hive.sync` are no-ops. */
+  enabled?: boolean;
+  /** Declared consortiums for `tools.sessions.visibility=consortium` (normalized agent IDs). */
+  consortiums?: SkillsHiveConsortium[];
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
@@ -44,4 +57,5 @@ export type SkillsConfig = {
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
   entries?: Record<string, SkillConfig>;
+  hive?: SkillsHiveConfig;
 };

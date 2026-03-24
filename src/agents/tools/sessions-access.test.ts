@@ -140,4 +140,23 @@ describe("createSessionVisibilityGuard", () => {
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
     });
   });
+
+  it("allows consortium peers for cross-agent access", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "consortium",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      cfg: {
+        skills: {
+          hive: {
+            consortiums: [{ id: "team", memberAgentIds: ["main", "ops"] }],
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({ allowed: true });
+    expect(guard.check("agent:guest:main").allowed).toBe(false);
+  });
 });

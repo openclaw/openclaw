@@ -33,6 +33,7 @@ export async function resolveVisibleSessionKeys(params: {
     requesterSessionKey: effectiveRequesterKey,
     visibility,
     a2aPolicy,
+    cfg,
   });
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit)

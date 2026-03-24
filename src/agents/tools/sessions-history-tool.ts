@@ -227,6 +227,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        cfg,
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {

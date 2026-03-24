@@ -1,4 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  mergeConsortiumDefinitions,
+  resolveConsortiumPeerAgentIds,
+} from "../../hive/consortium-store.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
@@ -6,7 +10,7 @@ import {
   resolveMainSessionAlias,
 } from "./sessions-resolution.js";
 
-export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+export type SessionToolsVisibility = "self" | "tree" | "agent" | "all" | "consortium";
 
 export type AgentToAgentPolicy = {
   enabled: boolean;
@@ -24,7 +28,13 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+  if (
+    value === "self" ||
+    value === "tree" ||
+    value === "agent" ||
+    value === "all" ||
+    value === "consortium"
+  ) {
     return value;
   }
   return "tree";
@@ -183,11 +193,17 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
 }
 
+function consortiumVisibilityMessage(action: SessionAccessAction): string {
+  return `${actionPrefix(action)} visibility is restricted to declared consortium peers (tools.sessions.visibility=consortium).`;
+}
+
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
+  /** Required for `consortium` visibility (reads `skills.hive.consortiums`). */
+  cfg?: OpenClawConfig;
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
@@ -197,9 +213,32 @@ export async function createSessionVisibilityGuard(params: {
       ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
       : null;
 
+  const consortiumPeers =
+    params.visibility === "consortium" && params.cfg
+      ? resolveConsortiumPeerAgentIds(requesterAgentId, mergeConsortiumDefinitions(params.cfg))
+      : params.visibility === "consortium"
+        ? new Set<string>([requesterAgentId])
+        : null;
+
   const check = (targetSessionKey: string): SessionAccessResult => {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
+
+    if (params.visibility === "consortium") {
+      const peers = consortiumPeers ?? new Set<string>([requesterAgentId]);
+      if (isCrossAgent) {
+        if (peers.has(targetAgentId)) {
+          return { allowed: true };
+        }
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: consortiumVisibilityMessage(params.action),
+        };
+      }
+      return { allowed: true };
+    }
+
     if (isCrossAgent) {
       if (params.visibility !== "all") {
         return {

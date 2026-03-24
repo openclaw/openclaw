@@ -230,6 +230,30 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
 ]);
 
+export const HiveSyncParamsSchema = Type.Object(
+  {
+    manifest: Type.Optional(
+      Type.Object(
+        {
+          version: Type.Literal(1),
+          entries: Type.Array(
+            Type.Object(
+              {
+                slug: NonEmptyString,
+                version: Type.Optional(NonEmptyString),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    manifestPath: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),

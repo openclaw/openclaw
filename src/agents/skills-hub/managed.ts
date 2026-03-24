@@ -7,7 +7,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { installPackageDir } from "../../infra/install-package-dir.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { scanDirectoryWithSummary, type SkillScanSummary } from "../../security/skill-scanner.js";
+import {
+  scanDirectoryWithSummary,
+  SKILL_SCAN_POLICY_VERSION,
+  type SkillScanSummary,
+} from "../../security/skill-scanner.js";
 import { CONFIG_DIR } from "../../utils.js";
 import { installSkillFromClawHub } from "../skills-clawhub.js";
 import {
@@ -172,7 +176,14 @@ export async function auditManagedSkills(
     try {
       summary = await scanDirectoryWithSummary(row.dirPath);
     } catch {
-      summary = { scannedFiles: 0, critical: 0, warn: 1, info: 0, findings: [] };
+      summary = {
+        scannedFiles: 0,
+        critical: 0,
+        warn: 1,
+        info: 0,
+        findings: [],
+        policyVersion: SKILL_SCAN_POLICY_VERSION,
+      };
     }
     summaries[row.name] = summary;
     const contentHash = await computeDirectoryContentHash(row.dirPath);
@@ -191,6 +202,7 @@ export async function auditManagedSkills(
         info: summary.info,
         verdict: summarizeVerdict(summary),
       },
+      lastVerifiedPolicyVersion: summary.policyVersion,
     });
   }
 
@@ -223,7 +235,7 @@ export async function updateManagedSkills(params: {
       const updateResult =
         entry.source === "clawhub"
           ? await installSkillFromClawHub({
-              workspaceDir: rootDir,
+              workspaceDir: CONFIG_DIR,
               slug: entry.name,
               version: entry.ref,
               force: true,
@@ -266,6 +278,7 @@ export async function updateManagedSkills(params: {
           verdict: summarizeVerdict(summary),
         },
         installedAt: Date.now(),
+        lastVerifiedPolicyVersion: summary.policyVersion,
       });
       results.push({ name: entry.name, ok: true, message: "updated" });
     } finally {

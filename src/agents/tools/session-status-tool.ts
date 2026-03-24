@@ -269,6 +269,7 @@ export function createSessionStatusTool(opts?: {
                 sandboxed: true,
               }),
               a2aPolicy,
+              cfg,
             })
           : null;
 

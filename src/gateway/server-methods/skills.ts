@@ -10,6 +10,8 @@ import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { parseSkillFeedV1FromFile, syncHiveSkillFeed } from "../../hive/skill-feed-sync.js";
+import { SkillFeedV1Schema } from "../../hive/types.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -17,6 +19,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateHiveSyncParams,
   validateSkillsBinsParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
@@ -56,6 +59,56 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
+  "hive.sync": async ({ params, respond }) => {
+    if (!validateHiveSyncParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid hive.sync params: ${formatValidationErrors(validateHiveSyncParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    if (cfg.skills?.hive?.enabled !== true) {
+      respond(true, { ok: true, skipped: true, results: [] }, undefined);
+      return;
+    }
+    const p = params as {
+      manifest?: { version: 1; entries: Array<{ slug: string; version?: string }> };
+      manifestPath?: string;
+    };
+    if (!p.manifest && !p.manifestPath) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "hive.sync requires manifest or manifestPath when skills.hive.enabled=true",
+        ),
+      );
+      return;
+    }
+    try {
+      const manifest = p.manifestPath
+        ? await parseSkillFeedV1FromFile(p.manifestPath.trim())
+        : SkillFeedV1Schema.parse(p.manifest);
+      const result = await syncHiveSkillFeed({ cfg, manifest });
+      respond(
+        result.ok,
+        result,
+        result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, "sync failed"),
+      );
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
+    }
+  },
   "skills.status": ({ params, respond }) => {
     if (!validateSkillsStatusParams(params)) {
       respond(

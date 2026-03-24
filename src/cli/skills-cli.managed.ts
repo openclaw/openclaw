@@ -4,6 +4,8 @@ import {
   listManagedSkills,
   updateManagedSkills,
 } from "../agents/skills-hub/managed.js";
+import { loadConfig } from "../config/config.js";
+import { parseSkillFeedV1FromFile, syncHiveSkillFeed } from "../hive/skill-feed-sync.js";
 import { defaultRuntime } from "../runtime.js";
 
 type ManagedListOptions = { json?: boolean };
@@ -92,6 +94,43 @@ export function registerManagedSkillsCli(skills: Command): void {
           } else {
             defaultRuntime.error(`${row.name}  ${row.message}`);
           }
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  const hive = managed
+    .command("hive")
+    .description("Hive registry (optional; requires skills.hive.enabled)");
+  hive
+    .command("sync")
+    .description("Install/update managed skills from a v1 feed manifest (ClawHub slugs only)")
+    .requiredOption("--manifest <path>", "Path to skill-feed v1 JSON (version + entries)")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts: { manifest: string; json?: boolean }) => {
+      try {
+        const cfg = loadConfig();
+        const manifest = await parseSkillFeedV1FromFile(opts.manifest.trim());
+        const result = await syncHiveSkillFeed({ cfg, manifest });
+        if (opts.json) {
+          defaultRuntime.writeJson(result);
+          return;
+        }
+        if (result.skipped) {
+          defaultRuntime.log("skills.hive.enabled is not true; nothing to do.");
+          return;
+        }
+        for (const row of result.results) {
+          if (row.ok) {
+            defaultRuntime.log(`${row.slug}  ok`);
+          } else {
+            defaultRuntime.error(`${row.slug}  ${row.message ?? "failed"}`);
+          }
+        }
+        if (!result.ok) {
+          defaultRuntime.exit(1);
         }
       } catch (err) {
         defaultRuntime.error(String(err));

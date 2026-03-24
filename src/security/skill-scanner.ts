@@ -19,12 +19,17 @@ export type SkillScanFinding = {
   evidence: string;
 };
 
+/** Bump when scanner rules / rule IDs change so lockfile can track re-verification. */
+export const SKILL_SCAN_POLICY_VERSION = "2026-03-24";
+
 export type SkillScanSummary = {
   scannedFiles: number;
   critical: number;
   warn: number;
   info: number;
   findings: SkillScanFinding[];
+  /** Policy generation for managed lockfile `lastVerifiedPolicyVersion`. */
+  policyVersion: string;
 };
 
 export type SkillScanOptions = {
@@ -655,5 +660,6 @@ export async function scanDirectoryWithSummary(
     warn,
     info,
     findings: allFindings,
+    policyVersion: SKILL_SCAN_POLICY_VERSION,
   };
 }

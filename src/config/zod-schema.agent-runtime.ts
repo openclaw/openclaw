@@ -819,7 +819,7 @@ export const ToolsSchema = z
     links: ToolsLinksSchema,
     sessions: z
       .object({
-        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        visibility: z.enum(["self", "tree", "agent", "all", "consortium"]).optional(),
       })
       .strict()
       .optional(),

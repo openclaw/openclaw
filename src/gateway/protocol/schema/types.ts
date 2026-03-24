@@ -108,6 +108,7 @@ export type SkillsBinsParams = SchemaType<"SkillsBinsParams">;
 export type SkillsBinsResult = SchemaType<"SkillsBinsResult">;
 export type SkillsInstallParams = SchemaType<"SkillsInstallParams">;
 export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
+export type HiveSyncParams = SchemaType<"HiveSyncParams">;
 export type CronJob = SchemaType<"CronJob">;
 export type CronListParams = SchemaType<"CronListParams">;
 export type CronStatusParams = SchemaType<"CronStatusParams">;

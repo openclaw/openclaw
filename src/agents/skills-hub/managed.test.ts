@@ -26,7 +26,14 @@ afterAll(async () => {
 describe("managed hub policy", () => {
   it("blocks critical findings by default", () => {
     const result = enforceManagedScanPolicy({
-      summary: { scannedFiles: 1, critical: 1, warn: 0, info: 0, findings: [] },
+      summary: {
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [],
+        policyVersion: "test",
+      },
       skillName: "unsafe-skill",
       force: false,
     });
@@ -35,7 +42,14 @@ describe("managed hub policy", () => {
 
   it("allows critical findings with force", () => {
     const result = enforceManagedScanPolicy({
-      summary: { scannedFiles: 1, critical: 1, warn: 0, info: 0, findings: [] },
+      summary: {
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [],
+        policyVersion: "test",
+      },
       skillName: "unsafe-skill",
       force: true,
     });
