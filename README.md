@@ -30,6 +30,7 @@ OpenClaw Onboard guides you step by step through setting up the gateway, workspa
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+- [Agent Guide (AGENTS.md)](AGENTS.md) — best practices, heartbeat vs cron, memory management
 ## Sponsors
 
 | OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
