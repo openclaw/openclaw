@@ -42,6 +42,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes Ollama prompt-too-long payloads through the context-overflow path", () => {
+    const text =
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it.each([
     "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.` in 2026.2.9",
     "nah it failed, hit a context overflow. the prompt was too large for the model. want me to retry it with a different approach?",
@@ -78,6 +86,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
+  });
+
+  it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
+    expect(
+      sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
+        errorContext: true,
+      }),
+    ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
   it.each([

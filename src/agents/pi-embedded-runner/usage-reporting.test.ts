@@ -1,22 +1,20 @@
-import "./run.overflow-compaction.mocks.shared.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  loadRunOverflowCompactionHarness,
+  mockedEnsureRuntimePluginsLoaded,
+  mockedRunEmbeddedAttempt,
+} from "./run.overflow-compaction.harness.js";
 
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
-import { runEmbeddedPiAgent } from "./run.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
-
-const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 describe("runEmbeddedPiAgent usage reporting", () => {
+  beforeAll(async () => {
+    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockedEnsureRuntimePluginsLoaded.mockReset();
+    mockedRunEmbeddedAttempt.mockReset();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
@@ -39,10 +37,43 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-gateway-bind",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {
@@ -75,6 +106,36 @@ describe("runEmbeddedPiAgent usage reporting", () => {
         senderName: "Josh Lehman",
         senderUsername: "josh",
         senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("forwards memory flush write paths into memory-triggered attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "flush",
+      timeoutMs: 30000,
+      runId: "run-memory-forwarding",
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-03-10.md",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "memory",
+        memoryFlushWritePath: "memory/2026-03-10.md",
       }),
     );
   });

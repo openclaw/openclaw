@@ -3,6 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
@@ -28,6 +29,29 @@ import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
+// Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
+// Skip those probes when the active auth mode cannot satisfy the endpoint.
+const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "google-gemini-cli",
+  "openai-codex",
+]);
+
+function shouldLoadUsageSummary(params: {
+  provider?: string;
+  selectedModelAuth?: string;
+}): boolean {
+  if (!params.provider) {
+    return false;
+  }
+  if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
+    return true;
+  }
+  const auth = params.selectedModelAuth?.trim().toLowerCase();
+  return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+}
+
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
   command: CommandContext;
@@ -40,6 +64,7 @@ export async function buildStatusReply(params: {
   model: string;
   contextTokens: number;
   resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
@@ -60,6 +85,7 @@ export async function buildStatusReply(params: {
     model,
     contextTokens,
     resolvedThinkLevel,
+    resolvedFastMode,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -75,6 +101,25 @@ export async function buildStatusReply(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: provider,
+    selectedModel: model,
+    sessionEntry,
+  });
+  const selectedModelAuth = resolveModelAuthLabel({
+    provider,
+    cfg,
+    sessionEntry,
+    agentDir: statusAgentDir,
+  });
+  const activeModelAuth = modelRefs.activeDiffers
+    ? resolveModelAuthLabel({
+        provider: modelRefs.active.provider,
+        cfg,
+        sessionEntry,
+        agentDir: statusAgentDir,
+      })
+    : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
       return resolveUsageProviderId(provider);
@@ -83,12 +128,32 @@ export async function buildStatusReply(params: {
     }
   })();
   let usageLine: string | null = null;
-  if (currentUsageProvider) {
+  if (
+    currentUsageProvider &&
+    shouldLoadUsageSummary({
+      provider: currentUsageProvider,
+      selectedModelAuth,
+    })
+  ) {
     try {
-      const usageSummary = await loadProviderUsageSummary({
-        timeoutMs: 3500,
-        providers: [currentUsageProvider],
-        agentDir: statusAgentDir,
+      const usageSummaryTimeoutMs = 3500;
+      let usageTimeout: NodeJS.Timeout | undefined;
+      const usageSummary = await Promise.race([
+        loadProviderUsageSummary({
+          timeoutMs: usageSummaryTimeoutMs,
+          providers: [currentUsageProvider],
+          agentDir: statusAgentDir,
+        }),
+        new Promise<never>((_, reject) => {
+          usageTimeout = setTimeout(
+            () => reject(new Error("usage summary timeout")),
+            usageSummaryTimeoutMs,
+          );
+        }),
+      ]).finally(() => {
+        if (usageTimeout) {
+          clearTimeout(usageTimeout);
+        }
       });
       const usageEntry = usageSummary.providers[0];
       if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
@@ -140,26 +205,16 @@ export async function buildStatusReply(params: {
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
-    sessionEntry,
-  });
-  const selectedModelAuth = resolveModelAuthLabel({
-    provider,
-    cfg,
-    sessionEntry,
-    agentDir: statusAgentDir,
-  });
-  const activeModelAuth = modelRefs.activeDiffers
-    ? resolveModelAuthLabel({
-        provider: modelRefs.active.provider,
-        cfg,
-        sessionEntry,
-        agentDir: statusAgentDir,
-      })
-    : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const effectiveFastMode =
+    resolvedFastMode ??
+    resolveFastModeState({
+      cfg,
+      provider,
+      model,
+      agentId: statusAgentId,
+      sessionEntry,
+    }).enabled;
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -174,6 +229,10 @@ export async function buildStatusReply(params: {
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    explicitConfiguredContextTokens:
+      typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+        ? agentDefaults.contextTokens
+        : undefined,
     sessionEntry,
     sessionKey,
     parentSessionKey,
@@ -181,6 +240,7 @@ export async function buildStatusReply(params: {
     sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedFast: effectiveFastMode,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,

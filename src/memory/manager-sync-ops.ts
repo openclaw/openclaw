@@ -29,12 +29,18 @@ import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
   ensureDir,
+  hashText,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import {
+  buildCaseInsensitiveExtensionGlob,
+  classifyMemoryMultimodalPath,
+  getMemoryMultimodalExtensions,
+} from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -50,6 +56,7 @@ type MemoryIndexMeta = {
   provider: string;
   providerKey?: string;
   sources?: MemorySource[];
+  scopeHash?: string;
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -85,6 +92,12 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+}
+
+export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
+  void sync().catch((err) => {
+    log.warn(`memory sync failed (${reason}): ${String(err)}`);
+  });
 }
 
 export abstract class MemoryManagerSyncOps {
@@ -144,6 +157,8 @@ export abstract class MemoryManagerSyncOps {
   protected abstract sync(params?: {
     reason?: string;
     force?: boolean;
+    forceSessions?: boolean;
+    sessionFile?: string;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   protected abstract withTimeout<T>(
@@ -352,6 +367,7 @@ export abstract class MemoryManagerSyncOps {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
+      cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
     });
@@ -383,9 +399,22 @@ export abstract class MemoryManagerSyncOps {
         }
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
+          if (this.settings.multimodal.enabled) {
+            for (const modality of this.settings.multimodal.modalities) {
+              for (const extension of getMemoryMultimodalExtensions(modality)) {
+                watchPaths.add(
+                  path.join(entry, "**", buildCaseInsensitiveExtensionGlob(extension)),
+                );
+              }
+            }
+          }
           continue;
         }
-        if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
+        if (
+          stat.isFile() &&
+          (entry.toLowerCase().endsWith(".md") ||
+            classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
+        ) {
           watchPaths.add(entry);
         }
       } catch {
@@ -591,6 +620,35 @@ export abstract class MemoryManagerSyncOps {
     return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
+  private normalizeTargetSessionFiles(sessionFiles?: string[]): Set<string> | null {
+    if (!sessionFiles || sessionFiles.length === 0) {
+      return null;
+    }
+    const normalized = new Set<string>();
+    for (const sessionFile of sessionFiles) {
+      const trimmed = sessionFile.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const resolved = path.resolve(trimmed);
+      if (this.isSessionFileForAgent(resolved)) {
+        normalized.add(resolved);
+      }
+    }
+    return normalized.size > 0 ? normalized : null;
+  }
+
+  private clearSyncedSessionFiles(targetSessionFiles?: Iterable<string> | null) {
+    if (!targetSessionFiles) {
+      this.sessionsDirtyFiles.clear();
+    } else {
+      for (const targetSessionFile of targetSessionFiles) {
+        this.sessionsDirtyFiles.delete(targetSessionFile);
+      }
+    }
+    this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
+  }
+
   protected ensureIntervalSync() {
     const minutes = this.settings.sync.intervalMinutes;
     if (!minutes || minutes <= 0 || this.intervalTimer) {
@@ -598,9 +656,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const ms = minutes * 60 * 1000;
     this.intervalTimer = setInterval(() => {
-      void this.sync({ reason: "interval" }).catch((err) => {
-        log.warn(`memory sync failed (interval): ${String(err)}`);
-      });
+      runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
   }
 
@@ -613,18 +669,19 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      void this.sync({ reason: "watch" }).catch((err) => {
-        log.warn(`memory sync failed (watch): ${String(err)}`);
-      });
+      runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
     }, this.settings.sync.watchDebounceMs);
   }
 
   private shouldSyncSessions(
-    params?: { reason?: string; force?: boolean },
+    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
     needsFullReindex = false,
   ) {
     if (!this.sources.has("sessions")) {
       return false;
+    }
+    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+      return true;
     }
     if (params?.force) {
       return true;
@@ -649,9 +706,19 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+      this.settings.multimodal,
+    );
     const fileEntries = (
-      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+      await runWithConcurrency(
+        files.map(
+          (file) => async () =>
+            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
+        ),
+        this.getIndexConcurrency(),
+      )
     ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
@@ -722,6 +789,7 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
+    targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
     // FTS-only mode: skip embedding sync (no provider)
@@ -730,13 +798,22 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listSessionFilesForAgent(this.agentId);
-    const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
-    const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    const targetSessionFiles = params.needsFullReindex
+      ? null
+      : this.normalizeTargetSessionFiles(params.targetSessionFiles);
+    const files = targetSessionFiles
+      ? Array.from(targetSessionFiles)
+      : await listSessionFilesForAgent(this.agentId);
+    const activePaths = targetSessionFiles
+      ? null
+      : new Set(files.map((file) => sessionPathForFile(file)));
+    const indexAll =
+      params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
       dirtyFiles: this.sessionsDirtyFiles.size,
+      targetedFiles: targetSessionFiles?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -797,6 +874,12 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
+    if (activePaths === null) {
+      // Targeted syncs only refresh the requested transcripts and should not
+      // prune unrelated session rows without a full directory enumeration.
+      return;
+    }
+
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("sessions") as Array<{ path: string }>;
@@ -855,6 +938,7 @@ export abstract class MemoryManagerSyncOps {
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
@@ -868,13 +952,54 @@ export abstract class MemoryManagerSyncOps {
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const configuredSources = this.resolveConfiguredSourcesForMeta();
+    const configuredScopeHash = this.resolveConfiguredScopeHash();
+    const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
+    const hasTargetSessionFiles = targetSessionFiles !== null;
+    if (hasTargetSessionFiles && targetSessionFiles && this.sources.has("sessions")) {
+      // Post-compaction refreshes should only update the explicit transcript files and
+      // leave broader reindex/dirty-work decisions to the regular sync path.
+      try {
+        await this.syncSessionFiles({
+          needsFullReindex: false,
+          targetSessionFiles: Array.from(targetSessionFiles),
+          progress: progress ?? undefined,
+        });
+        this.clearSyncedSessionFiles(targetSessionFiles);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        const activated =
+          this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        if (activated) {
+          if (
+            process.env.OPENCLAW_TEST_FAST === "1" &&
+            process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
+          ) {
+            await this.runUnsafeReindex({
+              reason: params?.reason,
+              force: true,
+              progress: progress ?? undefined,
+            });
+          } else {
+            await this.runSafeReindex({
+              reason: params?.reason,
+              force: true,
+              progress: progress ?? undefined,
+            });
+          }
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
     const needsFullReindex =
-      params?.force ||
+      (params?.force && !hasTargetSessionFiles) ||
       !meta ||
       (this.provider && meta.model !== this.provider.model) ||
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
+      meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -900,7 +1025,8 @@ export abstract class MemoryManagerSyncOps {
       }
 
       const shouldSyncMemory =
-        this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
+        this.sources.has("memory") &&
+        ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (shouldSyncMemory) {
@@ -909,7 +1035,11 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
+        await this.syncSessionFiles({
+          needsFullReindex,
+          targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+          progress: progress ?? undefined,
+        });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -996,6 +1126,7 @@ export abstract class MemoryManagerSyncOps {
       provider: fallback,
       remote: this.settings.remote,
       model: fallbackModel,
+      outputDimensionality: this.settings.outputDimensionality,
       fallback: "none",
       local: this.settings.local,
     });
@@ -1087,6 +1218,7 @@ export abstract class MemoryManagerSyncOps {
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
         sources: this.resolveConfiguredSourcesForMeta(),
+        scopeHash: this.resolveConfiguredScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1158,6 +1290,7 @@ export abstract class MemoryManagerSyncOps {
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
       sources: this.resolveConfiguredSourcesForMeta(),
+      scopeHash: this.resolveConfiguredScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1233,6 +1366,22 @@ export abstract class MemoryManagerSyncOps {
       ),
     ).toSorted();
     return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private resolveConfiguredScopeHash(): string {
+    const extraPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths)
+      .map((value) => value.replace(/\\/g, "/"))
+      .toSorted();
+    return hashText(
+      JSON.stringify({
+        extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: [...this.settings.multimodal.modalities].toSorted(),
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+    );
   }
 
   private metaSourcesDiffer(meta: MemoryIndexMeta, configuredSources: MemorySource[]): boolean {

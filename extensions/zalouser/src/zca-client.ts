@@ -1,32 +1,17 @@
+import * as zcaJsRuntime from "zca-js";
 import {
-  LoginQRCallbackEventType as LoginQRCallbackEventTypeRuntime,
-  Reactions as ReactionsRuntime,
-  ThreadType as ThreadTypeRuntime,
-  Zalo as ZaloRuntime,
-} from "zca-js";
+  LoginQRCallbackEventType,
+  Reactions,
+  TextStyle,
+  ThreadType,
+  type Style,
+} from "./zca-constants.js";
 
-export const ThreadType = ThreadTypeRuntime as {
-  User: 0;
-  Group: 1;
+const zcaJs = zcaJsRuntime as unknown as {
+  Zalo: unknown;
 };
-
-export const LoginQRCallbackEventType = LoginQRCallbackEventTypeRuntime as {
-  QRCodeGenerated: 0;
-  QRCodeExpired: 1;
-  QRCodeScanned: 2;
-  QRCodeDeclined: 3;
-  GotLoginInfo: 4;
-};
-
-export const Reactions = ReactionsRuntime as Record<string, string> & {
-  HEART: string;
-  LIKE: string;
-  HAHA: string;
-  WOW: string;
-  CRY: string;
-  ANGRY: string;
-  NONE: string;
-};
+export { LoginQRCallbackEventType, Reactions, TextStyle, ThreadType };
+export type { Style };
 
 export type Credentials = {
   imei: string;
@@ -257,4 +242,4 @@ type ZaloCtor = new (options?: { logging?: boolean; selfListen?: boolean }) => {
   ): Promise<API>;
 };
 
-export const Zalo = ZaloRuntime as unknown as ZaloCtor;
+export const Zalo = zcaJs.Zalo as unknown as ZaloCtor;

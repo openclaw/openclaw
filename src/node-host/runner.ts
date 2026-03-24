@@ -119,7 +119,6 @@ export async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    includeLegacyEnv: false,
     localTokenPrecedence: "env-first",
     localPasswordPrecedence: "env-first", // pragma: allowlist secret
     remoteTokenPrecedence: "env-first",
@@ -174,8 +173,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
 
   const client = new GatewayClient({
     url,

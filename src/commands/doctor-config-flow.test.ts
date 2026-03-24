@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -32,6 +33,22 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   } finally {
     noteSpy.mockRestore();
   }
+}
+
+async function loadFreshDoctorFlowDeps() {
+  vi.resetModules();
+  const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+  const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
+  const freshCommandSecretGatewayModule = await import("../cli/command-secret-gateway.js");
+  const freshNoteModule = await import("../terminal/note.js");
+  const doctorFlowModule = await import("./doctor-config-flow.js");
+  return {
+    telegramFetchModule,
+    telegramProxyModule,
+    commandSecretGatewayModule: freshCommandSecretGatewayModule,
+    noteModule: freshNoteModule,
+    loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
+  };
 }
 
 type DiscordGuildRule = {
@@ -107,6 +124,100 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("shows first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.telegram: Telegram is in first-time setup mode.") &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.groups"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows account-scoped first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.accounts.default.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes(
+            "channels.telegram.accounts.default: Telegram is in first-time setup mode.",
+          ) &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.accounts.default.groups"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          dangerouslyAllowNameMatching: true,
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -143,6 +254,304 @@ describe("doctor config flow", () => {
       mode: "token",
       token: "ok",
     });
+  });
+
+  it("migrates legacy browser extension profiles to existing-session on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        browser: {
+          relayBindHost: "0.0.0.0",
+          profiles: {
+            chromeLive: {
+              driver: "extension",
+              color: "#00AA00",
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
+  });
+
+  it("previews Matrix legacy sync-store migration in read-only mode", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(stateDir, "matrix", "bot-storage.json"),
+          '{"next_batch":"s1"}',
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true },
+          confirm: async () => false,
+        });
+      });
+
+      const warning = noteSpy.mock.calls.find(
+        (call) =>
+          call[1] === "Doctor warnings" &&
+          String(call[0]).includes("Matrix plugin upgraded in place."),
+      );
+      expect(warning?.[0]).toContain("Legacy sync store:");
+      expect(warning?.[0]).toContain(
+        'Run "openclaw doctor --fix" to migrate this Matrix state now.',
+      );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("previews Matrix encrypted-state migration in read-only mode", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const { rootDir: accountRoot } = resolveMatrixAccountStorageRoot({
+          stateDir,
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+        });
+        await fs.mkdir(path.join(accountRoot, "crypto"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(accountRoot, "crypto", "bot-sdk.json"),
+          JSON.stringify({ deviceId: "DEVICE123" }),
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true },
+          confirm: async () => false,
+        });
+      });
+
+      const warning = noteSpy.mock.calls.find(
+        (call) =>
+          call[1] === "Doctor warnings" &&
+          String(call[0]).includes("Matrix encrypted-state migration is pending"),
+      );
+      expect(warning?.[0]).toContain("Legacy crypto store:");
+      expect(warning?.[0]).toContain("New recovery key file:");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("migrates Matrix legacy state on doctor repair", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(stateDir, "matrix", "bot-storage.json"),
+          '{"next_batch":"s1"}',
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+
+        const migratedRoot = path.join(
+          stateDir,
+          "matrix",
+          "accounts",
+          "default",
+          "matrix.example.org__bot_example.org",
+        );
+        const migratedChildren = await fs.readdir(migratedRoot);
+        expect(migratedChildren.length).toBe(1);
+        expect(
+          await fs
+            .access(path.join(migratedRoot, migratedChildren[0] ?? "", "bot-storage.json"))
+            .then(() => true)
+            .catch(() => false),
+        ).toBe(true);
+        expect(
+          await fs
+            .access(path.join(stateDir, "matrix", "bot-storage.json"))
+            .then(() => true)
+            .catch(() => false),
+        ).toBe(false);
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          (call) =>
+            call[1] === "Doctor changes" &&
+            String(call[0]).includes("Matrix plugin upgraded in place."),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("creates a Matrix migration snapshot before doctor repair mutates Matrix state", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            matrix: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              accessToken: "tok-123",
+            },
+          },
+        }),
+      );
+      await fs.writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"next_batch":"s1"}');
+
+      await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      const snapshotDir = path.join(home, "Backups", "openclaw-migrations");
+      const snapshotEntries = await fs.readdir(snapshotDir);
+      expect(snapshotEntries.some((entry) => entry.endsWith(".tar.gz"))).toBe(true);
+
+      const marker = JSON.parse(
+        await fs.readFile(path.join(stateDir, "matrix", "migration-snapshot.json"), "utf8"),
+      ) as {
+        archivePath: string;
+      };
+      expect(marker.archivePath).toContain(path.join("Backups", "openclaw-migrations"));
+    });
+  });
+
+  it("warns when Matrix is installed from a stale custom path", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "tok-123",
+        },
+      },
+      plugins: {
+        installs: {
+          matrix: {
+            source: "path",
+            sourcePath: "/tmp/openclaw-matrix-missing",
+            installPath: "/tmp/openclaw-matrix-missing",
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) => line.includes("custom path") && line.includes("/tmp/openclaw-matrix-missing"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when Matrix is installed from an existing custom path", async () => {
+    await withTempHome(async (home) => {
+      const pluginPath = path.join(home, "matrix-plugin");
+      await fs.mkdir(pluginPath, { recursive: true });
+
+      const doctorWarnings = await collectDoctorWarnings({
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "tok-123",
+          },
+        },
+        plugins: {
+          installs: {
+            matrix: {
+              source: "path",
+              sourcePath: pluginPath,
+              installPath: pluginPath,
+            },
+          },
+        },
+      });
+
+      expect(
+        doctorWarnings.some((line) => line.includes("Matrix is installed from a custom path")),
+      ).toBe(true);
+      expect(
+        doctorWarnings.some((line) => line.includes("will not automatically replace that plugin")),
+      ).toBe(true);
+    });
+  });
+
+  it("notes legacy browser extension migration changes", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          browser: {
+            relayBindHost: "127.0.0.1",
+            profiles: {
+              chromeLive: {
+                driver: "extension",
+                color: "#00AA00",
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const messages = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(
+        messages.some((line) => line.includes('browser.profiles.chromeLive.driver "extension"')),
+      ).toBe(true);
+      expect(messages.some((line) => line.includes("browser.relayBindHost"))).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -183,8 +592,11 @@ describe("doctor config flow", () => {
   });
 
   it("resolves Telegram @username allowFrom entries to numeric IDs on repair", async () => {
-    const fetchSpy = vi.fn(async (url: string) => {
-      const u = String(url);
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const u = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
       const chatId = new URL(u).searchParams.get("chat_id") ?? "";
       const id =
         chatId.toLowerCase() === "@testuser"
@@ -201,7 +613,15 @@ describe("doctor config flow", () => {
         json: async () => (id != null ? { ok: true, result: { id } } : { ok: false }),
       } as unknown as Response;
     });
-    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("fetch", globalFetch);
+    const {
+      telegramFetchModule,
+      telegramProxyModule,
+      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
+    } = await loadFreshDoctorFlowDeps();
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
     try {
       const result = await runDoctorConfigWithInput({
         repair: true,
@@ -223,7 +643,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
+        run: loadDoctorFlowFresh,
       });
 
       const cfg = result.cfg as unknown as {
@@ -247,12 +667,16 @@ describe("doctor config flow", () => {
       expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
       expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
+      makeProxyFetch.mockRestore();
+      resolveTelegramFetch.mockRestore();
       vi.unstubAllGlobals();
     }
   });
 
   it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
+      await loadFreshDoctorFlowDeps();
+    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -271,7 +695,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
+        run: loadDoctorFlowFresh,
       });
 
       const cfg = result.cfg as {
@@ -290,6 +714,235 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some((call) =>
           String(call[0]).includes(
             "configured Telegram bot credentials are unavailable in this command path",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ignores custom Telegram apiRoot and proxy when repairing allowFrom usernames", async () => {
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      expect(url).toBe("https://api.telegram.org/bottok/getChat?chat_id=%40testuser");
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: { id: 12345 } }),
+      };
+    });
+    vi.stubGlobal("fetch", globalFetch);
+    const proxyFetch = vi.fn();
+    const {
+      telegramFetchModule,
+      telegramProxyModule,
+      commandSecretGatewayModule: freshCommandSecretGatewayModule,
+      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
+    } = await loadFreshDoctorFlowDeps();
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
+    makeProxyFetch.mockReturnValue(proxyFetch as unknown as typeof fetch);
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
+    const resolveSecretsSpy = vi
+      .spyOn(freshCommandSecretGatewayModule, "resolveCommandSecretRefsViaGateway")
+      .mockResolvedValue({
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+        resolvedConfig: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  apiRoot: "https://custom.telegram.test/root/",
+                  proxy: "http://127.0.0.1:8888",
+                  network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+      });
+
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadDoctorFlowFresh,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.work?.allowFrom).toEqual(["12345"]);
+      expect(makeProxyFetch).not.toHaveBeenCalled();
+      expect(resolveTelegramFetch).toHaveBeenCalledWith(undefined, {
+        network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      makeProxyFetch.mockRestore();
+      resolveTelegramFetch.mockRestore();
+      resolveSecretsSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sanitizes config-derived doctor warnings and changes before logging", async () => {
+    const {
+      telegramFetchModule,
+      noteModule: freshNoteModule,
+      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
+    } = await loadFreshDoctorFlowDeps();
+    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 12345 } }),
+    }));
+    vi.stubGlobal("fetch", globalFetch);
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  allowFrom: ["@\u001b[31mtestuser"],
+                },
+              },
+            },
+            slack: {
+              accounts: {
+                work: {
+                  allowFrom: ["alice\u001b[31m\nforged"],
+                },
+                "ops\u001b[31m\nopen": {
+                  dmPolicy: "open",
+                },
+              },
+            },
+            whatsapp: {
+              accounts: {
+                "ops\u001b[31m\nempty": {
+                  groupPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        run: loadDoctorFlowFresh,
+      });
+
+      const outputs = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
+      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("resolved @testuser -> 12345"))).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
+            line.includes("mutable allowlist"),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
+            line.includes('required by dmPolicy="open"'),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.whatsapp.accounts.opsempty.groupPolicy is "allowlist"') &&
+            line.includes("groupAllowFrom"),
+        ),
+      ).toBe(true);
+    } finally {
+      resolveTelegramFetch.mockRestore();
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
+    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
+      await loadFreshDoctorFlowDeps();
+    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              accounts: {
+                inactive: {
+                  enabled: false,
+                  botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadDoctorFlowFresh,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes("Telegram account inactive: failed to inspect bot token"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
           ),
         ),
       ).toBe(true);

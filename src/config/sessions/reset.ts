@@ -110,7 +110,7 @@ export function resolveSessionResetPolicy(params: {
   if (idleMinutesRaw != null) {
     const normalized = Math.floor(idleMinutesRaw);
     if (Number.isFinite(normalized)) {
-      idleMinutes = Math.max(normalized, 1);
+      idleMinutes = Math.max(normalized, 0);
     }
   } else if (mode === "idle") {
     idleMinutes = DEFAULT_IDLE_MINUTES;
@@ -146,7 +146,7 @@ export function evaluateSessionFreshness(params: {
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
-    params.policy.idleMinutes != null
+    params.policy.idleMinutes != null && params.policy.idleMinutes > 0
       ? params.updatedAt + params.policy.idleMinutes * 60_000
       : undefined;
   const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;

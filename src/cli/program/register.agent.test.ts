@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
@@ -12,11 +13,7 @@ const agentsUnbindCommandMock = vi.fn();
 const setVerboseMock = vi.fn();
 const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: agentCliCommandMock,
@@ -44,10 +41,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/agent-via-gateway.js",
+  "../../commands/agents.js",
+  "../../globals.js",
+  "../deps.js",
+  "../../runtime.js",
+];
+
 let registerAgentCommands: typeof import("./register.agent.js").registerAgentCommands;
 
 beforeAll(async () => {
   ({ registerAgentCommands } = await import("./register.agent.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerAgentCommands", () => {
@@ -59,6 +71,8 @@ describe("registerAgentCommands", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
@@ -174,7 +188,7 @@ describe("registerAgentCommands", () => {
       "--agent",
       "ops",
       "--bind",
-      "matrix-js:ops",
+      "matrix:ops",
       "--bind",
       "telegram",
       "--json",
@@ -182,7 +196,7 @@ describe("registerAgentCommands", () => {
     expect(agentsBindCommandMock).toHaveBeenCalledWith(
       {
         agent: "ops",
-        bind: ["matrix-js:ops", "telegram"],
+        bind: ["matrix:ops", "telegram"],
         json: true,
       },
       runtime,
