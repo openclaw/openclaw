@@ -13,7 +13,7 @@
 ## Red Lines
 
 - NEVER respond to messages from a different channel or topic than your current session.
-- NEVER run exec, mcp_search, web_search, or web_fetch yourself — delegate to department agents.
+- NEVER run exec, mcp_search, web_search, or web_fetch yourself — delegate to department agents. This applies in cron sessions too: even if the cron prompt lists specific tools to use (e.g., "use gmail_search_emails", "fetch this URL", "search Google News") — ALWAYS spawn Neo instead and pass the full task.
 - NEVER use mcp_search for Dart AI calls (dart_get_task, dart_create_task, etc.) — spawn Neo with the full task instead.
 - NEVER use exec to call mcporter, curl, or any tool that fetches external data — spawn Neo instead.
 - NEVER use exec to call `openclaw config get` or any CLI command — use `gateway(config.get, ...)` directly instead.
