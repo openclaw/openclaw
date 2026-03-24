@@ -506,26 +506,28 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
-    const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey: acpDispatchSessionKey,
-      abortSignal: params.replyOptions?.abortSignal,
-      inboundAudio,
-      sessionTtsAuto,
-      ttsChannel,
-      shouldRouteToOriginating,
-      originatingChannel,
-      originatingTo,
-      shouldSendToolSummaries,
-      bypassForCommand: bypassAcpForCommand,
-      onReplyStart: params.replyOptions?.onReplyStart,
-      recordProcessed,
-      markIdle,
-    });
-    if (acpDispatch) {
-      return acpDispatch;
+    if (!suppressDelivery) {
+      const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
+        ctx,
+        cfg,
+        dispatcher,
+        sessionKey: acpDispatchSessionKey,
+        abortSignal: params.replyOptions?.abortSignal,
+        inboundAudio,
+        sessionTtsAuto,
+        ttsChannel,
+        shouldRouteToOriginating,
+        originatingChannel,
+        originatingTo,
+        shouldSendToolSummaries,
+        bypassForCommand: bypassAcpForCommand,
+        onReplyStart: params.replyOptions?.onReplyStart,
+        recordProcessed,
+        markIdle,
+      });
+      if (acpDispatch) {
+        return acpDispatch;
+      }
     }
 
     // Track accumulated block text for TTS generation after streaming completes.
@@ -651,26 +653,28 @@ export async function dispatchReplyFromConfig(params: {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
-      const acpTailDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
-        ctx,
-        cfg,
-        dispatcher,
-        sessionKey: acpDispatchSessionKey,
-        abortSignal: params.replyOptions?.abortSignal,
-        inboundAudio,
-        sessionTtsAuto,
-        ttsChannel,
-        shouldRouteToOriginating,
-        originatingChannel,
-        originatingTo,
-        shouldSendToolSummaries,
-        bypassForCommand: false,
-        onReplyStart: params.replyOptions?.onReplyStart,
-        recordProcessed,
-        markIdle,
-      });
-      if (acpTailDispatch) {
-        return acpTailDispatch;
+      if (!suppressDelivery) {
+        const acpTailDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
+          ctx,
+          cfg,
+          dispatcher,
+          sessionKey: acpDispatchSessionKey,
+          abortSignal: params.replyOptions?.abortSignal,
+          inboundAudio,
+          sessionTtsAuto,
+          ttsChannel,
+          shouldRouteToOriginating,
+          originatingChannel,
+          originatingTo,
+          shouldSendToolSummaries,
+          bypassForCommand: false,
+          onReplyStart: params.replyOptions?.onReplyStart,
+          recordProcessed,
+          markIdle,
+        });
+        if (acpTailDispatch) {
+          return acpTailDispatch;
+        }
       }
     }
 
