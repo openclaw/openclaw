@@ -317,8 +317,13 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let raw = String(data: data, encoding: .utf8)?
+            var raw = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // `openclaw --version` outputs "OpenClaw 2026.x.y"; strip the product prefix
+            // so Semver.parse receives only the version token.
+            if let r = raw, r.lowercased().hasPrefix("openclaw ") {
+                raw = String(r.dropFirst("openclaw ".count))
+            }
             return Semver.parse(raw)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)

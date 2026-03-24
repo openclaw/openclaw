@@ -19,6 +19,9 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse("invalid") == nil)
         #expect(Semver.parse("1.2") == nil)
         #expect(Semver.parse("1.2.x") == nil)
+        // Product-prefixed output from `openclaw --version` should NOT parse as semver
+        // (the prefix must be stripped by the caller, not the parser).
+        #expect(Semver.parse("OpenClaw 2026.3.23-1") == nil)
     }
 
     @Test func `semver compatibility requires same major and not older`() {
