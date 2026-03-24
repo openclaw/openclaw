@@ -1,0 +1,49 @@
+# docker-compose.safe.yml
+#
+# SafeClaw = OpenClaw + AEP safety proxy
+# Run this instead of docker-compose.yml for safety and accountability.
+#
+# Usage:
+#   cp .env.example .env  # add your API keys
+#   docker compose -f docker-compose.yml -f docker-compose.safe.yml up
+#
+# Dashboard: http://localhost:8899/aep/
+# Every LLM call: cost tracked, safety enforced, PASS/FLAG/BLOCK decisions.
+
+services:
+  # AEP safety proxy — sits between OpenClaw and the LLM API
+  aep-proxy:
+    image: python:3.12-slim
+    command: >
+      sh -c "pip install --quiet aceteam-aep[all] &&
+             python -c \"
+      from aceteam_aep.proxy.app import create_proxy_app
+      import uvicorn
+      uvicorn.run(create_proxy_app(), host='0.0.0.0', port=8899)
+      \""
+    ports:
+      - "8899:8899"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8899/aep/')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Override OpenClaw gateway to route LLM calls through AEP proxy
+  openclaw-gateway:
+    environment:
+      OPENAI_BASE_URL: http://aep-proxy:8899/v1
+      ANTHROPIC_BASE_URL: http://aep-proxy:8899/v1
+    depends_on:
+      aep-proxy:
+        condition: service_healthy
