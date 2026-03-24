@@ -601,10 +601,10 @@ export function createImageGenerateTool(options?: {
         resolution,
         count,
         inputImages,
-        seed: seed ?? undefined,
-        watermark: watermark ?? undefined,
-        guidanceScale: guidanceScale ?? undefined,
-        optimizePrompt: optimizePrompt ?? undefined,
+        seed,
+        watermark,
+        guidanceScale,
+        optimizePrompt,
       });
 
       const savedImages = await Promise.all(

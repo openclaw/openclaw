@@ -190,13 +190,13 @@ export function createVideoGenerateTool(params: {
         prompt: prompt.trim(),
         agentDir: params.agentDir,
         modelOverride,
-        durationSeconds: duration ?? undefined,
+        durationSeconds: duration,
         aspectRatio: validatedAspectRatio,
         resolution: resolution?.trim(),
-        seed: seed ?? undefined,
-        watermark: watermark ?? undefined,
-        firstFrameImageUrl: firstFrameImageUrl ?? undefined,
-        lastFrameImageUrl: lastFrameImageUrl ?? undefined,
+        seed,
+        watermark,
+        firstFrameImageUrl,
+        lastFrameImageUrl,
         providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
       });
 
