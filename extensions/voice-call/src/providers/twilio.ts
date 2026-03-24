@@ -682,8 +682,11 @@ export class TwilioProvider implements VoiceCallProvider {
         let remainder: Buffer = Buffer.alloc(0);
         let audioSent = false;
         let abortListenerAttached = false;
+        let streamTimedOut = false;
+        const streamAbort = new AbortController();
         const onAbort = () => {
           console.log(`[voice-call] Streaming TTS aborted for stream ${streamSid}`);
+          streamAbort.abort();
         };
         if (signal.aborted) {
           onAbort();
@@ -693,30 +696,57 @@ export class TwilioProvider implements VoiceCallProvider {
         }
 
         try {
-          for await (const chunk of ttsProvider.streamForTelephony(text, signal)) {
-            if (chunk.length > 0) {
-              console.log(`[voice-call] Streaming TTS chunk received: ${chunk.length} bytes`);
-            }
-            if (signal.aborted) {
-              break;
-            }
-
-            // Accumulate audio and send in paced chunks
-            remainder = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
-
-            while (remainder.length >= CHUNK_SIZE) {
+          const iterator = ttsProvider
+            .streamForTelephony(text, streamAbort.signal)
+            [Symbol.asyncIterator]();
+          while (true) {
+            let readTimeout: ReturnType<typeof setTimeout> | null = null;
+            try {
+              const nextPromise = iterator.next();
+              const timeoutPromise = new Promise<IteratorResult<Buffer>>((_, reject) => {
+                readTimeout = setTimeout(() => {
+                  streamTimedOut = true;
+                  streamAbort.abort();
+                  reject(
+                    new Error(
+                      `Telephony TTS streaming timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
+                    ),
+                  );
+                }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
+              });
+              const { done, value } = await Promise.race([nextPromise, timeoutPromise]);
+              if (done) {
+                break;
+              }
+              const chunk = value;
+              if (chunk.length > 0) {
+                console.log(`[voice-call] Streaming TTS chunk received: ${chunk.length} bytes`);
+              }
               if (signal.aborted) {
                 break;
               }
-              const chunkResult = sendAudioChunk(remainder.subarray(0, CHUNK_SIZE));
-              chunkAttempts += 1;
-              if (chunkResult.sent) {
-                chunkDelivered += 1;
+
+              // Accumulate audio and send in paced chunks
+              remainder = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
+
+              while (remainder.length >= CHUNK_SIZE) {
+                if (signal.aborted) {
+                  break;
+                }
+                const chunkResult = sendAudioChunk(remainder.subarray(0, CHUNK_SIZE));
+                chunkAttempts += 1;
+                if (chunkResult.sent) {
+                  chunkDelivered += 1;
+                }
+                totalBytesSent += CHUNK_SIZE;
+                audioSent = true;
+                remainder = remainder.subarray(CHUNK_SIZE);
+                await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
               }
-              totalBytesSent += CHUNK_SIZE;
-              audioSent = true;
-              remainder = remainder.subarray(CHUNK_SIZE);
-              await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+            } finally {
+              if (readTimeout) {
+                clearTimeout(readTimeout);
+              }
             }
           }
         } catch (err) {
@@ -731,6 +761,11 @@ export class TwilioProvider implements VoiceCallProvider {
               `[voice-call] TTS bytes sent to Twilio for stream ${streamSid}: ${totalBytesSent}`,
             );
             return;
+          }
+          if (streamTimedOut) {
+            throw new Error(
+              `Telephony TTS streaming timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
+            );
           }
           throw err;
         } finally {

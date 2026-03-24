@@ -158,6 +158,12 @@ async function* streamOpenAITelephony(
     voice,
     response_format: "pcm", // Raw PCM: 24kHz, 16-bit signed LE, mono
   };
+  if (openai?.speed !== undefined) {
+    body.speed = openai.speed;
+  }
+  if (openai?.instructions) {
+    body.instructions = openai.instructions;
+  }
 
   const response = await fetch(`${baseUrl}/v1/audio/speech`, {
     method: "POST",
