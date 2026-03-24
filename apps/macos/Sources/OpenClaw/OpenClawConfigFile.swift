@@ -1,9 +1,11 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
 
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
+    private static let configHealthFileName = "config-health.json"
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -23,9 +25,11 @@ enum OpenClawConfigFile {
         do {
             let data = try Data(contentsOf: url)
             guard let root = self.parseConfigData(data) else {
+                self.observeConfigRead(data: data, root: nil, configURL: url, valid: false)
                 self.logger.warning("config JSON root invalid")
                 return [:]
             }
+            self.observeConfigRead(data: data, root: root, configURL: url, valid: true)
             return root
         } catch {
             self.logger.warning("config read failed: \(error.localizedDescription)")
@@ -76,6 +80,7 @@ enum OpenClawConfigFile {
                 "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
                 "suspicious": suspicious,
             ])
+            self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
         } catch {
             self.logger.error("config save failed: \(error.localizedDescription)")
             self.appendConfigWriteAudit([
@@ -316,11 +321,252 @@ enum OpenClawConfigFile {
             .appendingPathComponent(self.configAuditFileName, isDirectory: false)
     }
 
+    private static func configHealthStateURL() -> URL {
+        self.stateDirURL()
+            .appendingPathComponent("logs", isDirectory: true)
+            .appendingPathComponent(self.configHealthFileName, isDirectory: false)
+    }
+
+    private static func readConfigHealthState() -> [String: Any] {
+        let url = self.configHealthStateURL()
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+        return root
+    }
+
+    private static func writeConfigHealthState(_ root: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(root),
+              let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        else {
+            return
+        }
+        let url = self.configHealthStateURL()
+        do {
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // best-effort
+        }
+    }
+
+    private static func configHealthEntry(state: [String: Any], configPath: String) -> [String: Any] {
+        let entries = state["entries"] as? [String: Any]
+        return entries?[configPath] as? [String: Any] ?? [:]
+    }
+
+    private static func setConfigHealthEntry(
+        state: [String: Any],
+        configPath: String,
+        entry: [String: Any]) -> [String: Any]
+    {
+        var next = state
+        var entries = next["entries"] as? [String: Any] ?? [:]
+        entries[configPath] = entry
+        next["entries"] = entries
+        return next
+    }
+
+    private static func isUpdateChannelOnlyRoot(_ root: [String: Any]) -> Bool {
+        let keys = Array(root.keys)
+        guard keys.count == 1, keys.first == "update" else { return false }
+        guard let update = root["update"] as? [String: Any] else { return false }
+        let updateKeys = Array(update.keys)
+        return updateKeys.count == 1 && update["channel"] is String
+    }
+
+    private static func fileTimestampMs(_ value: Any?) -> Double? {
+        guard let date = value as? Date else { return nil }
+        return date.timeIntervalSince1970 * 1000
+    }
+
+    private static func configFingerprint(
+        data: Data,
+        root: [String: Any]?,
+        configURL: URL,
+        observedAt: String) -> [String: Any]
+    {
+        let attributes = try? FileManager().attributesOfItem(atPath: configURL.path)
+        return [
+            "hash": SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined(),
+            "bytes": data.count,
+            "mtimeMs": self.fileTimestampMs(attributes?[.modificationDate]) ?? NSNull(),
+            "ctimeMs": self.fileTimestampMs(attributes?[.creationDate]) ?? NSNull(),
+            "hasMeta": self.hasMeta(root),
+            "gatewayMode": self.gatewayMode(root) ?? NSNull(),
+            "observedAt": observedAt,
+        ]
+    }
+
+    private static func sameFingerprint(_ left: [String: Any]?, _ right: [String: Any]) -> Bool {
+        guard let left else { return false }
+        return (left["hash"] as? String) == (right["hash"] as? String) &&
+            (left["bytes"] as? Int) == (right["bytes"] as? Int) &&
+            (left["mtimeMs"] as? Double) == (right["mtimeMs"] as? Double) &&
+            (left["ctimeMs"] as? Double) == (right["ctimeMs"] as? Double) &&
+            (left["hasMeta"] as? Bool) == (right["hasMeta"] as? Bool) &&
+            (left["gatewayMode"] as? String) == (right["gatewayMode"] as? String)
+    }
+
+    private static func observeSuspiciousReasons(
+        root: [String: Any]?,
+        bytes: Int,
+        lastKnownGood: [String: Any]?) -> [String]
+    {
+        guard let lastKnownGood else { return [] }
+        var reasons: [String] = []
+        if let previousBytes = lastKnownGood["bytes"] as? Int,
+           previousBytes >= 512,
+           bytes < max(1, previousBytes / 2)
+        {
+            reasons.append("size-drop-vs-last-good:\(previousBytes)->\(bytes)")
+        }
+        if (lastKnownGood["hasMeta"] as? Bool) == true, !self.hasMeta(root) {
+            reasons.append("missing-meta-vs-last-good")
+        }
+        if (lastKnownGood["gatewayMode"] as? String) != nil, self.gatewayMode(root) == nil {
+            reasons.append("gateway-mode-missing-vs-last-good")
+        }
+        if let root, (lastKnownGood["gatewayMode"] as? String) != nil, self.isUpdateChannelOnlyRoot(root) {
+            reasons.append("update-channel-only-root")
+        }
+        return reasons
+    }
+
+    private static func readConfigFingerprint(at url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let root = self.parseConfigData(data)
+        return self.configFingerprint(
+            data: data,
+            root: root,
+            configURL: url,
+            observedAt: ISO8601DateFormatter().string(from: Date()))
+    }
+
+    private static func configTimestampToken(_ timestamp: String) -> String {
+        timestamp.replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
+    }
+
+    private static func persistClobberedSnapshot(data: Data, configURL: URL, observedAt: String) -> String? {
+        let url = configURL.deletingLastPathComponent()
+            .appendingPathComponent("\(configURL.lastPathComponent).clobbered.\(self.configTimestampToken(observedAt))")
+        guard !FileManager().fileExists(atPath: url.path) else { return url.path }
+        do {
+            try data.write(to: url, options: [])
+            return url.path
+        } catch {
+            return nil
+        }
+    }
+
+    private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {
+        let observedAt = ISO8601DateFormatter().string(from: Date())
+        let current = self.configFingerprint(data: data, root: root, configURL: configURL, observedAt: observedAt)
+        var state = self.readConfigHealthState()
+        let entry = self.configHealthEntry(state: state, configPath: configURL.path)
+        let lastKnownGood = entry["lastKnownGood"] as? [String: Any]
+        let suspicious = self.observeSuspiciousReasons(
+            root: root,
+            bytes: current["bytes"] as? Int ?? 0,
+            lastKnownGood: lastKnownGood)
+
+        if suspicious.isEmpty {
+            guard valid else { return }
+            let nextEntry: [String: Any] = [
+                "lastKnownGood": current,
+                "lastObservedSuspiciousSignature": NSNull(),
+            ]
+            if !self.sameFingerprint(lastKnownGood, current) || entry["lastObservedSuspiciousSignature"] != nil {
+                state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
+                self.writeConfigHealthState(state)
+            }
+            return
+        }
+
+        let signature = "\((current["hash"] as? String) ?? ""):\(suspicious.joined(separator: ","))"
+        if (entry["lastObservedSuspiciousSignature"] as? String) == signature {
+            return
+        }
+
+        let backup = self.readConfigFingerprint(at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
+        let clobberedPath = self.persistClobberedSnapshot(data: data, configURL: configURL, observedAt: observedAt)
+        self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
+        self.appendConfigObserveAudit([
+            "phase": "read",
+            "configPath": configURL.path,
+            "exists": true,
+            "valid": valid,
+            "hash": current["hash"] ?? NSNull(),
+            "bytes": current["bytes"] ?? NSNull(),
+            "mtimeMs": current["mtimeMs"] ?? NSNull(),
+            "ctimeMs": current["ctimeMs"] ?? NSNull(),
+            "hasMeta": current["hasMeta"] ?? false,
+            "gatewayMode": current["gatewayMode"] ?? NSNull(),
+            "suspicious": suspicious,
+            "lastKnownGoodHash": lastKnownGood?["hash"] ?? NSNull(),
+            "lastKnownGoodBytes": lastKnownGood?["bytes"] ?? NSNull(),
+            "lastKnownGoodMtimeMs": lastKnownGood?["mtimeMs"] ?? NSNull(),
+            "lastKnownGoodCtimeMs": lastKnownGood?["ctimeMs"] ?? NSNull(),
+            "lastKnownGoodGatewayMode": lastKnownGood?["gatewayMode"] ?? NSNull(),
+            "backupHash": backup?["hash"] ?? NSNull(),
+            "backupBytes": backup?["bytes"] ?? NSNull(),
+            "backupMtimeMs": backup?["mtimeMs"] ?? NSNull(),
+            "backupCtimeMs": backup?["ctimeMs"] ?? NSNull(),
+            "backupGatewayMode": backup?["gatewayMode"] ?? NSNull(),
+            "clobberedPath": clobberedPath ?? NSNull(),
+        ])
+        var nextEntry = entry
+        nextEntry["lastObservedSuspiciousSignature"] = signature
+        state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
+        self.writeConfigHealthState(state)
+    }
+
     private static func appendConfigWriteAudit(_ fields: [String: Any]) {
         var record: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: Date()),
             "source": "macos-openclaw-config-file",
             "event": "config.write",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "argv": Array(ProcessInfo.processInfo.arguments.prefix(8)),
+        ]
+        for (key, value) in fields {
+            record[key] = value is NSNull ? NSNull() : value
+        }
+        guard JSONSerialization.isValidJSONObject(record),
+              let data = try? JSONSerialization.data(withJSONObject: record)
+        else {
+            return
+        }
+        var line = Data()
+        line.append(data)
+        line.append(0x0A)
+        let logURL = self.configAuditLogURL()
+        do {
+            try FileManager().createDirectory(
+                at: logURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            if !FileManager().fileExists(atPath: logURL.path) {
+                FileManager().createFile(atPath: logURL.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: logURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } catch {
+            // best-effort
+        }
+    }
+
+    private static func appendConfigObserveAudit(_ fields: [String: Any]) {
+        var record: [String: Any] = [
+            "ts": ISO8601DateFormatter().string(from: Date()),
+            "source": "macos-openclaw-config-file",
+            "event": "config.observe",
             "pid": ProcessInfo.processInfo.processIdentifier,
             "argv": Array(ProcessInfo.processInfo.arguments.prefix(8)),
         ]
