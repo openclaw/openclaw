@@ -25,7 +25,7 @@
 
 static GDBusProxy *manager_proxy = NULL;
 static GDBusProxy *unit_proxy = NULL;
-static gchar *cached_exec_start = NULL;
+static gchar **cached_exec_start_argv = NULL;
 static gchar *cached_working_directory = NULL;
 static gchar **cached_environment = NULL;
 static gchar *cached_unit_name = NULL;
@@ -62,41 +62,6 @@ static gboolean check_system_scope_units(void) {
 
 static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
-}
-
-static void get_unit_preference_score(const gchar *candidate, gboolean *out_active, gboolean *out_enabled) {
-    gboolean active = FALSE, enabled = FALSE;
-    if (manager_proxy) {
-        g_autoptr(GError) err1 = NULL;
-        g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
-                                                            g_variant_new("(s)", candidate), 
-                                                            G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
-        if (fs_res) {
-            const gchar *state_str = NULL;
-            g_variant_get(fs_res, "(&s)", &state_str);
-            if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
-        }
-        
-        g_autoptr(GError) err2 = NULL;
-        g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
-                                                           g_variant_new("(s)", candidate),
-                                                           G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
-        if (u_res) {
-            const gchar *path = NULL;
-            g_variant_get(u_res, "(&o)", &path);
-            if (path) {
-                g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
-                if (uproxy) {
-                    g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
-                    if (as_var) {
-                        if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
-                    }
-                }
-            }
-        }
-    }
-    if (out_active) *out_active = active;
-    if (out_enabled) *out_enabled = enabled;
 }
 
 static GPtrArray* systemd_get_user_unit_paths(const gchar *home_dir) {
@@ -176,135 +141,15 @@ const gchar* systemd_get_canonical_unit_name(void) {
         return cached_unit_name;
     }
 
-    if (marked_units->len == 1) {
-        cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
-    } else if (marked_units->len > 1) {
-        /*
-         * v1 multi-unit selection rule precedence:
-         * 1. Prefer a candidate that is active.
-         * 2. Otherwise, prefer a candidate that is enabled.
-         * 3. Otherwise, deterministically select the first lexical candidate.
-         */
-        const gchar *best_candidate = NULL;
-        gboolean best_is_active = FALSE;
-        gboolean best_is_enabled = FALSE;
-        
-        // Sort lexically first so tie-breaking is deterministic
+    if (marked_units->len >= 1) {
         g_ptr_array_sort(marked_units, sort_marked_units);
-        
-        for (guint i = 0; i < marked_units->len; i++) {
-            const gchar *candidate = g_ptr_array_index(marked_units, i);
-            gboolean active = FALSE, enabled = FALSE;
-            
-            get_unit_preference_score(candidate, &active, &enabled);
-            
-            if (!best_candidate) {
-                best_candidate = candidate;
-                best_is_active = active;
-                best_is_enabled = enabled;
-            } else if (active && !best_is_active) {
-                best_candidate = candidate;
-                best_is_active = active;
-                best_is_enabled = enabled;
-            } else if (!best_is_active && enabled && !best_is_enabled) {
-                best_candidate = candidate;
-                best_is_active = active;
-                best_is_enabled = enabled;
-            }
-        }
-        
-        if (!best_is_active && !best_is_enabled) {
-            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Multiple OpenClaw systemd units found but none are active or enabled. "
-                      "Deterministically selecting '%s' via lexical fallback.", best_candidate);
-        }
-        
-        cached_unit_name = g_strdup(best_candidate);
+        cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
     } else {
         cached_unit_name = g_strdup("openclaw-gateway.service");
     }
 
     g_ptr_array_free(marked_units, TRUE);
     return cached_unit_name;
-}
-
-gchar** systemd_parse_single_env_file(const gchar *env_file, const gchar *home_dir, const gchar *unit_dir, gboolean is_optional, gchar **file_env) {
-    gchar *expanded_h = NULL;
-    const gchar *target_file = env_file;
-    
-    if (strstr(target_file, "%h")) {
-        gchar **parts = g_strsplit(target_file, "%h", -1);
-        expanded_h = g_strjoinv(home_dir, parts);
-        g_strfreev(parts);
-        target_file = expanded_h;
-    }
-    
-    gchar *resolved_path = NULL;
-    if (!g_path_is_absolute(target_file)) {
-        if (unit_dir) {
-            resolved_path = g_build_filename(unit_dir, target_file, NULL);
-        } else {
-            gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
-            resolved_path = g_build_filename(systemd_user_dir, target_file, NULL);
-            g_free(systemd_user_dir);
-        }
-        target_file = resolved_path;
-    }
-    
-    gchar *file_contents = NULL;
-    if (g_file_get_contents(target_file, &file_contents, NULL, NULL)) {
-        gchar **env_lines = g_strsplit(file_contents, "\n", -1);
-        for (gint j = 0; env_lines[j] != NULL; j++) {
-            gchar *env_line = g_strstrip(env_lines[j]);
-            if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
-            
-            gchar *eq = strchr(env_line, '=');
-            if (eq) {
-                gchar *key = g_strndup(env_line, eq - env_line);
-                gchar *val = g_strstrip(eq + 1);
-                gsize val_len = strlen(val);
-                if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
-                                     (val[0] == '\'' && val[val_len-1] == '\''))) {
-                    val[val_len-1] = '\0';
-                    val++;
-                }
-                file_env = g_environ_setenv(file_env, key, val, TRUE);
-                g_free(key);
-            }
-        }
-        g_strfreev(env_lines);
-        g_free(file_contents);
-    } else if (!is_optional) {
-        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", target_file);
-    }
-    
-    g_free(expanded_h);
-    g_free(resolved_path);
-    
-    return file_env;
-}
-
-gchar** systemd_parse_environment_file(const gchar *env_val, const gchar *home_dir, const gchar *unit_dir, gchar **file_env) {
-    gint argc = 0;
-    gchar **argv = NULL;
-    
-    // Parse the line as a shell command to handle multiple files and quotes
-    if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
-        for (gint k = 0; k < argc; k++) {
-            gchar *env_file = argv[k];
-            gboolean is_optional = FALSE;
-            
-            if (env_file[0] == '-') {
-                is_optional = TRUE;
-                env_file++;
-            }
-            
-            if (env_file[0] == '\0') continue;
-            
-            file_env = systemd_parse_single_env_file(env_file, home_dir, unit_dir, is_optional, file_env);
-        }
-        g_strfreev(argv);
-    }
-    return file_env;
 }
 
 static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out, gchar **working_directory_out) {
@@ -471,15 +316,206 @@ static void subscribe_to_unit(GDBusConnection *bus, const gchar *unit_path) {
 static void on_manager_signal(GDBusProxy *proxy, gchar *sender_name, gchar *signal_name, GVariant *parameters, gpointer user_data) {
     (void)proxy;
     (void)sender_name;
-    (void)parameters;
     (void)user_data;
 
-    // If unit files changed or a new unit appeared, re-evaluate our connection
-    if (g_strcmp0(signal_name, "UnitNew") == 0 || g_strcmp0(signal_name, "UnitFilesChanged") == 0) {
+    // If unit files changed, re-evaluate our connection unconditionally
+    if (g_strcmp0(signal_name, "UnitFilesChanged") == 0) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_signal signal=%s unit=%s proxy=%p",
                   signal_name, systemd_get_canonical_unit_name(), (void *)unit_proxy);
         systemd_refresh(); 
+        return;
     }
+
+    if (g_strcmp0(signal_name, "UnitNew") == 0 && parameters) {
+        const gchar *unit_name = NULL;
+        g_variant_get(parameters, "(&so)", &unit_name, NULL);
+        if (unit_name) {
+            const gchar *canonical = systemd_get_canonical_unit_name();
+            if ((canonical && g_strcmp0(unit_name, canonical) == 0) || systemd_is_gateway_unit_name(unit_name)) {
+                OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_signal signal=%s unit=%s proxy=%p",
+                          signal_name, unit_name, (void *)unit_proxy);
+                systemd_refresh();
+            }
+        }
+    } else if (g_strcmp0(signal_name, "JobRemoved") == 0 && parameters) {
+        guint32 job_id = 0;
+        const gchar *job_path = NULL;
+        const gchar *unit_name = NULL;
+        const gchar *result = NULL;
+        g_variant_get(parameters, "(u&o&s&s)", &job_id, &job_path, &unit_name, &result);
+        if (unit_name) {
+            const gchar *canonical = systemd_get_canonical_unit_name();
+            if ((canonical && g_strcmp0(unit_name, canonical) == 0) || systemd_is_gateway_unit_name(unit_name)) {
+                OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_signal signal=%s unit=%s result=%s proxy=%p",
+                          signal_name, unit_name, result, (void *)unit_proxy);
+                systemd_refresh();
+            }
+        }
+    }
+}
+
+static void publish_systemd_state_with_cached_config(const gchar *active_state, const gchar *sub_state) {
+    SystemdState sys_state = {0};
+    sys_state.installed = TRUE;
+    sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
+
+    if (active_state) {
+        sys_state.active_state = g_strdup(active_state);
+        sys_state.active = (g_strcmp0(active_state, "active") == 0);
+        sys_state.activating = (g_strcmp0(active_state, "activating") == 0);
+        sys_state.deactivating = (g_strcmp0(active_state, "deactivating") == 0);
+        sys_state.failed = (g_strcmp0(active_state, "failed") == 0);
+    }
+    if (sub_state) {
+        sys_state.sub_state = g_strdup(sub_state);
+    }
+    if (cached_exec_start_argv) {
+        sys_state.exec_start_argv = g_strdupv(cached_exec_start_argv);
+    }
+    if (cached_working_directory) {
+        sys_state.working_directory = g_strdup(cached_working_directory);
+    }
+    if (cached_environment) {
+        sys_state.environment = g_strdupv(cached_environment);
+    }
+
+    state_update_systemd(&sys_state);
+
+    g_free(sys_state.unit_name);
+    g_free(sys_state.working_directory);
+    g_free(sys_state.active_state);
+    g_free(sys_state.sub_state);
+    g_strfreev(sys_state.exec_start_argv);
+    g_strfreev(sys_state.environment);
+}
+
+typedef struct {
+    gchar *unit_name;
+    gchar *unit_object_path;
+} ServiceConfigContext;
+
+static void service_config_context_free(ServiceConfigContext *ctx) {
+    if (!ctx) return;
+    g_free(ctx->unit_name);
+    g_free(ctx->unit_object_path);
+    g_free(ctx);
+}
+
+static gboolean service_config_context_is_current(const ServiceConfigContext *ctx) {
+    if (!ctx) return FALSE;
+    // Unit name must still match the canonical name
+    if (g_strcmp0(ctx->unit_name, systemd_get_canonical_unit_name()) != 0)
+        return FALSE;
+    // The unit proxy must still exist and point to the same object path
+    if (!unit_proxy) return FALSE;
+    const gchar *current_path = g_dbus_proxy_get_object_path(unit_proxy);
+    if (g_strcmp0(ctx->unit_object_path, current_path) != 0)
+        return FALSE;
+    return TRUE;
+}
+
+static void on_get_service_properties_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    ServiceConfigContext *ctx = (ServiceConfigContext *)user_data;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+
+    // Discard stale reply if the subscription/proxy has changed since we fired
+    if (!service_config_context_is_current(ctx)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD,
+                  "on_get_service_properties_ready stale-discard requested_name=%s requested_path=%s current_name=%s proxy=%p",
+                  ctx ? ctx->unit_name : "(null)",
+                  ctx ? ctx->unit_object_path : "(null)",
+                  systemd_get_canonical_unit_name(),
+                  (void *)unit_proxy);
+        service_config_context_free(ctx);
+        return;
+    }
+    service_config_context_free(ctx);
+
+    gboolean config_loaded = FALSE;
+    if (result) {
+        // GetAll returns (a{sv})
+        GVariant *props = g_variant_get_child_value(result, 0);
+        if (props) {
+            gchar **new_exec_argv = NULL;
+            gchar *new_working_dir = NULL;
+            gchar **new_env = NULL;
+
+            if (systemd_parse_service_properties(props, g_get_home_dir(), &new_exec_argv, &new_working_dir, &new_env)) {
+                g_strfreev(cached_exec_start_argv);
+                cached_exec_start_argv = new_exec_argv;
+                
+                g_free(cached_working_directory);
+                cached_working_directory = new_working_dir;
+                
+                g_strfreev(cached_environment);
+                cached_environment = new_env;
+                
+                config_loaded = TRUE;
+            } else {
+                g_strfreev(new_exec_argv);
+                g_free(new_working_dir);
+                g_strfreev(new_env);
+            }
+            g_variant_unref(props);
+        }
+    }
+
+    if (!config_loaded) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_service_properties_ready D-Bus Service props unavailable, falling back to file parse");
+        gchar *fallback_exec = NULL;
+        extract_service_config_from_file(&fallback_exec, &cached_environment, &cached_working_directory);
+        if (fallback_exec) {
+            gint argcp;
+            gchar **argvp = NULL;
+            if (g_shell_parse_argv(fallback_exec, &argcp, &argvp, NULL)) {
+                cached_exec_start_argv = argvp;
+            }
+            g_free(fallback_exec);
+        }
+    }
+
+    // Stage 2: re-publish state now that service config is available.
+    // unit_proxy is guaranteed non-NULL here by the staleness check above.
+    g_autoptr(GVariant) active_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "ActiveState");
+    g_autoptr(GVariant) sub_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "SubState");
+    const gchar *as = active_state_v ? g_variant_get_string(active_state_v, NULL) : NULL;
+    const gchar *ss = sub_state_v ? g_variant_get_string(sub_state_v, NULL) : NULL;
+    publish_systemd_state_with_cached_config(as, ss);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_service_properties_ready exit config_loaded=%d proxy=%p",
+              config_loaded, (void *)unit_proxy);
+}
+
+static void fetch_service_config_async(void) {
+    if (!unit_proxy || !manager_proxy) return;
+
+    const gchar *unit_path = g_dbus_proxy_get_object_path(unit_proxy);
+    if (!unit_path) return;
+
+    GDBusConnection *bus = g_dbus_proxy_get_connection(manager_proxy);
+    if (!bus) return;
+
+    ServiceConfigContext *ctx = g_new0(ServiceConfigContext, 1);
+    ctx->unit_name = g_strdup(systemd_get_canonical_unit_name());
+    ctx->unit_object_path = g_strdup(unit_path);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_service_config_async unit_path=%s unit_name=%s",
+              unit_path, ctx->unit_name);
+
+    // One-shot async GetAll against the Service interface (not the Unit interface)
+    g_dbus_connection_call(
+        bus,
+        "org.freedesktop.systemd1",
+        unit_path,
+        "org.freedesktop.DBus.Properties",
+        "GetAll",
+        g_variant_new("(s)", "org.freedesktop.systemd1.Service"),
+        G_VARIANT_TYPE("(a{sv})"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1, NULL,
+        on_get_service_properties_ready,
+        ctx);
 }
 
 static void fetch_unit_properties(void) {
@@ -490,58 +526,22 @@ static void fetch_unit_properties(void) {
         return;
     }
 
+    // Stage 1: Read runtime state from the Unit interface and publish immediately
+    // with whatever service config is currently cached.
     g_autoptr(GVariant) active_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "ActiveState");
     g_autoptr(GVariant) sub_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "SubState");
 
-    SystemdState sys_state = {0};
-    sys_state.installed = TRUE;
+    const gchar *as = active_state_v ? g_variant_get_string(active_state_v, NULL) : NULL;
+    const gchar *ss = sub_state_v ? g_variant_get_string(sub_state_v, NULL) : NULL;
 
-    if (active_state_v) {
-        const gchar *as = g_variant_get_string(active_state_v, NULL);
-        sys_state.active_state = g_strdup(as);
-        
-        sys_state.active = (g_strcmp0(as, "active") == 0);
-        sys_state.activating = (g_strcmp0(as, "activating") == 0);
-        sys_state.deactivating = (g_strcmp0(as, "deactivating") == 0);
-        sys_state.failed = (g_strcmp0(as, "failed") == 0);
-    }
+    publish_systemd_state_with_cached_config(as, ss);
 
-    if (sub_state_v) {
-        const gchar *ss = g_variant_get_string(sub_state_v, NULL);
-        sys_state.sub_state = g_strdup(ss);
-    }
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_unit_properties stage1 active_state=%s sub_state=%s proxy=%p",
+              as ? as : "(null)", ss ? ss : "(null)", (void *)unit_proxy);
 
-    if (cached_exec_start) {
-        gint argcp;
-        gchar **argvp = NULL;
-        if (g_shell_parse_argv(cached_exec_start, &argcp, &argvp, NULL)) {
-            sys_state.exec_start_argv = argvp;
-        }
-    }
-
-    if (cached_working_directory) {
-        sys_state.working_directory = g_strdup(cached_working_directory);
-    }
-
-    if (cached_environment) {
-        sys_state.environment = g_strdupv(cached_environment);
-    }
-    
-    sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
-
-    state_update_systemd(&sys_state);
-
-    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_unit_properties exit active_state=%s sub_state=%s proxy=%p",
-              sys_state.active_state ? sys_state.active_state : "(null)",
-              sys_state.sub_state ? sys_state.sub_state : "(null)",
-              (void *)unit_proxy);
-
-    g_free(sys_state.unit_name);
-    g_free(sys_state.working_directory);
-    g_free(sys_state.active_state);
-    g_free(sys_state.sub_state);
-    g_strfreev(sys_state.exec_start_argv);
-    g_strfreev(sys_state.environment);
+    // Stage 2: Async fetch of service config from the correct Service interface.
+    // When the async callback fires, it will re-publish state with updated config.
+    fetch_service_config_async();
 }
 
 static void systemd_init_proxy_helper(void) {
@@ -580,7 +580,8 @@ static void systemd_init_proxy_helper(void) {
 
 void systemd_init(void) {
     systemd_init_proxy_helper();
-    extract_service_config_from_file(&cached_exec_start, &cached_environment, &cached_working_directory);
+    // Use async D-Bus properties instead of file parsing as primary source
+    systemd_refresh();
 }
 
 static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -618,12 +619,8 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
         sys_state.sub_state = g_strdup("dead");
         
         // Try to parse argv from the cached ExecStart string
-        if (cached_exec_start) {
-            gint argcp;
-            gchar **argvp = NULL;
-            if (g_shell_parse_argv(cached_exec_start, &argcp, &argvp, NULL)) {
-                sys_state.exec_start_argv = argvp;
-            }
+        if (cached_exec_start_argv) {
+            sys_state.exec_start_argv = g_strdupv(cached_exec_start_argv);
         }
 
         if (cached_working_directory) {
@@ -678,15 +675,6 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         }
         g_free(requested_unit_name);
     }
-
-    // 1. Refresh config unconditionally, so reconfigurations or deletions update the cache
-    g_free(cached_exec_start);
-    cached_exec_start = NULL;
-    g_free(cached_working_directory);
-    cached_working_directory = NULL;
-    g_strfreev(cached_environment);
-    cached_environment = NULL;
-    extract_service_config_from_file(&cached_exec_start, &cached_environment, &cached_working_directory);
 
     gboolean is_installed = FALSE;
     if (result) {
