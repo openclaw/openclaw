@@ -77,8 +77,14 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, ["line 1", "line 2", "line 3"].join("\n"), "utf-8");
 
-    const result = await manager!.readFile({ relPath, from: 2, lines: 1 });
-    expect(result).toEqual({ text: "line 2", path: relPath });
+    const readSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await manager!.readFile({ relPath, from: 2, lines: 1 });
+      expect(result).toEqual({ text: "line 2", path: relPath });
+      expect(readSpy).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("returns empty text when the requested slice is past EOF", async () => {

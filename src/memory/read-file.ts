@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -56,23 +58,47 @@ export async function readMemoryFile(params: {
   if (statResult.missing) {
     return { text: "", path: relPath };
   }
-  let content: string;
+  if (!params.from && !params.lines) {
+    let content: string;
+    try {
+      content = await fs.readFile(absPath, "utf-8");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
+    return { text: content, path: relPath };
+  }
+
+  const start = Math.max(1, params.from ?? 1);
+  const count = Math.max(1, params.lines ?? Number.MAX_SAFE_INTEGER);
+  const end = start + count - 1;
+  const collected: string[] = [];
+  let lineNo = 0;
+  const stream = createReadStream(absPath, { encoding: "utf-8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    for await (const line of rl) {
+      lineNo += 1;
+      if (lineNo < start) {
+        continue;
+      }
+      if (lineNo > end) {
+        break;
+      }
+      collected.push(line);
+    }
   } catch (err) {
     if (isFileMissingError(err)) {
       return { text: "", path: relPath };
     }
     throw err;
+  } finally {
+    rl.close();
+    stream.destroy();
   }
-  if (!params.from && !params.lines) {
-    return { text: content, path: relPath };
-  }
-  const fileLines = content.split("\n");
-  const start = Math.max(1, params.from ?? 1);
-  const count = Math.max(1, params.lines ?? fileLines.length);
-  const slice = fileLines.slice(start - 1, start - 1 + count);
-  return { text: slice.join("\n"), path: relPath };
+  return { text: collected.join("\n"), path: relPath };
 }
 
 export async function readAgentMemoryFile(params: {
