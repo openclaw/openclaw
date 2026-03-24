@@ -65,6 +65,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -1557,7 +1558,7 @@ export const registerTelegramHandlers = ({
       }
 
       const syntheticMessage = buildSyntheticTextMessage({
-        base: callbackMessage,
+        base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
         text: data,
       });
@@ -1735,16 +1736,17 @@ export const registerTelegramHandlers = ({
       isForum: msg.chat.is_forum,
       getChat,
     });
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
-      ctx: buildSyntheticContext(ctx, msg),
-      msg,
-      chatId: msg.chat.id,
+      ctx: buildSyntheticContext(ctx, normalizedMsg),
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: msg.message_thread_id,
-      senderId: msg.from?.id != null ? String(msg.from.id) : "",
-      senderUsername: msg.from?.username ?? "",
+      messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: false,
       sendOversizeWarning: true,
       oversizeLogMessage: "media exceeds size limit",

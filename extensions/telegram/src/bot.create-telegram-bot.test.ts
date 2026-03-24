@@ -1904,6 +1904,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
+    expect(getChatSpy).toHaveBeenCalledOnce();
     expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
     expect(dispatchCall?.ctx).toEqual(
       expect.objectContaining({

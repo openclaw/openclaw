@@ -46,6 +46,24 @@ export async function resolveTelegramForumFlag(params: {
   }
 }
 
+// Preserve recovered forum metadata so downstream handlers do not need to re-query getChat.
+export function withResolvedTelegramForumFlag<T extends { chat: object }>(
+  message: T,
+  isForum: boolean,
+): T {
+  const current = extractTelegramForumFlag(message.chat);
+  if (current === isForum) {
+    return message;
+  }
+  return {
+    ...message,
+    chat: {
+      ...message.chat,
+      is_forum: isForum,
+    },
+  };
+}
+
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
