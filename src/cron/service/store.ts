@@ -62,7 +62,10 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: { skipBackup?: boolean },
+) {
   if (!state.store) {
     return;
   }
@@ -70,7 +73,6 @@ export async function persist(state: CronServiceState, opts?: { skipBackup?: boo
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
-
 
 /**
  * Watch jobs.json for external changes (e.g. direct file writes as a workaround
