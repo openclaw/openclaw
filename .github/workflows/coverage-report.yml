@@ -1,0 +1,91 @@
+# ============================================================
+# AUTOMATION: Test Coverage Report
+# WHAT IT DOES: Runs unit tests with coverage and writes a summary
+# WHAT IT MODIFIES: Writes to GITHUB_STEP_SUMMARY (visible in Actions UI)
+# AUTO-COMMITS: no
+# HOW TO DISABLE: Delete this file
+# ============================================================
+name: Coverage Report
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "test/**"
+      - "vitest.unit.config.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-report-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  coverage:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run unit tests with coverage
+        run: |
+          pnpm vitest run \
+            --config vitest.unit.config.ts \
+            --coverage \
+            --reporter=verbose 2>&1 | tee /tmp/coverage-output.txt || true
+
+      - name: Write coverage summary
+        shell: bash
+        run: |
+          echo "## Test Coverage Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Branch:** \`${{ github.ref_name }}\`  " >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f coverage/coverage-summary.json ]; then
+            node - <<'JS'
+            const fs = require('fs');
+            const out = process.env.GITHUB_STEP_SUMMARY;
+            const s = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8')).total;
+            const fmt = (v) => `${v.pct.toFixed(1)}% (${v.covered}/${v.total})`;
+            const lines = [
+              '| Metric | Coverage |',
+              '|--------|----------|',
+              `| Statements | ${fmt(s.statements)} |`,
+              `| Branches   | ${fmt(s.branches)} |`,
+              `| Functions  | ${fmt(s.functions)} |`,
+              `| Lines      | ${fmt(s.lines)} |`,
+            ];
+            fs.appendFileSync(out, lines.join('\n') + '\n');
+            JS
+          else
+            echo "Coverage data not generated." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Install the coverage provider if missing: \`pnpm add -D @vitest/coverage-v8\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Test output</summary>" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -80 /tmp/coverage-output.txt >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          fi

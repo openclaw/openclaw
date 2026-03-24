@@ -21,3 +21,5 @@ paths:
       - 'constant expression "false" in condition'
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
+      # openai/codex-action is a third-party action not in actionlint's built-in list.
+      - 'openai/codex-action'

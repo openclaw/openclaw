@@ -1,0 +1,136 @@
+# ============================================================
+# AUTOMATION: Dead Code Sweep
+# WHAT IT DOES: Runs knip weekly to find unused exports/imports/files
+# WHAT IT MODIFIES: Creates or updates a GitHub issue labeled "dead-code"
+# AUTO-COMMITS: no
+# HOW TO DISABLE: Delete this file
+# ============================================================
+name: Dead Code Sweep
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  sweep:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run knip
+        id: knip
+        run: |
+          set +e
+          pnpm knip 2>&1 | head -300 > /tmp/knip-output.txt
+          KNIP_EXIT=$?
+          set -e
+          echo "exit_code=$KNIP_EXIT" >> "$GITHUB_OUTPUT"
+          LINE_COUNT=$(wc -l < /tmp/knip-output.txt | tr -d ' ')
+          echo "line_count=$LINE_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Write sweep summary
+        shell: bash
+        run: |
+          echo "## Dead Code Sweep" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.knip.outputs.exit_code }}" = "0" ]; then
+            echo "No dead code found." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Dead code detected. See issue for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            head -50 /tmp/knip-output.txt >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Create or update dead-code issue
+        if: steps.knip.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const raw = fs.readFileSync('/tmp/knip-output.txt', 'utf8');
+            const date = new Date().toISOString().split('T')[0];
+            const body = [
+              `## Dead Code Sweep — ${date}`,
+              '',
+              'Unused exports, imports, or files detected by `knip`.',
+              'Run `pnpm knip` locally to see the full list and fix or update `knip.config.ts`.',
+              '',
+              '<details><summary>Sweep output</summary>',
+              '',
+              '```',
+              raw.slice(0, 8000),
+              '```',
+              '</details>',
+            ].join('\n');
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'dead-code',
+              state: 'open',
+            });
+
+            if (existing.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing[0].number,
+                title: `chore: dead code detected (${date})`,
+                body,
+              });
+              core.info(`Updated issue #${existing[0].number}`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `chore: dead code detected (${date})`,
+                body,
+                labels: ['dead-code'],
+              });
+              core.info(`Created issue #${issue.number}`);
+            }
+
+      - name: Close stale dead-code issue if sweep is clean
+        if: steps.knip.outputs.exit_code == '0'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'dead-code',
+              state: 'open',
+            });
+            for (const issue of existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              core.info(`Closed issue #${issue.number} — sweep is clean`);
+            }

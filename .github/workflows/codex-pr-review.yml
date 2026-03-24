@@ -1,0 +1,76 @@
+# ============================================================
+# AUTOMATION: AI PR Review
+# WHAT IT DOES: Uses Codex to review every non-draft pull request
+# WHAT IT MODIFIES: Posts a review comment on the pull request
+# AUTO-COMMITS: no
+# HOW TO DISABLE: Delete this file or add [skip-ai-review] to PR title
+# ============================================================
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v6
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 0
+
+      - name: AI review
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          model: gpt-5.3-codex
+          effort: high
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }} for the openclaw project (multi-channel AI gateway).
+            Stack: TypeScript/Node.js 24 (primary), Swift (macOS), Kotlin (Android), Python (skills).
+            Lint rules: oxlint strict, typescript/no-explicit-any as error, TypeScript strict mode.
+
+            Focus on:
+            - Logic bugs and correctness
+            - Security issues (hardcoded secrets, injection, unsafe dependency usage)
+            - Missing test coverage (changes to src/ should have counterparts in test/)
+            - Type safety violations (flag `as` casts, `any` usage, unsafe assertions)
+            - Plugin SDK API contract violations in src/plugin-sdk/
+            - Unhandled promise rejections or missing error boundaries
+            - Race conditions in async code
+
+            Be concise. Include file paths and line numbers.
+            Skip style nits already covered by oxlint/oxfmt (formatting, naming conventions).
+
+      - name: Post review comment
+        if: ${{ steps.codex.outputs.final-message != '' }}
+        uses: actions/github-script@v7
+        env:
+          REVIEW: ${{ steps.codex.outputs.final-message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `## AI Code Review\n\n${process.env.REVIEW}`,
+            });

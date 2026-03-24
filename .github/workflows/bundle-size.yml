@@ -1,0 +1,141 @@
+# ============================================================
+# AUTOMATION: Bundle Size Check
+# WHAT IT DOES: Builds dist/ on every PR and reports the size
+# WHAT IT MODIFIES: Posts a comment on PRs with size info
+# AUTO-COMMITS: no
+# HOW TO DISABLE: Delete this file
+# ============================================================
+name: Bundle Size
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "packages/**"
+      - "extensions/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsdown.config.ts"
+      - "tsconfig.json"
+
+concurrency:
+  group: bundle-size-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  measure-pr:
+    if: github.event.pull_request.draft == false
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      size_bytes: ${{ steps.measure.outputs.size_bytes }}
+      size_human: ${{ steps.measure.outputs.size_human }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Measure dist size
+        id: measure
+        run: |
+          BYTES=$(du -sb dist/ | cut -f1)
+          HUMAN=$(du -sh dist/ | cut -f1)
+          echo "size_bytes=$BYTES" >> "$GITHUB_OUTPUT"
+          echo "size_human=$HUMAN" >> "$GITHUB_OUTPUT"
+
+  measure-base:
+    if: github.event.pull_request.draft == false
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      size_bytes: ${{ steps.measure.outputs.size_bytes }}
+      size_human: ${{ steps.measure.outputs.size_human }}
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Measure dist size
+        id: measure
+        run: |
+          BYTES=$(du -sb dist/ | cut -f1)
+          HUMAN=$(du -sh dist/ | cut -f1)
+          echo "size_bytes=$BYTES" >> "$GITHUB_OUTPUT"
+          echo "size_human=$HUMAN" >> "$GITHUB_OUTPUT"
+
+  report:
+    needs: [measure-pr, measure-base]
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post bundle size comment
+        uses: actions/github-script@v7
+        env:
+          PR_BYTES: ${{ needs.measure-pr.outputs.size_bytes }}
+          PR_HUMAN: ${{ needs.measure-pr.outputs.size_human }}
+          BASE_BYTES: ${{ needs.measure-base.outputs.size_bytes }}
+          BASE_HUMAN: ${{ needs.measure-base.outputs.size_human }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prBytes = parseInt(process.env.PR_BYTES);
+            const baseBytes = parseInt(process.env.BASE_BYTES);
+            const diff = prBytes - baseBytes;
+            const pct = baseBytes > 0 ? ((diff / baseBytes) * 100).toFixed(1) : '0.0';
+            const sign = diff >= 0 ? '+' : '';
+            const diffKB = (diff / 1024).toFixed(1);
+            const emoji = diff > 102400 ? '⚠️' : diff < 0 ? '📉' : diff === 0 ? '✅' : '📈';
+
+            const body = [
+              '## Bundle Size Report',
+              '',
+              `| | \`dist/\` size |`,
+              `|--|--|`,
+              `| \`${process.env.BASE_REF}\` (base) | ${process.env.BASE_HUMAN} |`,
+              `| This PR | ${process.env.PR_HUMAN} |`,
+              `| **Diff** | **${sign}${diffKB} KB (${sign}${pct}%)** ${emoji} |`,
+              '',
+              diff > 102400
+                ? '> ⚠️ **Bundle grew by more than 100 KB.** Please verify this is intentional.'
+                : '',
+            ].filter((l) => l !== '').join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });

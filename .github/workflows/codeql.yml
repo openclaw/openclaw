@@ -1,6 +1,10 @@
 name: CodeQL
 
 on:
+  schedule:
+    - cron: "0 2 * * 1"
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

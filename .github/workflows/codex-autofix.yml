@@ -1,0 +1,96 @@
+# ============================================================
+# AUTOMATION: Codex CI Autofix
+# WHAT IT DOES: Reads CI failure logs and opens a minimal fix PR
+# WHAT IT MODIFIES: Creates branches (codex/autofix-*) and PRs
+# AUTO-COMMITS: yes — pushes a branch and opens a PR when a fix is found
+# HOW TO DISABLE: Delete this file
+# ============================================================
+name: Codex Autofix
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  autofix:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout failing commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Capture CI failure logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run view "${{ github.event.workflow_run.id }}" \
+            --log-failed 2>&1 | tail -300 > /tmp/ci-failure-logs.txt
+
+          echo "" >> /tmp/ci-failure-logs.txt
+          echo "=== Failure Metadata ===" >> /tmp/ci-failure-logs.txt
+          echo "Run ID:  ${{ github.event.workflow_run.id }}" >> /tmp/ci-failure-logs.txt
+          echo "Branch:  ${{ github.event.workflow_run.head_branch }}" >> /tmp/ci-failure-logs.txt
+          echo "SHA:     ${{ github.event.workflow_run.head_sha }}" >> /tmp/ci-failure-logs.txt
+
+      - name: Run Codex autofix
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          model: gpt-5.3-codex
+          effort: high
+          prompt: |
+            The openclaw CI pipeline failed. Failure logs are at /tmp/ci-failure-logs.txt.
+            Project: multi-channel AI gateway (TypeScript/Node.js 24, strict oxlint, TypeScript strict).
+
+            Steps:
+            1. Read /tmp/ci-failure-logs.txt to identify the root cause
+            2. Apply the MINIMAL fix — do NOT refactor unrelated code
+            3. If the fix involves TypeScript: no `any` types, no `as` casts, maintain strict mode
+            4. Run `pnpm tsc --noEmit` to verify type correctness after your fix
+            5. Run the specific failing test: `pnpm vitest run [test-file-path]` to verify
+            6. If you cannot fix with high confidence, create AUTOFIX_SKIPPED.md explaining why
+            7. Do NOT attempt to fix flaky tests, infrastructure issues, or secrets/credentials
+
+      - name: Open fix PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$(git status --porcelain)" ] && [ ! -f "AUTOFIX_SKIPPED.md" ]; then
+            BRANCH="codex/autofix-$(date +%Y%m%d-%H%M%S)"
+            git checkout -b "$BRANCH"
+            git config user.name "codex[bot]"
+            git config user.email "codex[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "fix: auto-fix CI failure from run #${{ github.event.workflow_run.id }}"
+            git push origin "$BRANCH"
+            gh pr create \
+              --base "${{ github.event.workflow_run.head_branch }}" \
+              --head "$BRANCH" \
+              --title "fix: Codex autofix for CI failure on ${{ github.event.workflow_run.head_branch }}" \
+              --body "Automated fix for failed CI run [#${{ github.event.workflow_run.id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}).
+
+            **Always review carefully before merging.**"
+          fi
