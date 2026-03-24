@@ -16,7 +16,7 @@ type LoginOpenAICodexOAuth =
 type LoginQwenPortalOAuth =
   (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
 type GithubCopilotLoginCommand =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
+  (typeof import("../../../extensions/github-copilot/login.js"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
   (typeof import("../provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 type EnsureAuthProfileStore =
@@ -35,9 +35,12 @@ vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
   return {
     ...actual,
     loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
-    githubCopilotLoginCommand: githubCopilotLoginCommandMock,
   };
 });
+
+vi.mock("../../../extensions/github-copilot/login.js", () => ({
+  githubCopilotLoginCommand: githubCopilotLoginCommandMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
