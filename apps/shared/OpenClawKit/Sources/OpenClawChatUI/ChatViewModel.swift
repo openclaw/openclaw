@@ -646,7 +646,6 @@ public final class OpenClawChatViewModel {
         }
 
         self.isCompacting = true
-        self.lastCompactAt = Date()
         self.isLoading = true
         self.errorText = nil
         defer {
@@ -665,6 +664,7 @@ public final class OpenClawChatViewModel {
             return
         }
 
+        self.lastCompactAt = Date()
         await self.bootstrap()
     }
 
