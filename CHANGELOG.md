@@ -27,6 +27,10 @@ Docs: https://docs.openclaw.ai
 - ClawHub/skills: keep updating already-tracked legacy Unicode slugs after the ASCII-only slug hardening, so older installs do not get stuck behind `Invalid skill slug` errors during `openclaw skills update`. (#53206) Thanks @drobison00.
 - Infra/exec trust: preserve shell-multiplexer wrapper binaries for policy checks without breaking approved-command reconstruction, so BusyBox/ToyBox allowlist and audit flows bind to the real wrapper while execution plans stay coherent. (#53134) Thanks @vincentkoc.
 - LINE/runtime-api: pre-export overlapping runtime symbols before the `line-runtime` star export so jiti no longer throws `TypeError: Cannot redefine property` on startup. (#53221) Thanks @Drickon.
+- CLI/cron: make `openclaw cron add|edit --at ... --tz <iana>` honor the requested local wall-clock time for offset-less one-shot datetimes, including DST boundaries, and keep `--tz` rejected for `--every`. (#53224) Thanks @RolfHegr.
+ - Infra/exec trust: preserve shell-multiplexer wrapper binaries for policy checks without breaking approved-command reconstruction, so BusyBox/ToyBox allowlist and audit flows bind to the real wrapper while execution plans stay coherent. (#53134) Thanks @vincentkoc.
+ - LINE/runtime-api: pre-export overlapping runtime symbols before the `line-runtime` star export so jiti no longer throws `TypeError: Cannot redefine property` on startup. (#53221) Thanks @Drickon.
+ - CLI/cron: make `openclaw cron add|edit --at ... --tz <iana>` honor the requested local wall-clock time for offset-less one-shot datetimes, including DST boundaries, and keep `--tz` rejected for `--every`. (#53224) Thanks @RolfHegr.
 
 ## 2026.3.23
 
