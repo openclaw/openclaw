@@ -2247,7 +2247,10 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
-      } else if (params.model.api === "openai-responses" && params.provider === "openai") {
+      } else if (
+        (params.model.api === "openai-responses" && params.provider === "openai") ||
+        (params.model.api === "openai-codex-responses" && params.provider === "openai-codex")
+      ) {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
           activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {

@@ -113,14 +113,22 @@ export function applyToolPolicyPipeline(params: {
           isKnownCoreToolId(entry),
         );
         const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
-        const suffix = describeUnknownAllowlistSuffix({
-          strippedAllowlist: resolved.strippedAllowlist,
-          hasGatedCoreEntries: gatedCoreEntries.length > 0,
-          hasOtherEntries: otherEntries.length > 0,
-        });
-        const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
-        if (rememberToolPolicyWarning(warning)) {
-          params.warn(warning);
+        if (
+          !shouldSuppressUnavailableCoreToolWarning({
+            label: step.label,
+            hasGatedCoreEntries: gatedCoreEntries.length > 0,
+            hasOtherEntries: otherEntries.length > 0,
+          })
+        ) {
+          const suffix = describeUnknownAllowlistSuffix({
+            strippedAllowlist: resolved.strippedAllowlist,
+            hasGatedCoreEntries: gatedCoreEntries.length > 0,
+            hasOtherEntries: otherEntries.length > 0,
+          });
+          const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
+          if (rememberToolPolicyWarning(warning)) {
+            params.warn(warning);
+          }
         }
       }
       policy = resolved.policy;
@@ -130,6 +138,20 @@ export function applyToolPolicyPipeline(params: {
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
   return filtered;
+}
+
+function shouldSuppressUnavailableCoreToolWarning(params: {
+  label: string;
+  hasGatedCoreEntries: boolean;
+  hasOtherEntries: boolean;
+}): boolean {
+  if (!params.hasGatedCoreEntries || params.hasOtherEntries) {
+    return false;
+  }
+  return (
+    params.label.startsWith("tools.profile (") ||
+    params.label.startsWith("tools.byProvider.profile (")
+  );
 }
 
 function describeUnknownAllowlistSuffix(params: {

@@ -32,6 +32,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
+  const createOpenAIWebSocketStreamFnMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
@@ -50,6 +51,7 @@ const hoisted = vi.hoisted(() => {
     resolveBootstrapContextForRunMock,
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
+    createOpenAIWebSocketStreamFnMock,
     runContextEngineMaintenanceMock,
     sessionManager,
   };
@@ -213,7 +215,8 @@ vi.mock("../extra-params.js", () => ({
 }));
 
 vi.mock("../../openai-ws-stream.js", () => ({
-  createOpenAIWebSocketStreamFn: vi.fn(),
+  createOpenAIWebSocketStreamFn: (...args: unknown[]) =>
+    hoisted.createOpenAIWebSocketStreamFnMock(...args),
   releaseWsSession: () => {},
 }));
 
@@ -489,6 +492,7 @@ export function resetEmbeddedAttemptHarness(
     contextFiles: [],
   });
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.createOpenAIWebSocketStreamFnMock.mockReset();
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
