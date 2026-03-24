@@ -9,21 +9,34 @@ private struct TalkStatusCapsuleModifier: ViewModifier {
     let seam: Color
 
     func body(content: Content) -> some View {
+        self.applyBackground(to: content)
+    }
+
+    @ViewBuilder
+    private func applyBackground(to content: Content) -> some View {
+#if compiler(>=6.2)
         if #available(iOS 26, *) {
             // iOS 26+: native Liquid Glass capsule — tinted with the gateway seam color.
             content
                 .glassEffect(.regular.tint(seam.opacity(0.18)), in: Capsule())
         } else {
-            // iOS 18–25: manual dark capsule with seam-colored border.
-            content
-                .background(
-                    Capsule()
-                        .fill(Color.black.opacity(0.40))
-                        .overlay(
-                            Capsule().stroke(seam.opacity(0.22), lineWidth: 1)
-                        )
-                )
+            self.legacyBackground(content)
         }
+#else
+        self.legacyBackground(content)
+#endif
+    }
+
+    private func legacyBackground(_ content: Content) -> some View {
+        // iOS 18–25 / older SDKs: manual dark capsule with seam-colored border.
+        content
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.40))
+                    .overlay(
+                        Capsule().stroke(seam.opacity(0.22), lineWidth: 1)
+                    )
+            )
     }
 }
 

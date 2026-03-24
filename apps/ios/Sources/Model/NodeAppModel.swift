@@ -664,6 +664,8 @@ final class NodeAppModel {
     }
 
     func setSelectedAgentId(_ agentId: String?) {
+        let previousAgentName = self.activeAgentName
+        let previousMainSessionKey = self.mainSessionKey
         let trimmed = (agentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let stableID = (self.connectedGatewayID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if stableID.isEmpty {
@@ -683,6 +685,13 @@ final class NodeAppModel {
                     sessionKey: self.mainSessionKey,
                     deliveryChannel: self.shareDeliveryChannel,
                     deliveryTo: self.shareDeliveryTo))
+        }
+        if LiveActivityManager.shared.isActive,
+           (self.activeAgentName != previousAgentName || self.mainSessionKey != previousMainSessionKey)
+        {
+            LiveActivityManager.shared.refreshIdentity(
+                agentName: self.activeAgentName,
+                sessionKey: self.mainSessionKey)
         }
     }
 

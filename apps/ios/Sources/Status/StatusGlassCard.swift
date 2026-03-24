@@ -16,31 +16,43 @@ private struct StatusGlassBackgroundModifier: ViewModifier {
     let brighten: Bool
 
     func body(content: Content) -> some View {
+        self.applyBackground(to: content)
+    }
+
+    @ViewBuilder
+    private func applyBackground(to content: Content) -> some View {
+#if compiler(>=6.2)
         if #available(iOS 26, *) {
             // iOS 26+: native Liquid Glass — the framework handles translucency,
             // vibrancy, and color adaptation automatically.
-            // The `brighten` hint is not needed on iOS 26.
             content
                 .glassEffect(
                     .regular,
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
         } else {
-            // iOS 18–25: manual material + stroke border + shadow.
-            content
-                .background {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(
-                                    .white.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
-                                    lineWidth: self.contrast == .increased ? 1.0 : 0.5
-                                )
-                        }
-                        .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
-                }
+            self.legacyBackground(content)
         }
+#else
+        self.legacyBackground(content)
+#endif
+    }
+
+    private func legacyBackground(_ content: Content) -> some View {
+        // iOS 18–25 / older SDKs: manual material + stroke border + shadow.
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                .white.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
+                                lineWidth: self.contrast == .increased ? 1.0 : 0.5
+                            )
+                    }
+                    .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
+            }
     }
 }
 

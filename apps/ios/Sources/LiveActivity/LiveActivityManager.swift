@@ -48,26 +48,37 @@ final class LiveActivityManager {
             self.currentActivity = nil
         }
 
-        let authInfo = ActivityAuthorizationInfo()
-        guard authInfo.areActivitiesEnabled else {
-            self.logger.info("Live Activities disabled; skipping start")
+        self.startFreshActivity(
+            agentName: agentName,
+            sessionKey: sessionKey,
+            initialState: self.connectingState(),
+            nextConnectionState: .connecting)
+    }
+
+    func refreshIdentity(agentName: String, sessionKey: String) {
+        self.hydrateCurrentAndPruneDuplicates()
+
+        guard let current = self.currentActivity else {
+            self.startActivity(agentName: agentName, sessionKey: sessionKey)
+            return
+        }
+        guard current.attributes.agentName != agentName || current.attributes.sessionKey != sessionKey else {
             return
         }
 
-        self.activityStartDate = .now
-        let attributes = OpenClawActivityAttributes(agentName: agentName, sessionKey: sessionKey)
-
-        do {
-            let activity = try Activity.request(
-                attributes: attributes,
-                content: ActivityContent(state: self.connectingState(), staleDate: nil),
-                pushType: nil)
-            self.currentActivity = activity
-            self.lastConnectionState = .connecting
-            self.logger.info("started live activity id=\(activity.id, privacy: .public)")
-        } catch {
-            self.logger.error("failed to start live activity: \(error.localizedDescription, privacy: .public)")
+        let state = current.content.state
+        Task {
+            await current.end(
+                ActivityContent(state: self.disconnectedState(), staleDate: nil),
+                dismissalPolicy: .immediate)
         }
+        self.currentActivity = nil
+
+        self.startFreshActivity(
+            agentName: agentName,
+            sessionKey: sessionKey,
+            initialState: state,
+            nextConnectionState: self.lastConnectionState)
     }
 
     func handleConnecting() {
@@ -139,6 +150,34 @@ final class LiveActivityManager {
         }
     }
 
+    private func startFreshActivity(
+        agentName: String,
+        sessionKey: String,
+        initialState: OpenClawActivityAttributes.ContentState,
+        nextConnectionState: ConnectionState)
+    {
+        let authInfo = ActivityAuthorizationInfo()
+        guard authInfo.areActivitiesEnabled else {
+            self.logger.info("Live Activities disabled; skipping start")
+            return
+        }
+
+        self.activityStartDate = .now
+        let attributes = OpenClawActivityAttributes(agentName: agentName, sessionKey: sessionKey)
+
+        do {
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: ActivityContent(state: initialState, staleDate: nil),
+                pushType: nil)
+            self.currentActivity = activity
+            self.lastConnectionState = nextConnectionState
+            self.logger.info("started live activity id=\(activity.id, privacy: .public)")
+        } catch {
+            self.logger.error("failed to start live activity: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func updateCurrent(state: OpenClawActivityAttributes.ContentState) {
         guard let activity = self.currentActivity else { return }
         Task {
@@ -180,13 +219,23 @@ final class LiveActivityManager {
     }
 
     private func workingState(task: String) -> OpenClawActivityAttributes.ContentState {
-        OpenClawActivityAttributes.ContentState(
+        let startedAt: Date
+        if let current = self.currentActivity,
+           current.content.state.isWorking,
+           current.content.state.taskDescription == task
+        {
+            startedAt = current.content.state.startedAt
+        } else {
+            startedAt = .now
+        }
+
+        return OpenClawActivityAttributes.ContentState(
             statusText: task,
             isIdle: false,
             isDisconnected: false,
             isConnecting: false,
             isWorking: true,
             taskDescription: task,
-            startedAt: self.activityStartDate)
+            startedAt: startedAt)
     }
 }
