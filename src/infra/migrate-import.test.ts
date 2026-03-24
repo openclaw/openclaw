@@ -5,6 +5,7 @@ import {
   MIGRATE_IMPORT_LIMITS,
   type MigrateImportResult,
   parseManifest,
+  safeFallbackName,
   toPosixPath,
 } from "./migrate-import.js";
 
@@ -281,5 +282,31 @@ describe("MIGRATE_IMPORT_LIMITS", () => {
     expect(MIGRATE_IMPORT_LIMITS.maxArchiveBytes).toBeLessThan(
       MIGRATE_IMPORT_LIMITS.maxExtractedBytes,
     );
+  });
+});
+
+describe("safeFallbackName", () => {
+  it("extracts basename from a normal path", () => {
+    expect(safeFallbackName("/home/user/.openclaw/workspace", "default")).toBe("workspace");
+  });
+
+  it("returns fallback for '..'", () => {
+    expect(safeFallbackName("..", "safe")).toBe("safe");
+  });
+
+  it("returns fallback for '.'", () => {
+    expect(safeFallbackName(".", "safe")).toBe("safe");
+  });
+
+  it("returns fallback for empty string", () => {
+    expect(safeFallbackName("", "safe")).toBe("safe");
+  });
+
+  it("handles Windows path with traversal", () => {
+    expect(safeFallbackName("C:\\Users\\alice\\.openclaw\\workspace", "default")).toBe("workspace");
+  });
+
+  it("returns fallback for bare '..' with slashes", () => {
+    expect(safeFallbackName("/../..", "safe")).toBe("safe");
   });
 });

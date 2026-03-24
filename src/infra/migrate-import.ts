@@ -240,6 +240,31 @@ export function crossPlatformRelative(parent: string, child: string): string | u
 }
 
 /**
+ * Sanitize a basename derived from an untrusted source path.
+ * Rejects traversal segments and empty values.
+ * @internal Exported for testing.
+ */
+export function safeFallbackName(sourcePath: string, fallback: string): string {
+  const raw = path.basename(toPosixPath(sourcePath));
+  if (!raw || raw === "." || raw === "..") {
+    return fallback;
+  }
+  return raw;
+}
+
+/**
+ * Verify that a computed target path stays within the given root directory.
+ * Throws if the target escapes the root (e.g. via ".." segments).
+ */
+function assertTargetWithinRoot(target: string, root: string, label: string): void {
+  const resolvedTarget = path.resolve(target);
+  const resolvedRoot = path.resolve(root);
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+    throw new Error(`Import target for ${label} escapes root directory: ${target}`);
+  }
+}
+
+/**
  * Remap the source path from the archive manifest to a target path on the local machine.
  * Handles cross-platform path differences.
  */
@@ -271,7 +296,9 @@ function remapSourceToTarget(params: {
   if (kind === "agents" && params.sourceStateDir) {
     const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
     if (relative !== undefined) {
-      return path.join(params.localStateDir, relative);
+      const target = path.join(params.localStateDir, relative);
+      assertTargetWithinRoot(target, params.localStateDir, "agents");
+      return target;
     }
   }
 
@@ -294,29 +321,37 @@ function remapSourceToTarget(params: {
     if (params.sourceStateDir) {
       const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
       if (relative !== undefined) {
-        return path.join(params.localStateDir, relative);
+        const target = path.join(params.localStateDir, relative);
+        assertTargetWithinRoot(target, params.localStateDir, "workspace");
+        return target;
       }
     }
     // Derive a unique fallback name from the source path basename to avoid
     // multiple external workspaces colliding on a single target.
-    const basename = path.basename(toPosixPath(sourcePath)) || "workspace";
+    const basename = safeFallbackName(sourcePath, "workspace");
     const normalizedSource = toPosixPath(sourcePath);
     const idx = params.sourceWorkspaceDirs.findIndex((d) => toPosixPath(d) === normalizedSource);
-    if (idx > 0) {
-      return path.join(params.localStateDir, `${basename}-${idx}`);
-    }
-    return path.join(params.localStateDir, basename);
+    const target =
+      idx > 0
+        ? path.join(params.localStateDir, `${basename}-${idx}`)
+        : path.join(params.localStateDir, basename);
+    assertTargetWithinRoot(target, params.localStateDir, "workspace");
+    return target;
   }
 
   // Fallback: place under local state dir using relative path from source state dir.
   if (params.sourceStateDir) {
     const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
     if (relative !== undefined) {
-      return path.join(params.localStateDir, relative);
+      const target = path.join(params.localStateDir, relative);
+      assertTargetWithinRoot(target, params.localStateDir, kind);
+      return target;
     }
   }
 
-  return path.join(params.localStateDir, path.basename(sourcePath));
+  const fallbackTarget = path.join(params.localStateDir, safeFallbackName(sourcePath, "imported"));
+  assertTargetWithinRoot(fallbackTarget, params.localStateDir, kind);
+  return fallbackTarget;
 }
 
 async function mergeConfigFiles(existingPath: string, importedPath: string): Promise<void> {
