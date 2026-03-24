@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
@@ -16,7 +16,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader } from "./control-ui-csp.js";
+import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -234,6 +234,13 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
 }
 
 function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+  const hashes = computeInlineScriptHashes(body);
+  if (hashes.length > 0) {
+    res.setHeader(
+      "Content-Security-Policy",
+      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
+    );
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
@@ -271,10 +278,12 @@ function resolveSafeControlUiFile(
     rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "io") {
-      throw opened.error;
-    }
-    return null;
+    return matchBoundaryFileOpenFailure(opened, {
+      io: (failure) => {
+        throw failure.error;
+      },
+      fallback: () => null,
+    });
   }
   return { path: opened.path, fd: opened.fd };
 }

@@ -1,10 +1,49 @@
 import path from "node:path";
-import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getReplyFromConfig } from "./reply.js";
+
+const agentMocks = vi.hoisted(() => ({
+  runEmbeddedPiAgent: vi.fn(),
+  loadModelCatalog: vi.fn(),
+  webAuthExists: vi.fn().mockResolvedValue(true),
+  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
+  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
+}));
+
+vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  runEmbeddedPiAgent: (...args: unknown[]) => agentMocks.runEmbeddedPiAgent(...args),
+  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../agents/model-catalog.runtime.js", () => ({
+  loadModelCatalog: agentMocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/auth-profiles/session-override.js", () => ({
+  clearSessionAuthProfileOverride: vi.fn(),
+  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands-registry.runtime.js", () => ({
+  listChatCommands: () => [],
+}));
+
+vi.mock("../skill-commands.runtime.js", () => ({
+  listSkillCommandsForWorkspace: () => [],
+}));
+
+vi.mock("../../extensions/whatsapp/src/session.js", () => ({
+  webAuthExists: agentMocks.webAuthExists,
+  getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
+  readWebSelfId: agentMocks.readWebSelfId,
+}));
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
 function makeResult(text: string) {
   return {
@@ -19,7 +58,7 @@ function makeResult(text: string) {
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockClear();
+      agentMocks.runEmbeddedPiAgent.mockClear();
       return await fn(home);
     },
     {
@@ -45,10 +84,24 @@ function makeCfg(home: string) {
 }
 
 describe("getReplyFromConfig media note plumbing", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    agentMocks.runEmbeddedPiAgent.mockClear();
+    agentMocks.loadModelCatalog.mockClear();
+    agentMocks.loadModelCatalog.mockResolvedValue([
+      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+    ]);
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("includes all MediaPaths in the agent prompt", async () => {
     await withTempHome(async (home) => {
       let seenPrompt: string | undefined;
-      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
+      agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
         seenPrompt = params.prompt;
         return makeResult("ok");
       });

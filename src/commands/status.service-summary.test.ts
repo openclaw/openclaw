@@ -8,6 +8,7 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
     label: "systemd",
     loadedText: "enabled",
     notLoadedText: "disabled",
+    stage: vi.fn(async () => {}),
     install: vi.fn(async () => {}),
     uninstall: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),

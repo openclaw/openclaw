@@ -79,6 +79,9 @@ describeLive("openrouter plugin live", () => {
         },
       },
     });
+    if (!resolved) {
+      throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
+    }
 
     expect(resolved).toMatchObject({
       provider: "openrouter",
@@ -89,10 +92,10 @@ describeLive("openrouter plugin live", () => {
 
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,
-      baseURL: resolved?.baseUrl,
+      baseURL: resolved.baseUrl,
     });
     const response = await client.chat.completions.create({
-      model: resolved?.id ?? LIVE_MODEL_ID,
+      model: resolved.id,
       messages: [{ role: "user", content: "Reply with exactly OK." }],
       max_tokens: 16,
     });

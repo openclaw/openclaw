@@ -6,6 +6,8 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -136,7 +138,24 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
 
 function resolvePiCredentials(agentDir: string): PiCredentialMap {
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  return resolvePiCredentialMapFromStore(store);
+  const credentials = resolvePiCredentialMapFromStore(store);
+  // pi-coding-agent hides providers from its registry when auth storage lacks
+  // a matching credential entry. Mirror env-backed provider auth here so
+  // live/model discovery sees the same providers runtime auth can use.
+  for (const provider of Object.keys(PROVIDER_ENV_API_KEY_CANDIDATES)) {
+    if (credentials[provider]) {
+      continue;
+    }
+    const resolved = resolveEnvApiKey(provider);
+    if (!resolved?.apiKey) {
+      continue;
+    }
+    credentials[provider] = {
+      type: "api_key",
+      key: resolved.apiKey,
+    };
+  }
+  return credentials;
 }
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).

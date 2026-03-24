@@ -1,6 +1,5 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
-import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
   expectPairingPromptSent,
@@ -59,6 +58,7 @@ async function startWebInboxMonitor(params: {
   config?: Record<string, unknown>;
   sendReadReceipts?: boolean;
 }) {
+  const { monitorWebInbox } = await import("./inbound.js");
   if (params.config) {
     mockLoadConfig.mockReturnValue(params.config);
   }
