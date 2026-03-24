@@ -695,6 +695,54 @@ describe("resolveModel", () => {
     });
   });
 
+  it("preserves configured model options on discovered models", () => {
+    mockDiscoveredModel({
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        id: "qwen3.5:9b",
+        name: "Qwen 3.5 9B",
+        provider: "ollama",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [
+              {
+                ...makeModel("qwen3.5:9b"),
+                api: "ollama",
+                options: {
+                  num_ctx: 32768,
+                  temperature: 0.2,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { options?: Record<string, unknown> } | undefined)?.options).toEqual({
+      num_ctx: 32768,
+      temperature: 0.2,
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.4", () => {
     mockOpenAICodexTemplateModel();
 

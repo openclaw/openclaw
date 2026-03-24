@@ -154,6 +154,8 @@ function applyConfiguredProviderOverrides(params: {
     };
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const discoveredOptions = (discoveredModel as { options?: Record<string, unknown> }).options;
+  const resolvedOptions = configuredModel?.options ?? discoveredOptions;
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -193,7 +195,8 @@ function applyConfiguredProviderOverrides(params: {
           }
         : undefined,
     compat: configuredModel?.compat ?? discoveredModel.compat,
-  };
+    ...(resolvedOptions ? { options: resolvedOptions } : {}),
+  } as Model<Api>;
 }
 
 export function buildInlineProviderModels(
@@ -349,6 +352,7 @@ function resolveConfiguredFallbackModel(params: {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const fallbackModelOptions = configuredModel?.options ?? providerConfig?.models?.[0]?.options;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -381,6 +385,7 @@ function resolveConfiguredFallbackModel(params: {
         DEFAULT_CONTEXT_TOKENS,
       headers:
         providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      ...(fallbackModelOptions ? { options: fallbackModelOptions } : {}),
     } as Model<Api>,
     runtimeHooks,
   });

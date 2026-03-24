@@ -63,6 +63,59 @@ function resolveDefaultProviderApi(
   return normalizeProviderId(providerId) === "anthropic" ? "anthropic-messages" : undefined;
 }
 
+function isOllamaCompatProviderConfig(params: {
+  providerId: string;
+  providerBaseUrl?: string;
+}): boolean {
+  const providerId = normalizeProviderId(params.providerId);
+  if (providerId === "ollama") {
+    return true;
+  }
+  if (!params.providerBaseUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(params.providerBaseUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]";
+    if (isLocalhost && parsed.port === "11434") {
+      return true;
+    }
+
+    const providerHintsOllama = providerId.includes("ollama");
+    const isOllamaPort = parsed.port === "11434";
+    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseOptionsNumCtxAsContextWindow(params: {
+  api: ModelDefinitionConfig["api"] | undefined;
+  providerId: string;
+  providerBaseUrl?: string;
+  providerInjectNumCtxForOpenAICompat?: boolean;
+}): boolean {
+  if (params.api === "ollama") {
+    return true;
+  }
+  if (params.api !== "openai-completions") {
+    return false;
+  }
+  if (params.providerInjectNumCtxForOpenAICompat === false) {
+    return false;
+  }
+  return isOllamaCompatProviderConfig({
+    providerId: params.providerId,
+    providerBaseUrl: params.providerBaseUrl,
+  });
+}
+
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -280,9 +333,24 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           modelMutated = true;
         }
 
+        const api = raw.api ?? providerApi;
+        const configuredNumCtx = raw.options?.num_ctx;
+        const optionsNumCtx =
+          typeof configuredNumCtx === "number" &&
+          Number.isFinite(configuredNumCtx) &&
+          configuredNumCtx > 0
+            ? configuredNumCtx
+            : undefined;
         const contextWindow = isPositiveNumber(raw.contextWindow)
           ? raw.contextWindow
-          : DEFAULT_CONTEXT_TOKENS;
+          : shouldUseOptionsNumCtxAsContextWindow({
+                api,
+                providerId,
+                providerBaseUrl: provider.baseUrl,
+                providerInjectNumCtxForOpenAICompat: provider.injectNumCtxForOpenAICompat,
+              })
+            ? (optionsNumCtx ?? DEFAULT_CONTEXT_TOKENS)
+            : DEFAULT_CONTEXT_TOKENS;
         if (raw.contextWindow !== contextWindow) {
           modelMutated = true;
         }
@@ -298,7 +366,6 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         if (raw.maxTokens !== maxTokens) {
           modelMutated = true;
         }
-        const api = raw.api ?? providerApi;
         if (raw.api !== api) {
           modelMutated = true;
         }

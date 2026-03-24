@@ -186,4 +186,103 @@ describe("applyModelDefaults", () => {
     const model = next.models?.providers?.myproxy?.models?.[0];
     expect(model?.api).toBe("openai-completions");
   });
+
+  it("does not treat num_ctx as contextWindow for non-Ollama OpenAI proxies", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                options: { num_ctx: 32768 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+  });
+
+  it("uses num_ctx as contextWindow for native Ollama models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen 3.5 9B",
+                options: { num_ctx: 65536 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.ollama?.models?.[0];
+
+    expect(model?.contextWindow).toBe(65536);
+  });
+
+  it("does not use num_ctx as contextWindow for native Ollama providers when api is omitted", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen 3.5 9B",
+                options: { num_ctx: 65536 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.ollama?.models?.[0];
+
+    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+  });
+
+  it("uses num_ctx as contextWindow for enabled Ollama compat providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-ollama": {
+            baseUrl: "http://192.168.1.50:11434/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen 3.5 9B",
+                options: { num_ctx: 49152 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.["my-ollama"]?.models?.[0];
+
+    expect(model?.contextWindow).toBe(49152);
+  });
 });
