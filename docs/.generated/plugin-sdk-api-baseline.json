@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 229,
+            "line": 255,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 150,
+            "line": 174,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
