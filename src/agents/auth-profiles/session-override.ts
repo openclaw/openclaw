@@ -104,14 +104,15 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
-    // Skip persisting clear when image model is temporarily switched.
-    // The current profile is for a different provider and won't be in this provider's order,
-    // but we should preserve it for when the session returns to the original provider.
-    // Clear the local variable so subsequent logic picks a correct profile for the image provider.
-    if (!hasAppliedImageModelOverride) {
+    // The current profile is not in the order (e.g., after auth.order changes).
+    // Skip persisting clear when image model is temporarily switched to a DIFFERENT provider.
+    // However, if the provider is the same, we SHOULD persist the clear/rotation
+    // so the session converges to a valid profile instead of repeating the recovery path.
+    // Only set clearedDueToProviderMismatch when there was an actual provider mismatch
+    // (set in the earlier block), not when the profile just fell out of the order.
+    if (!hasAppliedImageModelOverride || !clearedDueToProviderMismatch) {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     }
-    clearedDueToProviderMismatch = true;
     current = undefined;
   }
 
