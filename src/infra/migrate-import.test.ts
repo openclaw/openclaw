@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   crossPlatformRelative,
   formatMigrateImportSummary,
+  MIGRATE_IMPORT_LIMITS,
   type MigrateImportResult,
   parseManifest,
   toPosixPath,
@@ -266,5 +267,19 @@ describe("parseManifest", () => {
       },
     });
     expect(() => parseManifest(json)).toThrow("missing required fields");
+  });
+});
+
+describe("MIGRATE_IMPORT_LIMITS", () => {
+  it("has reasonable extraction limits", () => {
+    expect(MIGRATE_IMPORT_LIMITS.maxEntries).toBe(50_000);
+    expect(MIGRATE_IMPORT_LIMITS.maxExtractedBytes).toBe(512 * 1024 * 1024);
+    expect(MIGRATE_IMPORT_LIMITS.maxArchiveBytes).toBe(256 * 1024 * 1024);
+  });
+
+  it("archive size limit is smaller than extracted size limit", () => {
+    expect(MIGRATE_IMPORT_LIMITS.maxArchiveBytes).toBeLessThan(
+      MIGRATE_IMPORT_LIMITS.maxExtractedBytes,
+    );
   });
 });

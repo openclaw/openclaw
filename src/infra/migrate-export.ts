@@ -417,6 +417,10 @@ export async function createMigrateArchive(
         gzip: true,
         portable: true,
         preservePaths: true,
+        // Dereference symlinks so archives contain regular files.
+        // This ensures the importer's link-blocking policy does not
+        // reject archives generated from workspaces with symlinks.
+        follow: true,
         onWriteEntry: (entry) => {
           // Remap the config override path back to the original config source path.
           if (stripSecrets && configOverridePath && entry.path === configOverridePath) {

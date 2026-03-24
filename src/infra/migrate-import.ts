@@ -13,6 +13,13 @@ import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/c
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 
+/** @internal Exported for testing. */
+export const MIGRATE_IMPORT_LIMITS = {
+  maxEntries: 50_000,
+  maxExtractedBytes: 512 * 1024 * 1024, // 512 MB
+  maxArchiveBytes: 256 * 1024 * 1024, // 256 MB
+} as const;
+
 export type MigrateImportOptions = {
   archive: string;
   merge?: boolean;
@@ -456,9 +463,22 @@ export async function importMigrateArchive(
     return result;
   }
 
+  // Extraction safety limits — exported for testing.
+  const MAX_EXTRACT_ENTRIES = MIGRATE_IMPORT_LIMITS.maxEntries;
+  const MAX_EXTRACT_BYTES = MIGRATE_IMPORT_LIMITS.maxExtractedBytes;
+  const MAX_ARCHIVE_BYTES = MIGRATE_IMPORT_LIMITS.maxArchiveBytes;
+
   // Extract to a temporary directory.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-import-"));
   try {
+    // Check archive size before extraction.
+    const archiveStat = await fs.stat(archivePath);
+    if (archiveStat.size > MAX_ARCHIVE_BYTES) {
+      throw new Error(
+        `Migration archive exceeds size limit (${archiveStat.size} bytes > ${MAX_ARCHIVE_BYTES} bytes).`,
+      );
+    }
+
     const blockedTarEntryTypes = new Set([
       "SymbolicLink",
       "Link",
@@ -467,6 +487,8 @@ export async function importMigrateArchive(
       "FIFO",
       "Socket",
     ]);
+    let entryCount = 0;
+    let extractedBytes = 0;
     await tar.x({
       file: archivePath,
       cwd: tempDir,
@@ -476,6 +498,25 @@ export async function importMigrateArchive(
       onReadEntry(entry) {
         if (blockedTarEntryTypes.has(entry.type)) {
           const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
+          const emitter = this as unknown as { abort?: (error: Error) => void };
+          emitter.abort?.(error);
+          return;
+        }
+        entryCount += 1;
+        if (entryCount > MAX_EXTRACT_ENTRIES) {
+          const error = new Error(
+            `Migration archive exceeds entry count limit (${MAX_EXTRACT_ENTRIES}).`,
+          );
+          const emitter = this as unknown as { abort?: (error: Error) => void };
+          emitter.abort?.(error);
+          return;
+        }
+        const size = typeof entry.size === "number" ? entry.size : 0;
+        extractedBytes += size;
+        if (extractedBytes > MAX_EXTRACT_BYTES) {
+          const error = new Error(
+            `Migration archive exceeds extracted size limit (${MAX_EXTRACT_BYTES} bytes).`,
+          );
           const emitter = this as unknown as { abort?: (error: Error) => void };
           emitter.abort?.(error);
         }
