@@ -211,10 +211,15 @@ function respondJson(res: ServerResponse, statusCode: number, body: Record<strin
   res.end(JSON.stringify(body));
 }
 
-/** Send a no-content ACK. */
-function respondNoContent(res: ServerResponse) {
-  res.writeHead(204);
-  res.end();
+/**
+ * Send a webhook ACK.
+ *
+ * Synology Chat requires 200 OK + {"success":true} — returning 204 No Content
+ * causes it to mark the bot as broken and stop delivering subsequent messages.
+ */
+function respondSuccess(res: ServerResponse) {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ success: true }));
 }
 
 export interface WebhookHandlerDeps {
@@ -236,7 +241,7 @@ export interface WebhookHandlerDeps {
  * 3. Checks user allowlist
  * 4. Checks rate limit
  * 5. Sanitizes input
- * 6. Immediately ACKs request (204)
+ * 6. Immediately ACKs request (200 + {"success":true})
  * 7. Delivers to the agent asynchronously and sends final reply via incomingUrl
  */
 type SynologyWebhookAuthorization =
@@ -354,7 +359,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
 
   const cleanText = sanitizeSynologyWebhookText(parsed.payload);
   if (!cleanText) {
-    respondNoContent(params.res);
+    respondSuccess(params.res);
     return { ok: false };
   }
   const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
@@ -455,7 +460,14 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
   const rateLimiter = getRateLimiter(account);
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Only accept POST
+    // Synology Chat sends a HEAD probe before each POST to test the endpoint.
+    // Respond 200 to HEAD so it doesn't mark the webhook as broken.
+    if (req.method === "HEAD") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end();
+      return;
+    }
+    // Only accept POST (and HEAD above)
     if (req.method !== "POST") {
       respondJson(res, 405, { error: "Method not allowed" });
       return;
@@ -476,7 +488,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     );
 
     // ACK immediately so Synology Chat won't remain in "Processing..."
-    respondNoContent(res);
+    respondSuccess(res);
     await processAuthorizedSynologyWebhook({
       account,
       deliver,
