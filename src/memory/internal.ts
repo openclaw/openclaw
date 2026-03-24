@@ -351,6 +351,8 @@ export function chunkMarkdown(
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  // Heading stack for carrying parent headings into subsections (fix #7)
+  let headingStack: string[] = [];
 
   const flush = () => {
     if (current.length === 0) {
@@ -373,7 +375,7 @@ export function chunkMarkdown(
     });
   };
 
-  const carryOverlap = () => {
+  const carryOverlap = (prependHeading?: string) => {
     if (overlapChars <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
@@ -391,6 +393,10 @@ export function chunkMarkdown(
       if (acc >= overlapChars) {
         break;
       }
+    }
+    // Fix #8: prepend heading line to overlap for oversized section sub-chunks
+    if (prependHeading) {
+      kept.unshift({ line: prependHeading, lineNo: 0 });
     }
     current = kept;
     currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
@@ -416,9 +422,21 @@ export function chunkMarkdown(
     }
 
     // Heading-aware: flush on heading (unless it's the first heading or inside a code fence)
-    if (headingAware && fenceDelimiter === null && isHeading(line) && current.length > 0) {
-      flush();
-      carryOverlap();
+    if (headingAware && fenceDelimiter === null && isHeading(line)) {
+      // Always update heading stack for parent tracking (fix #7)
+      const headingLevel = (line.match(/^#+/) ?? [""])[0].length;
+      headingStack = headingStack.slice(0, headingLevel - 1);
+      headingStack.push(line.trim());
+
+      if (current.length > 0) {
+        flush();
+        // Fix #6: do NOT carry overlap on heading-triggered flush (avoids defeating heading boundary)
+        // Fix #7: prepend parent headings to next chunk
+        current = headingStack.map((h) => ({ line: h, lineNo: 0 }));
+        currentChars = current.reduce((sum, entry) => sum + entry.line.length + 1, 0);
+        // Skip normal segment processing — heading already added via stack
+        continue;
+      }
     }
 
     const segments: string[] = [];
@@ -435,7 +453,11 @@ export function chunkMarkdown(
       // Enforce cumulative size limit to avoid giant chunks
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
-        carryOverlap();
+        // Fix #8: in heading-aware mode, prepend current heading to overlap
+        const headingToPrepend = headingAware && headingStack.length > 0
+          ? headingStack[headingStack.length - 1]
+          : undefined;
+        carryOverlap(headingToPrepend);
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;

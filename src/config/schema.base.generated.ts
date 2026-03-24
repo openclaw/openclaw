@@ -2107,6 +2107,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         minimum: 0,
                         maximum: 9007199254740991,
                       },
+                      headingAware: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3723,6 +3726,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "integer",
                           minimum: 0,
                           maximum: 9007199254740991,
+                        },
+                        headingAware: {
+                          type: "boolean",
                         },
                       },
                       additionalProperties: false,
@@ -13473,6 +13479,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.memorySearch.chunking.overlap": {
       label: "Memory Chunk Overlap Tokens",
       help: "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.headingAware": {
+      label: "Heading-Aware Memory Chunking",
+      help: "When enabled, splits memory chunks at markdown heading boundaries instead of purely by token count. Improves search relevance for structured documents by keeping heading sections intact.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.sync.onSessionStart": {
