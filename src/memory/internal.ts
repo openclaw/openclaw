@@ -396,18 +396,21 @@ export function chunkMarkdown(
     currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
   };
 
-  let fenceDelimiter: string | null = null;
+  let fenceDelimiter: { char: string; length: number } | null = null;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
 
     // Track fenced code blocks to avoid false heading detection
+    // A closing fence must have the same delimiter char and at least the same length (CommonMark)
     const fenceMatch = line.trim().match(/^(`{3,}|~{3,})/);
     if (fenceMatch) {
-      const delim = fenceMatch[1]![0]!;
+      const raw = fenceMatch[1]!;
+      const char = raw[0]!;
+      const length = raw.length;
       if (fenceDelimiter === null) {
-        fenceDelimiter = delim;
-      } else if (delim === fenceDelimiter) {
+        fenceDelimiter = { char, length };
+      } else if (char === fenceDelimiter.char && length >= fenceDelimiter.length) {
         fenceDelimiter = null;
       }
     }
