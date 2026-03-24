@@ -3,7 +3,10 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeHostExecEnvWithDiagnostics,
+} from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -366,7 +369,25 @@ export function createExecTool(
         workspaceDir: workdir,
         baseEnv: inheritedBaseEnv,
       });
-      const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };
+      const workspaceEnvOverrideDiagnostics =
+        host === "sandbox"
+          ? null
+          : inspectHostExecEnvOverrides({
+              overrides: workspaceEnv,
+              blockPathOverrides: true,
+            });
+      const safeWorkspaceEnv =
+        host === "sandbox"
+          ? workspaceEnv
+          : Object.fromEntries(
+              Object.entries(workspaceEnv).filter(
+                ([key]) =>
+                  !workspaceEnvOverrideDiagnostics?.rejectedOverrideBlockedKeys.includes(
+                    key.toUpperCase(),
+                  ) && !workspaceEnvOverrideDiagnostics?.rejectedOverrideInvalidKeys.includes(key),
+              ),
+            );
+      const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...safeWorkspaceEnv };
       const hostEnvResult =
         host === "sandbox"
           ? null
