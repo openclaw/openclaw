@@ -637,8 +637,11 @@ public final class OpenClawChatViewModel {
         do {
             try await self.transport.compactSession(sessionKey: self.sessionKey)
         } catch {
-            self.errorText = error.localizedDescription
-            chatUILogger.error("session compact failed \(error.localizedDescription, privacy: .public)")
+            self.errorText = "Unable to compact the session. Please try again."
+            let nsError = error as NSError
+            chatUILogger.error(
+                "session compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) details=\(String(describing: error), privacy: .private)"
+            )
             return
         }
 
