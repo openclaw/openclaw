@@ -305,98 +305,127 @@ function logToFile(
   }
 }
 
-export function createSubsystemLogger(subsystem: string): SubsystemLogger {
-  let fileLogger: TsLogger<LogObj> | null = null;
-  const getFileLogger = () => {
-    if (!fileLogger) {
-      fileLogger = getChildLogger({ subsystem });
+type FileLoggerRef = { current: TsLogger<LogObj> | null };
+
+function getOrCreateFileLogger(ref: FileLoggerRef, subsystem: string): TsLogger<LogObj> {
+  if (!ref.current) {
+    ref.current = getChildLogger({ subsystem });
+  }
+  return ref.current;
+}
+
+function isConsoleLoggingEnabled(subsystem: string, level: LogLevel): boolean {
+  const consoleSettings = getConsoleSettings();
+  return (
+    shouldLogToConsole(level, { level: consoleSettings.level }) &&
+    shouldLogSubsystemToConsole(subsystem)
+  );
+}
+
+function emitSubsystemLog(params: {
+  fileLoggerRef: FileLoggerRef;
+  level: LogLevel;
+  message: string;
+  meta?: Record<string, unknown>;
+  subsystem: string;
+}): void {
+  const consoleSettings = getConsoleSettings();
+  const consoleEnabled =
+    shouldLogToConsole(params.level, { level: consoleSettings.level }) &&
+    shouldLogSubsystemToConsole(params.subsystem);
+  const fileEnabled = isFileLogLevelEnabled(params.level);
+  if (!consoleEnabled && !fileEnabled) {
+    return;
+  }
+  let consoleMessageOverride: string | undefined;
+  let fileMeta = params.meta;
+  if (params.meta && Object.keys(params.meta).length > 0) {
+    const { consoleMessage, ...rest } = params.meta as Record<string, unknown> & {
+      consoleMessage?: unknown;
+    };
+    if (typeof consoleMessage === "string") {
+      consoleMessageOverride = consoleMessage;
     }
-    return fileLogger;
-  };
-  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
-    const consoleSettings = getConsoleSettings();
-    const consoleEnabled =
-      shouldLogToConsole(level, { level: consoleSettings.level }) &&
-      shouldLogSubsystemToConsole(subsystem);
-    const fileEnabled = isFileLogLevelEnabled(level);
-    if (!consoleEnabled && !fileEnabled) {
-      return;
-    }
-    let consoleMessageOverride: string | undefined;
-    let fileMeta = meta;
-    if (meta && Object.keys(meta).length > 0) {
-      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-        consoleMessage?: unknown;
-      };
-      if (typeof consoleMessage === "string") {
-        consoleMessageOverride = consoleMessage;
-      }
-      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-    }
-    if (fileEnabled) {
-      logToFile(getFileLogger(), level, message, fileMeta);
-    }
-    if (!consoleEnabled) {
-      return;
-    }
-    const consoleMessage = consoleMessageOverride ?? message;
-    if (
-      shouldSuppressProbeConsoleLine({
-        level,
-        subsystem,
-        message: consoleMessage,
-        meta: fileMeta,
-      })
-    ) {
-      return;
-    }
-    const line = formatConsoleLine({
-      level,
-      subsystem,
-      message: consoleSettings.style === "json" ? message : consoleMessage,
-      style: consoleSettings.style,
-      meta: fileMeta,
-    });
-    writeConsoleLine(level, line);
-  };
-  const isConsoleEnabled = (level: LogLevel): boolean => {
-    const consoleSettings = getConsoleSettings();
-    return (
-      shouldLogToConsole(level, { level: consoleSettings.level }) &&
-      shouldLogSubsystemToConsole(subsystem)
+    fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+  }
+  if (fileEnabled) {
+    logToFile(
+      getOrCreateFileLogger(params.fileLoggerRef, params.subsystem),
+      params.level,
+      params.message,
+      fileMeta,
     );
-  };
-  const isFileEnabled = (level: LogLevel): boolean => isFileLogLevelEnabled(level);
+  }
+  if (!consoleEnabled) {
+    return;
+  }
+  const consoleMessage = consoleMessageOverride ?? params.message;
+  if (
+    shouldSuppressProbeConsoleLine({
+      level: params.level,
+      subsystem: params.subsystem,
+      message: consoleMessage,
+      meta: fileMeta,
+    })
+  ) {
+    return;
+  }
+  const line = formatConsoleLine({
+    level: params.level,
+    subsystem: params.subsystem,
+    message: consoleSettings.style === "json" ? params.message : consoleMessage,
+    style: consoleSettings.style,
+    meta: fileMeta,
+  });
+  writeConsoleLine(params.level, line);
+}
+
+export function createSubsystemLogger(subsystem: string): SubsystemLogger {
+  const fileLoggerRef: FileLoggerRef = { current: null };
 
   const logger: SubsystemLogger = {
     subsystem,
-    isEnabled: (level, target = "any") => {
+    isEnabled(level, target = "any") {
       if (target === "console") {
-        return isConsoleEnabled(level);
+        return isConsoleLoggingEnabled(subsystem, level);
       }
       if (target === "file") {
-        return isFileEnabled(level);
+        return isFileLogLevelEnabled(level);
       }
-      return isConsoleEnabled(level) || isFileEnabled(level);
+      return isConsoleLoggingEnabled(subsystem, level) || isFileLogLevelEnabled(level);
     },
-    trace: (message, meta) => emit("trace", message, meta),
-    debug: (message, meta) => emit("debug", message, meta),
-    info: (message, meta) => emit("info", message, meta),
-    warn: (message, meta) => emit("warn", message, meta),
-    error: (message, meta) => emit("error", message, meta),
-    fatal: (message, meta) => emit("fatal", message, meta),
-    raw: (message) => {
-      if (isFileEnabled("info")) {
-        logToFile(getFileLogger(), "info", message, { raw: true });
+    trace(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "trace", message, meta, subsystem });
+    },
+    debug(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "debug", message, meta, subsystem });
+    },
+    info(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "info", message, meta, subsystem });
+    },
+    warn(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "warn", message, meta, subsystem });
+    },
+    error(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "error", message, meta, subsystem });
+    },
+    fatal(message, meta) {
+      emitSubsystemLog({ fileLoggerRef, level: "fatal", message, meta, subsystem });
+    },
+    raw(message) {
+      if (isFileLogLevelEnabled("info")) {
+        logToFile(getOrCreateFileLogger(fileLoggerRef, subsystem), "info", message, { raw: true });
       }
-      if (isConsoleEnabled("info")) {
+      if (isConsoleLoggingEnabled(subsystem, "info")) {
         if (shouldSuppressProbeConsoleLine({ level: "info", subsystem, message })) {
           return;
         }
         writeConsoleLine("info", message);
       }
     },
-    child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
+    child(name) {
+      return createSubsystemLogger(`${subsystem}/${name}`);
+    },
   };
   return logger;
 }
