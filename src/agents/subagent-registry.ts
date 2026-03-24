@@ -287,6 +287,11 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
@@ -1545,6 +1550,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
