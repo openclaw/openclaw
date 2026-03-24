@@ -8,8 +8,8 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isModernModelRef } from "./live-model-filter.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isHighSignalLiveModelRef } from "./live-model-filter.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -18,7 +18,7 @@ import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS = isLiveTestEnabled(["OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS"]);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
 
 const describeLive = LIVE ? describe : describe.skip;
@@ -388,7 +388,7 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
-          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
         }
@@ -417,7 +417,7 @@ describeLive("live models (profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,
