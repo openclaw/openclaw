@@ -383,19 +383,27 @@ function resolveDirectToolPolicyFromConfig(params: {
     }
 
     // When we only have derived fallback IDs (for example a threaded DM directId and its parent),
-    // check all explicit sender keys before falling back to the wildcard entry.
+    // preserve resolveToolsBySender's ID > e164 > username > name precedence across all
+    // candidate direct IDs before falling back to wildcard.
     const explicitToolsBySender = omitWildcardToolsBySender(toolsBySender);
     for (const senderId of senderIdsToTry) {
       const senderPolicy = resolveToolsBySender({
         toolsBySender: explicitToolsBySender,
         senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
       });
       if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
         return senderPolicy;
       }
+    }
+
+    const nonIdSenderPolicy = resolveToolsBySender({
+      toolsBySender: explicitToolsBySender,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    if (nonIdSenderPolicy && pickSandboxToolPolicy(nonIdSenderPolicy)) {
+      return nonIdSenderPolicy;
     }
 
     const wildcardPolicy = toolsBySender["*"];

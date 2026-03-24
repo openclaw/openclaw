@@ -446,6 +446,32 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("keeps id-based parent direct overrides ahead of name matches when senderId is omitted", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              toolsBySender: {
+                "name:alice": { allow: ["read"] },
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+        messageProvider: "feishu",
+        senderName: "alice",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
   it("prefers the full directId over the parent fallback when a thread token is part of the id", () => {
     const cfg = {
       channels: {
