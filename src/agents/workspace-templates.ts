@@ -29,9 +29,11 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     const cwd = opts?.cwd ?? process.cwd();
 
     const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+    // Prefer cwd (workspace) first, then packageRoot, then fallback
+    // This ensures workspace custom templates take priority over npm package defaults
     const candidates = [
-      packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
       cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,
+      packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
       FALLBACK_TEMPLATE_DIR,
     ].filter(Boolean) as string[];
 
