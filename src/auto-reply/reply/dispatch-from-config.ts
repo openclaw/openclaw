@@ -417,16 +417,14 @@ export async function dispatchReplyFromConfig(params: {
     }
   }
 
-  // Trigger plugin hooks (fire-and-forget)
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
+  // Trigger plugin message_received hooks.
+  // Observer hooks fire in the background; blocking hooks are awaited.
+  const messageReceivedResult = hookRunner?.hasHooks("message_received")
+    ? await hookRunner.runMessageReceived(
         toPluginMessageReceivedEvent(hookContext),
         toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
-  }
+      )
+    : undefined;
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
@@ -439,6 +437,20 @@ export async function dispatchReplyFromConfig(params: {
       ),
       "dispatch-from-config: message_received internal hook failed",
     );
+  }
+
+  if (messageReceivedResult?.cancel) {
+    if (messageReceivedResult.blockReason) {
+      logVerbose(
+        `dispatch-from-config: message_received blocked: ${messageReceivedResult.blockReason}`,
+      );
+    }
+    const queuedFinal = messageReceivedResult.replyText
+      ? await sendBindingNotice({ text: messageReceivedResult.replyText }, "terminal")
+      : false;
+    recordProcessed("completed", { reason: "message-received-cancelled" });
+    markIdle("message_received_cancelled");
+    return { queuedFinal, counts: dispatcher.getQueuedCounts() };
   }
 
   markProcessing();
