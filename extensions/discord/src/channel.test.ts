@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import { discordPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { setDiscordRuntime } from "./runtime.js";
+let discordPlugin: typeof import("./channel.js").discordPlugin;
+let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
@@ -73,6 +73,13 @@ afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+});
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.resetModules();
+  ({ discordPlugin } = await import("./channel.js"));
+  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discordPlugin outbound", () => {

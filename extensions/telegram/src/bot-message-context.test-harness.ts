@@ -1,9 +1,5 @@
 import { vi } from "vitest";
-import {
-  buildTelegramMessageContext,
-  type BuildTelegramMessageContextParams,
-  type TelegramMediaRef,
-} from "./bot-message-context.js";
+import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -24,7 +20,10 @@ type BuildTelegramMessageContextForTestParams = {
 
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
-): Promise<Awaited<ReturnType<typeof buildTelegramMessageContext>>> {
+): Promise<
+  Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
+> {
+  const { buildTelegramMessageContext } = await import("./bot-message-context.js");
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {

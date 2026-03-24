@@ -65,6 +65,8 @@ const MOONSHOT_NATIVE_BASE_URLS = new Set([
 const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://coding-intl.dashscope.aliyuncs.com/v1",
   "https://coding.dashscope.aliyuncs.com/v1",
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;

@@ -18,6 +18,7 @@ const getChatMembersMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
+const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -47,7 +48,7 @@ vi.mock("./channel.runtime.js", () => ({
     sendMessageFeishu: sendMessageFeishuMock,
     feishuOutbound: {
       sendText: vi.fn(),
-      sendMedia: vi.fn(),
+      sendMedia: feishuOutboundSendMediaMock,
     },
   },
 }));
@@ -202,6 +203,38 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
+  });
+
+  it("sends media through the outbound adapter", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "test",
+        media: "/tmp/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "test",
+      mediaUrl: "/tmp/image.png",
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      replyToId: undefined,
+    });
+    expect(result?.details).toMatchObject({ messageId: "om_media" });
   });
 
   it("reads messages", async () => {
