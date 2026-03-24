@@ -8,6 +8,11 @@ export type ManagerLookupResult<T> = {
   error?: string;
 };
 
+/**
+ * Calls `getManager()`, then runs `run()` with the result.
+ * If the manager is not found, calls `onMissing()` and returns early without running or closing.
+ * Otherwise, always calls `close()` in a `finally` block, even if `run()` throws.
+ */
 export async function withManager<T>(params: {
   getManager: () => Promise<ManagerLookupResult<T>>;
   onMissing: (error?: string) => void;
@@ -31,6 +36,7 @@ export async function withManager<T>(params: {
   }
 }
 
+/** Runs `action()` and catches any thrown error, forwarding it to `onError` if provided, otherwise logging it and calling `runtime.exit(1)`. */
 export async function runCommandWithRuntime(
   runtime: { error: (message: string) => void; exit: (code: number) => void },
   action: () => Promise<void>,
@@ -48,6 +54,7 @@ export async function runCommandWithRuntime(
   }
 }
 
+/** Walks up the Commander command tree looking for an option named `key`, returning the first value found. Useful for reading root-level options from a deeply nested subcommand. */
 export function resolveOptionFromCommand<T>(
   command: Command | undefined,
   key: string,
