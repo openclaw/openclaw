@@ -49,11 +49,19 @@ function createBaiduSchema() {
         maximum: MAX_SEARCH_COUNT,
       }),
     ),
+    date_after: Type.Optional(
+      Type.String({
+        description: "Only results published after this date (YYYY-MM-DD).",
+      }),
+    ),
+    date_before: Type.Optional(
+      Type.String({
+        description: "Only results published before this date (YYYY-MM-DD).",
+      }),
+    ),
+    freshness: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
     country: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
     language: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
-    freshness: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
-    date_after: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
-    date_before: Type.Optional(Type.String({ description: "Not supported by Baidu." })),
   });
 }
 
@@ -80,6 +88,8 @@ async function runBaiduSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   count: number;
+  dateAfter?: string;
+  dateBefore?: string;
 }): Promise<{ results: BaiduSearchResult[] }> {
   const body: Record<string, unknown> = {
     resource_type_filter: [
@@ -92,6 +102,15 @@ async function runBaiduSearch(params: {
       },
     ],
   };
+  if (params.dateBefore && !params.dateAfter) {
+    body.search_filter = { range: { page_time: { lte: params.dateBefore } } };
+  } else if (params.dateAfter && !params.dateBefore) {
+    body.search_filter = { range: { page_time: { gte: params.dateAfter } } };
+  } else if (params.dateBefore && params.dateAfter) {
+    body.search_filter = {
+      range: { page_time: { gte: params.dateAfter, lte: params.dateBefore } },
+    };
+  }
   return withTrustedWebSearchEndpoint(
     {
       url: BAIDU_SEARCH_API_ENDPOINT,
@@ -138,16 +157,14 @@ function createBaiduToolDefinition(
     parameters: createBaiduSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      for (const name of ["country", "language", "freshness", "date_after", "date_before"]) {
+      for (const name of ["country", "language", "freshness"]) {
         if (readStringParam(params, name)) {
           const label =
             name === "country"
               ? "country filtering"
-              : name === "language"
-                ? "language filtering"
-                : name === "freshness"
-                  ? "freshness filtering"
-                  : "date_after/date_before filtering";
+              : name === "freshness"
+                ? "freshness filtering"
+                : "language filtering";
           return {
             error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
             message: `${label} is not supported by the baidu provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
@@ -167,6 +184,8 @@ function createBaiduToolDefinition(
         };
       }
       const query = readStringParam(params, "query", { required: true });
+      const dateAfter = readStringParam(params, "date_after");
+      const dateBefore = readStringParam(params, "date_before");
       const count =
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
@@ -187,6 +206,8 @@ function createBaiduToolDefinition(
         apiKey,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        dateAfter,
+        dateBefore,
       });
       const payload = {
         query: params.query,

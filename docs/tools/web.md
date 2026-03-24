@@ -46,6 +46,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Baidu" icon="globe" href="/tools/baidu">
+    Structured results with snippets. 
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -73,15 +76,13 @@ returns results. Results are cached by query for 15 minutes (configurable).
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
   </Card>
-  <Card title="Baidu" icon="globe" href="/tools/baidu">
-    Structured results with snippets. 
-  </Card>
 </CardGroup>
 
 ### Provider comparison
 
 | Provider                               | Result style               | Filters                                          | API key                                     |
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Baidu](/tools/baidu-search)           | Structured snippets        | --                                               | `BAIDU_SEARCH_API_KEY`                      |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
@@ -91,7 +92,6 @@ returns results. Results are cached by query for 15 minutes (configurable).
 | [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 | [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
-| [Baidu](/tools/baidu-search)           | Structured snippets        | --                                               | `BAIDU_SEARCH_API_KEY`                      |
 
 ## Auto-detection
 
