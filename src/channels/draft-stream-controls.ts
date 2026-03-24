@@ -53,6 +53,7 @@ export function createFinalizableDraftStreamControls(params: {
   const stop = async (): Promise<void> => {
     params.markFinal();
     await loop.flush();
+    await loop.flush();
   };
 
   const stopForClear = async (): Promise<void> => {

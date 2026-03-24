@@ -7,17 +7,20 @@ export type DraftStreamLoop = {
   waitForInFlight: () => Promise<void>;
 };
 
+type DraftStreamSendResult = boolean | "reschedule";
+
 export function createDraftStreamLoop(params: {
   throttleMs: number;
   isStopped: () => boolean;
-  sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
+  sendOrEditStreamMessage: (text: string) => Promise<void | DraftStreamSendResult>;
 }): DraftStreamLoop {
   let lastSentAt = 0;
   let pendingText = "";
-  let inFlightPromise: Promise<void | boolean> | undefined;
+  let inFlightPromise: Promise<void | DraftStreamSendResult> | undefined;
+  let flushPromise: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const flush = async () => {
+  const runFlush = async () => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -45,10 +48,33 @@ export function createDraftStreamLoop(params: {
         return;
       }
       lastSentAt = Date.now();
+      if (sent === "reschedule") {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        if (pendingText) {
+          schedule();
+        }
+        return;
+      }
       if (!pendingText) {
         return;
       }
     }
+  };
+
+  const flush = () => {
+    if (flushPromise) {
+      return flushPromise;
+    }
+    const current = runFlush().finally(() => {
+      if (flushPromise === current) {
+        flushPromise = undefined;
+      }
+    });
+    flushPromise = current;
+    return current;
   };
 
   const schedule = () => {
