@@ -61,10 +61,10 @@ vi.mock("./peer.js", () => ({
   resolvePeerId: vi.fn(() => "120363408809173967@g.us"),
 }));
 
-import { createWebOnMessageHandler } from "./on-message.js";
-import { processMessage } from "./process-message.js";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { WebInboundMsg } from "../types.js";
+import { createWebOnMessageHandler } from "./on-message.js";
+import { processMessage } from "./process-message.js";
 
 function makeMsg(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
   return {
@@ -165,13 +165,14 @@ describe("on-message fromMe echo protection", () => {
     expect(processMessage).toHaveBeenCalled();
   });
 
-  it("skips fromMe messages in direct chats too", async () => {
+  it("skips fromMe messages in direct chats when not same phone", async () => {
     const { handler } = createHandler();
     const msg = makeMsg({
       fromMe: true,
       chatType: "direct",
       from: "+923006761319",
       to: "+971506443271",
+      selfE164: "+971506443271",
     });
 
     await handler(msg);
@@ -180,6 +181,23 @@ describe("on-message fromMe echo protection", () => {
     expect(logVerbose).toHaveBeenCalledWith(
       expect.stringContaining("Skipping auto-reply: fromMe message in direct"),
     );
+  });
+
+  it("allows fromMe messages in same-phone self-chat DMs", async () => {
+    const { handler } = createHandler();
+    const msg = makeMsg({
+      fromMe: true,
+      chatType: "direct",
+      from: "+971506443271",
+      to: "+971506443271",
+      selfE164: "+971506443271",
+      conversationId: "+971506443271",
+    });
+
+    await handler(msg);
+
+    // Self-chat should be processed — user is messaging their own number
+    expect(processMessage).toHaveBeenCalled();
   });
 
   it("still uses echo tracker as fallback when fromMe is false but text matches", async () => {

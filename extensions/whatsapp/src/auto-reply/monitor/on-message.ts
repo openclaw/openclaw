@@ -95,10 +95,15 @@ export function createWebOnMessageHandler(params: {
     // unchecked, so the bot's replies would re-enter the auto-reply pipeline
     // whenever the text-based echo tracker failed to match (e.g. due to
     // minor formatting differences or Set eviction under load).
-    if (msg.fromMe) {
-      logVerbose(
-        `Skipping auto-reply: fromMe message in ${msg.chatType} chat ${conversationId}`,
-      );
+    //
+    // Same-phone (self-chat) DMs are exempted: when the user messages their
+    // own number, `fromMe` is true but the message is intentional input to
+    // the bot.  This mirrors `checkInboundAccessControl` which only rejects
+    // `isFromMe && !isSamePhone`.
+    const isSamePhone =
+      msg.selfE164 != null && normalizeE164(msg.from) === normalizeE164(msg.selfE164);
+    if (msg.fromMe && !isSamePhone) {
+      logVerbose(`Skipping auto-reply: fromMe message in ${msg.chatType} chat ${conversationId}`);
       return;
     }
 
