@@ -261,7 +261,13 @@
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.config-top-tabs__scroller::-webkit-scrollbar {
+  display: none;
 }
 
 .config-top-tabs__tab {
@@ -296,13 +302,6 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-subtle);
-}
-
-.config-top-tabs__right {
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  min-width: 0;
 }
 
 /* Diff Panel */
@@ -554,110 +553,57 @@
   color: var(--text-strong);
 }
 
-/* Roundness slider */
-.settings-slider {
-  display: grid;
-  gap: 10px;
-}
-
-.settings-slider__header {
+/* Roundness options */
+.settings-roundness__options {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.settings-slider__label {
-  display: flex;
-  align-items: center;
   gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
 }
 
-.settings-slider__key-swatch {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--muted);
-  flex-shrink: 0;
-}
-
-.settings-slider__key-swatch--sharp {
-  border-radius: 0;
-}
-
-.settings-slider__key-swatch--round {
-  border-radius: var(--radius-sm);
-}
-
-.settings-slider__value {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.settings-slider__input {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  outline: none;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease;
-}
-
-.settings-slider__input:hover {
-  background: var(--border-strong);
-}
-
-.settings-slider__input::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elevated);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+.settings-roundness__btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
   cursor: pointer;
   transition:
-    transform var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
 }
 
-.settings-slider__input::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+.settings-roundness__btn:hover {
+  background: var(--bg-hover);
 }
 
-.settings-slider__input::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elevated);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
+.settings-roundness__btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
-.settings-slider__preview {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 0 0;
-}
-
-.settings-slider__preview-swatch {
-  width: 32px;
-  height: 22px;
+.settings-roundness__swatch {
+  width: 28px;
+  height: 20px;
   background: var(--bg-muted);
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border-strong);
   transition: border-radius var(--duration-fast) ease;
+}
+
+.settings-roundness__btn.active .settings-roundness__swatch {
+  border-color: var(--accent);
+}
+
+.settings-roundness__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.settings-roundness__btn.active .settings-roundness__label {
+  color: var(--accent);
 }
 
 .settings-info-grid {
@@ -1751,18 +1697,10 @@
   }
 
   .config-top-tabs__scroller {
-    flex: 1 1 100%;
+    flex: 1 1 auto;
   }
 
-  .config-top-tabs__right {
-    flex: 1 1 100%;
-  }
-
-  .config-top-tabs__right .config-mode-toggle {
-    width: 100%;
-  }
-
-  .config-top-tabs__right .config-mode-toggle__btn {
+  .config-actions__left .config-mode-toggle__btn {
     flex: 1 1 50%;
   }
 
