@@ -531,8 +531,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         // Exclude the current message from replies to avoid duplication.
         // Compare by both id and createdDateTime since Bot Framework activity.id
         // and Graph API reply.id may use different formats.
-        const currentTimestamp =
-          activity.timestamp instanceof Date ? activity.timestamp.toISOString() : undefined;
+        const currentTimestamp = timestamp?.toISOString();
         for (const reply of replies) {
           if (reply.id === currentActivityId) continue;
           if (currentTimestamp && reply.createdDateTime === currentTimestamp) continue;
