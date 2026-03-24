@@ -42,11 +42,23 @@ export function createGatewayHooksRequestHandler(params: {
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
-    const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
-      targetAgentId: value.agentId,
-    });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const resolvedTarget = value.sessionTarget ?? "isolated";
+
+    // Resolve sessionKey based on sessionTarget:
+    // "main" → use canonical main session key (runs in main session via cron runner)
+    // "current" → no conversation context in hooks, fall back to isolated
+    // "session:<id>" → use the explicit session id (goes through policy check)
+    // "isolated" / default → generate unique key
+    const sessionKey =
+      resolvedTarget === "main"
+        ? mainSessionKey
+        : normalizeHookDispatchSessionKey({
+            sessionKey: resolvedTarget.startsWith("session:")
+              ? resolvedTarget.slice("session:".length)
+              : value.sessionKey,
+            targetAgentId: value.agentId,
+          });
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -57,7 +69,7 @@ export function createGatewayHooksRequestHandler(params: {
       createdAtMs: now,
       updatedAtMs: now,
       schedule: { kind: "at", at: new Date(now).toISOString() },
-      sessionTarget: "isolated",
+      sessionTarget: value.sessionTarget ?? "isolated",
       wakeMode: value.wakeMode,
       payload: {
         kind: "agentTurn",

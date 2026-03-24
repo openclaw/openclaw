@@ -9336,6 +9336,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 agentId: {
                   type: "string",
                 },
+                sessionTarget: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "isolated",
+                    },
+                    {
+                      type: "string",
+                      const: "main",
+                    },
+                    {
+                      type: "string",
+                      const: "current",
+                    },
+                    {
+                      type: "string",
+                      pattern: "^session:",
+                    },
+                  ],
+                },
                 sessionKey: {
                   type: "string",
                 },

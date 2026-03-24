@@ -4,6 +4,7 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CronSessionTarget } from "../cron/types.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
@@ -205,6 +206,7 @@ export type HookAgentPayload = {
   agentId?: string;
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
+  sessionTarget?: CronSessionTarget;
   sessionKey?: string;
   deliver: boolean;
   channel: HookMessageChannel;
@@ -386,6 +388,20 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
+  const sessionTargetRaw = payload.sessionTarget;
+  let sessionTarget: CronSessionTarget | undefined;
+  if (typeof sessionTargetRaw === "string" && sessionTargetRaw.trim()) {
+    const v = sessionTargetRaw.trim();
+    if (
+      v === "isolated" ||
+      v === "main" ||
+      v === "current" ||
+      (v.startsWith("session:") && v.length > "session:".length)
+    ) {
+      sessionTarget = v as CronSessionTarget;
+    }
+    // Invalid values are silently ignored → defaults to "isolated" at dispatch
+  }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
@@ -403,6 +419,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       agentId,
       idempotencyKey,
       wakeMode,
+      sessionTarget,
       sessionKey,
       deliver,
       channel,

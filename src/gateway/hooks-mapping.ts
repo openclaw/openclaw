@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import type { CronSessionTarget } from "../cron/types.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
 
@@ -12,6 +13,7 @@ export type HookMappingResolved = {
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
   agentId?: string;
+  sessionTarget?: CronSessionTarget;
   sessionKey?: string;
   messageTemplate?: string;
   textTemplate?: string;
@@ -49,6 +51,7 @@ export type HookAction =
       name?: string;
       agentId?: string;
       wakeMode: "now" | "next-heartbeat";
+      sessionTarget?: CronSessionTarget;
       sessionKey?: string;
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
@@ -89,6 +92,7 @@ type HookTransformResult = Partial<{
   agentId: string;
   wakeMode: "now" | "next-heartbeat";
   name: string;
+  sessionTarget: CronSessionTarget;
   sessionKey: string;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
@@ -182,6 +186,25 @@ export async function applyHookMappings(
   return null;
 }
 
+/** Validate and normalize sessionTarget — drop invalid values to undefined (defaults to "isolated"). */
+function validateSessionTarget(
+  value: CronSessionTarget | undefined,
+): CronSessionTarget | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const v = typeof value === "string" ? value.trim() : "";
+  if (
+    v === "isolated" ||
+    v === "main" ||
+    v === "current" ||
+    (v.startsWith("session:") && v.length > "session:".length)
+  ) {
+    return v as CronSessionTarget;
+  }
+  return undefined;
+}
+
 function normalizeHookMapping(
   mapping: HookMappingConfig,
   index: number,
@@ -207,6 +230,7 @@ function normalizeHookMapping(
     wakeMode,
     name: mapping.name,
     agentId: mapping.agentId?.trim() || undefined,
+    sessionTarget: validateSessionTarget(mapping.sessionTarget),
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
@@ -260,6 +284,7 @@ function buildActionFromMapping(
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
+      sessionTarget: mapping.sessionTarget,
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
@@ -298,6 +323,7 @@ function mergeAction(
     wakeMode,
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
+    sessionTarget: validateSessionTarget(override.sessionTarget) ?? baseAgent?.sessionTarget,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
