@@ -76,7 +76,7 @@ describe("sandbox fs bridge anchored ops", () => {
       name: "write pins canonical parent + basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.writeFile({ filePath: "nested/file.txt", data: "updated" }),
-      expectedArgs: ["write", "/workspace", "nested", "file.txt", "1"],
+      expectedArgs: ["write", "/workspace", "nested", "file.txt", "1", "7"],
       forbiddenArgs: ["/workspace/nested/file.txt"],
     },
     {
