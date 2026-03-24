@@ -662,7 +662,7 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
           requestUpdate();
         }}
       />
-      <button class="btn-ghost" @click=${() => {
+      <button class="btn btn--ghost" @click=${() => {
         vs.searchOpen = false;
         vs.searchQuery = "";
         requestUpdate();
@@ -711,7 +711,7 @@ function renderPinnedSection(
                 <div class="agent-chat__pinned-item">
                   <span class="agent-chat__pinned-role">${role === "user" ? "You" : "Assistant"}</span>
                   <span class="agent-chat__pinned-text">${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span>
-                  <button class="btn-ghost" @click=${() => {
+                  <button class="btn btn--ghost" @click=${() => {
                     pinned.unpin(index);
                     requestUpdate();
                   }} title="Unpin">
@@ -1323,7 +1323,7 @@ export function renderChat(props: ChatProps) {
                 ? nothing
                 : html`
                     <button
-                      class="btn-ghost"
+                      class="btn btn--ghost"
                       @click=${props.onNewSession}
                       title="New session"
                       aria-label="New session"
@@ -1332,7 +1332,7 @@ export function renderChat(props: ChatProps) {
                     </button>
                   `
             }
-            <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
+            <button class="btn btn--ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
 

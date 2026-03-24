@@ -320,7 +320,7 @@ export function detachThemeListener(host: SettingsHost) {
   host.systemThemeCleanup = null;
 }
 
-const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, default: 10 };
+const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
 
 export function applyBorderRadius(value: number) {
   if (typeof document === "undefined") {
@@ -332,6 +332,7 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-md", `${Math.round(BASE_RADII.md * scale)}px`);
   root.style.setProperty("--radius-lg", `${Math.round(BASE_RADII.lg * scale)}px`);
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
+  root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
 }
 

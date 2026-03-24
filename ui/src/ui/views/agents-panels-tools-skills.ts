@@ -144,15 +144,15 @@ export function renderAgentTools(params: {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div style="min-width: 0;">
           <div class="card-title">Tool Access</div>
           <div class="card-sub">
             Profile + per-tool overrides for this agent.
             <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
           </div>
         </div>
-        <div class="row" style="gap: 8px;">
+        <div class="row" style="gap: 8px; flex-wrap: wrap;">
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
             Enable All
           </button>
@@ -346,8 +346,8 @@ export function renderAgentSkills(params: {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div style="min-width: 0;">
           <div class="card-title">Skills</div>
           <div class="card-sub">
             Per-agent skill allowlist and workspace skills.
