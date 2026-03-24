@@ -7,6 +7,7 @@ import * as sessions from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
+  killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
   sendControlledSubagentMessage,
@@ -350,6 +351,82 @@ describe("killControlledSubagentRun", () => {
     >;
     expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
+  });
+});
+
+describe("killAllControlledSubagentRuns", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("ignores stale run snapshots in bulk kill requests", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [childSessionKey]: {
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-current-bulk",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current bulk task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-stale-bulk",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "stale bulk task",
+          cleanup: "keep",
+          createdAt: Date.now() - 9_000,
+          startedAt: Date.now() - 8_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 0,
+      labels: [],
+    });
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
+    expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current-bulk");
   });
 });
 
