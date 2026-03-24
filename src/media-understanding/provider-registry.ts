@@ -168,7 +168,7 @@ export function buildMediaUnderstandingRegistry(
     }
   }
 
-  if (!overrides) {
+  if (!overrides && !cfg) {
     cachedRegistryVersion = getActivePluginRegistryVersion();
     mediaUnderstandingRegistryCache = registry;
   }

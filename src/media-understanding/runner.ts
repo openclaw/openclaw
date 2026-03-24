@@ -376,12 +376,18 @@ async function resolveKeyEntry(params: {
     return { type: "provider" as const, provider: providerId, model };
   };
 
-  // Helper to check all providers in registry for a given capability
-  // Skips auth check for plugin media providers - they may be keyless
-  const checkAllRegistryProviders = async (
+  // Helper to check all plugin providers in registry for a given capability
+  // Used as fallback after AUTO_*_PROVIDERS have been exhausted
+  // Only considers plugin providers (not built-ins from AUTO_* lists)
+  const checkAllPluginProviders = async (
     cap: MediaUnderstandingCapability,
+    builtinIds: Set<string>,
   ): Promise<MediaUnderstandingModelConfig | null> => {
     for (const [providerId, provider] of providerRegistry) {
+      // Skip built-in providers (handled by AUTO_* lists)
+      if (builtinIds.has(providerId.toLowerCase())) {
+        continue;
+      }
       const hasCapability =
         cap === "audio"
           ? !!provider.transcribeAudio
@@ -393,8 +399,7 @@ async function resolveKeyEntry(params: {
       if (!hasCapability) {
         continue;
       }
-      // Skip auth check for registry providers - they may be keyless plugins
-      // Just return the provider entry directly (auth will be resolved at execution)
+      // Skip auth check for plugin providers - they may be keyless
       const model = cap === "image" ? DEFAULT_IMAGE_MODELS[providerId] : undefined;
       return { type: "provider" as const, provider: providerId, model };
     }
@@ -416,7 +421,10 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return await checkAllRegistryProviders("image");
+    return await checkAllPluginProviders(
+      "image",
+      new Set(AUTO_IMAGE_KEY_PROVIDERS.map((p) => p.toLowerCase())),
+    );
   }
 
   if (capability === "video") {
@@ -433,7 +441,10 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return await checkAllRegistryProviders("video");
+    return await checkAllPluginProviders(
+      "video",
+      new Set(AUTO_VIDEO_KEY_PROVIDERS.map((p) => p.toLowerCase())),
+    );
   }
 
   const activeProvider = params.activeModel?.provider?.trim();
@@ -449,7 +460,10 @@ async function resolveKeyEntry(params: {
       return entry;
     }
   }
-  return await checkAllRegistryProviders("audio");
+  return await checkAllPluginProviders(
+    "audio",
+    new Set(AUTO_AUDIO_KEY_PROVIDERS.map((p) => p.toLowerCase())),
+  );
 }
 
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {

@@ -5,6 +5,7 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { findNormalizedProviderValue } from "../agents/model-selection.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -365,7 +366,7 @@ async function resolveProviderExecutionAuth(params: {
   if (!auth) {
     return {
       apiKeys: [],
-      providerConfig: params.cfg.models?.providers?.[params.providerId],
+      providerConfig: findNormalizedProviderValue(params.cfg.models?.providers, params.providerId),
     };
   }
   const requireKey = params.requireApiKey !== undefined ? params.requireApiKey : false;
@@ -375,7 +376,7 @@ async function resolveProviderExecutionAuth(params: {
       provider: params.providerId,
       primaryApiKey: primaryKey,
     }),
-    providerConfig: params.cfg.models?.providers?.[params.providerId],
+    providerConfig: findNormalizedProviderValue(params.cfg.models?.providers, params.providerId),
   };
 }
 
