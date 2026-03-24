@@ -10,6 +10,7 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 const PROVIDER_ID = "lemonade";
 const DEFAULT_API_KEY = "lemonade-local";
@@ -80,10 +81,11 @@ export default definePluginEntry({
             };
           }
 
+          const explicitApiKey = normalizeSecretInputString(explicit?.apiKey);
           const providerSetup = await loadProviderSetup();
           const provider = await providerSetup.buildLemonadeProvider({
             baseUrl: explicit?.baseUrl,
-            apiKey: lemonadeKey ?? explicit?.apiKey,
+            apiKey: lemonadeKey ?? explicitApiKey,
           });
           if (provider.models.length === 0 && !lemonadeKey && !explicit) {
             return null;
@@ -91,7 +93,7 @@ export default definePluginEntry({
           return {
             provider: {
               ...provider,
-              apiKey: lemonadeKey ?? explicit?.apiKey ?? DEFAULT_API_KEY,
+              apiKey: lemonadeKey ?? explicitApiKey ?? DEFAULT_API_KEY,
             },
           };
         },
