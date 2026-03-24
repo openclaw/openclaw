@@ -25,11 +25,13 @@ export function createMessageToolButtonsSchema(): TSchema {
 
 /** Schema helper for channels that accept provider-native card payloads. */
 export function createMessageToolCardSchema(): TSchema {
-  return Type.Object(
-    {},
-    {
-      additionalProperties: true,
-      description: "Structured card payload for channels that support card-style messages.",
-    },
+  return Type.Optional(
+    Type.Object(
+      {},
+      {
+        additionalProperties: true,
+        description: "Structured card payload for channels that support card-style messages.",
+      },
+    ),
   );
 }
