@@ -123,6 +123,77 @@ describe("msteams conversation store (fs)", () => {
     expect(retrieved).not.toBeNull();
     expect(retrieved!.timezone).toBe("Europe/London");
   });
+
+  it("findByUserId prefers personal conversation over group/channel (#51947)", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    const baseRef: StoredConversationReference = {
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1", aadObjectId: "aad1" },
+    };
+
+    // Group conversation stored first
+    await store.upsert("19:group@thread.tacv2", {
+      ...baseRef,
+      conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+    });
+
+    // Personal DM stored second
+    await store.upsert("a:1dm_personal", {
+      ...baseRef,
+      conversation: { id: "a:1dm_personal", conversationType: "personal" },
+    });
+
+    // Channel conversation stored third
+    await store.upsert("19:channel@thread.tacv2", {
+      ...baseRef,
+      conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+    });
+
+    const found = await store.findByUserId("aad1");
+    expect(found).not.toBeNull();
+    expect(found!.conversationId).toBe("a:1dm_personal");
+    expect(found!.reference.conversation?.conversationType).toBe("personal");
+  });
+
+  it("findByUserId falls back to most recent entry when no personal conversation exists", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    const baseRef: StoredConversationReference = {
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u2", aadObjectId: "aad2" },
+    };
+
+    // Older group conversation
+    await store.upsert("19:group-old@thread.tacv2", {
+      ...baseRef,
+      conversation: { id: "19:group-old@thread.tacv2", conversationType: "groupChat" },
+    });
+
+    // Small delay to ensure different lastSeenAt timestamps
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Newer group conversation
+    await store.upsert("19:group-new@thread.tacv2", {
+      ...baseRef,
+      conversation: { id: "19:group-new@thread.tacv2", conversationType: "groupChat" },
+    });
+
+    const found = await store.findByUserId("aad2");
+    expect(found).not.toBeNull();
+    // Should return the most recently seen entry
+    expect(found!.conversationId).toBe("19:group-new@thread.tacv2");
+  });
 });
 
 describe("msteams conversation store (memory)", () => {
@@ -225,5 +296,76 @@ describe("msteams conversation store (memory)", () => {
     await expect(store.get("conv-tz")).resolves.toMatchObject({
       timezone: "Europe/London",
     });
+  });
+
+  it("findByUserId prefers personal conversation over group/channel (#51947)", async () => {
+    const store = createMSTeamsConversationStoreMemory([
+      {
+        conversationId: "19:group@thread.tacv2",
+        reference: {
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+          user: { id: "user-x", aadObjectId: "aad-x", name: "Xavier" },
+        },
+      },
+      {
+        conversationId: "a:1dm_personal",
+        reference: {
+          conversation: { id: "a:1dm_personal", conversationType: "personal" },
+          user: { id: "user-x", aadObjectId: "aad-x", name: "Xavier" },
+        },
+      },
+      {
+        conversationId: "19:channel@thread.tacv2",
+        reference: {
+          conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+          user: { id: "user-x", aadObjectId: "aad-x", name: "Xavier" },
+        },
+      },
+    ]);
+
+    const found = await store.findByUserId("aad-x");
+    expect(found).not.toBeNull();
+    expect(found!.conversationId).toBe("a:1dm_personal");
+    expect(found!.reference.conversation?.conversationType).toBe("personal");
+  });
+
+  it("findByUserId falls back to first match when no personal conversation exists", async () => {
+    const store = createMSTeamsConversationStoreMemory([
+      {
+        conversationId: "19:group-a@thread.tacv2",
+        reference: {
+          conversation: { id: "19:group-a@thread.tacv2", conversationType: "groupChat" },
+          user: { id: "user-y", aadObjectId: "aad-y", name: "Yara" },
+        },
+      },
+      {
+        conversationId: "19:group-b@thread.tacv2",
+        reference: {
+          conversation: { id: "19:group-b@thread.tacv2", conversationType: "groupChat" },
+          user: { id: "user-y", aadObjectId: "aad-y", name: "Yara" },
+        },
+      },
+    ]);
+
+    const found = await store.findByUserId("aad-y");
+    expect(found).not.toBeNull();
+    // Falls back to first match when no personal conversation exists
+    expect(found!.conversationId).toBe("19:group-a@thread.tacv2");
+  });
+
+  it("findByUserId still works for single-conversation users", async () => {
+    const store = createMSTeamsConversationStoreMemory([
+      {
+        conversationId: "a:1only_dm",
+        reference: {
+          conversation: { id: "a:1only_dm", conversationType: "personal" },
+          user: { id: "user-z", aadObjectId: "aad-z", name: "Zara" },
+        },
+      },
+    ]);
+
+    const found = await store.findByUserId("aad-z");
+    expect(found).not.toBeNull();
+    expect(found!.conversationId).toBe("a:1only_dm");
   });
 });

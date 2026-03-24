@@ -39,15 +39,24 @@ export function createMSTeamsConversationStoreMemory(
       if (!target) {
         return null;
       }
+      const matches: MSTeamsConversationStoreEntry[] = [];
       for (const [conversationId, reference] of map.entries()) {
-        if (reference.user?.aadObjectId === target) {
-          return { conversationId, reference };
-        }
-        if (reference.user?.id === target) {
-          return { conversationId, reference };
+        if (reference.user?.aadObjectId === target || reference.user?.id === target) {
+          matches.push({ conversationId, reference });
         }
       }
-      return null;
+      if (matches.length === 0) {
+        return null;
+      }
+      if (matches.length === 1) {
+        return matches[0]!;
+      }
+      // Prefer personal (1:1) conversations over group/channel to avoid
+      // routing proactive sends to the wrong conversation (see #51947).
+      return (
+        matches.find((m) => m.reference.conversation?.conversationType === "personal") ??
+        matches[0]!
+      );
     },
   };
 }

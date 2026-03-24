@@ -118,16 +118,35 @@ export function createMSTeamsConversationStoreFs(params?: {
     if (!target) {
       return null;
     }
-    for (const entry of await list()) {
-      const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target) {
-        return { conversationId, reference };
-      }
-      if (reference.user?.id === target) {
-        return { conversationId, reference };
+    const entries = await list();
+    const matches: MSTeamsConversationStoreEntry[] = [];
+    for (const entry of entries) {
+      const { reference } = entry;
+      if (reference.user?.aadObjectId === target || reference.user?.id === target) {
+        matches.push(entry);
       }
     }
-    return null;
+    if (matches.length === 0) {
+      return null;
+    }
+    if (matches.length === 1) {
+      return matches[0]!;
+    }
+    // When multiple conversations exist for the same user, prefer personal (1:1)
+    // over group/channel to avoid routing DM-initiated proactive sends to the
+    // wrong conversation (see #51947).
+    const personal = matches.find((m) => m.reference.conversation?.conversationType === "personal");
+    if (personal) {
+      return personal;
+    }
+    // No personal conversation found; fall back to the most recently seen entry
+    // so the result is deterministic and predictable.
+    const sorted = matches.toSorted((a, b) => {
+      const aTs = parseTimestamp((a.reference as { lastSeenAt?: string }).lastSeenAt) ?? 0;
+      const bTs = parseTimestamp((b.reference as { lastSeenAt?: string }).lastSeenAt) ?? 0;
+      return bTs - aTs;
+    });
+    return sorted[0]!;
   };
 
   const upsert = async (
