@@ -20,6 +20,11 @@ export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null })
   return [escaped, `@${escaped}`];
 }
 
+/** Compat alias: upstream uses RegExp[], local uses string patterns. Returns RegExp[]. */
+export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
+  return resolveWhatsAppMentionStripPatterns(ctx).map((p) => new RegExp(p, "g"));
+}
+
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
 type WhatsAppSendMessage = PluginRuntimeChannel["whatsapp"]["sendMessageWhatsApp"];
 type WhatsAppSendPoll = PluginRuntimeChannel["whatsapp"]["sendPollWhatsApp"];

@@ -119,3 +119,4 @@ export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../extensions/telegram/api.js";
+export { resolveTelegramAccount } from "../../extensions/telegram/src/accounts.js";

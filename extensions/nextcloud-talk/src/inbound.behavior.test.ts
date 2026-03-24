@@ -84,7 +84,9 @@ function createRuntimeEnv() {
   } as unknown as RuntimeEnv;
 }
 
-function createAccount(overrides?: Partial<ResolvedNextcloudTalkAccount>): ResolvedNextcloudTalkAccount {
+function createAccount(
+  overrides?: Partial<ResolvedNextcloudTalkAccount>,
+): ResolvedNextcloudTalkAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -101,7 +103,9 @@ function createAccount(overrides?: Partial<ResolvedNextcloudTalkAccount>): Resol
   };
 }
 
-function createMessage(overrides?: Partial<NextcloudTalkInboundMessage>): NextcloudTalkInboundMessage {
+function createMessage(
+  overrides?: Partial<NextcloudTalkInboundMessage>,
+): NextcloudTalkInboundMessage {
   return {
     messageId: "msg-1",
     roomToken: "room-1",
@@ -160,7 +164,9 @@ describe("nextcloud-talk inbound behavior", () => {
       accountId: "default",
     });
     expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
-    expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ lastOutboundAt: expect.any(Number) }));
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lastOutboundAt: expect.any(Number) }),
+    );
   });
 
   it("drops unmentioned group traffic before dispatch", async () => {

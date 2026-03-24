@@ -347,3 +347,38 @@ export function getPluginCommandSpecs(provider?: string): Array<{
     acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
+
+/**
+ * Validates a plugin command definition structure.
+ * Returns an error string if invalid, or null if valid.
+ */
+export function validatePluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+): string | null {
+  if (typeof command.handler !== "function") {
+    return "Command handler must be a function";
+  }
+  if (typeof command.name !== "string") {
+    return "Command name must be a string";
+  }
+  if (typeof command.description !== "string") {
+    return "Command description must be a string";
+  }
+  if (!command.description.trim()) {
+    return "Command description cannot be empty";
+  }
+  const nameError = validateCommandName(command.name.trim());
+  if (nameError) {
+    return nameError;
+  }
+  for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
+    if (typeof alias !== "string") {
+      return `Native name for "${label}" must be a string`;
+    }
+    const aliasError = validateCommandName(alias.trim());
+    if (aliasError) {
+      return `Native name "${label}": ${aliasError}`;
+    }
+  }
+  return null;
+}

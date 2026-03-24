@@ -52,3 +52,4 @@ export {
   generateTopicLabel,
 } from "../auto-reply/reply/auto-topic-label.js";
 export type { AutoTopicLabelParams } from "../auto-reply/reply/auto-topic-label.js";
+export { chunkMarkdownText } from "../auto-reply/chunk.js";

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+import { listTelegramAccountIds } from "../../extensions/telegram/src/accounts.js";
 import {
-  inspectTelegramAccount,
   isNumericTelegramUserId,
-  listTelegramAccountIds,
-  lookupTelegramChatId,
   normalizeTelegramAllowFromEntry,
 } from "../../extensions/telegram/src/allow-from.js";
+import { lookupTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";

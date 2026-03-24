@@ -48,3 +48,4 @@ export {
   probeIMessage,
   sendMessageIMessage,
 } from "../../extensions/imessage/runtime-api.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";

@@ -1,1036 +1,3185 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Operator1 Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding:24px}
-h1{color:#58a6ff;font-size:24px;margin-bottom:4px}
-.sub{color:#8b949e;font-size:13px;margin-bottom:16px}
-.tabs{display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid #30363d}
-.tab{padding:10px 20px;cursor:pointer;color:#8b949e;font-size:14px;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;user-select:none}
-.tab:hover{color:#c9d1d9}
-.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
-.cnt{display:inline-block;background:#30363d;color:#c9d1d9;font-size:11px;padding:1px 6px;border-radius:10px;margin-left:6px}
-.tc{display:none}.tc.active{display:block}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px}
-.card h2{color:#58a6ff;font-size:16px;margin-bottom:12px}
-.card h3{color:#8b949e;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
-.mv{font-size:36px;font-weight:700;color:#f0f6fc;line-height:1}
-.ml{color:#8b949e;font-size:12px;margin-top:4px}
-.mc{font-size:14px;margin-left:8px}
-.mc.up{color:#3fb950}.mc.down{color:#f85149}.mc.flat{color:#8b949e}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:8px 12px;border-bottom:2px solid #30363d;color:#8b949e;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;user-select:none;white-space:nowrap}
-th:hover{color:#58a6ff}
-th .sort-arrow{font-size:10px;margin-left:4px;color:#484f58}
-th.sorted .sort-arrow{color:#58a6ff}
-td{padding:8px 12px;border-bottom:1px solid #21262d}
-tr:hover td{background:#1c2128}
-a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
-.b{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
-.b-keep,.b-MERGED,.b-verified,.b-CLOSED{background:#0d2818;color:#3fb950}
-.b-discard,.b-failed{background:#2d1115;color:#f85149}
-.b-baseline,.b-out-of-scope{background:#1c1d21;color:#8b949e}
-.b-pending,.b-medium{background:#2a1f00;color:#d29922}
-.b-high{background:#2d1115;color:#f85149}
-.b-low{background:#0d2818;color:#3fb950}
-.b-pr-open,.b-OPEN{background:#1c1d21;color:#58a6ff}
-.b-merged{background:#0d2818;color:#3fb950}
-.sg{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
-.si{text-align:center}
-.si .v{font-size:20px;font-weight:700}
-.si .l{font-size:11px;color:#8b949e;margin-top:2px}
-.ag{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.ac{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px}
-.ac h4{color:#f0f6fc;font-size:14px;margin-bottom:8px}
-.mr{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
-.mr .l{color:#8b949e}
-.ch{position:relative;height:280px}
-.es{color:#484f58;text-align:center;padding:40px;font-style:italic}
-.rn{text-align:center;color:#484f58;font-size:12px;margin-top:16px;padding:12px}
-code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#21262d;padding:2px 6px;border-radius:4px}
-.sr{display:flex;gap:16px;margin-bottom:20px}
-.sc{flex:1;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;text-align:center}
-.sc .num{font-size:28px;font-weight:700;color:#f0f6fc}
-.sc .lbl{font-size:12px;color:#8b949e;margin-top:4px}
-.scroll{max-height:500px;overflow-y:auto}
-.filter-bar{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
-.filter-btn{padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #30363d;background:#0d1117;color:#8b949e;transition:all .2s}
-.filter-btn:hover{border-color:#58a6ff;color:#c9d1d9}
-.filter-btn.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
-.pipeline{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
-.pipe-step{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 20px;text-align:center;flex:1;min-width:120px}
-.pipe-step .num{font-size:24px;font-weight:700}
-.pipe-step .lbl{font-size:11px;color:#8b949e;margin-top:2px}
-.pipe-arrow{color:#30363d;font-size:20px}
-.subtabs{display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid #21262d}
-.subtab{padding:8px 16px;cursor:pointer;color:#8b949e;font-size:13px;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
-.subtab:hover{color:#c9d1d9}
-.subtab.active{color:#58a6ff;border-bottom-color:#58a6ff}
-.stc{display:none}.stc.active{display:block}
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Operator1 Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: #0d1117;
+        color: #c9d1d9;
+        padding: 24px;
+      }
+      h1 {
+        color: #58a6ff;
+        font-size: 24px;
+        margin-bottom: 4px;
+      }
+      .sub {
+        color: #8b949e;
+        font-size: 13px;
+        margin-bottom: 16px;
+      }
+      .tabs {
+        display: flex;
+        gap: 0;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #30363d;
+      }
+      .tab {
+        padding: 10px 20px;
+        cursor: pointer;
+        color: #8b949e;
+        font-size: 14px;
+        font-weight: 600;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        transition: all 0.2s;
+        user-select: none;
+      }
+      .tab:hover {
+        color: #c9d1d9;
+      }
+      .tab.active {
+        color: #58a6ff;
+        border-bottom-color: #58a6ff;
+      }
+      .cnt {
+        display: inline-block;
+        background: #30363d;
+        color: #c9d1d9;
+        font-size: 11px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        margin-left: 6px;
+      }
+      .tc {
+        display: none;
+      }
+      .tc.active {
+        display: block;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+      .card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 20px;
+      }
+      .card h2 {
+        color: #58a6ff;
+        font-size: 16px;
+        margin-bottom: 12px;
+      }
+      .card h3 {
+        color: #8b949e;
+        font-size: 13px;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .mv {
+        font-size: 36px;
+        font-weight: 700;
+        color: #f0f6fc;
+        line-height: 1;
+      }
+      .ml {
+        color: #8b949e;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .mc {
+        font-size: 14px;
+        margin-left: 8px;
+      }
+      .mc.up {
+        color: #3fb950;
+      }
+      .mc.down {
+        color: #f85149;
+      }
+      .mc.flat {
+        color: #8b949e;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 2px solid #30363d;
+        color: #8b949e;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      th:hover {
+        color: #58a6ff;
+      }
+      th .sort-arrow {
+        font-size: 10px;
+        margin-left: 4px;
+        color: #484f58;
+      }
+      th.sorted .sort-arrow {
+        color: #58a6ff;
+      }
+      td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #21262d;
+      }
+      tr:hover td {
+        background: #1c2128;
+      }
+      a {
+        color: #58a6ff;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .b {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .b-keep,
+      .b-MERGED,
+      .b-verified,
+      .b-CLOSED {
+        background: #0d2818;
+        color: #3fb950;
+      }
+      .b-discard,
+      .b-failed {
+        background: #2d1115;
+        color: #f85149;
+      }
+      .b-baseline,
+      .b-out-of-scope {
+        background: #1c1d21;
+        color: #8b949e;
+      }
+      .b-pending,
+      .b-medium {
+        background: #2a1f00;
+        color: #d29922;
+      }
+      .b-high {
+        background: #2d1115;
+        color: #f85149;
+      }
+      .b-low {
+        background: #0d2818;
+        color: #3fb950;
+      }
+      .b-pr-open,
+      .b-OPEN {
+        background: #1c1d21;
+        color: #58a6ff;
+      }
+      .b-merged {
+        background: #0d2818;
+        color: #3fb950;
+      }
+      .sg {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 12px;
+      }
+      .si {
+        text-align: center;
+      }
+      .si .v {
+        font-size: 20px;
+        font-weight: 700;
+      }
+      .si .l {
+        font-size: 11px;
+        color: #8b949e;
+        margin-top: 2px;
+      }
+      .ag {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+      .ac {
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 6px;
+        padding: 12px;
+      }
+      .ac h4 {
+        color: #f0f6fc;
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+      .mr {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        font-size: 12px;
+      }
+      .mr .l {
+        color: #8b949e;
+      }
+      .ch {
+        position: relative;
+        height: 280px;
+      }
+      .es {
+        color: #484f58;
+        text-align: center;
+        padding: 40px;
+        font-style: italic;
+      }
+      .rn {
+        text-align: center;
+        color: #484f58;
+        font-size: 12px;
+        margin-top: 16px;
+        padding: 12px;
+      }
+      code {
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 12px;
+        background: #21262d;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .sr {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+      .sc {
+        flex: 1;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 16px;
+        text-align: center;
+      }
+      .sc .num {
+        font-size: 28px;
+        font-weight: 700;
+        color: #f0f6fc;
+      }
+      .sc .lbl {
+        font-size: 12px;
+        color: #8b949e;
+        margin-top: 4px;
+      }
+      .scroll {
+        max-height: 500px;
+        overflow-y: auto;
+      }
+      .filter-bar {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .filter-btn {
+        padding: 4px 12px;
+        border-radius: 14px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid #30363d;
+        background: #0d1117;
+        color: #8b949e;
+        transition: all 0.2s;
+      }
+      .filter-btn:hover {
+        border-color: #58a6ff;
+        color: #c9d1d9;
+      }
+      .filter-btn.active {
+        background: #1f6feb;
+        border-color: #1f6feb;
+        color: #fff;
+      }
+      .pipeline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+      .pipe-step {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 12px 20px;
+        text-align: center;
+        flex: 1;
+        min-width: 120px;
+      }
+      .pipe-step .num {
+        font-size: 24px;
+        font-weight: 700;
+      }
+      .pipe-step .lbl {
+        font-size: 11px;
+        color: #8b949e;
+        margin-top: 2px;
+      }
+      .pipe-arrow {
+        color: #30363d;
+        font-size: 20px;
+      }
+      .subtabs {
+        display: flex;
+        gap: 0;
+        margin-bottom: 16px;
+        border-bottom: 1px solid #21262d;
+      }
+      .subtab {
+        padding: 8px 16px;
+        cursor: pointer;
+        color: #8b949e;
+        font-size: 13px;
+        font-weight: 500;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+      }
+      .subtab:hover {
+        color: #c9d1d9;
+      }
+      .subtab.active {
+        color: #58a6ff;
+        border-bottom-color: #58a6ff;
+      }
+      .stc {
+        display: none;
+      }
+      .stc.active {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Operator1 Dashboard</h1>
+    <p class="sub">
+      Generated: 3/23/2026, 11:30:11 PM &mdash; Refresh:
+      <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code>
+    </p>
 
-<h1>Operator1 Dashboard</h1>
-<p class="sub">Generated: 3/23/2026, 11:30:11 PM &mdash; Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code></p>
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('metrics')">Agent Improvement</div>
+      <div class="tab" onclick="switchTab('platform')">
+        Platform Improvement<span class="cnt">1</span>
+      </div>
+      <div class="tab" onclick="switchTab('history')">History<span class="cnt">37</span></div>
+    </div>
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('metrics')">Agent Improvement</div>
-  <div class="tab" onclick="switchTab('platform')">Platform Improvement<span class="cnt">1</span></div>
-  <div class="tab" onclick="switchTab('history')">History<span class="cnt">37</span></div>
-</div>
+    <!-- ==================== AGENT IMPROVEMENT ==================== -->
+    <div id="tab-metrics" class="tc active">
+      <div class="grid">
+        <div class="card" id="leftMetricsCard">
+          <div id="leftMetricsContent">
+            <h2>Composite Score</h2>
+            <div class="mv">0.653<span class="mc flat">-0.000</span></div>
+            <div class="ml">Operator1 (main) &mdash; 5 sessions analyzed</div>
+            <div style="margin-top: 16px">
+              <h3>Metric Breakdown</h3>
+              <div class="sg">
+                <div class="si">
+                  <div class="v" style="color: #f85149">0.22</div>
+                  <div class="l">Delegation (0.30)</div>
+                </div>
+                <div class="si">
+                  <div class="v" style="color: #f85149">0.44</div>
+                  <div class="l">Memory (0.20)</div>
+                </div>
+                <div class="si">
+                  <div class="v" style="color: #3fb950">1.00</div>
+                  <div class="l">Conciseness (0.15)</div>
+                </div>
+                <div class="si">
+                  <div class="v" style="color: #3fb950">1.00</div>
+                  <div class="l">Silent Reply (0.15)</div>
+                </div>
+                <div class="si">
+                  <div class="v" style="color: #3fb950">1.00</div>
+                  <div class="l">Tool Errors (0.20)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Score Trend</h2>
+          <div class="filter-bar">
+            <button class="filter-btn active" onclick="setChartView('composite')">Composite</button>
+            <button class="filter-btn" onclick="setChartView('op1')">Operator1</button>
+            <button class="filter-btn" onclick="setChartView('neo')">Neo</button>
+            <button class="filter-btn" onclick="setChartView('morpheus')">Morpheus</button>
+            <button class="filter-btn" onclick="setChartView('trinity')">Trinity</button>
+            <button class="filter-btn" onclick="setChartView('all')">All Agents</button>
+          </div>
+          <div class="ch"><canvas id="trendChart"></canvas></div>
+        </div>
+      </div>
 
-<!-- ==================== AGENT IMPROVEMENT ==================== -->
-<div id="tab-metrics" class="tc active">
+      <div class="card" style="margin-bottom: 20px">
+        <h2>Agent Overview</h2>
+        <div class="ag">
+          <div class="ac">
+            <h4>Operator1 (main)</h4>
+            <div class="mr"><span class="l">Sessions</span><span>5</span></div>
+            <div class="mr">
+              <span class="l">Composite</span><span style="font-weight: 700">0.653</span>
+            </div>
+            <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
+            <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
+            <div class="mr"><span class="l">Richness</span><span>1.000</span></div>
+            <div class="mr"><span class="l">Memory</span><span>0.438</span></div>
+          </div>
+          <div class="ac">
+            <h4>neo</h4>
+            <div class="mr"><span class="l">Sessions</span><span>5</span></div>
+            <div class="mr">
+              <span class="l">Composite</span><span style="font-weight: 700">0.600</span>
+            </div>
+            <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
+            <div class="mr"><span class="l">Write-Back</span><span>0.250</span></div>
+            <div class="mr"><span class="l">Richness</span><span>0.625</span></div>
+            <div class="mr"><span class="l">Memory</span><span>0.333</span></div>
+          </div>
+          <div class="ac">
+            <h4>morpheus</h4>
+            <div class="mr"><span class="l">Sessions</span><span>5</span></div>
+            <div class="mr">
+              <span class="l">Composite</span><span style="font-weight: 700">0.760</span>
+            </div>
+            <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
+            <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
+            <div class="mr"><span class="l">Richness</span><span>0.600</span></div>
+            <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
+          </div>
+          <div class="ac">
+            <h4>trinity</h4>
+            <div class="mr"><span class="l">Sessions</span><span>5</span></div>
+            <div class="mr">
+              <span class="l">Composite</span><span style="font-weight: 700">0.807</span>
+            </div>
+            <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
+            <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
+            <div class="mr"><span class="l">Richness</span><span>0.650</span></div>
+            <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
+          </div>
+        </div>
+      </div>
 
-<div class="grid">
-  <div class="card" id="leftMetricsCard">
-    <div id="leftMetricsContent">
-      <h2>Composite Score</h2>
-      <div class="mv">0.653<span class="mc flat">-0.000</span></div>
-      <div class="ml">Operator1 (main) &mdash; 5 sessions analyzed</div>
-      <div style="margin-top:16px">
-        <h3>Metric Breakdown</h3>
-        <div class="sg">
-          <div class="si"><div class="v" style="color:#f85149">0.22</div><div class="l">Delegation (0.30)</div></div><div class="si"><div class="v" style="color:#f85149">0.44</div><div class="l">Memory (0.20)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Conciseness (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Silent Reply (0.15)</div></div><div class="si"><div class="v" style="color:#3fb950">1.00</div><div class="l">Tool Errors (0.20)</div></div>
+      <div class="grid">
+        <div class="card">
+          <h2>Platform Diagnostics</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Severity</th>
+                <th>Agent</th>
+                <th>Tool</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>session-stability</td>
+                <td><span class="b b-low">low</span></td>
+                <td>main</td>
+                <td><code>session</code></td>
+                <td
+                  style="
+                    max-width: 250px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  "
+                  title="Session prompt error: aborted (provider: zai, model: glm-5)"
+                >
+                  Session prompt error: aborted (provider: zai, model: glm-5)
+                </td>
+              </tr>
+              <tr>
+                <td>session-stability</td>
+                <td><span class="b b-low">low</span></td>
+                <td>neo</td>
+                <td><code>session</code></td>
+                <td
+                  style="
+                    max-width: 250px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  "
+                  title="Session prompt error: aborted (provider: zai, model: glm-5)"
+                >
+                  Session prompt error: aborted (provider: zai, model: glm-5)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h2>Auto-Fix Attempts</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Category</th>
+                <th>Sev</th>
+                <th>PR</th>
+                <th>Status</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
+                <td>session-stability</td>
+                <td><span class="b b-low">low</span></td>
+                <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
+                <td><span class="b b-merged">merged</span></td>
+                <td
+                  style="
+                    max-width: 300px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  "
+                >
+                  Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the
+                  fallback chain instead of terminating the session
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
-  </div>
-  <div class="card">
-    <h2>Score Trend</h2>
-    <div class="filter-bar">
-      <button class="filter-btn active" onclick="setChartView('composite')">Composite</button>
-      <button class="filter-btn" onclick="setChartView('op1')">Operator1</button>
-      <button class="filter-btn" onclick="setChartView('neo')">Neo</button>
-      <button class="filter-btn" onclick="setChartView('morpheus')">Morpheus</button>
-      <button class="filter-btn" onclick="setChartView('trinity')">Trinity</button>
-      <button class="filter-btn" onclick="setChartView('all')">All Agents</button>
-    </div>
-    <div class="ch"><canvas id="trendChart"></canvas></div>
-  </div>
-</div>
 
-<div class="card" style="margin-bottom:20px">
-  <h2>Agent Overview</h2>
-  <div class="ag">
-    <div class="ac"><h4>Operator1 (main)</h4>
-        <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.653</span></div>
-        <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
-        <div class="mr"><span class="l">Richness</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Memory</span><span>0.438</span></div>
-      </div><div class="ac"><h4>neo</h4>
-        <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.600</span></div>
-        <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.250</span></div>
-        <div class="mr"><span class="l">Richness</span><span>0.625</span></div>
-        <div class="mr"><span class="l">Memory</span><span>0.333</span></div>
-      </div><div class="ac"><h4>morpheus</h4>
-        <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.760</span></div>
-        <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
-        <div class="mr"><span class="l">Richness</span><span>0.600</span></div>
-        <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
-      </div><div class="ac"><h4>trinity</h4>
-        <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.807</span></div>
-        <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
-        <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
-        <div class="mr"><span class="l">Richness</span><span>0.650</span></div>
-        <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
+    <!-- ==================== PLATFORM IMPROVEMENT ==================== -->
+    <div id="tab-platform" class="tc">
+      <h2 style="color: #58a6ff; margin-bottom: 16px">Fix Pipeline</h2>
+      <div class="pipeline">
+        <div class="pipe-step">
+          <div class="num" style="color: #58a6ff">2</div>
+          <div class="lbl">Detected</div>
+        </div>
+        <div class="pipe-arrow">&rarr;</div>
+        <div class="pipe-step">
+          <div class="num" style="color: #d29922">1</div>
+          <div class="lbl">Issues Filed</div>
+        </div>
+        <div class="pipe-arrow">&rarr;</div>
+        <div class="pipe-step">
+          <div class="num" style="color: #58a6ff">1</div>
+          <div class="lbl">Fix Attempted</div>
+        </div>
+        <div class="pipe-arrow">&rarr;</div>
+        <div class="pipe-step">
+          <div class="num" style="color: #3fb950">0</div>
+          <div class="lbl">Verified</div>
+        </div>
+        <div class="pipe-step">
+          <div class="num" style="color: #d29922">1</div>
+          <div class="lbl">Pending</div>
+        </div>
+        <div class="pipe-step">
+          <div class="num" style="color: #f85149">0</div>
+          <div class="lbl">Failed</div>
+        </div>
       </div>
-  </div>
-</div>
 
-<div class="grid">
-  <div class="card">
-    <h2>Platform Diagnostics</h2>
-    <table>
-      <thead><tr><th>Category</th><th>Severity</th><th>Agent</th><th>Tool</th><th>Evidence</th></tr></thead>
-      <tbody><tr>
-        <td>session-stability</td>
-        <td><span class="b b-low">low</span></td>
-        <td>main</td>
-        <td><code>session</code></td>
-        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Session prompt error: aborted (provider: zai, model: glm-5)">Session prompt error: aborted (provider: zai, model: glm-5)</td>
-      </tr><tr>
-        <td>session-stability</td>
-        <td><span class="b b-low">low</span></td>
-        <td>neo</td>
-        <td><code>session</code></td>
-        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Session prompt error: aborted (provider: zai, model: glm-5)">Session prompt error: aborted (provider: zai, model: glm-5)</td>
-      </tr></tbody></table>
-  </div>
-  <div class="card">
-    <h2>Auto-Fix Attempts</h2>
-    <table>
-      <thead><tr><th>#</th><th>Category</th><th>Sev</th><th>PR</th><th>Status</th><th>Description</th></tr></thead>
-      <tbody><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
-        <td>session-stability</td>
-        <td><span class="b b-low">low</span></td>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
-        <td><span class="b b-merged">merged</span></td>
-        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
-      </tr></tbody></table>
-  </div>
-</div>
+      <div class="sr">
+        <div class="sc">
+          <div class="num">0</div>
+          <div class="lbl">Open Issues</div>
+        </div>
+        <div class="sc">
+          <div class="num">1</div>
+          <div class="lbl">Closed Issues</div>
+        </div>
+        <div class="sc">
+          <div class="num">0</div>
+          <div class="lbl">Open PRs</div>
+        </div>
+        <div class="sc">
+          <div class="num">16</div>
+          <div class="lbl">Merged PRs</div>
+        </div>
+      </div>
 
-</div>
+      <div class="grid">
+        <div class="card">
+          <h2>Fix Tracking</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Issue</th>
+                <th>Category</th>
+                <th>Severity</th>
+                <th>PR</th>
+                <th>Files</th>
+                <th>Status</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
+                <td>session-stability</td>
+                <td><span class="b b-low">low</span></td>
+                <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
+                <td>1</td>
+                <td><span class="b b-merged">merged</span></td>
+                <td
+                  style="
+                    max-width: 250px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  "
+                >
+                  Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the
+                  fallback chain instead of terminating the session
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
-<!-- ==================== PLATFORM IMPROVEMENT ==================== -->
-<div id="tab-platform" class="tc">
+        <div class="card">
+          <h2>Category Breakdown</h2>
+          <div class="ch"><canvas id="categoryChart"></canvas></div>
+        </div>
+      </div>
 
-<h2 style="color:#58a6ff;margin-bottom:16px">Fix Pipeline</h2>
-<div class="pipeline">
-  <div class="pipe-step"><div class="num" style="color:#58a6ff">2</div><div class="lbl">Detected</div></div>
-  <div class="pipe-arrow">&rarr;</div>
-  <div class="pipe-step"><div class="num" style="color:#d29922">1</div><div class="lbl">Issues Filed</div></div>
-  <div class="pipe-arrow">&rarr;</div>
-  <div class="pipe-step"><div class="num" style="color:#58a6ff">1</div><div class="lbl">Fix Attempted</div></div>
-  <div class="pipe-arrow">&rarr;</div>
-  <div class="pipe-step"><div class="num" style="color:#3fb950">0</div><div class="lbl">Verified</div></div>
-  <div class="pipe-step"><div class="num" style="color:#d29922">1</div><div class="lbl">Pending</div></div>
-  <div class="pipe-step"><div class="num" style="color:#f85149">0</div><div class="lbl">Failed</div></div>
-</div>
+      <div class="grid">
+        <div class="card">
+          <h2>Issues</h2>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Title</th>
+                  <th>State</th>
+                  <th>Labels</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a>
+                  </td>
+                  <td
+                    style="
+                      max-width: 300px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    session-stability: GLM-5 sessions abort with 'prompt error: aborted' on main and
+                    neo agents
+                  </td>
+                  <td><span class="b b-CLOSED">CLOSED</span></td>
+                  <td style="font-size: 11px">auto-improve, platform</td>
+                  <td>2026-03-23</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Pull Requests</h2>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Title</th>
+                  <th>State</th>
+                  <th>+/-</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    fix(session-stability): treat bare 'aborted' prompt errors as transient for
+                    fallback
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+7</span> <span style="color: #f85149">-0</span>
+                  </td>
+                  <td>2026-03-23</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/15">#15</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    feat: onboarding Phase 3 — health check + chat delete fix
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+1596</span>
+                    <span style="color: #f85149">-438</span>
+                  </td>
+                  <td>2026-03-17</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/14">#14</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync: upstream v2026.3.13-1 patch (8 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+702</span>
+                    <span style="color: #f85149">-681</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/13">#13</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(ui-reference): upstream v2026.3.13-beta.1 UI fixes reference (5 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+755</span>
+                    <span style="color: #f85149">-152</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/12">#12</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(platform): upstream v2026.3.13-beta.1 platform changes (21 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+1580</span>
+                    <span style="color: #f85149">-1038</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/11">#11</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(integration): upstream v2026.3.13-beta.1 integration-sensitive (11 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+1890</span>
+                    <span style="color: #f85149">-649</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/10">#10</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(features): upstream v2026.3.13-beta.1 features (6 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+13938</span>
+                    <span style="color: #f85149">-6323</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/9">#9</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(core): upstream v2026.3.13-beta.1 core changes (655 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+61677</span>
+                    <span style="color: #f85149">-38386</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/8">#8</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(security): upstream v2026.3.13-beta.1 security fixes (22 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+3259</span>
+                    <span style="color: #f85149">-1231</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/7">#7</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(ui-inspiration): upstream dashboard-v2 reference (v2026.3.12)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+13258</span>
+                    <span style="color: #f85149">-3975</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/6">#6</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(review): cherry-pick upstream v2026.3.12 ACP + gateway hardening (17
+                    commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+3576</span>
+                    <span style="color: #f85149">-2164</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/5">#5</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(provider-refactor): cherry-pick upstream v2026.3.12 provider plugin
+                    architecture (8 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+4727</span>
+                    <span style="color: #f85149">-1836</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/4">#4</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(features): cherry-pick upstream v2026.3.12 features (11 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+14374</span>
+                    <span style="color: #f85149">-1221</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/3">#3</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(bugfixes): cherry-pick upstream v2026.3.12 bug fixes (~83 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+16578</span>
+                    <span style="color: #f85149">-2954</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/2">#2</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    sync(security): cherry-pick upstream v2026.3.12 security fixes (34 commits)
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+13383</span>
+                    <span style="color: #f85149">-2514</span>
+                  </td>
+                  <td>2026-03-16</td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/1">#1</a></td>
+                  <td
+                    style="
+                      max-width: 350px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    Merge upstream v2026.2.12 — security hardening, streaming, new providers
+                  </td>
+                  <td><span class="b b-MERGED">MERGED</span></td>
+                  <td>
+                    <span style="color: #3fb950">+47066</span>
+                    <span style="color: #f85149">-14254</span>
+                  </td>
+                  <td>2026-02-14</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
 
-<div class="sr">
-  <div class="sc">
-    <div class="num">0</div>
-    <div class="lbl">Open Issues</div>
-  </div>
-  <div class="sc">
-    <div class="num">1</div>
-    <div class="lbl">Closed Issues</div>
-  </div>
-  <div class="sc">
-    <div class="num">0</div>
-    <div class="lbl">Open PRs</div>
-  </div>
-  <div class="sc">
-    <div class="num">16</div>
-    <div class="lbl">Merged PRs</div>
-  </div>
-</div>
+    <!-- ==================== HISTORY ==================== -->
+    <div id="tab-history" class="tc">
+      <div class="subtabs">
+        <div class="subtab active" onclick="switchSubTab('agent-hist')">
+          Agent Improvement History<span class="cnt">36</span>
+        </div>
+        <div class="subtab" onclick="switchSubTab('platform-hist')">
+          Platform Fix History<span class="cnt">1</span>
+        </div>
+      </div>
 
-<div class="grid">
-  <div class="card">
-    <h2>Fix Tracking</h2>
-    <table>
-      <thead><tr><th>Issue</th><th>Category</th><th>Severity</th><th>PR</th><th>Files</th><th>Status</th><th>Description</th></tr></thead>
-      <tbody><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
-        <td>session-stability</td>
-        <td><span class="b b-low">low</span></td>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
-        <td>1</td>
-        <td><span class="b b-merged">merged</span></td>
-        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
-      </tr></tbody></table>
-  </div>
+      <div id="st-agent-hist" class="stc active">
+        <div class="card">
+          <h2>Agent Improvement Iterations</h2>
+          <div class="scroll">
+            <table id="agentHistTable">
+              <thead>
+                <tr>
+                  <th onclick="sortTable('agentHistTable', 0, 'num')">
+                    # <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 1, 'str')">
+                    Commit <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 2, 'num')">
+                    Score <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 3, 'num')">
+                    Del <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 4, 'num')">
+                    Mem <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 5, 'num')">
+                    Con <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 6, 'num')">
+                    Silent <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 7, 'num')">
+                    Errors <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('agentHistTable', 8, 'str')">
+                    Status <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>1</td>
+                  <td><code>memory-</code></td>
+                  <td><strong>0.614</strong></td>
+                  <td>0.352</td>
+                  <td>0.190</td>
+                  <td>0.800</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-baseline">baseline</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="memory metrics baseline — op1 retrieval=0.190 and wb=0.000 are primary targets"
+                  >
+                    memory metrics baseline — op1 retrieval=0.190 and wb=0.000 are primary targets
+                  </td>
+                </tr>
+                <tr>
+                  <td>2</td>
+                  <td><code>476ded2</code></td>
+                  <td><strong>0.622</strong></td>
+                  <td>0.386</td>
+                  <td>0.182</td>
+                  <td>0.800</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1 retrieval triggers + write-back rule; subagent wb improved (morpheus 0→0.333, trinity 0→0.250, neo 0.333→0.400)"
+                  >
+                    op1 retrieval triggers + write-back rule; subagent wb improved (morpheus
+                    0→0.333, trinity 0→0.250, neo 0.333→0.400)
+                  </td>
+                </tr>
+                <tr>
+                  <td>3</td>
+                  <td><code>8a3c7dd</code></td>
+                  <td><strong>0.673</strong></td>
+                  <td>0.381</td>
+                  <td>0.480</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="neo mid-session retrieval triggers; op1 memory 0.182→0.480 (major improvement)"
+                  >
+                    neo mid-session retrieval triggers; op1 memory 0.182→0.480 (major improvement)
+                  </td>
+                </tr>
+                <tr>
+                  <td>4</td>
+                  <td><code>eb5f954</code></td>
+                  <td><strong>0.695</strong></td>
+                  <td>0.363</td>
+                  <td>0.432</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain); composite 0.673→0.695"
+                  >
+                    morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain);
+                    composite 0.673→0.695
+                  </td>
+                </tr>
+                <tr>
+                  <td>5</td>
+                  <td><code>5e2c11f</code></td>
+                  <td><strong>0.744</strong></td>
+                  <td>0.384</td>
+                  <td>0.643</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643 (major gain); delegation still weak at 0.384"
+                  >
+                    op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643
+                    (major gain); delegation still weak at 0.384
+                  </td>
+                </tr>
+                <tr>
+                  <td>6</td>
+                  <td><code>90cc600</code></td>
+                  <td><strong>0.763</strong></td>
+                  <td>0.400</td>
+                  <td>0.714</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation 0.384→0.400; memory 0.643→0.714"
+                  >
+                    op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation
+                    0.384→0.400; memory 0.643→0.714
+                  </td>
+                </tr>
+                <tr>
+                  <td>7</td>
+                  <td><code>f91ef40</code></td>
+                  <td><strong>0.770</strong></td>
+                  <td>0.400</td>
+                  <td>0.750</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still 0.000 (7 iters, prompt not triggering)"
+                  >
+                    op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still
+                    0.000 (7 iters, prompt not triggering)
+                  </td>
+                </tr>
+                <tr>
+                  <td>8</td>
+                  <td><code>dec7e02</code></td>
+                  <td><strong>0.770</strong></td>
+                  <td>0.400</td>
+                  <td>0.750</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: write-back step 7; score held 0.770; op1_wb 0.000→0.333 (first write-back!) neo_wb 0.400→0.600; delegation still 0.400"
+                  >
+                    op1: write-back step 7; score held 0.770; op1_wb 0.000→0.333 (first write-back!)
+                    neo_wb 0.400→0.600; delegation still 0.400
+                  </td>
+                </tr>
+                <tr>
+                  <td>9</td>
+                  <td><code>6a5e153</code></td>
+                  <td><strong>0.770</strong></td>
+                  <td>0.470</td>
+                  <td>0.740</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: QMD routing to Neo; test session del=0.667 mem=0.741 (strong); trinity_wb=0.000 is new target"
+                  >
+                    op1: QMD routing to Neo; test session del=0.667 mem=0.741 (strong);
+                    trinity_wb=0.000 is new target
+                  </td>
+                </tr>
+                <tr>
+                  <td>10</td>
+                  <td><code>0cd91ef</code></td>
+                  <td><strong>0.763</strong></td>
+                  <td>0.404</td>
+                  <td>0.710</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="trinity: wb threshold change; score 0.770→0.763 (within noise); trinity_wb 0.000→0.200 (first write-back!); del=0.404 still weak"
+                  >
+                    trinity: wb threshold change; score 0.770→0.763 (within noise); trinity_wb
+                    0.000→0.200 (first write-back!); del=0.404 still weak
+                  </td>
+                </tr>
+                <tr>
+                  <td>11</td>
+                  <td><code>fe98448</code></td>
+                  <td><strong>0.735</strong></td>
+                  <td>0.490</td>
+                  <td>0.442</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-discard">discard</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: cron delegation ban; composite 0.763→0.735 (-0.028 regression); added prompt confusion — reverted"
+                  >
+                    op1: cron delegation ban; composite 0.763→0.735 (-0.028 regression); added
+                    prompt confusion — reverted
+                  </td>
+                </tr>
+                <tr>
+                  <td>12</td>
+                  <td><code>9dd9ad5</code></td>
+                  <td><strong>0.763</strong></td>
+                  <td>0.490</td>
+                  <td>0.432</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="revert fe98448 (cron ban regression); baseline restored at 0.763; delegation=0.490 target"
+                  >
+                    revert fe98448 (cron ban regression); baseline restored at 0.763;
+                    delegation=0.490 target
+                  </td>
+                </tr>
+                <tr>
+                  <td>13</td>
+                  <td><code>0c222e8</code></td>
+                  <td><strong>0.643</strong></td>
+                  <td>0.078</td>
+                  <td>0.600</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-discard">discard</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="score dropped 0.763→0.643 (-0.12); Dart AI MCP direct calls (70+) tanked delegation to 0.078; regression unrelated to web-search keyword change — Dart routing gap exposed"
+                  >
+                    score dropped 0.763→0.643 (-0.12); Dart AI MCP direct calls (70+) tanked
+                    delegation to 0.078; regression unrelated to web-search keyword change — Dart
+                    routing gap exposed
+                  </td>
+                </tr>
+                <tr>
+                  <td>14</td>
+                  <td><code>0d2a60e</code></td>
+                  <td><strong>0.719</strong></td>
+                  <td>0.462</td>
+                  <td>0.400</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="Dart AI routing fix; pre-fix sessions avg 0.719 (excl. f9012666 Dart session: 0.771); delegation 0.078→0.462; fix verified correct — no post-fix sessions yet"
+                  >
+                    Dart AI routing fix; pre-fix sessions avg 0.719 (excl. f9012666 Dart session:
+                    0.771); delegation 0.078→0.462; fix verified correct — no post-fix sessions yet
+                  </td>
+                </tr>
+                <tr>
+                  <td>15</td>
+                  <td><code>e1bd3a5</code></td>
+                  <td><strong>0.759</strong></td>
+                  <td>0.462</td>
+                  <td>0.600</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="TOOLS.md: add Paperclip-sync RPC methods; score 0.719→0.759 (all pre-fix sessions); delegation still weak 0.462 due to pre-fix Dart mcp_search calls; memory improved 0.400→0.600"
+                  >
+                    TOOLS.md: add Paperclip-sync RPC methods; score 0.719→0.759 (all pre-fix
+                    sessions); delegation still weak 0.462 due to pre-fix Dart mcp_search calls;
+                    memory improved 0.400→0.600
+                  </td>
+                </tr>
+                <tr>
+                  <td>16</td>
+                  <td><code>a980d26</code></td>
+                  <td><strong>0.759</strong></td>
+                  <td>0.462</td>
+                  <td>0.600</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="ban exec for openclaw CLI config calls; score stable 0.759 (all pre-fix sessions still active); delegation target remains 0.462"
+                  >
+                    ban exec for openclaw CLI config calls; score stable 0.759 (all pre-fix sessions
+                    still active); delegation target remains 0.462
+                  </td>
+                </tr>
+                <tr>
+                  <td>17</td>
+                  <td><code>6db9250</code></td>
+                  <td><strong>0.770</strong></td>
+                  <td>0.635</td>
+                  <td>0.400</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="neo: write-back unconditional >5 msgs; score 0.759→0.770; delegation 0.462→0.635 (new post-fix session bc3aef29 del=1.0); memory 0.600→0.400 (cron false-positives)"
+                  >
+                    neo: write-back unconditional >5 msgs; score 0.759→0.770; delegation 0.462→0.635
+                    (new post-fix session bc3aef29 del=1.0); memory 0.600→0.400 (cron
+                    false-positives)
+                  </td>
+                </tr>
+                <tr>
+                  <td>18</td>
+                  <td><code>acd7ed8</code></td>
+                  <td><strong>0.770</strong></td>
+                  <td>0.635</td>
+                  <td>0.400</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: memory_search at cron start; score stable 0.770; op1_wb improved to 0.429; neo_wb=0.167 (1/6 sessions) — write-before-return fix needed"
+                  >
+                    op1: memory_search at cron start; score stable 0.770; op1_wb improved to 0.429;
+                    neo_wb=0.167 (1/6 sessions) — write-before-return fix needed
+                  </td>
+                </tr>
+                <tr>
+                  <td>19</td>
+                  <td><code>ebdb5f1</code></td>
+                  <td><strong>0.751</strong></td>
+                  <td>0.637</td>
+                  <td>0.300</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="neo: write-before-return; score 0.770→0.751 (noise: f9012666 pre-fix metadata ctx triggers); neo_wb=0.000 all recent sessions pre-fix; no regression from my changes"
+                  >
+                    neo: write-before-return; score 0.770→0.751 (noise: f9012666 pre-fix metadata
+                    ctx triggers); neo_wb=0.000 all recent sessions pre-fix; no regression from my
+                    changes
+                  </td>
+                </tr>
+                <tr>
+                  <td>20</td>
+                  <td><code>1d99169</code></td>
+                  <td><strong>0.752</strong></td>
+                  <td>0.639</td>
+                  <td>0.300</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="cron session fix; score stable 0.752; neo_wb improved 0.000→0.500 (iter19 working); pre-fix sessions still dragging composite"
+                  >
+                    cron session fix; score stable 0.752; neo_wb improved 0.000→0.500 (iter19
+                    working); pre-fix sessions still dragging composite
+                  </td>
+                </tr>
+                <tr>
+                  <td>21</td>
+                  <td><code>6607d1b</code></td>
+                  <td><strong>0.752</strong></td>
+                  <td>0.639</td>
+                  <td>0.300</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="morpheus write-back fix; score stable 0.752; neo_wb=0.500 (iter19 confirmed working)"
+                  >
+                    morpheus write-back fix; score stable 0.752; neo_wb=0.500 (iter19 confirmed
+                    working)
+                  </td>
+                </tr>
+                <tr>
+                  <td>22</td>
+                  <td><code>21fa0f6</code></td>
+                  <td><strong>0.744</strong></td>
+                  <td>0.639</td>
+                  <td>0.300</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="memory_search first tool; score drifted 0.752→0.744 (f9012666 growing: 4 metadata ctx triggers, 2 searches); no regression from changes"
+                  >
+                    memory_search first tool; score drifted 0.752→0.744 (f9012666 growing: 4
+                    metadata ctx triggers, 2 searches); no regression from changes
+                  </td>
+                </tr>
+                <tr>
+                  <td>23</td>
+                  <td><code>f0413e4</code></td>
+                  <td><strong>0.743</strong></td>
+                  <td>0.639</td>
+                  <td>0.300</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="ban autonomous exec investigation; score noise 0.744→0.743; excl. pre-fix sessions: 0.800 (true performance); pre-fix sessions still dominating"
+                  >
+                    ban autonomous exec investigation; score noise 0.744→0.743; excl. pre-fix
+                    sessions: 0.800 (true performance); pre-fix sessions still dominating
+                  </td>
+                </tr>
+                <tr>
+                  <td>24</td>
+                  <td><code>5699f61</code></td>
+                  <td><strong>0.654</strong></td>
+                  <td>0.181</td>
+                  <td>0.500</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: fix Memory Protocol write-after-each-task; score 0.743→0.654 (-0.089 driven by session 960e888e heavy direct tool use, not prompt change); delegation=0.181 is primary target"
+                  >
+                    op1: fix Memory Protocol write-after-each-task; score 0.743→0.654 (-0.089 driven
+                    by session 960e888e heavy direct tool use, not prompt change); delegation=0.181
+                    is primary target
+                  </td>
+                </tr>
+                <tr>
+                  <td>25</td>
+                  <td><code>dc52542</code></td>
+                  <td><strong>0.649</strong></td>
+                  <td>0.180</td>
+                  <td>0.476</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: ban mcp_search for Dart AI calls; score pre-change 0.649 del=0.180; 960e888e+f9012666 had 68+8 exec and 73 mcp_search (Dart) direct calls; new red line targets Dart mcp_search pattern"
+                  >
+                    op1: ban mcp_search for Dart AI calls; score pre-change 0.649 del=0.180;
+                    960e888e+f9012666 had 68+8 exec and 73 mcp_search (Dart) direct calls; new red
+                    line targets Dart mcp_search pattern
+                  </td>
+                </tr>
+                <tr>
+                  <td>26</td>
+                  <td><code>a5477e1</code></td>
+                  <td><strong>0.650</strong></td>
+                  <td>0.183</td>
+                  <td>0.476</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: ban exec for memory file reads; use memory_get; 960e888e had 75 exec calls from memory fallback pattern; score stable (same sessions); delegation target=0.183"
+                  >
+                    op1: ban exec for memory file reads; use memory_get; 960e888e had 75 exec calls
+                    from memory fallback pattern; score stable (same sessions); delegation
+                    target=0.183
+                  </td>
+                </tr>
+                <tr>
+                  <td>27</td>
+                  <td><code>0a61f91</code></td>
+                  <td><strong>0.658</strong></td>
+                  <td>0.193</td>
+                  <td>0.500</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008); trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600"
+                  >
+                    trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008);
+                    trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600
+                  </td>
+                </tr>
+                <tr>
+                  <td>28</td>
+                  <td><code>47994c6</code></td>
+                  <td><strong>0.650</strong></td>
+                  <td>0.213</td>
+                  <td>0.433</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="neo: add yesterday/pending/we discussed to mid-session memory triggers; score 0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800; trinity_wb unchanged at 0.400"
+                  >
+                    neo: add yesterday/pending/we discussed to mid-session memory triggers; score
+                    0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800;
+                    trinity_wb unchanged at 0.400
+                  </td>
+                </tr>
+                <tr>
+                  <td>29</td>
+                  <td><code>3f1ba19</code></td>
+                  <td><strong>0.654</strong></td>
+                  <td>0.220</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: cron memory_search explicit override; score 0.650→0.654 (+0.004 within noise); trinity_wb 0.400→0.600 (iteration28 working!); memory target=0.438"
+                  >
+                    op1: cron memory_search explicit override; score 0.650→0.654 (+0.004 within
+                    noise); trinity_wb 0.400→0.600 (iteration28 working!); memory target=0.438
+                  </td>
+                </tr>
+                <tr>
+                  <td>30</td>
+                  <td><code>68d3bc0</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001); neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600"
+                  >
+                    trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001);
+                    neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600
+                  </td>
+                </tr>
+                <tr>
+                  <td>31</td>
+                  <td><code>5099fa9</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did 6 web_search with 0 memory writes; added step 4 to checklist"
+                  >
+                    morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did
+                    6 web_search with 0 memory writes; added step 4 to checklist
+                  </td>
+                </tr>
+                <tr>
+                  <td>32</td>
+                  <td><code>2ee243e</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="neo: add what was/I told you/did we to DURING SESSION triggers; score stable 0.653; neo_memory 0.000→0.333 (dc600eb2 now in window: 3 ctx, 1 search); missing triggers aligned"
+                  >
+                    neo: add what was/I told you/did we to DURING SESSION triggers; score stable
+                    0.653; neo_memory 0.000→0.333 (dc600eb2 now in window: 3 ctx, 1 search); missing
+                    triggers aligned
+                  </td>
+                </tr>
+                <tr>
+                  <td>33</td>
+                  <td><code>1a23fc4</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="trinity: align DURING SESSION triggers to scoring pattern; added you said/I told you/did we/remind me; score stable 0.653; neo_wb/morpheus_wb window shift regressions"
+                  >
+                    trinity: align DURING SESSION triggers to scoring pattern; added you said/I told
+                    you/did we/remind me; score stable 0.653; neo_wb/morpheus_wb window shift
+                    regressions
+                  </td>
+                </tr>
+                <tr>
+                  <td>34</td>
+                  <td><code>f2cd7c0</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: routing table - route mid-task investigations to Neo; score stable 0.653; trinity_memory 0.000→1.000 (window rotation); session window still stale"
+                  >
+                    op1: routing table - route mid-task investigations to Neo; score stable 0.653;
+                    trinity_memory 0.000→1.000 (window rotation); session window still stale
+                  </td>
+                </tr>
+                <tr>
+                  <td>35</td>
+                  <td><code>f1ba267</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: cron MANDATORY 4-step sequence with explicit polling ban; replaces freeform instructions; targets cron wb and memory false-positives"
+                  >
+                    op1: cron MANDATORY 4-step sequence with explicit polling ban; replaces freeform
+                    instructions; targets cron wb and memory false-positives
+                  </td>
+                </tr>
+                <tr>
+                  <td>36</td>
+                  <td><code>7d6b842</code></td>
+                  <td><strong>0.653</strong></td>
+                  <td>0.219</td>
+                  <td>0.438</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                  <td><span class="b b-keep">keep</span></td>
+                  <td
+                    style="
+                      max-width: 400px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                    title="op1: remove duplicate write-back header in Session Notes; reduce prompt from 1019→~1005 words; simplicity criterion"
+                  >
+                    op1: remove duplicate write-back header in Session Notes; reduce prompt from
+                    1019→~1005 words; simplicity criterion
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
-  <div class="card">
-    <h2>Category Breakdown</h2>
-    <div class="ch"><canvas id="categoryChart"></canvas></div>
-  </div>
-</div>
+      <div id="st-platform-hist" class="stc">
+        <div class="card">
+          <h2>Platform Fix Attempts</h2>
+          <div class="scroll">
+            <table id="fixHistTable">
+              <thead>
+                <tr>
+                  <th onclick="sortTable('fixHistTable', 0, 'num')">
+                    Issue <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('fixHistTable', 1, 'str')">
+                    Category <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('fixHistTable', 2, 'str')">
+                    Severity <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('fixHistTable', 3, 'num')">
+                    PR <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('fixHistTable', 4, 'num')">
+                    Files <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th onclick="sortTable('fixHistTable', 5, 'str')">
+                    Status <span class="sort-arrow">&#9650;</span>
+                  </th>
+                  <th>Error Signature</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a>
+                  </td>
+                  <td>session-stability</td>
+                  <td><span class="b b-low">low</span></td>
+                  <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
+                  <td>1</td>
+                  <td><span class="b b-merged">merged</span></td>
+                  <td
+                    style="
+                      max-width: 200px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    <code>session-abort:*:aborted</code>
+                  </td>
+                  <td
+                    style="
+                      max-width: 300px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    "
+                  >
+                    Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the
+                    fallback chain instead of terminating the session
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
 
-<div class="grid">
-  <div class="card">
-    <h2>Issues</h2>
-    <div class="scroll"><table>
-      <thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Created</th></tr></thead>
-      <tbody><tr>
-          <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
-          <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">session-stability: GLM-5 sessions abort with 'prompt error: aborted' on main and neo agents</td>
-          <td><span class="b b-CLOSED">CLOSED</span></td>
-          <td style="font-size:11px">auto-improve, platform</td>
-          <td>2026-03-23</td>
-        </tr></tbody></table></div>
-  </div>
-  <div class="card">
-    <h2>Pull Requests</h2>
-    <div class="scroll"><table>
-      <thead><tr><th>#</th><th>Title</th><th>State</th><th>+/-</th><th>Created</th></tr></thead>
-      <tbody><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fix(session-stability): treat bare 'aborted' prompt errors as transient for fallback</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+7</span> <span style="color:#f85149">-0</span></td>
-        <td>2026-03-23</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/15">#15</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">feat: onboarding Phase 3 — health check + chat delete fix</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+1596</span> <span style="color:#f85149">-438</span></td>
-        <td>2026-03-17</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/14">#14</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync: upstream v2026.3.13-1 patch (8 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+702</span> <span style="color:#f85149">-681</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/13">#13</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(ui-reference): upstream v2026.3.13-beta.1 UI fixes reference (5 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+755</span> <span style="color:#f85149">-152</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/12">#12</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(platform): upstream v2026.3.13-beta.1 platform changes (21 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+1580</span> <span style="color:#f85149">-1038</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/11">#11</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(integration): upstream v2026.3.13-beta.1 integration-sensitive (11 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+1890</span> <span style="color:#f85149">-649</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/10">#10</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(features): upstream v2026.3.13-beta.1 features (6 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+13938</span> <span style="color:#f85149">-6323</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/9">#9</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(core): upstream v2026.3.13-beta.1 core changes (655 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+61677</span> <span style="color:#f85149">-38386</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/8">#8</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(security): upstream v2026.3.13-beta.1 security fixes (22 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+3259</span> <span style="color:#f85149">-1231</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/7">#7</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(ui-inspiration): upstream dashboard-v2 reference (v2026.3.12)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+13258</span> <span style="color:#f85149">-3975</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/6">#6</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(review): cherry-pick upstream v2026.3.12 ACP + gateway hardening (17 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+3576</span> <span style="color:#f85149">-2164</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/5">#5</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(provider-refactor): cherry-pick upstream v2026.3.12 provider plugin architecture (8 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+4727</span> <span style="color:#f85149">-1836</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/4">#4</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(features): cherry-pick upstream v2026.3.12 features (11 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+14374</span> <span style="color:#f85149">-1221</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/3">#3</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(bugfixes): cherry-pick upstream v2026.3.12 bug fixes (~83 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+16578</span> <span style="color:#f85149">-2954</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/2">#2</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sync(security): cherry-pick upstream v2026.3.12 security fixes (34 commits)</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+13383</span> <span style="color:#f85149">-2514</span></td>
-        <td>2026-03-16</td>
-      </tr><tr>
-        <td><a href="https://github.com/Interstellar-code/operator1/pull/1">#1</a></td>
-        <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Merge upstream v2026.2.12 — security hardening, streaming, new providers</td>
-        <td><span class="b b-MERGED">MERGED</span></td>
-        <td><span style="color:#3fb950">+47066</span> <span style="color:#f85149">-14254</span></td>
-        <td>2026-02-14</td>
-      </tr></tbody></table></div>
-  </div>
-</div>
+    <div class="rn">
+      Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code> then reload
+    </div>
 
-</div>
+    <script>
+      // Tab switching
+      function switchTab(name) {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        document.querySelectorAll(".tc").forEach((t) => t.classList.remove("active"));
+        event.target.closest(".tab").classList.add("active");
+        document.getElementById("tab-" + name).classList.add("active");
+      }
+      function switchSubTab(name) {
+        const parent = event.target.closest(".tc");
+        parent.querySelectorAll(".subtab").forEach((t) => t.classList.remove("active"));
+        parent.querySelectorAll(".stc").forEach((t) => t.classList.remove("active"));
+        event.target.closest(".subtab").classList.add("active");
+        document.getElementById("st-" + name).classList.add("active");
+      }
 
-<!-- ==================== HISTORY ==================== -->
-<div id="tab-history" class="tc">
+      // Sortable tables
+      function sortTable(tableId, colIdx, type) {
+        const table = document.getElementById(tableId);
+        const tbody = table.querySelector("tbody");
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+        const th = table.querySelectorAll("th")[colIdx];
+        const asc = !th.classList.contains("sorted") || th.dataset.dir === "desc";
+        table.querySelectorAll("th").forEach((h) => {
+          h.classList.remove("sorted");
+          delete h.dataset.dir;
+        });
+        th.classList.add("sorted");
+        th.dataset.dir = asc ? "asc" : "desc";
+        th.querySelector(".sort-arrow").textContent = asc ? "\u25B2" : "\u25BC";
+        rows.sort((a, b) => {
+          let va = a.cells[colIdx].textContent.trim();
+          let vb = b.cells[colIdx].textContent.trim();
+          if (type === "num") {
+            const na = parseFloat(va.replace("#", "")) || 0;
+            const nb = parseFloat(vb.replace("#", "")) || 0;
+            return asc ? na - nb : nb - na;
+          }
+          return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+        });
+        rows.forEach((r) => tbody.appendChild(r));
+      }
 
-<div class="subtabs">
-  <div class="subtab active" onclick="switchSubTab('agent-hist')">Agent Improvement History<span class="cnt">36</span></div>
-  <div class="subtab" onclick="switchSubTab('platform-hist')">Platform Fix History<span class="cnt">1</span></div>
-</div>
+      // Chart data
+      const trendData = [
+        {
+          score: 0.614,
+          delegation: 0.352,
+          memory: 0.19,
+          conciseness: 0.8,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.995,
+          morpheus_exec: 1,
+          trinity_exec: 0.96,
+          op1_wb: 0,
+          neo_wb: 0.333,
+          morpheus_wb: 0,
+          trinity_wb: 0,
+        },
+        {
+          score: 0.622,
+          delegation: 0.386,
+          memory: 0.182,
+          conciseness: 0.8,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.333,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.673,
+          delegation: 0.381,
+          memory: 0.48,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.333,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.695,
+          delegation: 0.363,
+          memory: 0.432,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.333,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.744,
+          delegation: 0.384,
+          memory: 0.643,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.333,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.763,
+          delegation: 0.4,
+          memory: 0.714,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.333,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.77,
+          delegation: 0.4,
+          memory: 0.75,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0,
+          neo_wb: 0.4,
+          morpheus_wb: 0.25,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.77,
+          delegation: 0.4,
+          memory: 0.75,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.6,
+          morpheus_wb: 0.25,
+          trinity_wb: 0.25,
+        },
+        {
+          score: 0.77,
+          delegation: 0.47,
+          memory: 0.74,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.6,
+          morpheus_wb: 0.25,
+          trinity_wb: 0,
+        },
+        {
+          score: 0.763,
+          delegation: 0.404,
+          memory: 0.71,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.2,
+          neo_wb: 0.6,
+          morpheus_wb: 0.25,
+          trinity_wb: 0.2,
+        },
+        {
+          score: 0.735,
+          delegation: 0.49,
+          memory: 0.442,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.2,
+          neo_wb: 0.6,
+          morpheus_wb: 0.25,
+          trinity_wb: 0.2,
+        },
+        {
+          score: 0.763,
+          delegation: 0.49,
+          memory: 0.432,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.2,
+          neo_wb: 0.6,
+          morpheus_wb: 0.25,
+          trinity_wb: 0.2,
+        },
+        {
+          score: 0.643,
+          delegation: 0.078,
+          memory: 0.6,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.976,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.2,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.719,
+          delegation: 0.462,
+          memory: 0.4,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.759,
+          delegation: 0.462,
+          memory: 0.6,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.759,
+          delegation: 0.462,
+          memory: 0.6,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.77,
+          delegation: 0.635,
+          memory: 0.4,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.333,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.77,
+          delegation: 0.635,
+          memory: 0.4,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0.167,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.751,
+          delegation: 0.637,
+          memory: 0.3,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.752,
+          delegation: 0.639,
+          memory: 0.3,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0.5,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.752,
+          delegation: 0.639,
+          memory: 0.3,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0.5,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.744,
+          delegation: 0.639,
+          memory: 0.3,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0.5,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.743,
+          delegation: 0.639,
+          memory: 0.3,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 0.974,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.429,
+          neo_wb: 0.5,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.654,
+          delegation: 0.181,
+          memory: 0.5,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.649,
+          delegation: 0.18,
+          memory: 0.476,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.65,
+          delegation: 0.183,
+          memory: 0.476,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.658,
+          delegation: 0.193,
+          memory: 0.5,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.6,
+          morpheus_wb: 0.6,
+          trinity_wb: 0.4,
+        },
+        {
+          score: 0.65,
+          delegation: 0.213,
+          memory: 0.433,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.8,
+          morpheus_wb: 0.8,
+          trinity_wb: 0.4,
+        },
+        {
+          score: 0.654,
+          delegation: 0.22,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.6,
+          morpheus_wb: 0.8,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.4,
+          morpheus_wb: 0.6,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.4,
+          morpheus_wb: 0.6,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.4,
+          morpheus_wb: 0.6,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+        {
+          score: 0.653,
+          delegation: 0.219,
+          memory: 0.438,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          neo_exec: 1,
+          morpheus_exec: 1,
+          trinity_exec: 1,
+          op1_wb: 0.4,
+          neo_wb: 0.25,
+          morpheus_wb: 0.4,
+          trinity_wb: 0.6,
+        },
+      ];
+      const labels = trendData.map((_, i) => i + 1);
 
-<div id="st-agent-hist" class="stc active">
-<div class="card">
-  <h2>Agent Improvement Iterations</h2>
-  <div class="scroll"><table id="agentHistTable">
-    <thead><tr>
-      <th onclick="sortTable('agentHistTable',0,'num')"># <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',1,'str')">Commit <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',2,'num')">Score <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',3,'num')">Del <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',4,'num')">Mem <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',5,'num')">Con <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',6,'num')">Silent <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',7,'num')">Errors <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('agentHistTable',8,'str')">Status <span class="sort-arrow">&#9650;</span></th>
-      <th>Description</th>
-    </tr></thead>
-    <tbody><tr>
-      <td>1</td>
-      <td><code>memory-</code></td>
-      <td><strong>0.614</strong></td>
-      <td>0.352</td>
-      <td>0.190</td>
-      <td>0.800</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-baseline">baseline</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="memory metrics baseline — op1 retrieval=0.190 and wb=0.000 are primary targets">memory metrics baseline — op1 retrieval=0.190 and wb=0.000 are primary targets</td>
-    </tr><tr>
-      <td>2</td>
-      <td><code>476ded2</code></td>
-      <td><strong>0.622</strong></td>
-      <td>0.386</td>
-      <td>0.182</td>
-      <td>0.800</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1 retrieval triggers + write-back rule; subagent wb improved (morpheus 0→0.333, trinity 0→0.250, neo 0.333→0.400)">op1 retrieval triggers + write-back rule; subagent wb improved (morpheus 0→0.333, trinity 0→0.250, neo 0.333→0.400)</td>
-    </tr><tr>
-      <td>3</td>
-      <td><code>8a3c7dd</code></td>
-      <td><strong>0.673</strong></td>
-      <td>0.381</td>
-      <td>0.480</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo mid-session retrieval triggers; op1 memory 0.182→0.480 (major improvement)">neo mid-session retrieval triggers; op1 memory 0.182→0.480 (major improvement)</td>
-    </tr><tr>
-      <td>4</td>
-      <td><code>eb5f954</code></td>
-      <td><strong>0.695</strong></td>
-      <td>0.363</td>
-      <td>0.432</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain); composite 0.673→0.695">morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain); composite 0.673→0.695</td>
-    </tr><tr>
-      <td>5</td>
-      <td><code>5e2c11f</code></td>
-      <td><strong>0.744</strong></td>
-      <td>0.384</td>
-      <td>0.643</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643 (major gain); delegation still weak at 0.384">op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643 (major gain); delegation still weak at 0.384</td>
-    </tr><tr>
-      <td>6</td>
-      <td><code>90cc600</code></td>
-      <td><strong>0.763</strong></td>
-      <td>0.400</td>
-      <td>0.714</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation 0.384→0.400; memory 0.643→0.714">op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation 0.384→0.400; memory 0.643→0.714</td>
-    </tr><tr>
-      <td>7</td>
-      <td><code>f91ef40</code></td>
-      <td><strong>0.770</strong></td>
-      <td>0.400</td>
-      <td>0.750</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still 0.000 (7 iters, prompt not triggering)">op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still 0.000 (7 iters, prompt not triggering)</td>
-    </tr><tr>
-      <td>8</td>
-      <td><code>dec7e02</code></td>
-      <td><strong>0.770</strong></td>
-      <td>0.400</td>
-      <td>0.750</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: write-back step 7; score held 0.770; op1_wb 0.000→0.333 (first write-back!) neo_wb 0.400→0.600; delegation still 0.400">op1: write-back step 7; score held 0.770; op1_wb 0.000→0.333 (first write-back!) neo_wb 0.400→0.600; delegation still 0.400</td>
-    </tr><tr>
-      <td>9</td>
-      <td><code>6a5e153</code></td>
-      <td><strong>0.770</strong></td>
-      <td>0.470</td>
-      <td>0.740</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: QMD routing to Neo; test session del=0.667 mem=0.741 (strong); trinity_wb=0.000 is new target">op1: QMD routing to Neo; test session del=0.667 mem=0.741 (strong); trinity_wb=0.000 is new target</td>
-    </tr><tr>
-      <td>10</td>
-      <td><code>0cd91ef</code></td>
-      <td><strong>0.763</strong></td>
-      <td>0.404</td>
-      <td>0.710</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: wb threshold change; score 0.770→0.763 (within noise); trinity_wb 0.000→0.200 (first write-back!); del=0.404 still weak">trinity: wb threshold change; score 0.770→0.763 (within noise); trinity_wb 0.000→0.200 (first write-back!); del=0.404 still weak</td>
-    </tr><tr>
-      <td>11</td>
-      <td><code>fe98448</code></td>
-      <td><strong>0.735</strong></td>
-      <td>0.490</td>
-      <td>0.442</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-discard">discard</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: cron delegation ban; composite 0.763→0.735 (-0.028 regression); added prompt confusion — reverted">op1: cron delegation ban; composite 0.763→0.735 (-0.028 regression); added prompt confusion — reverted</td>
-    </tr><tr>
-      <td>12</td>
-      <td><code>9dd9ad5</code></td>
-      <td><strong>0.763</strong></td>
-      <td>0.490</td>
-      <td>0.432</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="revert fe98448 (cron ban regression); baseline restored at 0.763; delegation=0.490 target">revert fe98448 (cron ban regression); baseline restored at 0.763; delegation=0.490 target</td>
-    </tr><tr>
-      <td>13</td>
-      <td><code>0c222e8</code></td>
-      <td><strong>0.643</strong></td>
-      <td>0.078</td>
-      <td>0.600</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-discard">discard</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="score dropped 0.763→0.643 (-0.12); Dart AI MCP direct calls (70+) tanked delegation to 0.078; regression unrelated to web-search keyword change — Dart routing gap exposed">score dropped 0.763→0.643 (-0.12); Dart AI MCP direct calls (70+) tanked delegation to 0.078; regression unrelated to web-search keyword change — Dart routing gap exposed</td>
-    </tr><tr>
-      <td>14</td>
-      <td><code>0d2a60e</code></td>
-      <td><strong>0.719</strong></td>
-      <td>0.462</td>
-      <td>0.400</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Dart AI routing fix; pre-fix sessions avg 0.719 (excl. f9012666 Dart session: 0.771); delegation 0.078→0.462; fix verified correct — no post-fix sessions yet">Dart AI routing fix; pre-fix sessions avg 0.719 (excl. f9012666 Dart session: 0.771); delegation 0.078→0.462; fix verified correct — no post-fix sessions yet</td>
-    </tr><tr>
-      <td>15</td>
-      <td><code>e1bd3a5</code></td>
-      <td><strong>0.759</strong></td>
-      <td>0.462</td>
-      <td>0.600</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="TOOLS.md: add Paperclip-sync RPC methods; score 0.719→0.759 (all pre-fix sessions); delegation still weak 0.462 due to pre-fix Dart mcp_search calls; memory improved 0.400→0.600">TOOLS.md: add Paperclip-sync RPC methods; score 0.719→0.759 (all pre-fix sessions); delegation still weak 0.462 due to pre-fix Dart mcp_search calls; memory improved 0.400→0.600</td>
-    </tr><tr>
-      <td>16</td>
-      <td><code>a980d26</code></td>
-      <td><strong>0.759</strong></td>
-      <td>0.462</td>
-      <td>0.600</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="ban exec for openclaw CLI config calls; score stable 0.759 (all pre-fix sessions still active); delegation target remains 0.462">ban exec for openclaw CLI config calls; score stable 0.759 (all pre-fix sessions still active); delegation target remains 0.462</td>
-    </tr><tr>
-      <td>17</td>
-      <td><code>6db9250</code></td>
-      <td><strong>0.770</strong></td>
-      <td>0.635</td>
-      <td>0.400</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo: write-back unconditional >5 msgs; score 0.759→0.770; delegation 0.462→0.635 (new post-fix session bc3aef29 del=1.0); memory 0.600→0.400 (cron false-positives)">neo: write-back unconditional >5 msgs; score 0.759→0.770; delegation 0.462→0.635 (new post-fix session bc3aef29 del=1.0); memory 0.600→0.400 (cron false-positives)</td>
-    </tr><tr>
-      <td>18</td>
-      <td><code>acd7ed8</code></td>
-      <td><strong>0.770</strong></td>
-      <td>0.635</td>
-      <td>0.400</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: memory_search at cron start; score stable 0.770; op1_wb improved to 0.429; neo_wb=0.167 (1/6 sessions) — write-before-return fix needed">op1: memory_search at cron start; score stable 0.770; op1_wb improved to 0.429; neo_wb=0.167 (1/6 sessions) — write-before-return fix needed</td>
-    </tr><tr>
-      <td>19</td>
-      <td><code>ebdb5f1</code></td>
-      <td><strong>0.751</strong></td>
-      <td>0.637</td>
-      <td>0.300</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo: write-before-return; score 0.770→0.751 (noise: f9012666 pre-fix metadata ctx triggers); neo_wb=0.000 all recent sessions pre-fix; no regression from my changes">neo: write-before-return; score 0.770→0.751 (noise: f9012666 pre-fix metadata ctx triggers); neo_wb=0.000 all recent sessions pre-fix; no regression from my changes</td>
-    </tr><tr>
-      <td>20</td>
-      <td><code>1d99169</code></td>
-      <td><strong>0.752</strong></td>
-      <td>0.639</td>
-      <td>0.300</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="cron session fix; score stable 0.752; neo_wb improved 0.000→0.500 (iter19 working); pre-fix sessions still dragging composite">cron session fix; score stable 0.752; neo_wb improved 0.000→0.500 (iter19 working); pre-fix sessions still dragging composite</td>
-    </tr><tr>
-      <td>21</td>
-      <td><code>6607d1b</code></td>
-      <td><strong>0.752</strong></td>
-      <td>0.639</td>
-      <td>0.300</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="morpheus write-back fix; score stable 0.752; neo_wb=0.500 (iter19 confirmed working)">morpheus write-back fix; score stable 0.752; neo_wb=0.500 (iter19 confirmed working)</td>
-    </tr><tr>
-      <td>22</td>
-      <td><code>21fa0f6</code></td>
-      <td><strong>0.744</strong></td>
-      <td>0.639</td>
-      <td>0.300</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="memory_search first tool; score drifted 0.752→0.744 (f9012666 growing: 4 metadata ctx triggers, 2 searches); no regression from changes">memory_search first tool; score drifted 0.752→0.744 (f9012666 growing: 4 metadata ctx triggers, 2 searches); no regression from changes</td>
-    </tr><tr>
-      <td>23</td>
-      <td><code>f0413e4</code></td>
-      <td><strong>0.743</strong></td>
-      <td>0.639</td>
-      <td>0.300</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="ban autonomous exec investigation; score noise 0.744→0.743; excl. pre-fix sessions: 0.800 (true performance); pre-fix sessions still dominating">ban autonomous exec investigation; score noise 0.744→0.743; excl. pre-fix sessions: 0.800 (true performance); pre-fix sessions still dominating</td>
-    </tr><tr>
-      <td>24</td>
-      <td><code>5699f61</code></td>
-      <td><strong>0.654</strong></td>
-      <td>0.181</td>
-      <td>0.500</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: fix Memory Protocol write-after-each-task; score 0.743→0.654 (-0.089 driven by session 960e888e heavy direct tool use, not prompt change); delegation=0.181 is primary target">op1: fix Memory Protocol write-after-each-task; score 0.743→0.654 (-0.089 driven by session 960e888e heavy direct tool use, not prompt change); delegation=0.181 is primary target</td>
-    </tr><tr>
-      <td>25</td>
-      <td><code>dc52542</code></td>
-      <td><strong>0.649</strong></td>
-      <td>0.180</td>
-      <td>0.476</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: ban mcp_search for Dart AI calls; score pre-change 0.649 del=0.180; 960e888e+f9012666 had 68+8 exec and 73 mcp_search (Dart) direct calls; new red line targets Dart mcp_search pattern">op1: ban mcp_search for Dart AI calls; score pre-change 0.649 del=0.180; 960e888e+f9012666 had 68+8 exec and 73 mcp_search (Dart) direct calls; new red line targets Dart mcp_search pattern</td>
-    </tr><tr>
-      <td>26</td>
-      <td><code>a5477e1</code></td>
-      <td><strong>0.650</strong></td>
-      <td>0.183</td>
-      <td>0.476</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: ban exec for memory file reads; use memory_get; 960e888e had 75 exec calls from memory fallback pattern; score stable (same sessions); delegation target=0.183">op1: ban exec for memory file reads; use memory_get; 960e888e had 75 exec calls from memory fallback pattern; score stable (same sessions); delegation target=0.183</td>
-    </tr><tr>
-      <td>27</td>
-      <td><code>0a61f91</code></td>
-      <td><strong>0.658</strong></td>
-      <td>0.193</td>
-      <td>0.500</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008); trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600">trinity: write-before-return in subagent mode; score 0.650→0.658 (+0.008); trinity_wb target=0.400; morpheus_wb improved 0.400→0.600; neo_wb 0.250→0.600</td>
-    </tr><tr>
-      <td>28</td>
-      <td><code>47994c6</code></td>
-      <td><strong>0.650</strong></td>
-      <td>0.213</td>
-      <td>0.433</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo: add yesterday/pending/we discussed to mid-session memory triggers; score 0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800; trinity_wb unchanged at 0.400">neo: add yesterday/pending/we discussed to mid-session memory triggers; score 0.658→0.650 (within noise -0.008); neo_wb 0.600→0.800; morpheus_wb 0.600→0.800; trinity_wb unchanged at 0.400</td>
-    </tr><tr>
-      <td>29</td>
-      <td><code>3f1ba19</code></td>
-      <td><strong>0.654</strong></td>
-      <td>0.220</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: cron memory_search explicit override; score 0.650→0.654 (+0.004 within noise); trinity_wb 0.400→0.600 (iteration28 working!); memory target=0.438">op1: cron memory_search explicit override; score 0.650→0.654 (+0.004 within noise); trinity_wb 0.400→0.600 (iteration28 working!); memory target=0.438</td>
-    </tr><tr>
-      <td>30</td>
-      <td><code>68d3bc0</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001); neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600">trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001); neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600</td>
-    </tr><tr>
-      <td>31</td>
-      <td><code>5099fa9</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did 6 web_search with 0 memory writes; added step 4 to checklist">morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did 6 web_search with 0 memory writes; added step 4 to checklist</td>
-    </tr><tr>
-      <td>32</td>
-      <td><code>2ee243e</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="neo: add what was/I told you/did we to DURING SESSION triggers; score stable 0.653; neo_memory 0.000→0.333 (dc600eb2 now in window: 3 ctx, 1 search); missing triggers aligned">neo: add what was/I told you/did we to DURING SESSION triggers; score stable 0.653; neo_memory 0.000→0.333 (dc600eb2 now in window: 3 ctx, 1 search); missing triggers aligned</td>
-    </tr><tr>
-      <td>33</td>
-      <td><code>1a23fc4</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: align DURING SESSION triggers to scoring pattern; added you said/I told you/did we/remind me; score stable 0.653; neo_wb/morpheus_wb window shift regressions">trinity: align DURING SESSION triggers to scoring pattern; added you said/I told you/did we/remind me; score stable 0.653; neo_wb/morpheus_wb window shift regressions</td>
-    </tr><tr>
-      <td>34</td>
-      <td><code>f2cd7c0</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: routing table - route mid-task investigations to Neo; score stable 0.653; trinity_memory 0.000→1.000 (window rotation); session window still stale">op1: routing table - route mid-task investigations to Neo; score stable 0.653; trinity_memory 0.000→1.000 (window rotation); session window still stale</td>
-    </tr><tr>
-      <td>35</td>
-      <td><code>f1ba267</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: cron MANDATORY 4-step sequence with explicit polling ban; replaces freeform instructions; targets cron wb and memory false-positives">op1: cron MANDATORY 4-step sequence with explicit polling ban; replaces freeform instructions; targets cron wb and memory false-positives</td>
-    </tr><tr>
-      <td>36</td>
-      <td><code>7d6b842</code></td>
-      <td><strong>0.653</strong></td>
-      <td>0.219</td>
-      <td>0.438</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td>1.000</td>
-      <td><span class="b b-keep">keep</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="op1: remove duplicate write-back header in Session Notes; reduce prompt from 1019→~1005 words; simplicity criterion">op1: remove duplicate write-back header in Session Notes; reduce prompt from 1019→~1005 words; simplicity criterion</td>
-    </tr></tbody></table></div>
-</div>
-</div>
+      // Dataset definitions for each view
+      const datasets = {
+        composite: [
+          {
+            label: "Composite",
+            data: trendData.map((d) => d.score),
+            borderColor: "#58a6ff",
+            backgroundColor: "rgba(88,166,255,0.1)",
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+          },
+          {
+            label: "Delegation",
+            data: trendData.map((d) => d.delegation),
+            borderColor: "#f85149",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Memory",
+            data: trendData.map((d) => d.memory),
+            borderColor: "#3fb950",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+        op1: [
+          {
+            label: "Composite",
+            data: trendData.map((d) => d.score),
+            borderColor: "#58a6ff",
+            fill: false,
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+          },
+          {
+            label: "Delegation",
+            data: trendData.map((d) => d.delegation),
+            borderColor: "#f85149",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Memory",
+            data: trendData.map((d) => d.memory),
+            borderColor: "#3fb950",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Conciseness",
+            data: trendData.map((d) => d.conciseness),
+            borderColor: "#d29922",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Silent Reply",
+            data: trendData.map((d) => d.silent_reply),
+            borderColor: "#a371f7",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Write-Back",
+            data: trendData.map((d) => d.op1_wb),
+            borderColor: "#79c0ff",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+        neo: [
+          {
+            label: "Exec Rate",
+            data: trendData.map((d) => d.neo_exec),
+            borderColor: "#58a6ff",
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+          },
+          {
+            label: "Write-Back",
+            data: trendData.map((d) => d.neo_wb),
+            borderColor: "#3fb950",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+        morpheus: [
+          {
+            label: "Exec Rate",
+            data: trendData.map((d) => d.morpheus_exec),
+            borderColor: "#58a6ff",
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+          },
+          {
+            label: "Write-Back",
+            data: trendData.map((d) => d.morpheus_wb),
+            borderColor: "#3fb950",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+        trinity: [
+          {
+            label: "Exec Rate",
+            data: trendData.map((d) => d.trinity_exec),
+            borderColor: "#58a6ff",
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+          },
+          {
+            label: "Write-Back",
+            data: trendData.map((d) => d.trinity_wb),
+            borderColor: "#3fb950",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+        all: [
+          {
+            label: "Composite",
+            data: trendData.map((d) => d.score),
+            borderColor: "#58a6ff",
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 2,
+          },
+          {
+            label: "Neo Exec",
+            data: trendData.map((d) => d.neo_exec),
+            borderColor: "#f85149",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Morpheus Exec",
+            data: trendData.map((d) => d.morpheus_exec),
+            borderColor: "#3fb950",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+          {
+            label: "Trinity Exec",
+            data: trendData.map((d) => d.trinity_exec),
+            borderColor: "#d29922",
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 1.5,
+          },
+        ],
+      };
 
-<div id="st-platform-hist" class="stc">
-<div class="card">
-  <h2>Platform Fix Attempts</h2>
-  <div class="scroll"><table id="fixHistTable">
-    <thead><tr>
-      <th onclick="sortTable('fixHistTable',0,'num')">Issue <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('fixHistTable',1,'str')">Category <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('fixHistTable',2,'str')">Severity <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('fixHistTable',3,'num')">PR <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('fixHistTable',4,'num')">Files <span class="sort-arrow">&#9650;</span></th>
-      <th onclick="sortTable('fixHistTable',5,'str')">Status <span class="sort-arrow">&#9650;</span></th>
-      <th>Error Signature</th>
-      <th>Description</th>
-    </tr></thead>
-    <tbody><tr>
-      <td><a href="https://github.com/Interstellar-code/operator1/issues/16">#16</a></td>
-      <td>session-stability</td>
-      <td><span class="b b-low">low</span></td>
-      <td><a href="https://github.com/Interstellar-code/operator1/pull/17">#17</a></td>
-      <td>1</td>
-      <td><span class="b b-merged">merged</span></td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code>session-abort:*:aborted</code></td>
-      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session</td>
-    </tr></tbody></table></div>
-</div>
-</div>
+      const chartOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            title: { display: true, text: "Iteration", color: "#8b949e" },
+            ticks: { color: "#8b949e" },
+            grid: { color: "#21262d" },
+          },
+          y: {
+            min: 0,
+            max: 1,
+            title: { display: true, text: "Score", color: "#8b949e" },
+            ticks: { color: "#8b949e" },
+            grid: { color: "#21262d" },
+          },
+        },
+        plugins: { legend: { labels: { color: "#c9d1d9", font: { size: 11 } } } },
+      };
 
-</div>
+      let trendChart;
+      const ctx = document.getElementById("trendChart");
+      if (ctx) {
+        trendChart = new Chart(ctx, {
+          type: "line",
+          data: { labels, datasets: datasets.composite },
+          options: chartOpts,
+        });
+      }
 
-<div class="rn">Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code> then reload</div>
+      // Current agent metrics for inline display
+      const agentMetrics = {
+        main: {
+          sessions: 5,
+          composite: 0.6529028436018958,
+          delegation: 0.21800947867298578,
+          memory: 0.4375,
+          conciseness: 1,
+          silent_reply: 1,
+          error_rate: 1,
+          exec_rate: 1,
+          writeback: 0.4,
+          richness: 1,
+          prompt_size: 2022,
+          prompt_size_score: 0.2,
+          prompt_files: [
+            { file: "AGENTS.md", words: 989 },
+            { file: "SOUL.md", words: 177 },
+            { file: "TOOLS.md", words: 261 },
+            { file: "HEARTBEAT.md", words: 545 },
+            { file: "IDENTITY.md", words: 50 },
+          ],
+          tool_efficiency: 1,
+          prompt_efficiency: 0.32289952700390495,
+          tool_call_count: 458,
+          tool_calls_per_message: 2.8625,
+        },
+        neo: {
+          sessions: 5,
+          composite: 0.6004166666666666,
+          delegation: -1,
+          memory: 0.3333333333333333,
+          conciseness: -1,
+          silent_reply: -1,
+          error_rate: 1,
+          exec_rate: 1,
+          writeback: 0.25,
+          richness: 0.625,
+          prompt_size: 1320,
+          prompt_size_score: 0.6,
+          prompt_files: [
+            { file: "AGENTS.md", words: 832 },
+            { file: "SOUL.md", words: 145 },
+            { file: "TOOLS.md", words: 36 },
+            { file: "HEARTBEAT.md", words: 256 },
+            { file: "IDENTITY.md", words: 51 },
+          ],
+          tool_efficiency: 0.6,
+          prompt_efficiency: 0.45486111111111105,
+          tool_call_count: 187,
+          tool_calls_per_message: 9.842105263157896,
+        },
+        morpheus: {
+          sessions: 5,
+          composite: 0.76,
+          delegation: -1,
+          memory: 1,
+          conciseness: -1,
+          silent_reply: -1,
+          error_rate: 1,
+          exec_rate: 1,
+          writeback: 0.4,
+          richness: 0.6,
+          prompt_size: 1297,
+          prompt_size_score: 0.6,
+          prompt_files: [
+            { file: "AGENTS.md", words: 810 },
+            { file: "SOUL.md", words: 153 },
+            { file: "TOOLS.md", words: 26 },
+            { file: "HEARTBEAT.md", words: 250 },
+            { file: "IDENTITY.md", words: 58 },
+          ],
+          tool_efficiency: 0.8,
+          prompt_efficiency: 0.5859676175790286,
+          tool_call_count: 29,
+          tool_calls_per_message: 5.8,
+        },
+        trinity: {
+          sessions: 5,
+          composite: 0.8075,
+          delegation: -1,
+          memory: 1,
+          conciseness: -1,
+          silent_reply: -1,
+          error_rate: 1,
+          exec_rate: 1,
+          writeback: 0.6,
+          richness: 0.65,
+          prompt_size: 1463,
+          prompt_size_score: 0.6,
+          prompt_files: [
+            { file: "AGENTS.md", words: 999 },
+            { file: "SOUL.md", words: 138 },
+            { file: "TOOLS.md", words: 27 },
+            { file: "HEARTBEAT.md", words: 248 },
+            { file: "IDENTITY.md", words: 51 },
+          ],
+          tool_efficiency: 0.6,
+          prompt_efficiency: 0.551948051948052,
+          tool_call_count: 53,
+          tool_calls_per_message: 10.6,
+        },
+      };
 
-<script>
-// Tab switching
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tc').forEach(t => t.classList.remove('active'));
-  event.target.closest('.tab').classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-}
-function switchSubTab(name) {
-  const parent = event.target.closest('.tc');
-  parent.querySelectorAll('.subtab').forEach(t => t.classList.remove('active'));
-  parent.querySelectorAll('.stc').forEach(t => t.classList.remove('active'));
-  event.target.closest('.subtab').classList.add('active');
-  document.getElementById('st-' + name).classList.add('active');
-}
+      const metricDefs = {
+        composite: [],
+        op1: [
+          { k: "composite", l: "Composite" },
+          { k: "delegation", l: "Delegation" },
+          { k: "memory", l: "Memory" },
+          { k: "conciseness", l: "Conciseness" },
+          { k: "silent_reply", l: "Silent Reply" },
+          { k: "error_rate", l: "Tool Errors" },
+          { k: "exec_rate", l: "Exec Rate" },
+          { k: "writeback", l: "Write-Back" },
+          { k: "richness", l: "Richness" },
+        ],
+        neo: [
+          { k: "exec_rate", l: "Exec Rate" },
+          { k: "writeback", l: "Write-Back" },
+          { k: "richness", l: "Richness" },
+          { k: "memory", l: "Memory" },
+        ],
+        morpheus: [
+          { k: "exec_rate", l: "Exec Rate" },
+          { k: "writeback", l: "Write-Back" },
+          { k: "richness", l: "Richness" },
+          { k: "memory", l: "Memory" },
+        ],
+        trinity: [
+          { k: "exec_rate", l: "Exec Rate" },
+          { k: "writeback", l: "Write-Back" },
+          { k: "richness", l: "Richness" },
+          { k: "memory", l: "Memory" },
+        ],
+        all: [],
+      };
+      const agentMap = {
+        composite: "main",
+        op1: "main",
+        neo: "neo",
+        morpheus: "morpheus",
+        trinity: "trinity",
+        all: "main",
+      };
 
-// Sortable tables
-function sortTable(tableId, colIdx, type) {
-  const table = document.getElementById(tableId);
-  const tbody = table.querySelector('tbody');
-  const rows = Array.from(tbody.querySelectorAll('tr'));
-  const th = table.querySelectorAll('th')[colIdx];
-  const asc = !th.classList.contains('sorted') || th.dataset.dir === 'desc';
-  table.querySelectorAll('th').forEach(h => { h.classList.remove('sorted'); delete h.dataset.dir; });
-  th.classList.add('sorted');
-  th.dataset.dir = asc ? 'asc' : 'desc';
-  th.querySelector('.sort-arrow').textContent = asc ? '\u25B2' : '\u25BC';
-  rows.sort((a, b) => {
-    let va = a.cells[colIdx].textContent.trim();
-    let vb = b.cells[colIdx].textContent.trim();
-    if (type === 'num') {
-      const na = parseFloat(va.replace('#','')) || 0;
-      const nb = parseFloat(vb.replace('#','')) || 0;
-      return asc ? na - nb : nb - na;
-    }
-    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-  });
-  rows.forEach(r => tbody.appendChild(r));
-}
+      function renderLeftPanel(view) {
+        const container = document.getElementById("leftMetricsContent");
+        const agent = agentMetrics[agentMap[view]];
+        if (!agent) return;
 
-// Chart data
-const trendData = [{"score":0.614,"delegation":0.352,"memory":0.19,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":0.995,"morpheus_exec":1,"trinity_exec":0.96,"op1_wb":0,"neo_wb":0.333,"morpheus_wb":0,"trinity_wb":0},{"score":0.622,"delegation":0.386,"memory":0.182,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.673,"delegation":0.381,"memory":0.48,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.695,"delegation":0.363,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.744,"delegation":0.384,"memory":0.643,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.763,"delegation":0.4,"memory":0.714,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.47,"memory":0.74,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0},{"score":0.763,"delegation":0.404,"memory":0.71,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.735,"delegation":0.49,"memory":0.442,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.763,"delegation":0.49,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.643,"delegation":0.078,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.976,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.2,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.719,"delegation":0.462,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.167,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.751,"delegation":0.637,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.744,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.743,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.654,"delegation":0.181,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.649,"delegation":0.18,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.65,"delegation":0.183,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.658,"delegation":0.193,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.6,"trinity_wb":0.4},{"score":0.65,"delegation":0.213,"memory":0.433,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.8,"morpheus_wb":0.8,"trinity_wb":0.4},{"score":0.654,"delegation":0.22,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.8,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6}];
-const labels = trendData.map((_, i) => i + 1);
+        const agentName = {
+          composite: "Composite",
+          op1: "Operator1 (main)",
+          neo: "Neo",
+          morpheus: "Morpheus",
+          trinity: "Trinity",
+          all: "All Agents",
+        }[view];
+        const defs = metricDefs[view] || [];
 
-// Dataset definitions for each view
-const datasets = {
-  composite: [
-    { label:'Composite', data:trendData.map(d=>d.score), borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.1)', fill:true, tension:0.3, pointRadius:3, borderWidth:2 },
-    { label:'Delegation', data:trendData.map(d=>d.delegation), borderColor:'#f85149', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Memory', data:trendData.map(d=>d.memory), borderColor:'#3fb950', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-  op1: [
-    { label:'Composite', data:trendData.map(d=>d.score), borderColor:'#58a6ff', fill:false, tension:0.3, pointRadius:3, borderWidth:2 },
-    { label:'Delegation', data:trendData.map(d=>d.delegation), borderColor:'#f85149', tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Memory', data:trendData.map(d=>d.memory), borderColor:'#3fb950', tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Conciseness', data:trendData.map(d=>d.conciseness), borderColor:'#d29922', tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Silent Reply', data:trendData.map(d=>d.silent_reply), borderColor:'#a371f7', tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Write-Back', data:trendData.map(d=>d.op1_wb), borderColor:'#79c0ff', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-  neo: [
-    { label:'Exec Rate', data:trendData.map(d=>d.neo_exec), borderColor:'#58a6ff', tension:0.3, pointRadius:3, borderWidth:2 },
-    { label:'Write-Back', data:trendData.map(d=>d.neo_wb), borderColor:'#3fb950', tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-  morpheus: [
-    { label:'Exec Rate', data:trendData.map(d=>d.morpheus_exec), borderColor:'#58a6ff', tension:0.3, pointRadius:3, borderWidth:2 },
-    { label:'Write-Back', data:trendData.map(d=>d.morpheus_wb), borderColor:'#3fb950', tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-  trinity: [
-    { label:'Exec Rate', data:trendData.map(d=>d.trinity_exec), borderColor:'#58a6ff', tension:0.3, pointRadius:3, borderWidth:2 },
-    { label:'Write-Back', data:trendData.map(d=>d.trinity_wb), borderColor:'#3fb950', tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-  all: [
-    { label:'Composite', data:trendData.map(d=>d.score), borderColor:'#58a6ff', tension:0.3, pointRadius:2, borderWidth:2 },
-    { label:'Neo Exec', data:trendData.map(d=>d.neo_exec), borderColor:'#f85149', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Morpheus Exec', data:trendData.map(d=>d.morpheus_exec), borderColor:'#3fb950', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-    { label:'Trinity Exec', data:trendData.map(d=>d.trinity_exec), borderColor:'#d29922', borderDash:[4,4], tension:0.3, pointRadius:2, borderWidth:1.5 },
-  ],
-};
+        const c = (v) => (v >= 0.8 ? "#3fb950" : v >= 0.5 ? "#d29922" : "#f85149");
+        const f = (v) => (v >= 0 ? v.toFixed(3) : "-");
+        const f2 = (v) => (v >= 0 ? v.toFixed(2) : "-");
 
-const chartOpts = {
-  responsive:true, maintainAspectRatio:false,
-  scales: {
-    x:{title:{display:true,text:'Iteration',color:'#8b949e'},ticks:{color:'#8b949e'},grid:{color:'#21262d'}},
-    y:{min:0,max:1,title:{display:true,text:'Score',color:'#8b949e'},ticks:{color:'#8b949e'},grid:{color:'#21262d'}},
-  },
-  plugins:{legend:{labels:{color:'#c9d1d9',font:{size:11}}}},
-};
+        if (view === "composite" || view === "all") {
+          // Reset to default composite view
+          const m = agentMetrics["main"];
+          container.innerHTML =
+            "<h2>Composite Score</h2>" +
+            '<div class="mv">' +
+            f2(m.composite) +
+            "</div>" +
+            '<div class="ml">Operator1 (main) &mdash; ' +
+            m.sessions +
+            " sessions</div>" +
+            '<div style="margin-top:16px"><h3>Metric Breakdown</h3><div class="sg">' +
+            [
+              { k: "delegation", l: "Delegation", w: "0.30" },
+              { k: "memory", l: "Memory", w: "0.20" },
+              { k: "conciseness", l: "Conciseness", w: "0.15" },
+              { k: "silent_reply", l: "Silent Reply", w: "0.15" },
+              { k: "error_rate", l: "Tool Errors", w: "0.20" },
+            ]
+              .map(
+                (d) =>
+                  '<div class="si"><div class="v" style="color:' +
+                  c(m[d.k]) +
+                  '">' +
+                  f2(m[d.k]) +
+                  '</div><div class="l">' +
+                  d.l +
+                  " (" +
+                  d.w +
+                  ")</div></div>",
+              )
+              .join("") +
+            "</div></div>";
+          return;
+        }
 
-let trendChart;
-const ctx = document.getElementById('trendChart');
-if (ctx) {
-  trendChart = new Chart(ctx, { type:'line', data:{ labels, datasets:datasets.composite }, options:chartOpts });
-}
+        // Agent-specific view
+        let html = "<h2>" + agentName + "</h2>";
 
-// Current agent metrics for inline display
-const agentMetrics = {"main":{"sessions":5,"composite":0.6529028436018958,"delegation":0.21800947867298578,"memory":0.4375,"conciseness":1,"silent_reply":1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":1,"prompt_size":2022,"prompt_size_score":0.2,"prompt_files":[{"file":"AGENTS.md","words":989},{"file":"SOUL.md","words":177},{"file":"TOOLS.md","words":261},{"file":"HEARTBEAT.md","words":545},{"file":"IDENTITY.md","words":50}],"tool_efficiency":1,"prompt_efficiency":0.32289952700390495,"tool_call_count":458,"tool_calls_per_message":2.8625},"neo":{"sessions":5,"composite":0.6004166666666666,"delegation":-1,"memory":0.3333333333333333,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.25,"richness":0.625,"prompt_size":1320,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":832},{"file":"SOUL.md","words":145},{"file":"TOOLS.md","words":36},{"file":"HEARTBEAT.md","words":256},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.6,"prompt_efficiency":0.45486111111111105,"tool_call_count":187,"tool_calls_per_message":9.842105263157896},"morpheus":{"sessions":5,"composite":0.76,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":0.6,"prompt_size":1297,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":810},{"file":"SOUL.md","words":153},{"file":"TOOLS.md","words":26},{"file":"HEARTBEAT.md","words":250},{"file":"IDENTITY.md","words":58}],"tool_efficiency":0.8,"prompt_efficiency":0.5859676175790286,"tool_call_count":29,"tool_calls_per_message":5.8},"trinity":{"sessions":5,"composite":0.8075,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.6,"richness":0.65,"prompt_size":1463,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":999},{"file":"SOUL.md","words":138},{"file":"TOOLS.md","words":27},{"file":"HEARTBEAT.md","words":248},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.6,"prompt_efficiency":0.551948051948052,"tool_call_count":53,"tool_calls_per_message":10.6}};
+        // Composite score for this agent
+        if (agent.composite >= 0) {
+          html += '<div class="mv" style="margin:8px 0">' + f(agent.composite) + "</div>";
+          html +=
+            '<div class="ml" style="margin-bottom:12px">Composite &mdash; ' +
+            agent.sessions +
+            " sessions</div>";
+        }
 
-const metricDefs = {
-  composite: [],
-  op1: [
-    {k:'composite',l:'Composite'},{k:'delegation',l:'Delegation'},{k:'memory',l:'Memory'},
-    {k:'conciseness',l:'Conciseness'},{k:'silent_reply',l:'Silent Reply'},{k:'error_rate',l:'Tool Errors'},
-    {k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'}
-  ],
-  neo: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
-  morpheus: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
-  trinity: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
-  all: [],
-};
-const agentMap = {composite:'main',op1:'main',neo:'neo',morpheus:'morpheus',trinity:'trinity',all:'main'};
+        html += '<div style="margin-top:8px">';
 
-function renderLeftPanel(view) {
-  const container = document.getElementById('leftMetricsContent');
-  const agent = agentMetrics[agentMap[view]];
-  if (!agent) return;
+        // Metrics grid
+        if (defs.length) {
+          html +=
+            '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">';
+          defs.forEach((d) => {
+            const v = agent[d.k];
+            html +=
+              '<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;text-align:center">' +
+              '<div style="font-size:18px;font-weight:700;color:' +
+              c(v) +
+              '">' +
+              f(v) +
+              "</div>" +
+              '<div style="font-size:10px;color:#8b949e">' +
+              d.l +
+              "</div></div>";
+          });
+          html += "</div>";
+        }
 
-  const agentName = {composite:'Composite',op1:'Operator1 (main)',neo:'Neo',morpheus:'Morpheus',trinity:'Trinity',all:'All Agents'}[view];
-  const defs = metricDefs[view] || [];
+        // Prompt file breakdown
+        const pf = agentMetrics[agentMap[view]];
+        if (pf && pf.prompt_size >= 0) {
+          html += "<h3>Prompt Files</h3>";
+          html += '<div style="font-size:12px;margin-top:4px">';
+          html +=
+            '<div class="mr"><span class="l">Total</span><span style="color:' +
+            c(pf.prompt_size_score) +
+            '"><strong>' +
+            pf.prompt_size +
+            " words</strong> (" +
+            f(pf.prompt_size_score) +
+            ")</span></div>";
+          if (pf.prompt_files) {
+            pf.prompt_files.forEach((pfile) => {
+              const pct = pf.prompt_size > 0 ? Math.round((pfile.words / pf.prompt_size) * 100) : 0;
+              html +=
+                '<div class="mr"><span class="l">' +
+                pfile.file +
+                "</span><span>" +
+                pfile.words +
+                " (" +
+                pct +
+                "%)</span></div>";
+            });
+          }
+          html += "</div>";
+        }
 
-  const c = (v) => v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
-  const f = (v) => v >= 0 ? v.toFixed(3) : '-';
-  const f2 = (v) => v >= 0 ? v.toFixed(2) : '-';
+        // Tool stats
+        if (pf && pf.tool_call_count >= 0) {
+          html += '<h3 style="margin-top:8px">Tool Usage</h3>';
+          html += '<div style="font-size:12px;margin-top:4px">';
+          html +=
+            '<div class="mr"><span class="l">Total Calls</span><span>' +
+            pf.tool_call_count +
+            "</span></div>";
+          html +=
+            '<div class="mr"><span class="l">Calls/Message</span><span>' +
+            pf.tool_calls_per_message.toFixed(1) +
+            "</span></div>";
+          html +=
+            '<div class="mr"><span class="l">Efficiency</span><span style="color:' +
+            c(pf.tool_efficiency) +
+            '">' +
+            f(pf.tool_efficiency) +
+            "</span></div>";
+          html += "</div>";
+        }
 
-  if (view === 'composite' || view === 'all') {
-    // Reset to default composite view
-    const m = agentMetrics['main'];
-    container.innerHTML =
-      '<h2>Composite Score</h2>' +
-      '<div class="mv">' + f2(m.composite) + '</div>' +
-      '<div class="ml">Operator1 (main) &mdash; ' + m.sessions + ' sessions</div>' +
-      '<div style="margin-top:16px"><h3>Metric Breakdown</h3><div class="sg">' +
-      [{k:'delegation',l:'Delegation',w:'0.30'},{k:'memory',l:'Memory',w:'0.20'},{k:'conciseness',l:'Conciseness',w:'0.15'},{k:'silent_reply',l:'Silent Reply',w:'0.15'},{k:'error_rate',l:'Tool Errors',w:'0.20'}]
-        .map(d => '<div class="si"><div class="v" style="color:'+c(m[d.k])+'">'+f2(m[d.k])+'</div><div class="l">'+d.l+' ('+d.w+')</div></div>').join('') +
-      '</div></div>';
-    return;
-  }
+        html += "</div>";
+        container.innerHTML = html;
+      }
 
-  // Agent-specific view
-  let html = '<h2>' + agentName + '</h2>';
+      function setChartView(view) {
+        if (!trendChart) return;
+        document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+        event.target.classList.add("active");
+        trendChart.data.datasets = datasets[view];
+        trendChart.update();
+        renderLeftPanel(view);
+      }
 
-  // Composite score for this agent
-  if (agent.composite >= 0) {
-    html += '<div class="mv" style="margin:8px 0">' + f(agent.composite) + '</div>';
-    html += '<div class="ml" style="margin-bottom:12px">Composite &mdash; ' + agent.sessions + ' sessions</div>';
-  }
-
-  html += '<div style="margin-top:8px">';
-
-  // Metrics grid
-  if (defs.length) {
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">';
-    defs.forEach(d => {
-      const v = agent[d.k];
-      html += '<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;text-align:center">' +
-        '<div style="font-size:18px;font-weight:700;color:'+c(v)+'">'+ f(v) +'</div>' +
-        '<div style="font-size:10px;color:#8b949e">'+d.l+'</div></div>';
-    });
-    html += '</div>';
-  }
-
-  // Prompt file breakdown
-  const pf = agentMetrics[agentMap[view]];
-  if (pf && pf.prompt_size >= 0) {
-    html += '<h3>Prompt Files</h3>';
-    html += '<div style="font-size:12px;margin-top:4px">';
-    html += '<div class="mr"><span class="l">Total</span><span style="color:'+c(pf.prompt_size_score)+'"><strong>'+pf.prompt_size+' words</strong> ('+f(pf.prompt_size_score)+')</span></div>';
-    if (pf.prompt_files) {
-      pf.prompt_files.forEach(pfile => {
-        const pct = pf.prompt_size > 0 ? Math.round(pfile.words / pf.prompt_size * 100) : 0;
-        html += '<div class="mr"><span class="l">'+pfile.file+'</span><span>'+pfile.words+' ('+pct+'%)</span></div>';
-      });
-    }
-    html += '</div>';
-  }
-
-  // Tool stats
-  if (pf && pf.tool_call_count >= 0) {
-    html += '<h3 style="margin-top:8px">Tool Usage</h3>';
-    html += '<div style="font-size:12px;margin-top:4px">';
-    html += '<div class="mr"><span class="l">Total Calls</span><span>'+pf.tool_call_count+'</span></div>';
-    html += '<div class="mr"><span class="l">Calls/Message</span><span>'+pf.tool_calls_per_message.toFixed(1)+'</span></div>';
-    html += '<div class="mr"><span class="l">Efficiency</span><span style="color:'+c(pf.tool_efficiency)+'">'+f(pf.tool_efficiency)+'</span></div>';
-    html += '</div>';
-  }
-
-  html += '</div>';
-  container.innerHTML = html;
-}
-
-function setChartView(view) {
-  if (!trendChart) return;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-  trendChart.data.datasets = datasets[view];
-  trendChart.update();
-  renderLeftPanel(view);
-}
-
-// Category breakdown chart
-const catCtx = document.getElementById('categoryChart');
-if (catCtx) {
-  const cats = {};
-  [{"category":"session-stability","severity":"low","agent":"main","session_id":"960e888e-9434-4e8e-a7a6-5cd3e076b29c","timestamp":"2026-03-23T18:18:43.171Z","tool_name":"session","error_signature":"session-abort:main:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]},{"category":"session-stability","severity":"low","agent":"neo","session_id":"1556e146-2d2b-4c7f-b591-8fb5d293189c","timestamp":"2026-03-23T09:54:23.504Z","tool_name":"session","error_signature":"session-abort:neo:aborted","evidence":"Session prompt error: aborted (provider: zai, model: glm-5)","suggested_labels":["auto-improve","platform","session-stability"]}].forEach(d => { cats[d.category] = (cats[d.category]||0) + 1; });
-  [{"issue":"16","category":"session-stability","severity":"low","pr":"17","status":"merged","error_signature":"session-abort:*:aborted","files_changed":"1","description":"Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session"}].forEach(f => { cats[f.category] = (cats[f.category]||0) + 1; });
-  const catLabels = Object.keys(cats);
-  const catData = Object.values(cats);
-  const catColors = ['#58a6ff','#f85149','#3fb950','#d29922','#a371f7','#79c0ff','#f778ba','#ffa657'];
-  new Chart(catCtx, {
-    type:'doughnut',
-    data:{ labels:catLabels, datasets:[{ data:catData, backgroundColor:catColors.slice(0,catLabels.length), borderWidth:0 }] },
-    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'right',labels:{color:'#c9d1d9',font:{size:12}}}} },
-  });
-}
-</script>
-</body></html>
+      // Category breakdown chart
+      const catCtx = document.getElementById("categoryChart");
+      if (catCtx) {
+        const cats = {};
+        [
+          {
+            category: "session-stability",
+            severity: "low",
+            agent: "main",
+            session_id: "960e888e-9434-4e8e-a7a6-5cd3e076b29c",
+            timestamp: "2026-03-23T18:18:43.171Z",
+            tool_name: "session",
+            error_signature: "session-abort:main:aborted",
+            evidence: "Session prompt error: aborted (provider: zai, model: glm-5)",
+            suggested_labels: ["auto-improve", "platform", "session-stability"],
+          },
+          {
+            category: "session-stability",
+            severity: "low",
+            agent: "neo",
+            session_id: "1556e146-2d2b-4c7f-b591-8fb5d293189c",
+            timestamp: "2026-03-23T09:54:23.504Z",
+            tool_name: "session",
+            error_signature: "session-abort:neo:aborted",
+            evidence: "Session prompt error: aborted (provider: zai, model: glm-5)",
+            suggested_labels: ["auto-improve", "platform", "session-stability"],
+          },
+        ].forEach((d) => {
+          cats[d.category] = (cats[d.category] || 0) + 1;
+        });
+        [
+          {
+            issue: "16",
+            category: "session-stability",
+            severity: "low",
+            pr: "17",
+            status: "merged",
+            error_signature: "session-abort:*:aborted",
+            files_changed: "1",
+            description:
+              "Add /^aborted$/i to timeout patterns so GLM-5/ZAI provider-side aborts enter the fallback chain instead of terminating the session",
+          },
+        ].forEach((f) => {
+          cats[f.category] = (cats[f.category] || 0) + 1;
+        });
+        const catLabels = Object.keys(cats);
+        const catData = Object.values(cats);
+        const catColors = [
+          "#58a6ff",
+          "#f85149",
+          "#3fb950",
+          "#d29922",
+          "#a371f7",
+          "#79c0ff",
+          "#f778ba",
+          "#ffa657",
+        ];
+        new Chart(catCtx, {
+          type: "doughnut",
+          data: {
+            labels: catLabels,
+            datasets: [
+              {
+                data: catData,
+                backgroundColor: catColors.slice(0, catLabels.length),
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: "right", labels: { color: "#c9d1d9", font: { size: 12 } } },
+            },
+          },
+        });
+      }
+    </script>
+  </body>
+</html>

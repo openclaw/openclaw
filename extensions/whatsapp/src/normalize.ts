@@ -26,3 +26,9 @@ export function looksLikeWhatsAppTargetId(raw: string): boolean {
     prefixPattern: /^whatsapp:/i,
   });
 }
+
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./normalize-target.js";

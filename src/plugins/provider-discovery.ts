@@ -1,17 +1,24 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+
+function resolveProviderCatalogHook(provider: ProviderPlugin) {
+  return provider.catalog ?? provider.discovery;
+}
 
 export function resolvePluginDiscoveryProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
-  return resolvePluginProviders(params).filter((provider) => provider.discovery);
+  return resolvePluginProviders({
+    ...params,
+    bundledProviderAllowlistCompat: true,
+  }).filter((provider) => resolveProviderCatalogHook(provider));
 }
 
 export function groupPluginDiscoveryProvidersByOrder(
@@ -25,7 +32,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   } as Record<ProviderDiscoveryOrder, ProviderPlugin[]>;
 
   for (const provider of providers) {
-    const order = provider.discovery?.order ?? "late";
+    const order = resolveProviderCatalogHook(provider)?.order ?? "late";
     grouped[order].push(provider);
   }
 
@@ -62,4 +69,35 @@ export function normalizePluginDiscoveryResult(params: {
     normalized[normalizedKey] = value;
   }
   return normalized;
+}
+
+export function runProviderCatalog(params: {
+  provider: ProviderPlugin;
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveProviderApiKey: (providerId?: string) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+  };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
+  };
+}) {
+  return resolveProviderCatalogHook(params.provider)?.run({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    resolveProviderApiKey: params.resolveProviderApiKey,
+    resolveProviderAuth: params.resolveProviderAuth,
+  });
 }

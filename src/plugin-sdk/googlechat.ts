@@ -92,3 +92,4 @@ export {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
+export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
