@@ -325,6 +325,12 @@ export function startDeliveryRecoveryTimer(opts: {
     }
   }
 
+  // Bail out immediately if the signal was already aborted before we start.
+  if (opts.abortSignal?.aborted) {
+    stop();
+    return { stop };
+  }
+
   // Schedule the first sweep after the startup grace period so channels
   // have time to connect, then sweep on a fixed interval thereafter.
   initialTimer = setTimeout(() => {
