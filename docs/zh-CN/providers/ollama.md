@@ -127,7 +127,7 @@ openclaw models set ollama/glm-4.7-flash
 
 - 查询 `/api/tags`
 - 在可用时，尽力通过 `/api/show` 查找 `contextWindow`
-- 通过模型名称启发式规则标记 `reasoning`（例如 `r1`、`reasoning`、`think`、`qwen3`、`qwq`、`glm-5`、`kimi-k2`、`deepseek-v3`、`marco-o`、`skywork-o`）
+- 通过模型名称启发式规则标记 `reasoning`（例如 `r1`、`reasoning`、`reason` 或 `think`）
 - 将 `maxTokens` 设置为 OpenClaw 使用的默认 Ollama 最大 token 上限
 - 将所有成本设置为 `0`
 
@@ -246,7 +246,7 @@ export OLLAMA_API_KEY="ollama-local"
 
 ### 推理模型
 
-OpenClaw 默认会将一些常见的推理模型名称模式视为支持推理。常见例子包括 `deepseek-r1`、`qwen3`、`qwq`、`glm-5`、`kimi-k2`、`deepseek-v3`、`marco-o`、`skywork-o`，以及名称中包含 `reasoning`、`reason` 或 `think` 的模型：
+OpenClaw 默认会将匹配其推理启发式规则的模型名称视为支持推理。常见例子包括 `deepseek-r1`，以及名称中包含 `reasoning`、`reason` 或 `think` 的模型：
 
 ```bash
 ollama pull deepseek-r1:32b

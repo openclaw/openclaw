@@ -120,7 +120,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 
 - Queries `/api/tags`
 - Uses best-effort `/api/show` lookups to read `contextWindow` when available
-- Marks `reasoning` with a model-name heuristic (for example `r1`, `reasoning`, `think`, `qwen3`, `qwq`, `glm-5`, `kimi-k2`, `deepseek-v3`, `marco-o`, `skywork-o`)
+- Marks `reasoning` with a model-name heuristic (for example `r1`, `reasoning`, `reason`, or `think`)
 - Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw
 - Sets all costs to `0`
 
@@ -239,7 +239,7 @@ You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
 
 ### Reasoning models
 
-OpenClaw treats models with known reasoning-oriented names as reasoning-capable by default. Common examples include `deepseek-r1`, `qwen3`, `qwq`, `glm-5`, `kimi-k2`, `deepseek-v3`, `marco-o`, `skywork-o`, plus generic names containing `reasoning`, `reason`, or `think`:
+OpenClaw treats models with names that match its reasoning heuristic as reasoning-capable by default. Common examples include `deepseek-r1` plus generic names containing `reasoning`, `reason`, or `think`:
 
 ```bash
 ollama pull deepseek-r1:32b
