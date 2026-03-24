@@ -8,9 +8,11 @@
  *  - Session registry helpers (releaseWsSession, hasWsSession)
  */
 
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponseObject } from "./openai-ws-connection.js";
 import {
+  __testing as openAIWsStreamTesting,
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
   convertTools,
@@ -168,40 +170,17 @@ const { MockManager } = vi.hoisted(() => {
   return { MockManager: TrackedMockManager };
 });
 
-vi.mock("./openai-ws-connection.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./openai-ws-connection.js")>();
-  return {
-    ...original,
-    OpenAIWebSocketManager: MockManager,
-  };
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock pi-ai
-// ─────────────────────────────────────────────────────────────────────────────
-
 // Track if streamSimple (HTTP fallback) was called
 const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
-
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-
-  const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-    streamSimpleCalls.push({ model, context });
-    // Return a minimal AssistantMessageEventStream-like async iterable
-    const stream = original.createAssistantMessageEventStream();
-    queueMicrotask(() => {
-      const msg = makeFakeAssistantMessage("http fallback response");
-      stream.push({ type: "done", reason: "stop", message: msg });
-      stream.end();
-    });
-    return stream;
+const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
+  streamSimpleCalls.push({ model, context });
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    const msg = makeFakeAssistantMessage("http fallback response");
+    stream.push({ type: "done", reason: "stop", message: msg });
+    stream.end();
   });
-
-  return {
-    ...original,
-    streamSimple: mockStreamSimple,
-  };
+  return stream;
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,6 +203,7 @@ type FakeMessage =
   | {
       role: "assistant";
       content: unknown[];
+      phase?: "commentary" | "final_answer";
       stopReason: string;
       api: string;
       provider: string;
@@ -247,6 +227,7 @@ function userMsg(text: string): FakeMessage {
 function assistantMsg(
   textBlocks: string[],
   toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [],
+  phase?: "commentary" | "final_answer",
 ): FakeMessage {
   const content: unknown[] = [];
   for (const t of textBlocks) {
@@ -258,6 +239,7 @@ function assistantMsg(
   return {
     role: "assistant",
     content,
+    phase,
     stopReason: toolCalls.length > 0 ? "toolUse" : "stop",
     api: "openai-responses",
     provider: "openai",
@@ -302,6 +284,7 @@ function makeResponseObject(
   id: string,
   outputText?: string,
   toolCallName?: string,
+  phase?: "commentary" | "final_answer",
 ): ResponseObject {
   const output: ResponseObject["output"] = [];
   if (outputText) {
@@ -310,6 +293,7 @@ function makeResponseObject(
       id: "item_1",
       role: "assistant",
       content: [{ type: "output_text", text: outputText }],
+      phase,
     });
   }
   if (toolCallName) {
@@ -357,18 +341,16 @@ describe("convertTools", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       type: "function",
-      function: {
-        name: "exec",
-        description: "Run a command",
-        parameters: { type: "object", properties: { cmd: { type: "string" } } },
-      },
+      name: "exec",
+      description: "Run a command",
+      parameters: { type: "object", properties: { cmd: { type: "string" } } },
     });
   });
 
   it("handles tools without description", () => {
     const tools = [{ name: "ping", description: "", parameters: {} }];
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
-    expect(result[0]?.function?.name).toBe("ping");
+    expect(result[0]?.name).toBe("ping");
   });
 });
 
@@ -391,6 +373,19 @@ describe("convertMessagesToInputItems", () => {
     expect(items[0]).toMatchObject({ type: "message", role: "assistant", content: "Hi there." });
   });
 
+  it("preserves assistant phase on replayed assistant messages", () => {
+    const items = convertMessagesToInputItems([
+      assistantMsg(["Working on it."], [], "commentary"),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "Working on it.",
+      phase: "commentary",
+    });
+  });
+
   it("converts an assistant message with a tool call", () => {
     const msg = assistantMsg(
       ["Let me run that."],
@@ -408,8 +403,56 @@ describe("convertMessagesToInputItems", () => {
       call_id: "call_1",
       name: "exec",
     });
+    expect(textItem).not.toHaveProperty("phase");
     const fc = fcItem as { arguments: string };
     expect(JSON.parse(fc.arguments)).toEqual({ cmd: "ls" });
+  });
+
+  it("preserves assistant phase on commentary text before tool calls", () => {
+    const msg = assistantMsg(
+      ["Let me run that."],
+      [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
+      "commentary",
+    );
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    const textItem = items.find((i) => i.type === "message");
+    expect(textItem).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "Let me run that.",
+      phase: "commentary",
+    });
+  });
+
+  it("preserves assistant phase from textSignature metadata without local phase field", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working on it.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "Working on it.",
+      phase: "commentary",
+    });
   });
 
   it("converts a tool result message", () => {
@@ -518,6 +561,34 @@ describe("convertMessagesToInputItems", () => {
     expect((items[0] as { content?: unknown }).content).toBe("Here is my answer.");
   });
 
+  it("replays reasoning blocks from thinking signatures", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "internal reasoning...",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_test",
+            summary: [],
+          }),
+        },
+        { type: "text" as const, text: "Here is my answer." },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
+  });
+
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
@@ -594,6 +665,16 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content).toEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
+
+  it("preserves phase from assistant message output items", () => {
+    const response = makeResponseObject("resp_8", "Final answer", undefined, "final_answer");
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(msg.phase).toBe("final_answer");
+    expect(msg.content[0]?.text).toBe("Final answer");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -620,6 +701,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
   beforeEach(() => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
+    openAIWsStreamTesting.setDepsForTest({
+      createManager: (() => new MockManager()) as never,
+      streamSimple: mockStreamSimple,
+    });
   });
 
   afterEach(() => {
@@ -633,10 +718,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-fallback");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
+    releaseWsSession("sess-phase");
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    openAIWsStreamTesting.setDepsForTest();
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -793,6 +880,40 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | undefined;
     expect(doneEvent).toBeDefined();
     expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
+  });
+
+  it("keeps assistant phase on completed WebSocket responses", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_phase", "Working...", "exec", "commentary"),
+    });
+
+    await done;
+
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done") as
+      | {
+          type: string;
+          reason: string;
+          message: { phase?: string; stopReason: string };
+        }
+      | undefined;
+    expect(doneEvent?.message.phase).toBe("commentary");
+    expect(doneEvent?.message.stopReason).toBe("toolUse");
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
@@ -1199,10 +1320,15 @@ describe("createOpenAIWebSocketStreamFn", () => {
 describe("releaseWsSession / hasWsSession", () => {
   beforeEach(() => {
     MockManager.reset();
+    openAIWsStreamTesting.setDepsForTest({
+      createManager: (() => new MockManager()) as never,
+      streamSimple: mockStreamSimple,
+    });
   });
 
   afterEach(() => {
     releaseWsSession("registry-test");
+    openAIWsStreamTesting.setDepsForTest();
   });
 
   it("hasWsSession returns false for unknown session", () => {

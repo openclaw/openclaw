@@ -4,6 +4,25 @@ import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+const authProfileUsageDeps = {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      saveAuthProfileStore: typeof saveAuthProfileStore;
+      updateAuthProfileStoreWithLock: typeof updateAuthProfileStoreWithLock;
+    }> | null,
+  ) {
+    authProfileUsageDeps.saveAuthProfileStore =
+      overrides?.saveAuthProfileStore ?? saveAuthProfileStore;
+    authProfileUsageDeps.updateAuthProfileStoreWithLock =
+      overrides?.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
+  },
+};
+
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
@@ -110,7 +129,11 @@ export function resolveProfilesUnavailableReason(params: {
       recordedReason = true;
     }
     if (!recordedReason) {
-      addScore("rate_limit", 1);
+      // No failure counts recorded for this cooldown window. Previously this
+      // defaulted to "rate_limit", which caused false "rate limit reached"
+      // warnings when the actual reason was unknown (e.g. transient network
+      // blip or server error without a classified failure count).
+      addScore("unknown", 1);
     }
   }
 
@@ -243,7 +266,7 @@ export async function markAuthProfileUsed(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = await updateAuthProfileStoreWithLock({
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) {
@@ -266,7 +289,7 @@ export async function markAuthProfileUsed(params: {
   updateUsageStatsEntry(store, profileId, (existing) =>
     resetUsageStats(existing, { lastUsed: Date.now() }),
   );
-  saveAuthProfileStore(store, agentDir);
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
@@ -473,7 +496,7 @@ export async function markAuthProfileFailure(params: {
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;
   let updateTime = 0;
-  const updated = await updateAuthProfileStoreWithLock({
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
@@ -535,7 +558,7 @@ export async function markAuthProfileFailure(params: {
   });
   nextStats = computed;
   updateUsageStatsEntry(store, profileId, () => computed);
-  saveAuthProfileStore(store, agentDir);
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
   logAuthProfileFailureStateChange({
     runId,
     profileId,
@@ -577,7 +600,7 @@ export async function clearAuthProfileCooldown(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = await updateAuthProfileStoreWithLock({
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.usageStats?.[profileId]) {
@@ -597,5 +620,5 @@ export async function clearAuthProfileCooldown(params: {
   }
 
   updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
-  saveAuthProfileStore(store, agentDir);
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
 }

@@ -41,7 +41,7 @@ No external `zca`/`openzca` CLI binary is required.
 }
 ```
 
-4. Restart the Gateway (or finish onboarding).
+4. Restart the Gateway (or finish setup).
 5. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
@@ -74,7 +74,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
 
-`channels.zalouser.allowFrom` accepts user IDs or names. During onboarding, names are resolved to IDs using the plugin's in-process contact lookup.
+`channels.zalouser.allowFrom` accepts user IDs or names. During setup, names are resolved to IDs using the plugin's in-process contact lookup.
 
 Approve via:
 
@@ -86,11 +86,13 @@ Approve via:
 - Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Restrict to an allowlist with:
   - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (keys are group IDs or names; controls which groups are allowed)
+  - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup when possible)
   - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
-- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping.
+- Group allowlist matching is ID-only by default. Unresolved names are ignored for auth unless `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
+- `channels.zalouser.dangerouslyAllowNameMatching: true` is a break-glass compatibility mode that re-enables mutable group-name matching.
 - If `groupAllowFrom` is unset, runtime falls back to `allowFrom` for group sender checks.
 - Sender checks apply to both normal group messages and control commands (for example `/new`, `/reset`).
 

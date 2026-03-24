@@ -1,25 +1,5 @@
-// Type for raw Matrix event from @vector-im/matrix-bot-sdk
-type MatrixRawEvent = {
-  event_id: string;
-  sender: string;
-  type: string;
-  origin_server_ts: number;
-  content: Record<string, unknown>;
-};
-
-type RoomMessageEventContent = {
-  msgtype: string;
-  body: string;
-  "m.relates_to"?: {
-    rel_type?: string;
-    event_id?: string;
-    "m.in_reply_to"?: { event_id?: string };
-  };
-};
-
-const RelationType = {
-  Thread: "m.thread",
-} as const;
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import { RelationType } from "./types.js";
 
 export function resolveMatrixThreadTarget(params: {
   threadReplies: "off" | "inbound" | "always";

@@ -53,7 +53,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-import { compareOpenClawVersions } from "./version.js";
+import { shouldWarnOnTouchedVersion } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -62,6 +62,7 @@ export { MissingEnvVarError } from "./env-substitution.js";
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
+  "DEEPSEEK_API_KEY",
   "ANTHROPIC_OAUTH_TOKEN",
   "GEMINI_API_KEY",
   "ZAI_API_KEY",
@@ -162,6 +163,32 @@ function hashConfigRaw(raw: string | null): string {
     .createHash("sha256")
     .update(raw ?? "")
     .digest("hex");
+}
+
+async function tightenStateDirPermissionsIfNeeded(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  fsModule: typeof fs;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const stateDir = resolveStateDir(params.env, params.homedir);
+  const configDir = path.dirname(params.configPath);
+  if (path.resolve(configDir) !== path.resolve(stateDir)) {
+    return;
+  }
+  try {
+    const stat = await params.fsModule.promises.stat(configDir);
+    const mode = stat.mode & 0o777;
+    if ((mode & 0o077) === 0) {
+      return;
+    }
+    await params.fsModule.promises.chmod(configDir, 0o700);
+  } catch {
+    // Best-effort hardening only; callers still need the config write to proceed.
+  }
 }
 
 function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
@@ -595,11 +622,7 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   if (!touched) {
     return;
   }
-  const cmp = compareOpenClawVersions(VERSION, touched);
-  if (cmp === null) {
-    return;
-  }
-  if (cmp < 0) {
+  if (shouldWarnOnTouchedVersion(VERSION, touched)) {
     logger.warn(
       `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
     );
@@ -1136,6 +1159,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    await tightenStateDirPermissionsIfNeeded({
+      configPath,
+      env: deps.env,
+      homedir: deps.homedir,
+      fsModule: deps.fs,
+    });
     const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)

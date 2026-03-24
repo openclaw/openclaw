@@ -11,14 +11,16 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
-import { promptAndConfigureVllm } from "./vllm-setup.js";
+
+export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
-const VLLM_VALUE = "__vllm__";
 const PROVIDER_FILTER_THRESHOLD = 30;
 
 // Models that are internal routing features and should not be shown in selection lists.
@@ -31,15 +33,27 @@ type PromptDefaultModelParams = {
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeManual?: boolean;
-  includeVllm?: boolean;
+  includeProviderPluginSetups?: boolean;
   ignoreAllowlist?: boolean;
   preferredProvider?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  runtime?: import("../runtime.js").RuntimeEnv;
   message?: string;
 };
 
 type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
 type PromptModelAllowlistResult = { models?: string[] };
+
+async function loadModelPickerRuntime() {
+  return import("./model-picker.runtime.js");
+}
+
+const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
+  loadModelPickerRuntime,
+  ({ modelPickerRuntime }) => modelPickerRuntime,
+);
 
 function hasAuthForProvider(
   provider: string,
@@ -148,12 +162,14 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
-function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
-  return (
-    entry.provider === "anthropic" &&
-    typeof entry.id === "string" &&
-    entry.id.toLowerCase().startsWith("claude-3")
-  );
+function matchesPreferredProvider(entryProvider: string, preferredProvider: string): boolean {
+  if (preferredProvider === "volcengine") {
+    return entryProvider === "volcengine" || entryProvider === "volcengine-plan";
+  }
+  if (preferredProvider === "byteplus") {
+    return entryProvider === "byteplus" || entryProvider === "byteplus-plan";
+  }
+  return entryProvider === preferredProvider;
 }
 
 async function promptManualModel(params: {
@@ -180,7 +196,7 @@ export async function promptDefaultModel(
   const cfg = params.config;
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
-  const includeVllm = params.includeVllm ?? false;
+  const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = params.preferredProvider?.trim();
   const preferredProvider = preferredProviderRaw
@@ -227,19 +243,19 @@ export async function promptDefaultModel(
     });
   }
 
-  const providers = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
+  const providerIds = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
     a.localeCompare(b),
   );
 
-  const hasPreferredProvider = preferredProvider ? providers.includes(preferredProvider) : false;
+  const hasPreferredProvider = preferredProvider ? providerIds.includes(preferredProvider) : false;
   const shouldPromptProvider =
-    !hasPreferredProvider && providers.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
+    !hasPreferredProvider && providerIds.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [
         { value: "*", label: "All providers" },
-        ...providers.map((provider) => {
+        ...providerIds.map((provider) => {
           const count = models.filter((entry) => entry.provider === provider).length;
           return {
             value: provider,
@@ -255,18 +271,7 @@ export async function promptDefaultModel(
   }
 
   if (hasPreferredProvider && preferredProvider) {
-    models = models.filter((entry) => {
-      if (preferredProvider === "volcengine") {
-        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
-      }
-      if (preferredProvider === "byteplus") {
-        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
-      }
-      return entry.provider === preferredProvider;
-    });
-    if (preferredProvider === "anthropic") {
-      models = models.filter((entry) => !isAnthropicLegacyModel(entry));
-    }
+    models = models.filter((entry) => matchesPreferredProvider(entry.provider, preferredProvider));
   }
 
   const agentDir = params.agentDir;
@@ -286,12 +291,15 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
-  if (includeVllm && agentDir) {
-    options.push({
-      value: VLLM_VALUE,
-      label: "vLLM (custom)",
-      hint: "Enter vLLM URL + API key + model",
-    });
+  if (includeProviderPluginSetups && agentDir) {
+    const { resolveProviderModelPickerEntries } = await loadResolvedModelPickerRuntime();
+    options.push(
+      ...resolveProviderModelPickerEntries({
+        config: cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }),
+    );
   }
 
   const seen = new Set<string>();
@@ -337,23 +345,83 @@ export async function promptDefaultModel(
       initialValue: configuredRaw || resolvedKey || undefined,
     });
   }
-  if (selection === VLLM_VALUE) {
-    if (!agentDir) {
+
+  let pluginResolution: string | null = null;
+  let pluginProviders: ProviderPlugin[] = [];
+  if (selection.startsWith("provider-plugin:")) {
+    pluginResolution = selection;
+  } else if (!selection.includes("/")) {
+    const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
+    pluginProviders = resolvePluginProviders({
+      config: cfg,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    pluginResolution = pluginProviders.some(
+      (provider) => normalizeProviderId(provider.id) === normalizeProviderId(selection),
+    )
+      ? selection
+      : null;
+  }
+  if (pluginResolution) {
+    if (!agentDir || !params.runtime) {
       await params.prompter.note(
-        "vLLM setup requires an agent directory context.",
-        "vLLM not available",
+        "Provider setup requires agent and runtime context.",
+        "Provider setup unavailable",
       );
       return {};
     }
-    const { config: nextConfig, modelRef } = await promptAndConfigureVllm({
-      cfg,
-      prompter: params.prompter,
-      agentDir,
+    const {
+      resolvePluginProviders,
+      resolveProviderPluginChoice,
+      runProviderModelSelectedHook,
+      runProviderPluginAuthMethod,
+    } = await loadResolvedModelPickerRuntime();
+    if (pluginProviders.length === 0) {
+      pluginProviders = resolvePluginProviders({
+        config: cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    const resolved = resolveProviderPluginChoice({
+      providers: pluginProviders,
+      choice: pluginResolution,
     });
-
-    return { model: modelRef, config: nextConfig };
+    if (!resolved) {
+      return {};
+    }
+    const applied = await runProviderPluginAuthMethod({
+      config: cfg,
+      runtime: params.runtime,
+      prompter: params.prompter,
+      method: resolved.method,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    if (applied.defaultModel) {
+      await runProviderModelSelectedHook({
+        config: applied.config,
+        model: applied.defaultModel,
+        prompter: params.prompter,
+        agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return { model: applied.defaultModel, config: applied.config };
   }
-  return { model: String(selection) };
+  const model = String(selection);
+  const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
+  await runProviderModelSelectedHook({
+    config: cfg,
+    model,
+    prompter: params.prompter,
+    agentDir,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return { model };
 }
 
 export async function promptModelAllowlist(params: {
@@ -363,11 +431,16 @@ export async function promptModelAllowlist(params: {
   agentDir?: string;
   allowedKeys?: string[];
   initialSelections?: string[];
+  preferredProvider?: string;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
+  const preferredProviderRaw = params.preferredProvider?.trim();
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
+    : undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -390,7 +463,7 @@ export async function promptModelAllowlist(params: {
         params.message ??
         "Allowlist models (comma-separated provider/model; blank to keep current)",
       initialValue: existingKeys.join(", "),
-      placeholder: `${OPENAI_CODEX_DEFAULT_MODEL}, anthropic/claude-opus-4-6`,
+      placeholder: "provider/model, other-provider/model",
     });
     const parsed = String(raw ?? "")
       .split(",")
@@ -411,9 +484,16 @@ export async function promptModelAllowlist(params: {
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
 
-  const filteredCatalog = allowedKeySet
+  const allowedCatalog = allowedKeySet
     ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
     : catalog;
+  const filteredCatalog =
+    preferredProvider &&
+    allowedCatalog.some((entry) => matchesPreferredProvider(entry.provider, preferredProvider))
+      ? allowedCatalog.filter((entry) =>
+          matchesPreferredProvider(entry.provider, preferredProvider),
+        )
+      : allowedCatalog;
 
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
@@ -457,33 +537,6 @@ export async function promptModelAllowlist(params: {
     return {};
   }
   return { models: [] };
-}
-
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
-        models: {
-          ...existingModels,
-          [model]: existingModels?.[model] ?? {},
-        },
-      },
-    },
-  };
 }
 
 export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {

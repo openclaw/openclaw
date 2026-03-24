@@ -138,21 +138,23 @@ public final class OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
 
-        // Always show the main session first, even if it hasn't been updated recently.
-        if let main = sorted.first(where: { $0.key == "main" }) {
+        // Always show the resolved main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: "main"))
-            included.insert("main")
+            result.append(self.placeholderSession(key: mainSessionKey))
+            included.insert(mainSessionKey)
         }
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
+            guard entry.key == self.sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
             guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
@@ -167,6 +169,18 @@ public final class OpenClawChatViewModel {
         }
 
         return result
+    }
+
+    private var resolvedMainSessionKey: String {
+        let trimmed = self.sessionDefaults?.mainSessionKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
+    }
+
+    private static func isHiddenInternalSession(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     public var showsModelPicker: Bool {
@@ -275,6 +289,17 @@ public final class OpenClawChatViewModel {
             stopReason: message.stopReason)
     }
 
+    private static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
+        message.content.map { item in
+            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
+        }.joined(separator: "\\u{001E}")
+    }
+
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !role.isEmpty else { return nil }
@@ -284,21 +309,26 @@ public final class OpenClawChatViewModel {
             return String(format: "%.3f", value)
         }()
 
-        let contentFingerprint = message.content.map { item in
-            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
-        }.joined(separator: "\\u{001E}")
-
+        let contentFingerprint = Self.messageContentFingerprint(for: message)
         let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if timestamp.isEmpty, contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
             return nil
         }
         return [role, timestamp, toolCallId, toolName, contentFingerprint].joined(separator: "|")
+    }
+
+    private static func userRefreshIdentityKey(for message: OpenClawChatMessage) -> String? {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard role == "user" else { return nil }
+
+        let contentFingerprint = Self.messageContentFingerprint(for: message)
+        let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
+            return nil
+        }
+        return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
     }
 
     private static func reconcileMessageIDs(
@@ -339,6 +369,75 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    private static func reconcileRunRefreshMessages(
+        previous: [OpenClawChatMessage],
+        incoming: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        guard !previous.isEmpty else { return incoming }
+        guard !incoming.isEmpty else { return previous }
+
+        func countKeys(_ keys: [String]) -> [String: Int] {
+            keys.reduce(into: [:]) { counts, key in
+                counts[key, default: 0] += 1
+            }
+        }
+
+        var reconciled = Self.reconcileMessageIDs(previous: previous, incoming: incoming)
+        let incomingIdentityKeys = Set(reconciled.compactMap(Self.messageIdentityKey(for:)))
+        var remainingIncomingUserRefreshCounts = countKeys(
+            reconciled.compactMap(Self.userRefreshIdentityKey(for:)))
+
+        var lastMatchedPreviousIndex: Int?
+        for (index, message) in previous.enumerated() {
+            if let key = Self.messageIdentityKey(for: message),
+               incomingIdentityKeys.contains(key)
+            {
+                lastMatchedPreviousIndex = index
+                continue
+            }
+            if let userKey = Self.userRefreshIdentityKey(for: message),
+               let remaining = remainingIncomingUserRefreshCounts[userKey],
+               remaining > 0
+            {
+                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
+                lastMatchedPreviousIndex = index
+            }
+        }
+
+        let trailingUserMessages = (lastMatchedPreviousIndex != nil
+            ? previous.suffix(from: previous.index(after: lastMatchedPreviousIndex!))
+            : ArraySlice(previous))
+            .filter { message in
+                guard message.role.lowercased() == "user" else { return false }
+                guard let key = Self.userRefreshIdentityKey(for: message) else { return false }
+                let remaining = remainingIncomingUserRefreshCounts[key] ?? 0
+                if remaining > 0 {
+                    remainingIncomingUserRefreshCounts[key] = remaining - 1
+                    return false
+                }
+                return true
+            }
+
+        guard !trailingUserMessages.isEmpty else {
+            return reconciled
+        }
+
+        for message in trailingUserMessages {
+            guard let messageTimestamp = message.timestamp else {
+                reconciled.append(message)
+                continue
+            }
+
+            let insertIndex = reconciled.firstIndex { existing in
+                guard let existingTimestamp = existing.timestamp else { return false }
+                return existingTimestamp > messageTimestamp
+            } ?? reconciled.endIndex
+            reconciled.insert(message, at: insertIndex)
+        }
+
+        return Self.dedupeMessages(reconciled)
+    }
+
     private static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var result: [OpenClawChatMessage] = []
         result.reserveCapacity(messages.count)
@@ -365,10 +464,19 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        if Self.resetTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performReset()
+            return
+        }
+
         let sessionKey = self.sessionKey
 
         guard self.healthOK else {
@@ -499,6 +607,22 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
+    private func performReset() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+
+        do {
+            try await self.transport.resetSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        await self.bootstrap()
+    }
+
     private func performSelectThinkingLevel(_ level: String) async {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.thinkingLevel else { return }
@@ -549,7 +673,9 @@ public final class OpenClawChatViewModel {
                 sessionKey: sessionKey,
                 model: nextModelRef)
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
-                self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: false)
+                // Keep older successful patches as rollback state, but do not replay
+                // stale UI/session state over a newer in-flight or completed selection.
+                self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = next
                 return
             }
             self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)
@@ -878,7 +1004,7 @@ public final class OpenClawChatViewModel {
     private func refreshHistoryAfterRun() async {
         do {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.reconcileMessageIDs(
+            self.messages = Self.reconcileRunRefreshMessages(
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId

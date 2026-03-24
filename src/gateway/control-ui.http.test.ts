@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -85,6 +86,13 @@ describe("handleControlUiHttpRequest", () => {
     return { assetsDir, filePath };
   }
 
+  async function createHardlinkedAssetFile(rootPath: string) {
+    const { filePath } = await writeAssetFile(rootPath, "app.js", "console.log('hi');");
+    const hardlinkPath = path.join(path.dirname(filePath), "app.hl.js");
+    await fs.link(filePath, hardlinkPath);
+    return hardlinkPath;
+  }
+
   async function withBasePathRootFixture<T>(params: {
     siblingDir: string;
     fn: (paths: { root: string; sibling: string }) => Promise<T>;
@@ -120,6 +128,27 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+      },
+    });
+  });
+
+  it("includes CSP hash for inline scripts in index.html", async () => {
+    const scriptContent = "(function(){ var x = 1; })();";
+    const html = `<html><head><script>${scriptContent}</script></head><body></body></html>\n`;
+    const expectedHash = createHash("sha256").update(scriptContent, "utf8").digest("base64");
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, setHeader } = makeMockHttpResponse();
+        handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+        });
+        const cspCalls = setHeader.mock.calls.filter(
+          (call) => call[0] === "Content-Security-Policy",
+        );
+        const lastCsp = String(cspCalls[cspCalls.length - 1]?.[1] ?? "");
+        expect(lastCsp).toContain(`'sha256-${expectedHash}'`);
+        expect(lastCsp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
       },
     });
   });
@@ -353,10 +382,7 @@ describe("handleControlUiHttpRequest", () => {
   it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+        await createHardlinkedAssetFile(tmp);
 
         const { res, end, handled } = runControlUiRequest({
           url: "/assets/app.hl.js",
@@ -374,10 +400,7 @@ describe("handleControlUiHttpRequest", () => {
   it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+        await createHardlinkedAssetFile(tmp);
 
         const { res, end, handled } = runControlUiRequest({
           url: "/assets/app.hl.js",

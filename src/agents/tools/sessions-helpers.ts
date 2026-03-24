@@ -12,6 +12,7 @@ export {
   resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
 } from "./sessions-access.js";
+import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
   isRequesterSpawnedSessionVisible,
@@ -27,6 +28,7 @@ export {
   shouldResolveSessionIdInput,
   shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
@@ -44,6 +46,8 @@ export type SessionListDeliveryContext = {
   accountId?: string;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
 export type SessionListRow = {
   key: string;
   kind: SessionKind;
@@ -56,6 +60,12 @@ export type SessionListRow = {
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
+  estimatedCostUsd?: number;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  childSessions?: string[];
   thinkingLevel?: string;
   verboseLevel?: string;
   systemSent?: boolean;
@@ -71,6 +81,22 @@ export type SessionListRow = {
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+export function resolveSessionToolContext(opts?: {
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  config?: OpenClawConfig;
+}) {
+  const cfg = opts?.config ?? loadConfig();
+  return {
+    cfg,
+    ...resolveSandboxedSessionToolContext({
+      cfg,
+      agentSessionKey: opts?.agentSessionKey,
+      sandboxed: opts?.sandboxed,
+    }),
+  };
 }
 
 export function classifySessionKind(params: {
@@ -166,9 +192,9 @@ export function extractAssistantText(message: unknown): string | undefined {
       normalizeText: (text) => text.trim(),
     }) ?? "";
   const stopReason = (message as { stopReason?: unknown }).stopReason;
-  const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
-  const errorContext =
-    stopReason === "error" || (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
+  // Gate on stopReason only — a non-error response with a stale/background errorMessage
+  // should not have its content rewritten with error templates (#13935).
+  const errorContext = stopReason === "error";
 
   return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
 }

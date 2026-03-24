@@ -10,7 +10,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveHookConfig } from "./config.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
@@ -19,6 +19,24 @@ import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
+
+function safeLogValue(value: string): string {
+  return sanitizeForLog(value);
+}
+
+function maybeWarnTrustedHookSource(source: string): void {
+  if (source === "openclaw-workspace") {
+    log.warn(
+      "Loading workspace hook code into the gateway process. Workspace hooks are trusted local code.",
+    );
+    return;
+  }
+  if (source === "openclaw-managed") {
+    log.warn(
+      "Loading managed hook code into the gateway process. Managed hooks are trusted local code.",
+    );
+  }
+}
 
 /**
  * Load and register all hook handlers
@@ -66,15 +84,14 @@ export async function loadInternalHooks(
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 
     for (const entry of eligible) {
-      const hookConfig = resolveHookConfig(cfg, entry.hook.name);
-
-      // Skip if explicitly disabled in config
-      if (hookConfig?.enabled === false) {
-        continue;
-      }
-
       try {
-        const hookBaseDir = safeRealpathOrResolve(entry.hook.baseDir);
+        const hookBaseDir = resolveExistingRealpath(entry.hook.baseDir);
+        if (!hookBaseDir) {
+          log.error(
+            `Hook '${safeLogValue(entry.hook.name)}' base directory is no longer readable: ${safeLogValue(entry.hook.baseDir)}`,
+          );
+          continue;
+        }
         const opened = await openBoundaryFile({
           absolutePath: entry.hook.handlerPath,
           rootPath: hookBaseDir,
@@ -82,12 +99,13 @@ export async function loadInternalHooks(
         });
         if (!opened.ok) {
           log.error(
-            `Hook '${entry.hook.name}' handler path fails boundary checks: ${entry.hook.handlerPath}`,
+            `Hook '${safeLogValue(entry.hook.name)}' handler path fails boundary checks: ${safeLogValue(entry.hook.handlerPath)}`,
           );
           continue;
         }
         const safeHandlerPath = opened.path;
         fs.closeSync(opened.fd);
+        maybeWarnTrustedHookSource(entry.hook.source);
 
         // Import handler module — only cache-bust mutable (workspace/managed) hooks
         const importUrl = buildImportUrl(safeHandlerPath, entry.hook.source);
@@ -101,14 +119,16 @@ export async function loadInternalHooks(
         });
 
         if (!handler) {
-          log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
+          log.error(
+            `Handler '${safeLogValue(exportName)}' from ${safeLogValue(entry.hook.name)} is not a function`,
+          );
           continue;
         }
 
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          log.warn(`Hook '${entry.hook.name}' has no events defined in metadata`);
+          log.warn(`Hook '${safeLogValue(entry.hook.name)}' has no events defined in metadata`);
           continue;
         }
 
@@ -117,18 +137,18 @@ export async function loadInternalHooks(
         }
 
         log.info(
-          `Registered hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
+          `Registered hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
         );
         loadedCount++;
       } catch (err) {
         log.error(
-          `Failed to load hook ${entry.hook.name}: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
         );
       }
     }
   } catch (err) {
     log.error(
-      `Failed to load directory-based hooks: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to load directory-based hooks: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
     );
   }
 
@@ -144,17 +164,29 @@ export async function loadInternalHooks(
       }
       if (path.isAbsolute(rawModule)) {
         log.error(
-          `Handler module path must be workspace-relative (got absolute path): ${rawModule}`,
+          `Handler module path must be workspace-relative (got absolute path): ${safeLogValue(rawModule)}`,
         );
         continue;
       }
       const baseDir = path.resolve(workspaceDir);
       const modulePath = path.resolve(baseDir, rawModule);
-      const baseDirReal = safeRealpathOrResolve(baseDir);
-      const modulePathSafe = safeRealpathOrResolve(modulePath);
-      const rel = path.relative(baseDir, modulePath);
+      const baseDirReal = resolveExistingRealpath(baseDir);
+      if (!baseDirReal) {
+        log.error(
+          `Workspace directory is no longer readable while loading hooks: ${safeLogValue(baseDir)}`,
+        );
+        continue;
+      }
+      const modulePathSafe = resolveExistingRealpath(modulePath);
+      if (!modulePathSafe) {
+        log.error(
+          `Handler module path could not be resolved with realpath: ${safeLogValue(rawModule)}`,
+        );
+        continue;
+      }
+      const rel = path.relative(baseDirReal, modulePathSafe);
       if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-        log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
+        log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
         continue;
       }
       const opened = await openBoundaryFile({
@@ -163,11 +195,16 @@ export async function loadInternalHooks(
         boundaryLabel: "workspace directory",
       });
       if (!opened.ok) {
-        log.error(`Handler module path fails boundary checks under workspaceDir: ${rawModule}`);
+        log.error(
+          `Handler module path fails boundary checks under workspaceDir: ${safeLogValue(rawModule)}`,
+        );
         continue;
       }
       const safeModulePath = opened.path;
       fs.closeSync(opened.fd);
+      log.warn(
+        `Loading legacy internal hook module from workspace path ${safeLogValue(rawModule)}. Legacy hook modules are trusted local code.`,
+      );
 
       // Legacy handlers are always workspace-relative, so use mtime-based cache busting
       const importUrl = buildImportUrl(safeModulePath, "openclaw-workspace");
@@ -181,18 +218,20 @@ export async function loadInternalHooks(
       });
 
       if (!handler) {
-        log.error(`Handler '${exportName}' from ${modulePath} is not a function`);
+        log.error(
+          `Handler '${safeLogValue(exportName)}' from ${safeLogValue(modulePath)} is not a function`,
+        );
         continue;
       }
 
       registerInternalHook(handlerConfig.event, handler);
       log.info(
-        `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
+        `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );
       loadedCount++;
     } catch (err) {
       log.error(
-        `Failed to load hook handler from ${handlerConfig.module}: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to load hook handler from ${safeLogValue(handlerConfig.module)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
       );
     }
   }
@@ -200,10 +239,10 @@ export async function loadInternalHooks(
   return loadedCount;
 }
 
-function safeRealpathOrResolve(value: string): string {
+function resolveExistingRealpath(value: string): string | null {
   try {
     return fs.realpathSync(value);
   } catch {
-    return path.resolve(value);
+    return null;
   }
 }

@@ -7,6 +7,7 @@ import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readLatestSessionUsageFromTranscript,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -550,7 +551,9 @@ describe("readSessionMessages", () => {
         testCase.wrongStorePath,
         testCase.sessionFile,
       );
-      expect(out).toEqual([testCase.message]);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject(testCase.message);
+      expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     }
   });
 });
@@ -648,6 +651,156 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   });
 });
 
+describe("readLatestSessionUsageFromTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns the latest assistant usage snapshot and skips delivery mirrors", () => {
+    const sessionId = "usage-session";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1200,
+            output: 300,
+            cacheRead: 50,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toEqual({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheRead: 50,
+      totalTokens: 1250,
+      totalTokensFresh: true,
+      costUsd: 0.0042,
+    });
+  });
+
+  test("aggregates assistant usage across the full transcript and keeps the latest context snapshot", () => {
+    const sessionId = "usage-aggregate";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: {
+            input: 1_800,
+            output: 400,
+            cacheRead: 600,
+            cost: { total: 0.0055 },
+          },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          usage: {
+            input: 2_400,
+            output: 250,
+            cacheRead: 900,
+            cost: { total: 0.006 },
+          },
+        },
+      },
+    ]);
+
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      inputTokens: 4200,
+      outputTokens: 650,
+      cacheRead: 1500,
+      totalTokens: 3300,
+      totalTokensFresh: true,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
+  });
+
+  test("reads earlier assistant usage outside the old tail window", () => {
+    const sessionId = "usage-full-transcript";
+    const filler = "x".repeat(20_000);
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1_000,
+            output: 200,
+            cacheRead: 100,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      ...Array.from({ length: 80 }, () => ({ message: { role: "user", content: filler } })),
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 500,
+            output: 150,
+            cacheRead: 50,
+            cost: { total: 0.0021 },
+          },
+        },
+      },
+    ]);
+
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1500,
+      outputTokens: 350,
+      cacheRead: 150,
+      totalTokens: 550,
+      totalTokensFresh: true,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
+  });
+
+  test("returns null when the transcript has no assistant usage snapshot", () => {
+    const sessionId = "usage-empty";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "hello" } },
+      { message: { role: "assistant", content: "hi" } },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
+  });
+});
+
 describe("resolveSessionTranscriptCandidates", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -711,6 +864,78 @@ describe("resolveSessionTranscriptCandidates safety", () => {
 
     expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
     expect(normalizedCandidates).toContain(expectedFallback);
+  });
+
+  test("prefers the current sessionId transcript before a stale sessionFile candidate", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl",
+    );
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(
+      path.resolve("/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl"),
+    );
+  });
+
+  test("keeps explicit custom sessionFile ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-transcript.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps custom topic-like transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-topic-notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps forked transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile =
+      "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_11111111-1111-4111-8111-111111111111.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps timestamped custom transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("still treats generated topic transcripts from another session as stale", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionFile =
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222-topic-thread.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, staleSessionFile);
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(path.resolve(staleSessionFile));
   });
 });
 

@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { usesMoonshotThinkingPayloadCompat } from "../provider-capabilities.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 
@@ -35,6 +36,14 @@ function isMoonshotToolChoiceCompatible(toolChoice: unknown): boolean {
   return false;
 }
 
+function isPinnedToolChoice(toolChoice: unknown): boolean {
+  if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
+    return false;
+  }
+  const typeValue = (toolChoice as Record<string, unknown>).type;
+  return typeValue === "tool" || typeValue === "function";
+}
+
 export function shouldApplySiliconFlowThinkingOffCompat(params: {
   provider: string;
   modelId: string;
@@ -44,6 +53,27 @@ export function shouldApplySiliconFlowThinkingOffCompat(params: {
     params.provider === "siliconflow" &&
     params.thinkingLevel === "off" &&
     params.modelId.startsWith("Pro/")
+  );
+}
+
+export function shouldApplyMoonshotPayloadCompat(params: {
+  provider: string;
+  modelId: string;
+}): boolean {
+  const normalizedProvider = params.provider.trim().toLowerCase();
+  const normalizedModelId = params.modelId.trim().toLowerCase();
+
+  if (usesMoonshotThinkingPayloadCompat(normalizedProvider)) {
+    return true;
+  }
+
+  // Ollama Cloud exposes Kimi variants through OpenAI-compatible model IDs such
+  // as `kimi-k2.5:cloud`, but they still need the same payload normalization as
+  // native Moonshot endpoints when thinking/tool_choice are enabled together.
+  return (
+    normalizedProvider === "ollama" &&
+    normalizedModelId.startsWith("kimi-k") &&
+    normalizedModelId.includes(":cloud")
   );
 }
 
@@ -103,7 +133,11 @@ export function createMoonshotThinkingWrapper(
             effectiveThinkingType === "enabled" &&
             !isMoonshotToolChoiceCompatible(payloadObj.tool_choice)
           ) {
-            payloadObj.tool_choice = "auto";
+            if (payloadObj.tool_choice === "required") {
+              payloadObj.tool_choice = "auto";
+            } else if (isPinnedToolChoice(payloadObj.tool_choice)) {
+              payloadObj.thinking = { type: "disabled" };
+            }
           }
         }
         return originalOnPayload?.(payload, model);
