@@ -50,6 +50,7 @@ describe("ensureConfigReady", () => {
     runtime: RuntimeEnv;
     commandPath?: string[];
     suppressDoctorStdout?: boolean;
+    allowInvalid?: boolean;
   }) => Promise<void>;
   let resetConfigGuardStateForTests: () => void;
 
@@ -144,9 +145,14 @@ describe("ensureConfigReady", () => {
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("does not exit for invalid config on plugins install", async () => {
+  it("allows an explicit invalid-config override", async () => {
     setInvalidSnapshot();
-    const runtime = await runEnsureConfigReady(["plugins", "install"]);
+    const runtime = makeRuntime();
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
