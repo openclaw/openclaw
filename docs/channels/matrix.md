@@ -164,6 +164,35 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 
 ## E2EE setup
 
+## Bot to bot rooms
+
+By default, Matrix messages from other configured OpenClaw Matrix accounts are ignored.
+
+Use `allowBots` when you intentionally want inter-agent Matrix traffic:
+
+```json5
+{
+  channels: {
+    matrix: {
+      allowBots: "mentions", // true | "mentions"
+      groups: {
+        "!roomid:example.org": {
+          requireMention: true,
+        },
+      },
+    },
+  },
+}
+```
+
+- `allowBots: true` accepts messages from other configured Matrix bot accounts in allowed rooms and DMs.
+- `allowBots: "mentions"` accepts those messages only when they visibly mention this bot in rooms. DMs are still allowed.
+- `groups.<room>.allowBots` overrides the account-level setting for one room.
+- OpenClaw still ignores messages from the same Matrix user ID to avoid self-reply loops.
+- Matrix does not expose a native bot flag here; OpenClaw treats "bot-authored" as "sent by another configured Matrix account on this OpenClaw gateway".
+
+Use strict room allowlists and mention requirements when enabling bot-to-bot traffic in shared rooms.
+
 Enable encryption:
 
 ```json5
@@ -203,6 +232,8 @@ Bootstrap cross-signing and verification state:
 ```bash
 openclaw matrix verify bootstrap
 ```
+
+Multi-account support: use `channels.matrix.accounts` with per-account credentials and optional `name`. See [Configuration reference](/gateway/configuration-reference#multi-account-all-channels) for the shared pattern.
 
 Verbose bootstrap diagnostics:
 
@@ -558,6 +589,39 @@ Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account f
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 
+## Private/LAN homeservers
+
+By default, OpenClaw blocks private/internal Matrix homeservers for SSRF protection unless you
+explicitly opt in per account.
+
+If your homeserver runs on localhost, a LAN/Tailscale IP, or an internal hostname, enable
+`allowPrivateNetwork` for that Matrix account:
+
+```json5
+{
+  channels: {
+    matrix: {
+      homeserver: "http://matrix-synapse:8008",
+      allowPrivateNetwork: true,
+      accessToken: "syt_internal_xxx",
+    },
+  },
+}
+```
+
+CLI setup example:
+
+```bash
+openclaw matrix account add \
+  --account ops \
+  --homeserver http://matrix-synapse:8008 \
+  --allow-private-network \
+  --access-token syt_ops_xxx
+```
+
+This opt-in only allows trusted private/internal targets. Public cleartext homeservers such as
+`http://matrix.example.org:8008` remain blocked. Prefer `https://` whenever possible.
+
 ## Target resolution
 
 Matrix accepts these target forms anywhere OpenClaw asks you for a room or user target:
@@ -578,6 +642,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `name`: optional label for the account.
 - `defaultAccount`: preferred account ID when multiple Matrix accounts are configured.
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
+- `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
 - `accessToken`: access token for token-based auth.
 - `password`: password for password-based login.

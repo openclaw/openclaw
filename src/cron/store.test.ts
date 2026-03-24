@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
@@ -56,6 +57,38 @@ describe("cron store", () => {
     await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
   });
 
+  it("accepts JSON5 syntax when loading an existing cron store", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      `{
+        // hand-edited legacy store
+        version: 1,
+        jobs: [
+          {
+            id: 'job-1',
+            name: 'Job 1',
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: 'every', everyMs: 60000 },
+            sessionTarget: 'main',
+            wakeMode: 'next-heartbeat',
+            payload: { kind: 'systemEvent', text: 'tick-job-1' },
+            state: {},
+          },
+        ],
+      }`,
+      "utf-8",
+    );
+
+    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
+      version: 1,
+      jobs: [{ id: "job-1", enabled: true }],
+    });
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
@@ -78,6 +111,30 @@ describe("cron store", () => {
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(currentRaw)).toEqual(second);
     expect(JSON.parse(backupRaw)).toEqual(first);
+  });
+
+  it("skips backup files for runtime-only state churn", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second: CronStoreFile = {
+      ...first,
+      jobs: first.jobs.map((job) => ({
+        ...job,
+        updatedAtMs: job.updatedAtMs + 60_000,
+        state: {
+          ...job.state,
+          nextRunAtMs: job.createdAtMs + 60_000,
+          lastRunAtMs: job.createdAtMs + 30_000,
+        },
+      })),
+    };
+
+    await saveCronStore(store.storePath, first);
+    await saveCronStore(store.storePath, second);
+
+    const currentRaw = await fs.readFile(store.storePath, "utf-8");
+    expect(JSON.parse(currentRaw)).toEqual(second);
+    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
   });
 
   it.skipIf(process.platform === "win32")(
@@ -117,6 +174,10 @@ describe("cron store", () => {
 describe("saveCronStore", () => {
   const dummyStore: CronStoreFile = { version: 1, jobs: [] };
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("persists and round-trips a store file", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, dummyStore);
@@ -126,11 +187,10 @@ describe("saveCronStore", () => {
 
   it("retries rename on EBUSY then succeeds", async () => {
     const { storePath } = await makeStorePath();
-    const realSetTimeout = globalThis.setTimeout;
     const setTimeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockImplementation(((handler: TimerHandler, _timeout?: number, ...args: unknown[]) =>
-        realSetTimeout(handler, 0, ...args)) as typeof setTimeout);
+        scheduleNativeTimeout(handler, 0, ...args)) as typeof setTimeout);
     const origRename = fs.rename.bind(fs);
     let ebusyCount = 0;
     const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {

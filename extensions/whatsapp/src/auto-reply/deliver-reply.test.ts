@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../../../src/globals.js";
 import { loadWebMedia } from "../media.js";
-import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
 const { sleepWithAbortMock } = vi.hoisted(() => ({
@@ -28,6 +27,8 @@ vi.mock("../reconnect.js", async (importOriginal) => {
     sleepWithAbort: (ms: number, signal?: AbortSignal) => sleepWithAbortMock(ms, signal),
   };
 });
+
+let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -90,7 +91,9 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverWebReply } = await import("./deliver-reply.js"));
     vi.clearAllMocks();
     sleepWithAbortMock.mockImplementation(async () => undefined);
   });

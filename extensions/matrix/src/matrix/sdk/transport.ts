@@ -1,3 +1,9 @@
+import {
+  closeDispatcher,
+  createPinnedDispatcher,
+  resolvePinnedHostnameWithPolicy,
+  type SsrFPolicy,
+} from "../../runtime-api.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -44,60 +50,196 @@ function isRedirectStatus(statusCode: number): boolean {
   return statusCode >= 300 && statusCode < 400;
 }
 
-async function fetchWithSafeRedirects(url: URL, init: RequestInit): Promise<Response> {
-  let currentUrl = new URL(url.toString());
-  let method = (init.method ?? "GET").toUpperCase();
-  let body = init.body;
-  let headers = new Headers(init.headers ?? {});
-  const maxRedirects = 5;
+function toFetchUrl(resource: RequestInfo | URL): string {
+  if (resource instanceof URL) {
+    return resource.toString();
+  }
+  if (typeof resource === "string") {
+    return resource;
+  }
+  return resource.url;
+}
 
-  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    const response = await fetch(currentUrl, {
-      ...init,
-      method,
-      body,
-      headers,
-      redirect: "manual",
+function buildBufferedResponse(params: {
+  source: Response;
+  body: ArrayBuffer;
+  url: string;
+}): Response {
+  const response = new Response(params.body, {
+    status: params.source.status,
+    statusText: params.source.statusText,
+    headers: new Headers(params.source.headers),
+  });
+  try {
+    Object.defineProperty(response, "url", {
+      value: params.source.url || params.url,
+      configurable: true,
     });
+  } catch {
+    // Response.url is read-only in some runtimes; metadata is best-effort only.
+  }
+  return response;
+}
 
-    if (!isRedirectStatus(response.status)) {
-      return response;
-    }
-
-    const location = response.headers.get("location");
-    if (!location) {
-      throw new Error(`Matrix redirect missing location header (${currentUrl.toString()})`);
-    }
-
-    const nextUrl = new URL(location, currentUrl);
-    if (nextUrl.protocol !== currentUrl.protocol) {
-      throw new Error(
-        `Blocked cross-protocol redirect (${currentUrl.protocol} -> ${nextUrl.protocol})`,
-      );
-    }
-
-    if (nextUrl.origin !== currentUrl.origin) {
-      headers = new Headers(headers);
-      headers.delete("authorization");
-    }
-
-    if (
-      response.status === 303 ||
-      ((response.status === 301 || response.status === 302) &&
-        method !== "GET" &&
-        method !== "HEAD")
-    ) {
-      method = "GET";
-      body = undefined;
-      headers = new Headers(headers);
-      headers.delete("content-type");
-      headers.delete("content-length");
-    }
-
-    currentUrl = nextUrl;
+function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  const { timeoutMs, signal } = params;
+  if (!timeoutMs && !signal) {
+    return { signal: undefined, cleanup: () => {} };
+  }
+  if (!timeoutMs) {
+    return { signal, cleanup: () => {} };
   }
 
-  throw new Error(`Too many redirects while requesting ${url.toString()}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    },
+  };
+}
+
+async function fetchWithMatrixGuardedRedirects(params: {
+  url: string;
+  init?: RequestInit;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+  let currentUrl = new URL(params.url);
+  let method = (params.init?.method ?? "GET").toUpperCase();
+  let body = params.init?.body;
+  let headers = new Headers(params.init?.headers ?? {});
+  const maxRedirects = 5;
+  const visited = new Set<string>();
+  const { signal, cleanup } = buildAbortSignal({
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
+
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    let dispatcher: ReturnType<typeof createPinnedDispatcher> | undefined;
+    try {
+      const pinned = await resolvePinnedHostnameWithPolicy(currentUrl.hostname, {
+        policy: params.ssrfPolicy,
+      });
+      dispatcher = createPinnedDispatcher(pinned, undefined, params.ssrfPolicy);
+      const response = await fetch(currentUrl.toString(), {
+        ...params.init,
+        method,
+        body,
+        headers,
+        redirect: "manual",
+        signal,
+        dispatcher,
+      } as RequestInit & { dispatcher: unknown });
+
+      if (!isRedirectStatus(response.status)) {
+        return {
+          response,
+          release: async () => {
+            cleanup();
+            await closeDispatcher(dispatcher);
+          },
+          finalUrl: currentUrl.toString(),
+        };
+      }
+
+      const location = response.headers.get("location");
+      if (!location) {
+        cleanup();
+        await closeDispatcher(dispatcher);
+        throw new Error(`Matrix redirect missing location header (${currentUrl.toString()})`);
+      }
+
+      const nextUrl = new URL(location, currentUrl);
+      if (nextUrl.protocol !== currentUrl.protocol) {
+        cleanup();
+        await closeDispatcher(dispatcher);
+        throw new Error(
+          `Blocked cross-protocol redirect (${currentUrl.protocol} -> ${nextUrl.protocol})`,
+        );
+      }
+
+      const nextUrlString = nextUrl.toString();
+      if (visited.has(nextUrlString)) {
+        cleanup();
+        await closeDispatcher(dispatcher);
+        throw new Error("Redirect loop detected");
+      }
+      visited.add(nextUrlString);
+
+      if (nextUrl.origin !== currentUrl.origin) {
+        headers = new Headers(headers);
+        headers.delete("authorization");
+      }
+
+      if (
+        response.status === 303 ||
+        ((response.status === 301 || response.status === 302) &&
+          method !== "GET" &&
+          method !== "HEAD")
+      ) {
+        method = "GET";
+        body = undefined;
+        headers = new Headers(headers);
+        headers.delete("content-type");
+        headers.delete("content-length");
+      }
+
+      void response.body?.cancel();
+      await closeDispatcher(dispatcher);
+      currentUrl = nextUrl;
+    } catch (error) {
+      cleanup();
+      await closeDispatcher(dispatcher);
+      throw error;
+    }
+  }
+
+  cleanup();
+  throw new Error(`Too many redirects while requesting ${params.url}`);
+}
+
+export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): typeof fetch {
+  return (async (resource: RequestInfo | URL, init?: RequestInit) => {
+    const url = toFetchUrl(resource);
+    const { signal, ...requestInit } = init ?? {};
+    const { response, release } = await fetchWithMatrixGuardedRedirects({
+      url,
+      init: requestInit,
+      signal: signal ?? undefined,
+      ssrfPolicy: params.ssrfPolicy,
+    });
+
+    try {
+      const body = await response.arrayBuffer();
+      return buildBufferedResponse({
+        source: response,
+        body,
+        url,
+      });
+    } finally {
+      await release();
+    }
+  }) as typeof fetch;
 }
 
 export async function performMatrixRequest(params: {
@@ -111,6 +253,7 @@ export async function performMatrixRequest(params: {
   raw?: boolean;
   maxBytes?: number;
   readIdleTimeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
   allowAbsoluteEndpoint?: boolean;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const isAbsoluteEndpoint =
@@ -146,15 +289,18 @@ export async function performMatrixRequest(params: {
     }
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), params.timeoutMs);
-  try {
-    const response = await fetchWithSafeRedirects(baseUrl, {
+  const { response, release } = await fetchWithMatrixGuardedRedirects({
+    url: baseUrl.toString(),
+    init: {
       method: params.method,
       headers,
       body,
-      signal: controller.signal,
-    });
+    },
+    timeoutMs: params.timeoutMs,
+    ssrfPolicy: params.ssrfPolicy,
+  });
+
+  try {
     if (params.raw) {
       const contentLength = response.headers.get("content-length");
       if (params.maxBytes && contentLength) {
@@ -187,6 +333,6 @@ export async function performMatrixRequest(params: {
       buffer: Buffer.from(text, "utf8"),
     };
   } finally {
-    clearTimeout(timeoutId);
+    await release();
   }
 }

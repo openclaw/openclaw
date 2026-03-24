@@ -36,6 +36,35 @@ const { maybePersistResolvedTelegramTarget } = vi.hoisted(() => ({
   maybePersistResolvedTelegramTarget: vi.fn(async () => {}),
 }));
 
+const {
+  undiciFetch,
+  undiciSetGlobalDispatcher,
+  undiciAgentCtor,
+  undiciEnvHttpProxyAgentCtor,
+  undiciProxyAgentCtor,
+} = vi.hoisted(() => ({
+  undiciFetch: vi.fn(),
+  undiciSetGlobalDispatcher: vi.fn(),
+  undiciAgentCtor: vi.fn(function MockAgent(
+    this: { options?: Record<string, unknown> },
+    options?: Record<string, unknown>,
+  ) {
+    this.options = options;
+  }),
+  undiciEnvHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options?: Record<string, unknown> },
+    options?: Record<string, unknown>,
+  ) {
+    this.options = options;
+  }),
+  undiciProxyAgentCtor: vi.fn(function MockProxyAgent(
+    this: { options?: Record<string, unknown> | string },
+    options?: Record<string, unknown> | string,
+  ) {
+    this.options = options;
+  }),
+}));
+
 type TelegramSendTestMocks = {
   botApi: Record<string, MockFn>;
   botCtorSpy: MockFn;
@@ -49,6 +78,10 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   Bot: class {
     api = botApi;
     catch = vi.fn();
@@ -69,7 +102,18 @@ vi.mock("grammy", () => ({
       super(message);
     }
   },
+  GrammyError: class GrammyError extends Error {
+    description = "";
+  },
   InputFile: class {},
+}));
+
+vi.mock("undici", () => ({
+  Agent: undiciAgentCtor,
+  EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
+  ProxyAgent: undiciProxyAgentCtor,
+  fetch: undiciFetch,
+  setGlobalDispatcher: undiciSetGlobalDispatcher,
 }));
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
@@ -94,6 +138,11 @@ export function installTelegramSendTestHooks() {
     loadWebMedia.mockReset();
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
+    undiciFetch.mockReset();
+    undiciSetGlobalDispatcher.mockReset();
+    undiciAgentCtor.mockClear();
+    undiciEnvHttpProxyAgentCtor.mockClear();
+    undiciProxyAgentCtor.mockClear();
     botCtorSpy.mockReset();
     for (const fn of Object.values(botApi)) {
       fn.mockReset();

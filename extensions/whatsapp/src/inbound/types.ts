@@ -1,5 +1,5 @@
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { ReconnectPolicy } from "../reconnect.js";
 
 export type WebListenerCloseReason = {
