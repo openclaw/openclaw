@@ -28,8 +28,8 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 
 2. browser(action="act", kind="evaluate", fn="(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*=\"opacity: 0\"],[style*=\"opacity:0\"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager'; if (img.dataset.src) img.src = img.dataset.src }); return 'done' })()")
 
-3. Incremental scroll with async pauses to trigger IntersectionObservers:
-   browser(action="act", kind="evaluate", fn="(async () => { const h = document.body.scrollHeight; const step = Math.ceil(h / 5); for (let i = step; i <= h; i += step) { window.scrollTo(0, i); await new Promise(r => setTimeout(r, 300)) } return 'scrolled' })()")
+3. Incremental scroll in viewport-sized steps to trigger IntersectionObservers:
+   browser(action="act", kind="evaluate", fn="(async () => { const h = document.body.scrollHeight; const step = window.innerHeight; for (let i = step; i <= h; i += step) { window.scrollTo(0, i); await new Promise(r => setTimeout(r, 300)) } return 'scrolled' })()")
 
 4. Wait 2 seconds (exec: sleep 2)
 
@@ -61,7 +61,7 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 1. **Forces all reveal elements visible** — Selects elements with class names containing `reveal`, `fade`, `animate`, or `scroll` and overrides their opacity, transform, and visibility
 2. **Catches inline-styled hidden elements** — Finds elements with `opacity: 0` in their inline style
 3. **Triggers lazy images** — Changes `loading="lazy"` to `eager` and copies `data-src` to `src` for custom lazy-loading implementations
-4. **Incrementally scrolls with pauses** — Steps through the page in chunks with 300ms async pauses between each step, giving IntersectionObservers time to fire and render
+4. **Incrementally scrolls in viewport-sized steps** — Steps through the page one viewport height at a time with 300ms async pauses, ensuring every vertical band enters view and IntersectionObservers fire reliably
 5. **Re-applies reveal after scroll** — Observers may add new hidden classes during scroll, so reveal injection runs again
 6. **Scrolls back to top** — Returns to page start for a clean full-page screenshot
 7. **Full mobile pass** — After resize, repeats the complete reveal + scroll + reveal cycle because responsive breakpoints often mount mobile-only blocks or reinitialize observers
