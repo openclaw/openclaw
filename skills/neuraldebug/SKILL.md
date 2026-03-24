@@ -16,6 +16,7 @@ metadata:
     emoji: "🔍"
     homepage: https://github.com/DennySun2020/DeepRhapsody
 ---
+
 # NeuralDebug
 
 AI-powered debugging framework for **software** and **LLM reasoning**. Part of the [DeepRhapsody](https://github.com/DennySun2020/DeepRhapsody) project.
@@ -25,12 +26,15 @@ Use this skill when asked to debug a program, diagnose a crash, analyze a core d
 ## What NeuralDebug Does
 
 ### 🔧 Software Debugging (8 Languages)
+
 Debug **Python, C/C++, C#, Rust, Java, Go, Node.js/TypeScript, and Ruby** using real debuggers — not code reading. NeuralDebug drives GDB, LLDB, CDB, JDB, Delve, Node Inspector, and rdbg via a unified natural-language interface.
 
 ### 🧠 LLM Debugging
-Step through transformer forward passes **layer by layer**. Run interpretability techniques to understand *why* a model produces a given output: Logit Lens, Attention Analysis, Probing, Activation Patching, and custom analysis sandboxes.
+
+Step through transformer forward passes **layer by layer**. Run interpretability techniques to understand _why_ a model produces a given output: Logit Lens, Attention Analysis, Probing, Activation Patching, and custom analysis sandboxes.
 
 ### 🎯 LLM Fine-Tuning
+
 Inject missing knowledge into GPT-2 family models using LoRA. Diagnose → fine-tune → verify in a single workflow.
 
 ## Installation
@@ -70,16 +74,16 @@ python3 src/neuraldebug/python_debugger.py debug my_script.py --breakpoint 42 --
 
 ### Supported Languages
 
-| Language | Script | Backend |
-|----------|--------|---------|
-| Python | `python_debug_session.py` | bdb (stdlib) |
-| C/C++ | `cpp_debug_session.py` | GDB, LLDB, or CDB |
-| C# | `csharp_debug_session.py` | netcoredbg |
-| Rust | `rust_debug_session.py` | rust-gdb / LLDB |
-| Java | `java_debug_session.py` | JDB |
-| Go | `go_debug_session.py` | Delve |
-| Node.js/TS | `nodejs_debug_session.py` | Node Inspector |
-| Ruby | `ruby_debug_session.py` | rdbg |
+| Language   | Script                    | Backend           |
+| ---------- | ------------------------- | ----------------- |
+| Python     | `python_debug_session.py` | bdb (stdlib)      |
+| C/C++      | `cpp_debug_session.py`    | GDB, LLDB, or CDB |
+| C#         | `csharp_debug_session.py` | netcoredbg        |
+| Rust       | `rust_debug_session.py`   | rust-gdb / LLDB   |
+| Java       | `java_debug_session.py`   | JDB               |
+| Go         | `go_debug_session.py`     | Delve             |
+| Node.js/TS | `nodejs_debug_session.py` | Node Inspector    |
+| Ruby       | `ruby_debug_session.py`   | rdbg              |
 
 All scripts live in `src/neuraldebug/` and share the same command interface.
 
@@ -109,6 +113,7 @@ python3 src/neuraldebug/llm/llm_debug_session.py cmd -p 5680 patch "The capital 
 ### LLM Models Supported
 
 Any HuggingFace causal LM with a built-in adapter:
+
 - **GPT-2 family**: distilgpt2, gpt2, gpt2-medium, gpt2-large, gpt2-xl
 - **Llama family**: Llama, Mistral, Qwen, DeepSeek
 - **Custom models**: implement `ModelAdapter` and register
@@ -169,6 +174,7 @@ Every command returns structured JSON — parseable by any AI agent.
 - **Issues**: https://github.com/DennySun2020/DeepRhapsody/issues
 
 See the `references/` folder for detailed command documentation:
+
 - `software-debugging.md` — full command reference for all 8 languages
 - `llm-debugging.md` — interpretability techniques and LLM commands
 - `llm-finetuning.md` — LoRA fine-tuning workflow and configuration
