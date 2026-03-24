@@ -410,6 +410,9 @@ export class OpenClawApp extends LitElement {
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
 
+  @state() heartbeatsEnabled = false;
+  @state() heartbeatStopping = false;
+
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSummary | null = null;

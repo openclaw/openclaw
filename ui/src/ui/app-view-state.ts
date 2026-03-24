@@ -278,6 +278,8 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    heartbeatsEnabled: boolean;
+    heartbeatStopping: boolean;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
     debugHealth: HealthSummary | null;

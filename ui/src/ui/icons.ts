@@ -289,6 +289,12 @@ export const icons = {
   stop: html`
     <svg viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="1" /></svg>
   `,
+  heartPulse: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M19.5 12.572 12 20l-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572" />
+      <path d="M5 12h2l2-3 3 6 2-3h5" />
+    </svg>
+  `,
   pin: html`
     <svg viewBox="0 0 24 24">
       <line x1="12" x2="12" y1="17" y2="22" />

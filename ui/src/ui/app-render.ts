@@ -1459,6 +1459,29 @@ export function renderApp(state: AppViewState) {
                   ? "Stop autonomous session tasks"
                   : undefined,
                 onAbort: () => void state.handleAbortChat(),
+                heartbeatsEnabled: state.heartbeatsEnabled,
+                heartbeatStopping: state.heartbeatStopping,
+                onStopHeartbeats: async () => {
+                  if (!state.client || !state.connected || state.heartbeatStopping) {
+                    return;
+                  }
+                  state.heartbeatStopping = true;
+                  try {
+                    // Abort active run if one is in progress
+                    if (state.chatRunId || state.chatSessionActivity?.canStop) {
+                      await state.handleAbortChat();
+                    }
+                    // Also disable the heartbeat system if it's enabled
+                    if (state.heartbeatsEnabled) {
+                      await state.client.request("set-heartbeats", { enabled: false });
+                      state.heartbeatsEnabled = false;
+                    }
+                  } catch (err) {
+                    state.lastError = `Failed to stop: ${String(err)}`;
+                  } finally {
+                    state.heartbeatStopping = false;
+                  }
+                },
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 onClearHistory: async () => {

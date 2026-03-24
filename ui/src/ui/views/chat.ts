@@ -110,6 +110,9 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  heartbeatsEnabled?: boolean;
+  heartbeatStopping?: boolean;
+  onStopHeartbeats?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -1342,6 +1345,22 @@ export function renderChat(props: ChatProps) {
             <button class="btn btn--ghost" @click=${() => exportMarkdown(props)} title="Export" aria-label="Export chat" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
+
+            ${
+              props.heartbeatsEnabled || isBusy || props.sending
+                ? html`
+                  <button
+                    class="btn btn--ghost btn--heartbeat-stop"
+                    @click=${props.onStopHeartbeats}
+                    title=${props.heartbeatStopping ? "Stopping\u2026" : "Stop"}
+                    aria-label=${props.heartbeatStopping ? "Stopping" : "Stop running task"}
+                    ?disabled=${props.heartbeatStopping || !props.connected}
+                  >
+                    ${icons.heartPulse}
+                  </button>
+                `
+                : nothing
+            }
 
             ${
               canAbort && !(isBusy || props.sending)

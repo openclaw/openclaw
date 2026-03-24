@@ -410,6 +410,16 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     return;
   }
 
+  if (evt.event === "heartbeat") {
+    const payload = evt.payload as { status?: string } | undefined;
+    if (payload?.status) {
+      const heartbeatHost = host as unknown as { heartbeatsEnabled: boolean };
+      // A heartbeat event means heartbeats are running
+      heartbeatHost.heartbeatsEnabled = true;
+    }
+    return;
+  }
+
   if (evt.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
     const payload = evt.payload as GatewayUpdateAvailableEventPayload | undefined;
     host.updateAvailable = payload?.updateAvailable ?? null;
@@ -431,6 +441,8 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
     host.healthResult = snapshot.health;
+    const heartbeatHost = host as unknown as { heartbeatsEnabled: boolean };
+    heartbeatHost.heartbeatsEnabled = (snapshot.health.heartbeatSeconds ?? 0) > 0;
   }
   if (snapshot?.sessionDefaults) {
     applySessionDefaults(host, snapshot.sessionDefaults);
