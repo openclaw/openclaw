@@ -68,7 +68,7 @@
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 60%, transparent);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Grid */
@@ -172,7 +172,7 @@
   --info: #2563eb;
 
   --focus: rgba(220, 38, 38, 0.15);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
   --grid-line: rgba(0, 0, 0, 0.04);
@@ -236,7 +236,7 @@
   --text-strong: #f5f5f7;
   --chat-text: #e0e0e2;
   --muted: #7a7a80;
-  --muted-strong: #5a5a62;
+  --muted-strong: #6e6e76;
   --muted-foreground: #7a7a80;
 
   /* Borders — whisper-thin, barely visible */
@@ -371,7 +371,7 @@
   --text-strong: #f0e4da;
   --chat-text: #d8c8b8;
   --muted: #9a8878;
-  --muted-strong: #7a6858;
+  --muted-strong: #8a7868;
   --muted-foreground: #9a8878;
 
   --border: #302418;
@@ -467,12 +467,18 @@ body {
 
 body {
   margin: 0;
-  font: 400 13.5px/1.55 var(--font-body);
+  font: 400 14px/1.55 var(--font-body);
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (min-width: 1600px) {
+  body {
+    font-size: 15px;
+  }
 }
 
 /* Theme transition */
@@ -517,11 +523,12 @@ openclaw-app {
 
 a {
   color: var(--accent);
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 a:hover {
-  text-decoration: underline;
+  text-decoration-thickness: 2px;
 }
 
 button,
@@ -689,6 +696,17 @@ select {
 }
 .stagger-6 {
   animation-delay: 250ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Focus visible styles */
