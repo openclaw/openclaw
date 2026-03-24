@@ -1326,6 +1326,10 @@ export function replaceSubagentRunAfterSteer(params: {
 
   if (previousRunId !== nextRunId) {
     clearPendingLifecycleError(previousRunId);
+    const shouldDeleteAttachments = source.cleanup === "delete" || !source.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(source);
+    }
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
