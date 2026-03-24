@@ -492,6 +492,18 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** Tavily configuration. */
+      tavily?: {
+        apiKey?: SecretInput;
+      };
+      /** SearXNG configuration. */
+      searxng?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+        allowPrivateNetwork?: boolean;
+      };
+      /** Allow searches to private/internal IP addresses (default: false). */
+      allowPrivateNetwork?: boolean;
     } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */
@@ -508,6 +520,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** Allow fetches to private/internal IP addresses (default: false). */
+      allowPrivateNetwork?: boolean;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {

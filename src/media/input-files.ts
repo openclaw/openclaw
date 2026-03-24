@@ -29,6 +29,7 @@ export type InputFileLimits = {
   maxChars: number;
   maxRedirects: number;
   timeoutMs: number;
+  allowPrivateNetwork?: boolean;
   pdf: InputPdfLimits;
 };
 
@@ -53,6 +54,7 @@ export type InputImageLimits = {
   maxBytes: number;
   maxRedirects: number;
   timeoutMs: number;
+  allowPrivateNetwork?: boolean;
 };
 
 export type InputImageSource =
@@ -304,7 +306,7 @@ export async function extractImageContentFromSource(
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: limits.allowPrivateNetwork ?? false,
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_image",
@@ -350,7 +352,7 @@ export async function extractFileContentFromSource(params: {
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: limits.allowPrivateNetwork ?? false,
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_file",

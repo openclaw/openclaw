@@ -721,6 +721,7 @@ export async function startGatewayServer(
     logHooks,
     logPlugins,
     getReadiness,
+    gatewayMode: runtimeConfig.gatewayMode,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();

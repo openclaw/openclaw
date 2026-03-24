@@ -753,6 +753,8 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
+  gatewayMode: "local" | "remote";
+  allowPrivateNetwork?: boolean;
 }): HttpServer {
   const {
     canvasHost,
@@ -771,6 +773,8 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     getReadiness,
+    gatewayMode,
+    allowPrivateNetwork,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -854,6 +858,8 @@ export function createGatewayHttpServer(opts: {
             handleOpenResponsesHttpRequest(req, res, {
               auth: resolvedAuth,
               config: openResponsesConfig,
+              gatewayMode,
+              allowPrivateNetwork,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,

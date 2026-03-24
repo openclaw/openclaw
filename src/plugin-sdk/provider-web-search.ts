@@ -24,8 +24,9 @@ export {
   resolveSearchTimeoutSeconds,
   resolveSiteName,
   postTrustedWebToolsJson,
-  throwWebSearchApiError,
   withTrustedWebSearchEndpoint,
+  withWebSearchEndpoint,
+  throwWebSearchApiError,
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
 export {

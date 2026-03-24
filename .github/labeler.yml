@@ -301,6 +301,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/synthetic/**"
+"extensions: searxng":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/searxng/**"
+          - "docs/tools/searxng.md"
 "extensions: tavily":
   - changed-files:
       - any-glob-to-any-file:

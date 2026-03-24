@@ -150,6 +150,8 @@ async function withCanvasGatewayHarness(params: {
     handleHooksRequest: async () => false,
     resolvedAuth: params.resolvedAuth,
     rateLimiter: params.rateLimiter,
+    gatewayMode: "local",
+    allowPrivateNetwork: false,
   });
 
   const wss = new WebSocketServer({ noServer: true });

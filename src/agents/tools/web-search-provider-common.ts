@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
+import { fetchWithWebToolsNetworkGuard, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -90,6 +91,28 @@ export async function withTrustedWebSearchEndpoint<T>(
     },
     async ({ response }) => run(response),
   );
+}
+
+export async function withWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    policy?: SsrFPolicy;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const { response, release } = await fetchWithWebToolsNetworkGuard({
+    url: params.url,
+    init: params.init,
+    timeoutSeconds: params.timeoutSeconds,
+    policy: params.policy,
+  });
+  try {
+    return await run(response);
+  } finally {
+    await release();
+  }
 }
 
 export async function postTrustedWebToolsJson<T>(

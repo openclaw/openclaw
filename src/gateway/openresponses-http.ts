@@ -54,6 +54,8 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  gatewayMode: "local" | "remote";
+  allowPrivateNetwork?: boolean;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -202,23 +204,32 @@ type ResolvedResponsesLimits = {
   maxUrlParts: number;
   files: InputFileLimits;
   images: InputImageLimits;
+  gatewayMode: "local" | "remote";
+  allowPrivateNetwork?: boolean;
 };
 
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
+  opts: { gatewayMode: "local" | "remote"; allowPrivateNetwork?: boolean },
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
   const fileLimits = resolveInputFileLimits(files);
+  const allowPrivateNetwork =
+    opts.allowPrivateNetwork ?? (opts.gatewayMode === "local" ? true : undefined);
+
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     maxUrlParts:
       typeof config?.maxUrlParts === "number"
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
+    gatewayMode: opts.gatewayMode,
+    allowPrivateNetwork,
     files: {
       ...fileLimits,
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
+      allowPrivateNetwork: files?.allowPrivateNetwork ?? allowPrivateNetwork,
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
@@ -227,6 +238,7 @@ function resolveResponsesLimits(
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
       timeoutMs: images?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
+      allowPrivateNetwork: images?.allowPrivateNetwork ?? allowPrivateNetwork,
     },
   };
 }
@@ -419,7 +431,10 @@ export async function handleOpenResponsesHttpRequest(
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const limits = resolveResponsesLimits(opts.config);
+  const limits = resolveResponsesLimits(opts.config, {
+    gatewayMode: opts.gatewayMode,
+    allowPrivateNetwork: opts.allowPrivateNetwork,
+  });
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes

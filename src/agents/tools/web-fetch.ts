@@ -66,7 +66,7 @@ const WebFetchSchema = Type.Object({
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
-    ? Fetch
+    ? Fetch & { allowPrivateNetwork?: boolean }
     : undefined
   : undefined;
 
@@ -458,6 +458,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  allowPrivateNetwork?: boolean;
 };
 
 function toFirecrawlContentParams(
@@ -545,6 +546,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
+      },
+      policy: {
+        allowPrivateNetwork: params.allowPrivateNetwork,
       },
     });
     res = result.response;
@@ -795,6 +799,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        allowPrivateNetwork: fetch?.allowPrivateNetwork,
       });
       return jsonResult(result);
     },

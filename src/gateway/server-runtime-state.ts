@@ -67,6 +67,7 @@ export async function createGatewayRuntimeState(params: {
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
   canvasHostEnabled: boolean;
+  gatewayMode: "local" | "remote";
   allowCanvasHostInTests?: boolean;
   logCanvas: { info: (msg: string) => void; warn: (msg: string) => void };
   log: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -97,6 +98,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  gatewayMode: "local" | "remote";
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   try {
@@ -178,6 +180,10 @@ export async function createGatewayRuntimeState(params: {
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+        gatewayMode: params.gatewayMode,
+        allowPrivateNetwork:
+          params.openResponsesConfig?.files?.allowPrivateNetwork ??
+          params.openResponsesConfig?.images?.allowPrivateNetwork,
       });
       try {
         await listenGatewayHttpServer({
@@ -248,6 +254,7 @@ export async function createGatewayRuntimeState(params: {
       removeChatRun,
       chatAbortControllers,
       toolEventRecipients,
+      gatewayMode: params.gatewayMode,
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);

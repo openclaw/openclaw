@@ -1,0 +1,36 @@
+{
+  "id": "searxng",
+  "providerAuthEnvVars": {
+    "searxng": ["SEARXNG_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "SearXNG API Key",
+      "help": "Optional SearXNG API key (only if your instance requires it).",
+      "sensitive": true
+    },
+    "webSearch.baseUrl": {
+      "label": "SearXNG Base URL",
+      "help": "The URL of your SearXNG instance (e.g., http://localhost:8080).",
+      "placeholder": "http://localhost:8080"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

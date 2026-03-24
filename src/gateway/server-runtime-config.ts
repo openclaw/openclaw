@@ -35,6 +35,7 @@ export type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
+  gatewayMode: "local" | "remote";
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -184,5 +185,6 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
     hooksConfig,
     canvasHostEnabled,
+    gatewayMode: params.cfg.gateway?.mode ?? "local",
   };
 }
