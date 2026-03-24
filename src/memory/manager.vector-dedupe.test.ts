@@ -79,6 +79,7 @@ describe("memory vector dedupe", () => {
     } as OpenClawConfig;
 
     manager = await createMemoryManagerOrThrow(cfg);
+    await manager.probeEmbeddingAvailability();
 
     const db = (
       manager as unknown as {
@@ -95,6 +96,11 @@ describe("memory vector dedupe", () => {
     if (!entry) {
       throw new Error("entry missing");
     }
+    await (
+      manager as unknown as {
+        indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
+      }
+    ).indexFile(entry, { source: "memory" });
     await (
       manager as unknown as {
         indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
