@@ -1378,7 +1378,7 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: OpenClawPluginTypedHookOptions<K>,
   ) => void;
 };
 
@@ -1684,6 +1684,20 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookMessageReceivedResult = {
+  cancel?: boolean;
+  blockReason?: string;
+  replyText?: string;
+};
+
+export type PluginHookMessageReceivedMode = "observe" | "blocking";
+
+export type OpenClawPluginTypedHookOptions<K extends PluginHookName> = {
+  priority?: number;
+} & (K extends "message_received"
+  ? { mode?: PluginHookMessageReceivedMode }
+  : Record<never, never>);
+
 // message_sending hook
 export type PluginHookMessageSendingEvent = {
   to: string;
@@ -1939,7 +1953,7 @@ export type PluginHookHandlerMap = {
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookMessageReceivedResult | void> | PluginHookMessageReceivedResult | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,
@@ -2007,4 +2021,5 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   source: string;
+  messageReceivedMode?: PluginHookMessageReceivedMode;
 };

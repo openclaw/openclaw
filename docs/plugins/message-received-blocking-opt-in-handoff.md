@@ -140,16 +140,20 @@ then behavior remains the same:
 If a plugin registers:
 
 ```ts
-api.on("message_received", async (event, ctx) => {
-  const decision = await remotePolicyCheck(event);
-  if (!decision.allow) {
-    return {
-      cancel: true,
-      blockReason: "remote policy denied inbound message",
-      replyText: "Your message was blocked by policy.",
-    };
-  }
-}, { mode: "blocking" });
+api.on(
+  "message_received",
+  async (event, ctx) => {
+    const decision = await remotePolicyCheck(event);
+    if (!decision.allow) {
+      return {
+        cancel: true,
+        blockReason: "remote policy denied inbound message",
+        replyText: "Your message was blocked by policy.",
+      };
+    }
+  },
+  { mode: "blocking" },
+);
 ```
 
 then behavior becomes:
@@ -270,7 +274,7 @@ That means the merge should look like:
   cancel: acc?.cancel ?? next.cancel,
   blockReason: acc?.blockReason ?? next.blockReason,
   replyText: acc?.replyText ?? next.replyText,
-})
+});
 ```
 
 Do **not** make a lower-priority hook “un-cancel” a higher-priority decision.
@@ -365,7 +369,7 @@ Why:
 If this works cleanly, use:
 
 ```ts
-await sendBindingNotice({ text: result.replyText }, "terminal")
+await sendBindingNotice({ text: result.replyText }, "terminal");
 ```
 
 This is preferred over inventing a new outbound reply mechanism.
@@ -376,7 +380,7 @@ Extend the helper registry builders so tests can create a typed hook
 registration with:
 
 ```ts
-messageReceivedMode: "blocking"
+messageReceivedMode: "blocking";
 ```
 
 This is needed for runner-level tests.
@@ -480,17 +484,11 @@ async function runMessageReceived(event, ctx) {
     return undefined;
   }
 
-  return runModifyingHooksList(
-    blockingHooks,
-    "message_received",
-    event,
-    ctx,
-    (acc, next) => ({
-      cancel: acc?.cancel ?? next.cancel,
-      blockReason: acc?.blockReason ?? next.blockReason,
-      replyText: acc?.replyText ?? next.replyText,
-    }),
-  );
+  return runModifyingHooksList(blockingHooks, "message_received", event, ctx, (acc, next) => ({
+    cancel: acc?.cancel ?? next.cancel,
+    blockReason: acc?.blockReason ?? next.blockReason,
+    replyText: acc?.replyText ?? next.replyText,
+  }));
 }
 ```
 

@@ -36,6 +36,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  OpenClawPluginTypedHookOptions,
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
   OpenClawPluginService,
@@ -777,7 +778,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: OpenClawPluginTypedHookOptions<K>,
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -819,6 +820,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: effectiveHandler,
       priority: opts?.priority,
       source: record.source,
+      messageReceivedMode:
+        hookName === "message_received" && opts && "mode" in opts
+          ? (opts.mode ?? undefined)
+          : undefined,
     } as TypedPluginHookRegistration);
   };
 

@@ -32,6 +32,7 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -236,6 +237,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   };
 
   /**
+   * Run a void hook on an explicit list of hooks (fire-and-forget).
+   */
+  async function runVoidHooksList<K extends PluginHookName>(
+    hooks: PluginHookRegistration<K>[],
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<void> {
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
+    const promises = hooks.map(async (hook) => {
+      try {
+        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    });
+    await Promise.all(promises);
+  }
+
+  /**
    * Run a hook that doesn't return a value (fire-and-forget style).
    * All handlers are executed in parallel for performance.
    */
@@ -248,18 +269,38 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     if (hooks.length === 0) {
       return;
     }
+    return runVoidHooksList(hooks, hookName, event, ctx);
+  }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
-
-    const promises = hooks.map(async (hook) => {
+  /**
+   * Run a modifying hook on an explicit list of hooks (sequential, merged results).
+   */
+  async function runModifyingHooksList<K extends PluginHookName, TResult>(
+    hooks: PluginHookRegistration<K>[],
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult,
+  ): Promise<TResult | undefined> {
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
+    let result: TResult | undefined;
+    for (const hook of hooks) {
       try {
-        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
+        )(event, ctx);
+        if (handlerResult !== undefined && handlerResult !== null) {
+          if (mergeResults && result !== undefined) {
+            result = mergeResults(result, handlerResult);
+          } else {
+            result = handlerResult;
+          }
+        }
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
-    });
-
-    await Promise.all(promises);
+    }
+    return result;
   }
 
   /**
@@ -276,30 +317,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     if (hooks.length === 0) {
       return undefined;
     }
-
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
-
-    let result: TResult | undefined;
-
-    for (const hook of hooks) {
-      try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
-        )(event, ctx);
-
-        if (handlerResult !== undefined && handlerResult !== null) {
-          if (mergeResults && result !== undefined) {
-            result = mergeResults(result, handlerResult);
-          } else {
-            result = handlerResult;
-          }
-        }
-      } catch (err) {
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
-      }
-    }
-
-    return result;
+    return runModifyingHooksList(hooks, hookName, event, ctx, mergeResults);
   }
 
   /**
@@ -581,14 +599,41 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
-   * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
+   * Run message_received hooks.
+   * Observer hooks (default) run in parallel fire-and-forget.
+   * Blocking hooks (opt-in) are awaited sequentially and return a merged result.
    */
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+  ): Promise<PluginHookMessageReceivedResult | undefined> {
+    const hooks = getHooksForName(registry, "message_received");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    const observerHooks = hooks.filter((h) => h.messageReceivedMode !== "blocking");
+    const blockingHooks = hooks.filter((h) => h.messageReceivedMode === "blocking");
+
+    if (observerHooks.length > 0) {
+      void runVoidHooksList(observerHooks, "message_received", event, ctx);
+    }
+
+    if (blockingHooks.length === 0) {
+      return undefined;
+    }
+
+    return runModifyingHooksList<"message_received", PluginHookMessageReceivedResult>(
+      blockingHooks,
+      "message_received",
+      event,
+      ctx,
+      (acc, next) => ({
+        cancel: acc?.cancel ?? next.cancel,
+        blockReason: acc?.blockReason ?? next.blockReason,
+        replyText: acc?.replyText ?? next.replyText,
+      }),
+    );
   }
 
   /**
