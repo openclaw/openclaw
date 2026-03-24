@@ -409,7 +409,12 @@ export function normalizeCronJobInput(
   // Pre-hook normalization
   if ("preHook" in base) {
     if (isRecord(base.preHook)) {
-      const command = typeof base.preHook.command === "string" ? base.preHook.command.trim() : "";
+      if (typeof base.preHook.command !== "string") {
+        // Reject malformed preHook objects — missing/non-string command must not
+        // be silently coerced to "" (which would clear an existing hook in patch mode).
+        return null;
+      }
+      const command = base.preHook.command.trim();
       if (command) {
         const normalized: UnknownRecord = { command };
         if (
