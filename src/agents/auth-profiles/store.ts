@@ -29,6 +29,11 @@ const loadedAuthStoreCache = new Map<
   { mtimeMs: number | null; syncedAtMs: number; store: AuthProfileStore }
 >();
 
+// Timestamp when replaceRuntimeAuthProfileStoreSnapshots() last populated the runtime map.
+// Used to detect if on-disk auth-profiles.json was modified externally (e.g. by `openclaw models auth login`
+// while gateway was stopped) and invalidate stale runtime snapshots on startup.
+let runtimeSnapshotsLoadedAtMs = 0;
+
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
 }
@@ -42,8 +47,31 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     return null;
   }
 
+  // Staleness detection: if the on-disk auth-profiles.json was modified after
+  // the runtime snapshot was loaded (e.g. by `openclaw models auth login` while
+  // gateway was stopped), invalidate the snapshot so callers fall through to a
+  // fresh disk read. This prevents overwriting fresh tokens with stale cached state.
+  const mainAuthPath = resolveAuthStorePath();
+  const mainMtime = readAuthStoreMtimeMs(mainAuthPath);
+  if (mainMtime !== null && mainMtime > runtimeSnapshotsLoadedAtMs) {
+    runtimeAuthStoreSnapshots.clear();
+    runtimeSnapshotsLoadedAtMs = 0;
+    return null;
+  }
+
   const mainKey = resolveRuntimeStoreKey(undefined);
   const requestedKey = resolveRuntimeStoreKey(agentDir);
+
+  // Check agent-specific store staleness only when it differs from main
+  if (requestedKey !== mainKey) {
+    const requestedMtime = readAuthStoreMtimeMs(requestedKey);
+    if (requestedMtime !== null && requestedMtime > runtimeSnapshotsLoadedAtMs) {
+      runtimeAuthStoreSnapshots.clear();
+      runtimeSnapshotsLoadedAtMs = 0;
+      return null;
+    }
+  }
+
   const mainStore = runtimeAuthStoreSnapshots.get(mainKey);
   const requestedStore = runtimeAuthStoreSnapshots.get(requestedKey);
 
@@ -73,6 +101,10 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
+  // Record timestamp BEFORE populating the map so that any disk writes
+  // that happen between "load from disk" and "stamp here" are still detected
+  // as stale (the mtime will be >= this timestamp).
+  runtimeSnapshotsLoadedAtMs = Date.now();
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
     runtimeAuthStoreSnapshots.set(
@@ -85,6 +117,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshots.clear();
   loadedAuthStoreCache.clear();
+  runtimeSnapshotsLoadedAtMs = 0;
 }
 
 function readAuthStoreMtimeMs(authPath: string): number | null {
