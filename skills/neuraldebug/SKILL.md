@@ -7,6 +7,11 @@ metadata:
       bins:
         - python3
         - git
+    install:
+      - id: pip
+        kind: uv
+        package: "git+https://github.com/DennySun2020/DeepRhapsody.git"
+        label: "Install NeuralDebug (pip from GitHub)"
     emoji: "🔍"
 ---
 ---
