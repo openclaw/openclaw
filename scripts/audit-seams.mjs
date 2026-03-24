@@ -25,7 +25,9 @@ Sections:
   seamTestInventory            High-signal seam candidates with nearby-test gap signals,
                                including cron orchestration seams for agent handoff,
                                outbound/media delivery, heartbeat/followup handoff,
-                               and scheduler state crossings
+                               and scheduler state crossings, plus subagent seams
+                               for spawn/session handoff, announce delivery,
+                               lifecycle registry, cleanup, and parent streaming
 
 Notes:
   - Output is JSON only.
@@ -560,6 +562,16 @@ function isCronProductionPath(relativePath) {
   return relativePath.startsWith("src/cron/") && isProductionLikeFile(relativePath);
 }
 
+function isSubagentProductionPath(relativePath) {
+  return (
+    (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
+    isProductionLikeFile(relativePath) &&
+    (/subagent|sessions-spawn|acp-spawn/.test(relativePath) ||
+      relativePath === "src/agents/tools/sessions-spawn-tool.ts" ||
+      relativePath === "src/agents/tools/subagents-tool.ts")
+  );
+}
+
 function describeCronSeamKinds(relativePath, source) {
   if (!isCronProductionPath(relativePath)) {
     return [];
@@ -662,6 +674,102 @@ function describeCronSeamKinds(relativePath, source) {
   return seamKinds;
 }
 
+function describeSubagentSeamKinds(relativePath, source) {
+  if (!isSubagentProductionPath(relativePath)) {
+    return [];
+  }
+
+  const seamKinds = [];
+  const isAnnounceDispatchPath =
+    relativePath === "src/agents/subagent-announce.ts" ||
+    relativePath === "src/agents/subagent-announce-dispatch.ts";
+  const importsSpawnRuntime = hasAnyImportSource(source, [
+    "./subagent-spawn.js",
+    "../subagent-spawn.js",
+    "./acp-spawn.js",
+    "../acp-spawn.js",
+    "./subagent-registry.js",
+    "../subagent-registry.js",
+    "../acp/control-plane/manager.js",
+  ]);
+  const importsLifecycleRegistry = hasAnyImportSource(source, [
+    "./subagent-registry-completion.js",
+    "./subagent-registry-cleanup.js",
+    "./subagent-registry-state.js",
+    "./subagent-registry.js",
+    "./subagent-lifecycle-events.js",
+    "../context-engine/init.js",
+    "../context-engine/registry.js",
+    "../sessions/session-lifecycle-events.js",
+  ]);
+  const importsAnnounceDelivery = hasAnyImportSource(source, [
+    "./subagent-announce.js",
+    "./subagent-announce-dispatch.js",
+    "./subagent-announce-queue.js",
+    "../infra/outbound/bound-delivery-router.js",
+    "../utils/delivery-context.js",
+    "../gateway/call.js",
+  ]);
+  const importsCleanup = hasAnyImportSource(source, [
+    "../gateway/call.js",
+    "./subagent-registry-cleanup.js",
+    "../acp/control-plane/spawn.js",
+  ]);
+  const importsParentStream = hasAnyImportSource(source, [
+    "./acp-spawn-parent-stream.js",
+    "../infra/heartbeat-wake.js",
+    "../infra/system-events.js",
+    "../infra/agent-events.js",
+  ]);
+
+  if (
+    importsSpawnRuntime &&
+    /\bspawnSubagentDirect\b|\bspawnAcpDirect\b|\bregisterSubagentRun\b|\bgetAcpSessionManager\b|\bspawnSubagent\b|\bspawnAcp\b/.test(
+      source,
+    )
+  ) {
+    seamKinds.push("subagent-session-spawn");
+  }
+
+  if (
+    importsLifecycleRegistry &&
+    /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/.test(
+      source,
+    )
+  ) {
+    seamKinds.push("subagent-lifecycle-registry");
+  }
+
+  if (
+    (importsAnnounceDelivery || isAnnounceDispatchPath) &&
+    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedPiMessage\b|\bwaitForEmbeddedPiRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
+      source,
+    )
+  ) {
+    seamKinds.push("subagent-announce-delivery");
+  }
+
+  if (
+    importsCleanup &&
+    /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/.test(
+      source,
+    )
+  ) {
+    seamKinds.push("subagent-session-cleanup");
+  }
+
+  if (
+    importsParentStream &&
+    /\bstartAcpSpawnParentStreamRelay\b|\brequestHeartbeatNow\b|\benqueueSystemEvent\b|\bonAgentEvent\b|\bstreamTo\b/.test(
+      source,
+    )
+  ) {
+    seamKinds.push("subagent-parent-stream");
+  }
+
+  return seamKinds;
+}
+
 export function describeSeamKinds(relativePath, source) {
   const seamKinds = [];
   const isReplyDeliveryPath =
@@ -702,6 +810,7 @@ export function describeSeamKinds(relativePath, source) {
     seamKinds.push("streaming-media-handoff");
   }
   seamKinds.push(...describeCronSeamKinds(relativePath, source));
+  seamKinds.push(...describeSubagentSeamKinds(relativePath, source));
   return [...new Set(seamKinds)].toSorted(compareStrings);
 }
 
@@ -836,7 +945,12 @@ export function determineSeamTestStatus(seamKinds, relatedTestMatches) {
     seamKinds.includes("cron-heartbeat-handoff") ||
     seamKinds.includes("cron-scheduler-state") ||
     seamKinds.includes("cron-media-delivery") ||
-    seamKinds.includes("cron-followup-handoff")
+    seamKinds.includes("cron-followup-handoff") ||
+    seamKinds.includes("subagent-session-spawn") ||
+    seamKinds.includes("subagent-lifecycle-registry") ||
+    seamKinds.includes("subagent-announce-delivery") ||
+    seamKinds.includes("subagent-session-cleanup") ||
+    seamKinds.includes("subagent-parent-stream")
   ) {
     return {
       status: "partial",
