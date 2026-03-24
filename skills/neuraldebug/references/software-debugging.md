@@ -32,6 +32,7 @@ All languages share the same command interface via TCP/JSON.
 | `step_over` | `n` | Execute current line, skip function calls |
 | `step_in` | `si` | Step into function calls |
 | `step_out` | `so` | Run until current function returns |
+| `run_to_line <line>` | `rt` | Run to a specific line number |
 
 ### Inspection
 
@@ -41,17 +42,9 @@ All languages share the same command interface via TCP/JSON.
 | `evaluate <expr>` | `e` | Evaluate an expression in current context |
 | `backtrace` | `bt` | Show call stack |
 | `list` | `l` | Show source code around current line |
-| `threads` | | List all threads |
-| `switch_thread <id>` | | Switch to a different thread |
 
-### Memory & Low-Level (C/C++ only)
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `read_memory <addr> <len>` | `mem` | Read raw memory bytes |
-| `disassemble [addr]` | `dis` | Disassemble instructions |
-| `registers` | `regs` | Show CPU register values |
-| `write_memory <addr> <bytes>` | | Patch memory |
+> **Assembly-level debugging** (disassemble, registers, memory read/write) is
+> available via `asm_debug_session.py`, not the standard debug session scripts.
 
 ## Language-Specific Notes
 
@@ -102,16 +95,16 @@ Python-only quick captures without a persistent session:
 
 ```bash
 # Basic
-python src/neuraldebug/python_debugger.py debug script.py -b 42 -o result.json
+python3 src/neuraldebug/python_debugger.py debug script.py -b 42 -o result.json
 
 # With arguments
-python src/neuraldebug/python_debugger.py debug script.py -b 42 --args "input.txt --verbose"
+python3 src/neuraldebug/python_debugger.py debug script.py -b 42 --args "input.txt --verbose"
 
 # Multiple breakpoints
-python src/neuraldebug/python_debugger.py debug script.py -b 42 -b 87 -o result.json
+python3 src/neuraldebug/python_debugger.py debug script.py -b 42 -b 87 -o result.json
 
 # Conditional breakpoint
-python src/neuraldebug/python_debugger.py debug script.py -b 42 --condition "x > 10"
+python3 src/neuraldebug/python_debugger.py debug script.py -b 42 --condition "x > 10"
 ```
 
 > **Note:** One-shot mode is only available for Python (`python_debugger.py`).
