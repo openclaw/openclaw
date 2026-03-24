@@ -366,6 +366,10 @@ export async function saveMediaSource(
     const id = buildSavedMediaId({ baseId, ext });
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
+    // Rename keeps the original file mode, which can be overly restrictive under
+    // hardened umasks (e.g. 0o077). Normalize to the expected cross-container
+    // readability mode after the final path is in place.
+    await fs.chmod(finalDest, MEDIA_FILE_MODE);
     return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
   // local path
