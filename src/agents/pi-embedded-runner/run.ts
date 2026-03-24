@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -14,6 +15,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
   resolveProfilesUnavailableReason,
+  type AuthProfileFailureReason,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -62,6 +64,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -124,6 +127,15 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
+
+// Keep overload pacing noticeable enough to avoid tight retry bursts, but short
+// enough that fallback still feels responsive within a single turn.
+const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 250,
+  maxMs: 1_500,
+  factor: 2,
+  jitter: 0.2,
+};
 
 // Defensive guard for the outer run loop across all retry branches.
 const BASE_RUN_RETRY_ITERATIONS = 24;
@@ -714,6 +726,37 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
         });
+      };
+      let overloadFailoverAttempts = 0;
+      const resolveAuthProfileFailureReason = (
+        failoverReason: FailoverReason | null,
+      ): AuthProfileFailureReason | null => {
+        // Timeouts are transport/model-path failures, not auth health signals,
+        // so they should not persist auth-profile failure state.
+        if (!failoverReason || failoverReason === "timeout") {
+          return null;
+        }
+        return failoverReason;
+      };
+      const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
+        if (reason !== "overloaded") {
+          return;
+        }
+        overloadFailoverAttempts += 1;
+        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
+        log.warn(
+          `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortErr = new Error("Operation aborted", { cause: err });
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw err;
+        }
       };
       const MAX_NETWORK_RETRIES = 3;
       const NETWORK_RETRY_DELAY_MS = 2_000;

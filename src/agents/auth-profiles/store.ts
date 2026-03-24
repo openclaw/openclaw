@@ -13,15 +13,12 @@ function shouldLogAuthStoreTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
-function syncExternalCliCredentialsTimed(
-  store: AuthProfileStore,
-  options?: Parameters<typeof syncExternalCliCredentials>[1],
-): boolean {
+function syncExternalCliCredentialsTimed(store: AuthProfileStore): boolean {
   if (!shouldLogAuthStoreTiming()) {
-    return syncExternalCliCredentials(store, options);
+    return syncExternalCliCredentials(store);
   }
   const startMs = Date.now();
-  const mutated = syncExternalCliCredentials(store, options);
+  const mutated = syncExternalCliCredentials(store);
   log.info(
     `auth-store stage=external-cli-sync elapsedMs=${Date.now() - startMs} mutated=${mutated}`,
   );

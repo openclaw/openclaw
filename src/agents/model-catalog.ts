@@ -31,10 +31,10 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
-let providerRuntimePromise:
-  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
-  | undefined;
-let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
+
+function shouldLogModelCatalogTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
 
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
@@ -50,20 +50,6 @@ type SyntheticCatalogFallback = {
   id: string;
   templateIds: readonly string[];
 };
-
-function shouldLogModelCatalogTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
-
-function loadModelSuppression() {
-  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
-  return modelSuppressionPromise;
-}
 
 const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
   {
@@ -249,9 +235,6 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
-      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
-        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
-      logStage("catalog-deps-ready");
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       logStage("auth-storage-ready");
@@ -277,9 +260,6 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
-          continue;
-        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -291,33 +271,7 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applySyntheticCatalogFallbacks(models);
-      logStage("configured-models-merged", `entries=${models.length}`);
-      const supplemental = await augmentModelCatalogWithProviderPlugins({
-        config: cfg,
-        env: process.env,
-        context: {
-          config: cfg,
-          agentDir,
-          env: process.env,
-          entries: [...models],
-        },
-      });
-      if (supplemental.length > 0) {
-        const seen = new Set(
-          models.map(
-            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-          ),
-        );
-        for (const entry of supplemental) {
-          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
-          if (seen.has(key)) {
-            continue;
-          }
-          models.push(entry);
-          seen.add(key);
-        }
-      }
-      logStage("plugin-models-merged", `entries=${models.length}`);
+      logStage("complete", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
@@ -325,7 +279,6 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
-      logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
