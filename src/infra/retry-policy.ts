@@ -1,14 +1,15 @@
 import { RateLimitError } from "@buape/carbon";
 import { formatErrorMessage } from "./errors.js";
+import { isTransientNetworkError } from "./network-errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
 export const DISCORD_RETRY_DEFAULTS = {
-  attempts: 3,
-  minDelayMs: 500,
+  attempts: 4,
+  minDelayMs: 1_000,
   maxDelayMs: 30_000,
-  jitter: 0.1,
+  jitter: 0.2,
 };
 
 export const TELEGRAM_RETRY_DEFAULTS = {
@@ -55,17 +56,17 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError,
+      shouldRetry: (err) => err instanceof RateLimitError || isTransientNetworkError(err),
       retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
-      onRetry: params.verbose
-        ? (info) => {
-            const labelText = info.label ?? "request";
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
-              `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
-            );
-          }
-        : undefined,
+      onRetry: (info) => {
+        const labelText = info.label ?? "request";
+        const maxRetries = Math.max(1, info.maxAttempts - 1);
+        const isRateLimit = info.err instanceof RateLimitError;
+        const reason = isRateLimit ? "rate limited" : "network error";
+        console.warn(
+          `discord ${labelText} ${reason}, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+        );
+      },
     });
 }
 

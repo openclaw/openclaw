@@ -340,12 +340,30 @@ describe("retry rate limits", () => {
     expect(postMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry non-rate-limit errors", async () => {
+  it("retries transient network errors", async () => {
     const { rest, postMock } = makeRest();
-    postMock.mockRejectedValueOnce(new Error("network error"));
+    const networkError = Object.assign(new Error("getaddrinfo ENOTFOUND discord.com"), {
+      code: "ENOTFOUND",
+    });
+    postMock
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce({ id: "m1", channel_id: "789" });
+
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    expect(result.messageId).toBe("m1");
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-retryable errors", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockRejectedValueOnce(new Error("Missing Permissions"));
 
     await expect(sendMessageDiscord("channel:789", "hello", { rest, token: "t" })).rejects.toThrow(
-      "network error",
+      "Missing Permissions",
     );
     expect(postMock).toHaveBeenCalledTimes(1);
   });

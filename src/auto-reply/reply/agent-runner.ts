@@ -41,7 +41,10 @@ import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
-const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+// Timeout for a single block reply delivery. Needs to be long enough
+// to survive transient network drops (Discord send retries up to ~30s)
+// while still bailing if the send is truly stuck.
+const BLOCK_REPLY_SEND_TIMEOUT_MS = 45_000;
 
 export async function runReplyAgent(params: {
   commandBody: string;
