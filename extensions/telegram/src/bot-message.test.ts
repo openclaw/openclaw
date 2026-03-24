@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
@@ -18,12 +18,15 @@ vi.mock("./bot-message-dispatch.js", () => ({
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 
 describe("telegram bot message processor", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
+  });
+
+  beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
     upsertChannelPairingRequest.mockClear();
-    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
   });
 
   const telegramDepsForTest = {
