@@ -359,6 +359,47 @@ describe("killSubagentRunAdmin", () => {
     expect(result).toEqual({ found: false, killed: false });
   });
 
+  it("does not kill a newest finished run when only a stale older row is still active", async () => {
+    const childSessionKey = "agent:main:subagent:worker-stale-admin";
+
+    addSubagentRunForTests({
+      runId: "run-stale-admin",
+      childSessionKey,
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: "agent:main:other-requester",
+      requesterDisplayKey: "other-requester",
+      task: "stale admin task",
+      cleanup: "keep",
+      createdAt: Date.now() - 9_000,
+      startedAt: Date.now() - 8_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-current-admin",
+      childSessionKey,
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: "agent:main:other-requester",
+      requesterDisplayKey: "other-requester",
+      task: "current admin task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    const result = await killSubagentRunAdmin({
+      cfg: {} as OpenClawConfig,
+      sessionKey: childSessionKey,
+    });
+
+    expect(result).toMatchObject({
+      found: true,
+      killed: false,
+      runId: "run-current-admin",
+      sessionKey: childSessionKey,
+    });
+  });
+
   it("still terminates the run when session store persistence fails during kill", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
     const storePath = path.join(tmpDir, "sessions.json");
@@ -642,6 +683,66 @@ describe("killAllControlledSubagentRuns", () => {
       labels: ["current shadow task"],
     });
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
+
+  it("does not kill a newest finished bulk target when only a stale older row is still active", async () => {
+    const childSessionKey = "agent:main:subagent:stale-bulk-finished-worker";
+
+    addSubagentRunForTests({
+      runId: "run-stale-bulk-finished",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale bulk finished task",
+      cleanup: "keep",
+      createdAt: Date.now() - 9_000,
+      startedAt: Date.now() - 8_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-current-bulk-finished",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current bulk finished task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [
+        {
+          runId: "run-current-bulk-finished",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "current bulk finished task",
+          cleanup: "keep",
+          createdAt: Date.now() - 5_000,
+          startedAt: Date.now() - 4_000,
+          endedAt: Date.now() - 1_000,
+          outcome: { status: "ok" },
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      killed: 0,
+      labels: [],
+    });
   });
 });
 
