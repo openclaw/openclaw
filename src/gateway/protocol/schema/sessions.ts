@@ -97,6 +97,7 @@ export const SessionsAbortParamsSchema = Type.Object(
 export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),

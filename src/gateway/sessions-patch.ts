@@ -108,6 +108,31 @@ export async function applySessionsPatchToStore(params: {
       }
     : { sessionId: randomUUID(), updatedAt: now };
 
+  if ("agentId" in patch) {
+    const raw = patch.agentId;
+    if (raw === null) {
+      if (existing?.agentId) {
+        return invalid("agentId cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const normalized = normalizeAgentId(String(raw));
+      if (!normalized) {
+        return invalid("invalid agentId: empty");
+      }
+      if (normalized !== sessionAgentId) {
+        return invalid(`agentId must match canonical session agent: ${sessionAgentId}`);
+      }
+      if (existing?.agentId && existing.agentId !== normalized) {
+        return invalid("agentId cannot be changed once set");
+      }
+      next.agentId = normalized;
+    }
+  }
+
+  if (!next.agentId) {
+    next.agentId = sessionAgentId;
+  }
+
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;
     if (raw === null) {

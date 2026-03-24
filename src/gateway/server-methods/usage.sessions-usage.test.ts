@@ -149,6 +149,30 @@ describe("sessions.usage", () => {
     expect(sessions[1].agentId).toBe("main");
   });
 
+  it("prefers canonical store agentId over the outer discovery scan agent", async () => {
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:opus:subagent:child": {
+          sessionId: "s-main",
+          label: "real child",
+          updatedAt: 777,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+
+    expect(sessions).toHaveLength(2);
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "agent:opus:s-opus", agentId: "opus" }),
+        expect.objectContaining({ key: "agent:opus:subagent:child", agentId: "opus" }),
+      ]),
+    );
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));

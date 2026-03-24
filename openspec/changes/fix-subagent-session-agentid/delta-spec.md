@@ -1,309 +1,375 @@
-# Fix Subagent Session agentId Attribution
+# Fix Subagent Session `agentId` Attribution
 
-## Problem Statement
+## Problem
 
-Spawned subagent sessions are incorrectly reporting `agentId: "main"` in API payloads and downstream dashboards, even when spawned with explicit `agentId` parameters (e.g., `mew`, `charmander`, `bulbasaur`).
+Spawned specialist sessions are created with the correct child session key (`agent:mew:subagent:…`, `agent:charmander:subagent:…`, etc.), but downstream activity/session payloads can still surface them as `agentId: "main"`.
 
-### Observed Behavior
-- **Session keys** are correct: `agent:mew:subagent:...`, `agent:charmander:subagent:...`, `agent:bulbasaur:subagent:...`
-- **Downstream titles** display correct agent names: `mew-real-attribution-check`, `charmander-real-attribution-check`
-- **API payloads** report incorrect `agentId: "main"` instead of the actual agent identity
+Observed downstream evidence:
 
-### Expected Behavior
-When a subagent is spawned with `agentId: "mew"`, all downstream systems (API responses, events, dashboards, analytics) should consistently report `agentId: "mew"`, not `main`.
+- titles such as `mew-real-attribution-check`, `charmander-real-attribution-check`, `bulbasaur-real-attribution-check`
+- payloads still tagged with `agentId: "main"`
 
-## Root Cause Analysis
+This is not a spawn-key construction bug. The child key is correct at creation time. The attribution bug appears later, when transcript placement and usage/activity discovery re-derive agent identity.
 
-### 1. Where Session Identity is Created
+---
+
+## Traced Code Path
+
+### 1) Spawn creates the correct child session identity
 
 **File:** `src/agents/subagent-spawn.ts`
 **Function:** `spawnSubagentDirect()`
-**Line:** ~360
 
-```typescript
+The child session key is already correct:
+
+```ts
 const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
 ```
 
-✅ **This is correct** — the session key is constructed with the target agent ID.
+`spawnSubagentDirect()` then:
 
-### 2. Where agentId is Resolved for Downstream Consumers
+1. patches the provisional child session via `sessions.patch`
+2. starts the run via gateway `agent`
+3. passes `sessionKey: childSessionKey`
 
-**Problem Area 1: Gateway Event Broadcasting**
+So the spawned session identity is born correctly.
 
-**File:** `src/gateway/server-chat.ts`
-**Function:** `createAgentEventHandler()`
+### 2) Gateway preserves the child session key during run startup
 
-Events broadcast to nodes/clients include `sessionKey` but not an explicit `agentId` field. The downstream consumer (iOS/Android app, web dashboard, PokeDex dashboard) must derive `agentId` from `sessionKey`.
+**File:** `src/gateway/server-methods/agent.ts`
+**Function:** `agentHandlers.agent`
 
-**File:** `src/routing/session-key.ts`
-**Function:** `resolveAgentIdFromSessionKey()`
+When `request.sessionKey` is provided, the handler loads that exact session entry, resolves:
 
-```typescript
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+```ts
+const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
+```
+
+and registers the run context with the canonical child key:
+
+```ts
+registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+```
+
+So the gateway-side run context is also correct.
+
+### 3) The first real identity loss happens when transcript paths are chosen
+
+**Files:**
+
+- `src/config/sessions/paths.ts`
+- transitively from `src/agents/agent-command.ts` / transcript persistence helpers
+
+**Exact functions:**
+
+- `resolveSessionFilePathOptions()`
+- `resolveSessionFilePath()`
+
+#### Current behavior
+
+When a session has no persisted `sessionFile` yet, transcript persistence eventually falls back to:
+
+```ts
+return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+```
+
+inside `resolveSessionFilePath()`.
+
+But `sessionsDir` comes from `resolveSessionFilePathOptions()`:
+
+```ts
+if (storePath && storePath !== MULTI_STORE_PATH_SENTINEL) {
+  const sessionsDir = path.dirname(path.resolve(storePath));
+  return agentId ? { sessionsDir, agentId } : { sessionsDir };
 }
 ```
 
-✅ **This should work correctly** — it extracts the agent ID from the session key.
+That means **store location wins over `agentId`** for brand-new transcripts.
 
-**Problem Area 2: Context Propagation in Session Store**
+#### Why this matters
 
-**File:** `src/config/sessions.ts` (and related session utility files)
+For shared/default-store layouts, a child session for `agent:mew:subagent:...` can be written into the same transcript directory used by the parent/default agent. The session key remains `agent:mew:...`, but the physical transcript placement is now parent/default scoped.
 
-When session metadata is queried or broadcast, there may be code paths that:
-1. Look up the **parent session** instead of the child
-2. Use a **cached** or **inherited** `agentId` from the spawning context
-3. Fail to parse the session key correctly when constructing responses
+This is the first place the spawned child can start looking like `main` downstream.
 
-### 3. Likely Bug Location
+### 4) Activity/session discovery then reuses the scan agent instead of the child agent
 
-**Hypothesis:** The issue is in how `agentId` is propagated when:
+**File:** `src/gateway/server-methods/usage.ts`
+**Function:** `discoverAllSessionsForUsage()`
 
-1. **Session lifecycle events are emitted** (`sessions.changed`, `subagent_spawned`, etc.)
-2. **API responses are constructed** (e.g., `agent.identity.get`, `sessions.list`, dashboard queries)
-3. **Context is inherited from parent** during spawn
+Current code:
 
-The most likely culprit is in **`src/agents/subagent-spawn.ts`** where session metadata is patched but `agentId` is not explicitly set in the session entry:
-
-```typescript
-const initialChildSessionPatch: Record<string, unknown> = {
-  spawnDepth: childDepth,
-  subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
-  subagentControlScope: childCapabilities.controlScope,
-};
+```ts
+const results = await Promise.all(
+  agents.map(async (agent) => {
+    const sessions = await discoverAllSessions({
+      agentId: agent.id,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+    return sessions.map((session) => ({ ...session, agentId: agent.id }));
+  }),
+);
 ```
 
-❌ **Missing:** No explicit `agentId: targetAgentId` in the patch
+This is the concrete place where the wrong `agentId` is emitted:
 
-**File:** `src/gateway/server-methods/agent.ts`
-**Function:** `agentHandlers.agent()`
+- transcripts are discovered by scanning an agent directory
+- every discovered session is stamped with the **directory/loop agent** (`agent.id`)
+- there is no verification against the canonical session key/session store identity
 
-When the subagent session is created via `callGateway({ method: "agent", ... })`, the session entry may be created/updated without explicitly setting `agentId`, allowing it to default to or inherit from the wrong context.
+So if a spawned specialist transcript is sitting in the parent/default transcript directory, `discoverAllSessionsForUsage()` emits it as `agentId: "main"`.
 
-### 4. Secondary Issue: Session Entry Type
+That matches the observed failure pattern exactly:
 
-**File:** `src/config/sessions/types.ts` (likely)
+- title/label can still reflect the child run (`mew-real-attribution-check`)
+- emitted activity payload still says `agentId: "main"`
 
-The `SessionEntry` type may not include an explicit `agentId` field, relying solely on session key parsing. If this field exists but is not being set during subagent spawn, downstream queries may return stale or inherited values.
+---
 
-## Proposed Fix
+## Root Cause
 
-### Core Change 1: Explicit agentId in Session Entry
+This is a **two-part attribution bug**:
 
-**File:** `src/agents/subagent-spawn.ts`
-**Line:** ~560 (inside `spawnSubagentDirect`)
+1. **Transcript placement bug**: new session transcripts are resolved from `storePath`/directory first, not the session's canonical agent identity.
+2. **Discovery attribution bug**: `discoverAllSessionsForUsage()` assigns `agentId` from the scan loop (`agent.id`) instead of the canonical session identity.
 
-Add explicit `agentId` to the initial session patch:
+The combination causes spawned child sessions to be observable downstream as `main`, even though the spawned session key itself is correct.
 
-```diff
-  const initialChildSessionPatch: Record<string, unknown> = {
-+   agentId: targetAgentId,
-    spawnDepth: childDepth,
-    subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
-    subagentControlScope: childCapabilities.controlScope,
+---
+
+## Required Fix
+
+### Fix 1 — Make transcript placement follow the session agent, not the parent/default store dir
+
+**Primary change:** `src/config/sessions/paths.ts`
+
+#### Exact change
+
+Update transcript fallback so a known `agentId` wins for new transcript creation.
+
+Today:
+
+```ts
+export function resolveSessionFilePath(
+  sessionId: string,
+  entry?: { sessionFile?: string },
+  opts?: SessionFilePathOptions,
+): string {
+  const sessionsDir = resolveSessionsDir(opts);
+  const candidate = entry?.sessionFile?.trim();
+  if (candidate) {
+    try {
+      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+    } catch {
+      // Keep handlers alive when persisted metadata is stale/corrupt.
+    }
+  }
+  return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+}
+```
+
+Required behavior:
+
+- if `entry.sessionFile` already exists, preserve current compatibility behavior
+- if no `entry.sessionFile` exists **and** `opts.agentId` is known, create the transcript under the canonical agent transcript root for that agent
+- only fall back to `sessionsDir` when no `agentId` is available
+
+Implementation shape:
+
+```ts
+if (candidate) {
+  ...existing behavior...
+}
+if (opts?.agentId) {
+  return resolveSessionTranscriptPath(sessionId, opts.agentId);
+}
+return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+```
+
+This is the surgical fix that stops brand-new child transcripts from being born in the parent/default directory.
+
+### Fix 2 — Stop emitting discovered session `agentId` from the scan loop
+
+**Primary change:** `src/gateway/server-methods/usage.ts`
+
+#### Exact change
+
+`discoverAllSessionsForUsage()` must not permanently stamp discovered sessions with `agent.id` from the outer loop.
+
+Current buggy line:
+
+```ts
+return sessions.map((session) => ({ ...session, agentId: agent.id }));
+```
+
+Required behavior:
+
+- prefer canonical agent identity from the combined session store by `sessionId`
+- if no store match exists, fall back to a transcript-derived or path-derived agent id when possible
+- only use the scan-loop agent as a last resort
+
+Implementation-ready approach:
+
+1. Load the combined session store once at the start of `discoverAllSessionsForUsage()`.
+2. Build a `Map<sessionId, sessionKey>` from store entries.
+3. For each discovered transcript:
+   - `const canonicalKey = storeBySessionId.get(session.sessionId)`
+   - `const canonicalAgentId = parseAgentSessionKey(canonicalKey)?.agentId`
+   - emit `{ ...session, agentId: canonicalAgentId ?? agent.id }`
+
+Pseudo-diff:
+
+```ts
+const { store } = loadCombinedSessionStoreForGateway(params.config);
+const storeBySessionId = buildStoreBySessionId(store);
+...
+return sessions.map((session) => {
+  const storeMatch = storeBySessionId.get(session.sessionId);
+  const canonicalAgentId = parseAgentSessionKey(storeMatch?.key)?.agentId;
+  return {
+    ...session,
+    agentId: canonicalAgentId ?? agent.id,
   };
+});
 ```
 
-### Core Change 2: Persist agentId in Session Store
+This makes activity/session emission resilient even for historical transcripts already written in the wrong directory.
 
-**File:** `src/gateway/server-methods/agent.ts`
-**Line:** ~400-450 (inside `agentHandlers.agent`)
+### Fix 3 — Add a regression test for cross-agent spawned sessions under shared/default store layouts
 
-When loading/creating a session entry for the agent request, ensure `agentId` is extracted from the session key and persisted:
+The issue only shows up when physical transcript placement and discovery diverge from canonical session key identity. Tests must cover that explicitly.
 
-```diff
-  if (requestedSessionKey) {
-    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
-    cfgForAgent = cfg;
-    isNewSession = !entry;
-    const now = Date.now();
-    const sessionId = entry?.sessionId ?? randomUUID();
-    const labelValue = request.label?.trim() || entry?.label;
-    const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-+   
-    spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-    
-    // ... rest of the function
-    
-    const nextEntryPatch: SessionEntry = {
-+     agentId: sessionAgent, // ADDED: Explicit agentId from session key
-      sessionId,
-      updatedAt: now,
-      // ... rest of fields
-    };
-```
+---
 
-### Core Change 3: Ensure SessionEntry Type Includes agentId
+## Compatibility / Migration
 
-**File:** `src/config/sessions/types.ts` (or wherever `SessionEntry` is defined)
+### Backward compatibility
 
-Verify the type includes `agentId?`:
+This should be backward-compatible.
 
-```typescript
-export type SessionEntry = {
-  agentId?: string; // ADDED if missing
-  sessionId: string;
-  sessionKey?: string;
-  // ... rest of fields
-};
-```
+- Existing sessions with persisted `sessionFile` continue to resolve from their stored path.
+- Existing session keys do not change.
+- Existing store entries do not need rewriting.
 
-### Core Change 4: Event Broadcasting Enhancement
+### Migration concerns
 
-**File:** `src/gateway/server-chat.ts`
-**Function:** `createAgentEventHandler()`
+No schema migration is required.
 
-When broadcasting events to nodes/clients, include an explicit `agentId` field derived from `sessionKey`:
+However:
 
-```diff
-  return (evt: AgentEventPayload) => {
-    const chatLink = chatRunState.registry.peek(evt.runId);
-    const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
-    const sessionKey =
-      chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
-+   const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
-    const clientRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
-    const isAborted =
-      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
-    // Include sessionKey so Control UI can filter tool streams per session.
--   const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
-+   const agentPayload = sessionKey 
-+     ? { ...eventForClients, sessionKey, agentId } 
-+     : eventForClients;
-```
+- **new sessions** after the fix may write transcripts into agent-specific transcript roots where older sessions for the same deployment were written into a shared/default directory
+- historical sessions already written to the wrong directory may still exist there
+
+That is why **Fix 2** is required along with **Fix 1**: it makes activity discovery recover canonical `agentId` from the session store for existing sessions, not just future ones.
+
+### Optional cleanup
+
+A follow-up maintenance command could later move old transcripts into canonical agent roots, but that is not required for correctness if discovery is fixed.
+
+---
 
 ## Validation
 
-### End-to-End Validation
+### Unit tests
 
-1. **Spawn test:**
-   ```bash
-   # From main session
-   sessions_spawn task="test attribution" agentId="mew" label="test-mew-attr"
-   ```
+#### 1) Transcript fallback honors child agent identity
 
-2. **Check session list API:**
-   ```bash
-   openclaw gateway call sessions.list | jq '.[] | select(.label | contains("test-mew-attr")) | {sessionKey, agentId, label}'
-   ```
-   
-   **Expected:**
-   ```json
-   {
-     "sessionKey": "agent:mew:subagent:...",
-     "agentId": "mew",
-     "label": "test-mew-attr"
-   }
-   ```
+**File:** `src/config/sessions/paths.test.ts` (or nearest existing test file)
 
-3. **Check live events in Control UI:**
-   - Open Control UI dashboard
-   - Monitor WebSocket events during spawn
-   - Verify `agent` and `chat` events include `agentId: "mew"`
+Add a test proving that when:
 
-4. **Check PokeDex dashboard:**
-   - Spawn Mew, Charmander, Bulbasaur specialists via the pipeline
-   - Verify dashboard panels display correct agent names in run history
-   - Confirm cost tracking attributes tokens to correct agents
+- `opts.agentId = "mew"`
+- `opts.sessionsDir` points at the default/main/shared sessions dir
+- `entry.sessionFile` is absent
 
-### Unit Test Coverage
+then `resolveSessionFilePath()` returns the `mew` transcript root, not the parent/default one.
 
-**File:** `src/agents/subagent-spawn.test.ts` (create if missing)
+Expected assertion shape:
 
-```typescript
-test("spawned subagent session entry includes explicit agentId", async () => {
-  const result = await spawnSubagentDirect(
-    { task: "test", agentId: "mew" },
-    { agentSessionKey: "agent:main:main" }
-  );
-  
-  expect(result.status).toBe("accepted");
-  
-  const sessionEntry = loadSessionEntry(result.childSessionKey!);
-  expect(sessionEntry.entry?.agentId).toBe("mew");
-});
-
-test("event payloads include agentId from session key", () => {
-  const sessionKey = "agent:charmander:subagent:test-123";
-  const event = {
-    runId: "test-run",
-    stream: "lifecycle",
-    data: { phase: "start" },
-    sessionKey,
-  };
-  
-  const enriched = enrichEventWithAgentId(event);
-  expect(enriched.agentId).toBe("charmander");
-});
+```ts
+expect(
+  resolveSessionFilePath(sessionId, undefined, { agentId: "mew", sessionsDir: mainDir }),
+).toContain("/agents/mew/sessions/");
 ```
 
-### Integration Test
+#### 2) Usage discovery prefers canonical store key agent over scan-loop agent
 
-**File:** `test/integration/subagent-attribution.test.ts` (create new)
+**File:** `src/gateway/server-methods/usage.sessions-usage.test.ts`
 
-End-to-end test that:
-1. Spawns subagents with different agentIds
-2. Subscribes to SSE events
-3. Validates all events include correct `agentId`
-4. Queries session list API and confirms `agentId` matches
+Add a case where:
 
-## Migration & Compatibility
+- a transcript file is discovered while scanning the `main` directory
+- the combined session store contains the same `sessionId` under key `agent:mew:subagent:child`
 
-### Backward Compatibility
+Expected result:
 
-✅ **No breaking changes** — adding `agentId` to session entries and event payloads is additive.
+- emitted session/activity entry uses `agentId: "mew"`
+- not `main`
 
-Existing systems that:
-- Parse `agentId` from `sessionKey` → continue to work
-- Don't consume `agentId` → unaffected
-- Expect `agentId` in payloads → **now get correct data**
+### Integration / gateway validation
 
-### Migration Steps
+Create or extend a gateway test that simulates:
 
-1. **Deploy gateway changes** (session store + event enrichment)
-2. **No data migration needed** — `agentId` is derived from existing session keys
-3. **Dashboard updates** (if needed):
-   - PokeDex: Update queries to prefer `agentId` field over parsing `sessionKey`
-   - Control UI: Use explicit `agentId` from events instead of deriving it
+1. parent session `agent:main:main`
+2. `sessions_spawn` with `agentId: "mew"` and label `mew-real-attribution-check`
+3. child session creation with canonical key `agent:mew:subagent:...`
+4. transcript creation for that child
+5. `sessions.usage` or the relevant activity-producing method
 
-### Rollback Safety
+Expected outcome:
 
-If issues arise:
-1. The explicit `agentId` field can be ignored by downstream consumers
-2. All consumers can fall back to parsing `sessionKey` (existing behavior)
-3. No data loss — session keys remain the canonical source of truth
+- returned/emitted session key remains `agent:mew:subagent:...` (or canonical store-matched key)
+- returned/emitted `agentId === "mew"`
+- never `main`
 
-## Impact Assessment
+### Manual validation
 
-### Systems Affected
+Reproduce with three spawned agents:
 
-1. ✅ **Gateway session store** — adds `agentId` field to session entries
-2. ✅ **Event broadcasting** — includes `agentId` in `agent` and `chat` events
-3. ✅ **Control UI dashboard** — displays correct agent names
-4. ✅ **PokeDex dashboard** — accurate cost tracking per agent
-5. ✅ **iOS/Android companion apps** — correct session attribution in UI
-6. ✅ **Analytics/logging** — proper agent-level metrics
+- `mew-real-attribution-check`
+- `charmander-real-attribution-check`
+- `bulbasaur-real-attribution-check`
 
-### Performance Impact
+Then verify downstream payloads now show:
 
-❌ **Negligible** — no new queries, just field assignment during existing operations.
+- `title: "mew-real-attribution-check", agentId: "mew"`
+- `title: "charmander-real-attribution-check", agentId: "charmander"`
+- `title: "bulbasaur-real-attribution-check", agentId: "bulbasaur"`
 
-### Testing Burden
+and no longer:
 
-- Unit tests: ~4 new tests
-- Integration tests: 1 new end-to-end test
-- Manual QA: 10-15 minutes (spawn + dashboard verification)
+- `agentId: "main"`
 
-## Conclusion
+---
 
-The root cause is missing explicit `agentId` propagation during subagent spawn and event broadcasting. The session key is correct, but downstream consumers receive inconsistent data because:
+## Summary of Exact Files / Functions to Change
 
-1. Session entries don't include explicit `agentId` field
-2. Event payloads omit `agentId` and rely on parsing `sessionKey` (which may not happen consistently)
+### Required
 
-The fix is surgical: add `agentId` in two places (session patch + event enrichment) and validate end-to-end attribution. No breaking changes, minimal risk, high impact for dashboard accuracy and operator confidence.
+1. **`src/config/sessions/paths.ts`**
+   - `resolveSessionFilePath()`
+   - make new transcript fallback prefer `opts.agentId`
+
+2. **`src/gateway/server-methods/usage.ts`**
+   - `discoverAllSessionsForUsage()`
+   - derive emitted `agentId` from canonical store/session identity, not the outer scan-loop agent
+
+### Tests
+
+3. **`src/gateway/server-methods/usage.sessions-usage.test.ts`**
+   - add regression for discovered-in-main / canonical-key-in-child-agent case
+
+4. **`src/config/sessions/paths.*.test.ts`**
+   - add regression for transcript fallback path selection
+
+---
+
+## Why this is the right upstream fix
+
+The spawn/session-key path is already correct. The real bug is that later layers re-materialize identity from the wrong source:
+
+- transcript directory instead of canonical child agent
+- scan-loop/default agent instead of session key/store identity
+
+Fixing those two points restores end-to-end attribution without changing spawn semantics or session-key format.

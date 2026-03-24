@@ -249,6 +249,16 @@ const parseDateRange = (params: {
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 
+function resolveCanonicalAgentIdForSession(params: {
+  sessionId: string;
+  storeBySessionId: Map<string, { key: string; entry: SessionEntry }>;
+  fallbackAgentId: string;
+}): string {
+  const storeMatch = params.storeBySessionId.get(params.sessionId);
+  const canonicalAgentId = parseAgentSessionKey(storeMatch?.key)?.agentId;
+  return canonicalAgentId ?? params.fallbackAgentId;
+}
+
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
@@ -265,6 +275,7 @@ async function discoverAllSessionsForUsage(params: {
   config: ReturnType<typeof loadConfig>;
   startMs: number;
   endMs: number;
+  storeBySessionId: Map<string, { key: string; entry: SessionEntry }>;
 }): Promise<DiscoveredSessionWithAgent[]> {
   const agents = listAgentsForGateway(params.config).agents;
   const results = await Promise.all(
@@ -274,7 +285,14 @@ async function discoverAllSessionsForUsage(params: {
         startMs: params.startMs,
         endMs: params.endMs,
       });
-      return sessions.map((session) => ({ ...session, agentId: agent.id }));
+      return sessions.map((session) => ({
+        ...session,
+        agentId: resolveCanonicalAgentIdForSession({
+          sessionId: session.sessionId,
+          storeBySessionId: params.storeBySessionId,
+          fallbackAgentId: agent.id,
+        }),
+      }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -392,6 +410,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Load session store for named sessions
     const { storePath, store } = loadCombinedSessionStoreForGateway(config);
+    const storeBySessionId = buildStoreBySessionId(store);
     const now = Date.now();
 
     // Merge discovered sessions with store entries
@@ -415,8 +434,6 @@ export const usageHandlers: GatewayRequestHandlers = {
 
       // Prefer the store entry when available, even if the caller provides a discovered key
       // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-      const storeBySessionId = buildStoreBySessionId(store);
-
       const storeMatch = store[specificKey]
         ? { key: specificKey, entry: store[specificKey] }
         : null;
@@ -424,19 +441,20 @@ export const usageHandlers: GatewayRequestHandlers = {
       const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
       const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
       const sessionId = storeEntry?.sessionId ?? keyRest;
+      const resolvedAgentId = parseAgentSessionKey(resolvedStoreKey)?.agentId ?? agentIdFromKey;
 
       // Resolve the session file path
       let sessionFile: string | undefined;
       try {
         const pathOpts = resolveSessionFilePathOptions({
           storePath: storePath !== "(multiple)" ? storePath : undefined,
-          agentId: agentIdFromKey,
+          agentId: resolvedAgentId,
         });
         sessionFile = resolveExistingUsageSessionFile({
           sessionId,
           sessionEntry: storeEntry,
           sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
-          agentId: agentIdFromKey,
+          agentId: resolvedAgentId,
         });
       } catch {
         respond(
@@ -470,10 +488,8 @@ export const usageHandlers: GatewayRequestHandlers = {
         config,
         startMs,
         endMs,
+        storeBySessionId,
       });
-
-      // Build a map of sessionId -> store entry for quick lookup
-      const storeBySessionId = buildStoreBySessionId(store);
 
       for (const discovered of discoveredSessions) {
         const storeMatch = storeBySessionId.get(discovered.sessionId);

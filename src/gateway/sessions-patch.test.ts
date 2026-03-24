@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { validateSessionsPatchParams } from "./protocol/index.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
@@ -105,6 +106,32 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  test("schema accepts canonical agentId in sessions.patch payloads", () => {
+    const ok = validateSessionsPatchParams({
+      key: KIMI_SUBAGENT_KEY,
+      agentId: "kimi",
+    });
+    expect(ok).toBe(true);
+  });
+
+  test("persists canonical agentId on session entries", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: KIMI_SUBAGENT_KEY,
+        patch: { key: KIMI_SUBAGENT_KEY, agentId: "kimi" },
+      }),
+    );
+    expect(entry.agentId).toBe("kimi");
+  });
+
+  test("rejects non-canonical agentId patch values", async () => {
+    const result = await runPatch({
+      storeKey: KIMI_SUBAGENT_KEY,
+      patch: { key: KIMI_SUBAGENT_KEY, agentId: "main" },
+    });
+    expectPatchError(result, "agentId must match canonical session agent: kimi");
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
