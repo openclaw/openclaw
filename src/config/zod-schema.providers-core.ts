@@ -46,11 +46,11 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z.union([z.string(), z.number()]).transform((value, ctx) => {
   if (typeof value === "number") {
-    if (value > Number.MAX_SAFE_INTEGER) {
+    if (!Number.isSafeInteger(value) || value < 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          `Discord ID "${String(value)}" may have lost precision (exceeds Number.MAX_SAFE_INTEGER). ` +
+          `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
           `Wrap it in quotes in your config file.`,
       });
       return z.NEVER;

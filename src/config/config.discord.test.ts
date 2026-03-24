@@ -90,18 +90,25 @@ describe("config discord", () => {
     }
   });
 
-  it("rejects numeric discord IDs that exceed MAX_SAFE_INTEGER", () => {
-    const res = validateConfigObject({
-      channels: {
-        discord: {
-          allowFrom: [106232522769186816],
+  it("rejects numeric discord IDs that are not valid non-negative safe integers", () => {
+    const cases = [106232522769186816, -1, 123.45];
+    for (const id of cases) {
+      const res = validateConfigObject({
+        channels: {
+          discord: {
+            allowFrom: [id],
+          },
         },
-      },
-    });
+      });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((issue) => issue.message.includes("lost precision"))).toBe(true);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(
+          res.issues.some((issue) =>
+            issue.message.includes("not a valid non-negative safe integer"),
+          ),
+        ).toBe(true);
+      }
     }
   });
 });
