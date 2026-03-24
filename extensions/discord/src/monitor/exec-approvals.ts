@@ -32,6 +32,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
+import { resolveDiscordChannelId } from "../targets.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
@@ -45,6 +46,38 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
   const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
   return match ? match[1] : null;
+}
+
+function normalizeTurnSourceChannel(value?: string | null): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
+
+function resolveDiscordApprovalChannelId(params: {
+  sessionKey?: string | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceThreadId?: string | number | null;
+}): string | null {
+  if (normalizeTurnSourceChannel(params.turnSourceChannel) === "discord") {
+    const turnSourceTo = params.turnSourceTo?.trim();
+    if (turnSourceTo) {
+      try {
+        return resolveDiscordChannelId(turnSourceTo);
+      } catch {
+        // Fall back to thread/session hints when the turn-source target is not a channel.
+      }
+    }
+
+    if (params.turnSourceThreadId != null && params.turnSourceThreadId !== "") {
+      const threadId = String(params.turnSourceThreadId).trim();
+      if (threadId) {
+        return threadId;
+      }
+    }
+  }
+
+  return extractDiscordChannelId(params.sessionKey);
 }
 
 function buildDiscordApprovalDmRedirectNotice(): { content: string } {
@@ -525,8 +558,13 @@ export class DiscordExecApprovalHandler {
     const sendToChannel = target === "channel" || target === "both";
     let fallbackToDm = false;
     const originatingChannelId =
-      request.request.sessionKey && target === "dm"
-        ? extractDiscordChannelId(request.request.sessionKey)
+      target === "dm"
+        ? resolveDiscordApprovalChannelId({
+            sessionKey: request.request.sessionKey,
+            turnSourceChannel: request.request.turnSourceChannel,
+            turnSourceTo: request.request.turnSourceTo,
+            turnSourceThreadId: request.request.turnSourceThreadId,
+          })
         : null;
 
     if (target === "dm" && originatingChannelId) {
@@ -545,7 +583,12 @@ export class DiscordExecApprovalHandler {
 
     // Send to originating channel if configured
     if (sendToChannel) {
-      const channelId = extractDiscordChannelId(request.request.sessionKey);
+      const channelId = resolveDiscordApprovalChannelId({
+        sessionKey: request.request.sessionKey,
+        turnSourceChannel: request.request.turnSourceChannel,
+        turnSourceTo: request.request.turnSourceTo,
+        turnSourceThreadId: request.request.turnSourceThreadId,
+      });
       if (channelId) {
         try {
           const message = (await discordRequest(

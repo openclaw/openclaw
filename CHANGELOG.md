@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/groups: track recent gateway-sent message IDs and suppress only matching group echoes, preserving owner `/status`, `/new`, and `/activation` commands from linked-account `fromMe` traffic. (#53624) Thanks @w-sss.
 - Runtime/build: stabilize long-lived lazy `dist` runtime entry paths and harden bundled plugin npm staging so local rebuilds stop breaking on missing hashed chunks or broken shell `npm` shims. (#53855) Thanks @vincentkoc.
 - Discord/timeouts: send a visible timeout reply when the inbound Discord worker times out before a final reply starts, including created auto-thread targets and queued-run ordering. (#53823) Thanks @Kimbo7870.
+- Discord/exec approvals: prefer Discord turn-source routing hints for subagent and cron approval delivery before falling back to legacy session-key channel parsing, so approval cards and DM redirect notices return to the original Discord channel/thread more reliably.
 
 ## 2026.3.23
 

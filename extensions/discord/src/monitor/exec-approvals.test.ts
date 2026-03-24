@@ -909,6 +909,110 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     clearPendingTimeouts(handler);
   });
 
+  it("uses turn-source channel hints before session-key fallback for non-channel sessions", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "channel",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await internals.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:search:subagent:abc",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:999888777",
+        turnSourceThreadId: "444555666",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          components: expect.any(Array),
+        }),
+      }),
+    );
+    expect(mockRestPost).not.toHaveBeenCalledWith(Routes.userChannels(), expect.anything());
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("falls back to turn-source thread id when turn-source target is not usable", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "channel",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await internals.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:doctor:cron:abc",
+        turnSourceChannel: "discord",
+        turnSourceTo: "user:123",
+        turnSourceThreadId: "444555666",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("444555666"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          components: expect.any(Array),
+        }),
+      }),
+    );
+    expect(mockRestPost).not.toHaveBeenCalledWith(Routes.userChannels(), expect.anything());
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("posts the DM redirect note back to the turn-source channel when the session is not channel-encoded", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockSuccessfulDmDelivery({
+      noteChannelId: "999888777",
+      expectedNoteText: "I sent the allowed approvers DMs",
+      throwOnUnexpectedRoute: true,
+    });
+
+    await internals.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:reporter:subagent:xyz",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:999888777",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: expect.stringContaining("I sent the allowed approvers DMs"),
+        }),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("dm-1"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+
+    clearPendingTimeouts(handler);
+  });
+
   it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
     const handler = createHandler({
       enabled: true,
