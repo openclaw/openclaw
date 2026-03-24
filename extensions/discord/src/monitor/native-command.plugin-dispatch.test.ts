@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
@@ -12,6 +12,8 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type EnsureConfiguredBindingRouteReadyFn =
   typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
+
+let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
   vi.fn<EnsureConfiguredBindingRouteReadyFn>(async () => ({
@@ -154,13 +156,7 @@ function createConfiguredAcpCase(params: {
   };
 }
 
-async function loadCreateDiscordNativeCommand() {
-  vi.resetModules();
-  return (await import("./native-command.js")).createDiscordNativeCommand;
-}
-
 async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeCommandSpec) {
-  const createDiscordNativeCommand = await loadCreateDiscordNativeCommand();
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -173,7 +169,6 @@ async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeComma
 }
 
 async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
-  const createDiscordNativeCommand = await loadCreateDiscordNativeCommand();
   return createDiscordNativeCommand({
     command: {
       name: params.name,
@@ -287,6 +282,11 @@ async function expectBoundStatusCommandDispatch(params: {
 }
 
 describe("Discord native plugin command dispatch", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ createDiscordNativeCommand } = await import("./native-command.js"));
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
