@@ -772,7 +772,25 @@ export class TwilioProvider implements VoiceCallProvider {
               `Telephony TTS streaming timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
             );
           }
-          throw err;
+          console.warn(
+            `[voice-call] Streaming TTS failed before audio was sent; falling back to buffered synthesis:`,
+            err instanceof Error ? err.message : err,
+          );
+          const fallbackAudio = await ttsProvider.synthesizeForTelephony(text);
+          const bufferedChunks = chunkAudio(fallbackAudio, CHUNK_SIZE);
+          for (const chunk of bufferedChunks) {
+            if (signal.aborted) {
+              break;
+            }
+            const chunkResult = sendAudioChunk(chunk);
+            chunkAttempts += 1;
+            if (chunkResult.sent) {
+              chunkDelivered += 1;
+            }
+            totalBytesSent += chunk.length;
+            await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+          }
+          return;
         } finally {
           if (abortListenerAttached) {
             signal.removeEventListener("abort", onAbort);
