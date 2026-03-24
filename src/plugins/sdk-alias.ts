@@ -32,11 +32,15 @@ function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | n
   }
 }
 
+function isSafePluginSdkSubpathSegment(subpath: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+}
+
 function listPluginSdkSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string[] {
   return Object.keys(pkg.exports ?? {})
     .filter((key) => key.startsWith("./plugin-sdk/"))
     .map((key) => key.slice("./plugin-sdk/".length))
-    .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
+    .filter((subpath) => isSafePluginSdkSubpathSegment(subpath))
     .toSorted();
 }
 
