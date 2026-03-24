@@ -204,6 +204,10 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
+  return path.join(dir, WORKSPACE_STATE_FILENAME);
+}
+
+function resolveLegacyWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
@@ -256,8 +260,13 @@ async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetu
 }
 
 async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
-  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceSetupState(statePath);
+  const resolved = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolved);
+  const state = await readWorkspaceSetupState(statePath);
+  if (state.setupCompletedAt || state.bootstrapSeededAt) {
+    return state;
+  }
+  return await readWorkspaceSetupState(resolveLegacyWorkspaceStatePath(resolved));
 }
 
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
@@ -269,7 +278,6 @@ async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
   const payload = `${JSON.stringify(state, null, 2)}\n`;
   const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
   try {
@@ -389,6 +397,9 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
   let state = await readWorkspaceSetupState(statePath);
+  if (!state.setupCompletedAt && !state.bootstrapSeededAt) {
+    state = await readWorkspaceSetupState(resolveLegacyWorkspaceStatePath(dir));
+  }
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
