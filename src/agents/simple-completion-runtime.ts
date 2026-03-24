@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import { complete, type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -230,4 +230,16 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     model: prepared.model,
     auth: prepared.auth,
   };
+}
+
+export async function completeWithPreparedSimpleCompletionModel(params: {
+  model: Model<Api>;
+  auth: ResolvedProviderAuth;
+  context: Parameters<typeof complete>[1];
+  options?: Omit<Parameters<typeof complete>[2], "apiKey">;
+}) {
+  return await complete(params.model, params.context, {
+    ...params.options,
+    apiKey: params.auth.apiKey,
+  });
 }
