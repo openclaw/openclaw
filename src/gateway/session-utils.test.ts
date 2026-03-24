@@ -1317,6 +1317,60 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(followup?.runtimeMs).toBeGreaterThanOrEqual(150_000);
   });
 
+  test("uses the newest child-session row for stale/current replacement pairs", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-current";
+    const store: Record<string, SessionEntry> = {
+      [childSessionKey]: {
+        sessionId: "sess-stale-current",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-stale-active",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale active row",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_500,
+      model: "openai/gpt-5.4",
+    });
+    addSubagentRunForTests({
+      runId: "run-current-ended",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current ended row",
+      cleanup: "keep",
+      createdAt: now - 1_000,
+      startedAt: now - 900,
+      endedAt: now - 200,
+      outcome: { status: "ok" },
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      status: "done",
+      startedAt: now - 900,
+      endedAt: now - 200,
+    });
+  });
+
   test("uses persisted active subagent runs when the local worker only has terminal snapshots", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
