@@ -169,16 +169,22 @@ function isSecretKey(key: string): boolean {
   return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 
+function redactArraySecrets(arr: unknown[]): void {
+  for (const element of arr) {
+    if (Array.isArray(element)) {
+      redactArraySecrets(element);
+    } else if (typeof element === "object" && element !== null) {
+      redactObjectSecrets(element as Record<string, unknown>);
+    }
+  }
+}
+
 function redactObjectSecrets(obj: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === "string" && isSecretKey(key)) {
       obj[key] = "<REDACTED>";
     } else if (Array.isArray(value)) {
-      for (const element of value) {
-        if (typeof element === "object" && element !== null && !Array.isArray(element)) {
-          redactObjectSecrets(element as Record<string, unknown>);
-        }
-      }
+      redactArraySecrets(value);
     } else if (typeof value === "object" && value !== null) {
       redactObjectSecrets(value as Record<string, unknown>);
     }

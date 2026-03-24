@@ -154,21 +154,30 @@ function resolveAgentScopedWorkspaceDirs(
       : resolveDefaultAgentWorkspaceDir();
 
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const configuredAgentIds = new Set<string>();
   const agentsWithExplicitWorkspace = new Set<string>();
   for (const agent of list) {
     const agentRecord = agent as { id?: string; workspace?: string };
-    if (typeof agentRecord.id === "string" && agentIdSet.has(agentRecord.id)) {
-      if (typeof agentRecord.workspace === "string" && agentRecord.workspace.trim()) {
-        dirs.add(resolveUserPath(agentRecord.workspace));
-        agentsWithExplicitWorkspace.add(agentRecord.id);
-      }
+    if (typeof agentRecord.id !== "string") {
+      continue;
+    }
+    if (!agentIdSet.has(agentRecord.id)) {
+      continue;
+    }
+    configuredAgentIds.add(agentRecord.id);
+    if (typeof agentRecord.workspace === "string" && agentRecord.workspace.trim()) {
+      dirs.add(resolveUserPath(agentRecord.workspace));
+      agentsWithExplicitWorkspace.add(agentRecord.id);
     }
   }
 
-  // Include the inherited default workspace if any selected agent lacks
-  // an explicit workspace entry (they inherit the default).
-  const allHaveExplicit = agentIds.every((id) => agentsWithExplicitWorkspace.has(id));
-  if (!allHaveExplicit) {
+  // Include the inherited default workspace for agents that are configured
+  // but lack an explicit workspace (they inherit the default). Agents not
+  // found in agents.list at all are ignored — they don't have workspace data.
+  const hasInheritingAgent = [...configuredAgentIds].some(
+    (id) => !agentsWithExplicitWorkspace.has(id),
+  );
+  if (hasInheritingAgent) {
     dirs.add(defaultWorkspace);
   }
 

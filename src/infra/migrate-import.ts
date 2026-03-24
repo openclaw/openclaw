@@ -273,7 +273,10 @@ function remapSourceToTarget(params: {
     if (params.remapWorkspace) {
       // If there are multiple workspace dirs, create subdirectories.
       if (params.sourceWorkspaceDirs.length > 1) {
-        const idx = params.sourceWorkspaceDirs.indexOf(sourcePath);
+        const normalizedSource = toPosixPath(sourcePath);
+        const idx = params.sourceWorkspaceDirs.findIndex(
+          (d) => toPosixPath(d) === normalizedSource,
+        );
         if (idx > 0) {
           return path.join(params.remapWorkspace, `workspace-${idx}`);
         }
@@ -290,7 +293,8 @@ function remapSourceToTarget(params: {
     // Derive a unique fallback name from the source path basename to avoid
     // multiple external workspaces colliding on a single target.
     const basename = path.basename(toPosixPath(sourcePath)) || "workspace";
-    const idx = params.sourceWorkspaceDirs.indexOf(sourcePath);
+    const normalizedSource = toPosixPath(sourcePath);
+    const idx = params.sourceWorkspaceDirs.findIndex((d) => toPosixPath(d) === normalizedSource);
     if (idx > 0) {
       return path.join(params.localStateDir, `${basename}-${idx}`);
     }
@@ -463,6 +467,9 @@ export async function importMigrateArchive(
       preservePaths: false,
     });
 
+    const resolvedTempDir = await fs.realpath(tempDir);
+    const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
+
     // Process each asset.
     for (const importAsset of importAssets) {
       const manifestAsset = manifest.assets.find(
@@ -473,8 +480,6 @@ export async function importMigrateArchive(
       }
 
       const extractedPath = path.join(tempDir, manifestAsset.archivePath);
-      const resolvedTempDir = await fs.realpath(tempDir);
-      const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
 
       // Lexical check first: reject obviously bad paths before touching the filesystem.
       const resolvedExtracted = path.resolve(extractedPath);
