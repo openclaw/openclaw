@@ -464,12 +464,16 @@ export async function killAllControlledSubagentRuns(params: {
       continue;
     }
     seenChildSessionKeys.add(childKey);
+    const currentEntry = getSubagentRunByChildSessionKey(childKey);
+    if (!currentEntry || currentEntry.runId !== entry.runId || currentEntry.endedAt) {
+      continue;
+    }
 
     if (!entry.endedAt) {
-      const stopResult = await killSubagentRun({ cfg: params.cfg, entry, cache });
+      const stopResult = await killSubagentRun({ cfg: params.cfg, entry: currentEntry, cache });
       if (stopResult.killed) {
         killed += 1;
-        killedLabels.push(resolveSubagentLabel(entry));
+        killedLabels.push(resolveSubagentLabel(currentEntry));
       }
     }
 
@@ -792,6 +796,14 @@ export async function sendControlledSubagentMessage(params: {
     return {
       status: "forbidden" as const,
       error: "Leaf subagents cannot control other sessions.",
+    };
+  }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done" as const,
+      runId: params.entry.runId,
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
     };
   }
 
