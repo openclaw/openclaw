@@ -3420,6 +3420,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 fastModeDefault: {
                   type: "boolean",
                 },
+                userTimezone: {
+                  type: "string",
+                },
                 skills: {
                   type: "array",
                   items: {

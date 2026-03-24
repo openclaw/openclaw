@@ -333,7 +333,7 @@ function resolveCompactionSessionFile(params: {
   storePath?: string;
   newSessionId: string;
 }): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey });
   const pathOpts = resolveSessionFilePathOptions({
     agentId,
     storePath: params.storePath,

@@ -1444,10 +1444,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes,
       };
 
-      const agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-      });
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,
