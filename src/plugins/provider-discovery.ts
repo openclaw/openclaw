@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -14,6 +14,7 @@ export function resolvePluginDiscoveryProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): ProviderPlugin[] {
   return resolvePluginProviders({
     ...params,

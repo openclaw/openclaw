@@ -391,6 +391,7 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
   status?: SessionRunStatus;
   startedAt?: number;
   endedAt?: number;
@@ -644,7 +645,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "document">;
 };
 
 export type ToolCatalogProfile =

@@ -267,7 +267,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="Cannot access docs.openclaw.ai (SSL error)">
     Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
     Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
-    detail: [Troubleshooting](/help/faq#docsopenclawai-shows-an-ssl-error-comcast-xfinity).
+    detail: [Troubleshooting](/help/faq#cannot-access-docsopenclaw-ai-ssl-error).
     Please help us unblock it by reporting here: [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status).
 
     If you still can't reach the site, the docs are mirrored on GitHub:
@@ -992,18 +992,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How do I install skills on Linux?">
-    Use **ClawHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
+    Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
     Browse skills at [https://clawhub.com](https://clawhub.com).
 
-    Install the ClawHub CLI (pick one package manager):
-
     ```bash
-    npm i -g clawhub
+    openclaw skills search "calendar"
+    openclaw skills install <skill-slug>
+    openclaw skills update --all
     ```
 
-    ```bash
-    pnpm add -g clawhub
-    ```
+    Install the separate `clawhub` CLI only if you want to publish or sync your own skills.
 
   </Accordion>
 
@@ -1075,11 +1073,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Install skills:
 
     ```bash
-    clawhub install <skill-slug>
-    clawhub update --all
+    openclaw skills install <skill-slug>
+    openclaw skills update --all
     ```
 
-    ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -1131,7 +1129,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
-    Key config reference: [Gateway configuration](/gateway/configuration-reference#agents-defaults-sandbox)
+    Key config reference: [Gateway configuration](/gateway/configuration-reference#agentsdefaultssandbox)
 
   </Accordion>
 
@@ -2148,12 +2146,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
-    profile was found), so the model can't be resolved. A fix for this detection is
-    in **2026.1.12** (unreleased at the time of writing).
+    profile was found), so the model can't be resolved.
 
     Fix checklist:
 
-    1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
+    1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
     3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,

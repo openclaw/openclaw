@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
+  resolveBrowserControlAuth: vi.fn(() => ({
+    token: "loopback-token",
+    password: undefined,
+  })),
+  getBridgeAuthForPort: vi.fn(() => null),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
@@ -30,13 +35,21 @@ vi.mock("./control-service.js", () => ({
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
 
+vi.mock("./control-auth.js", () => ({
+  resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
+}));
+
+vi.mock("./bridge-auth-registry.js", () => ({
+  getBridgeAuthForPort: mocks.getBridgeAuthForPort,
+}));
+
 vi.mock("./routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: vi.fn(() => ({
     dispatch: mocks.dispatch,
   })),
 }));
 
-import { fetchBrowserJson } from "./client-fetch.js";
+let fetchBrowserJson: typeof import("./client-fetch.js").fetchBrowserJson;
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -72,8 +85,11 @@ async function expectThrownBrowserFetchError(
 }
 
 describe("fetchBrowserJson loopback auth", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ fetchBrowserJson } = await import("./client-fetch.js"));
     vi.restoreAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "loopback-token");
     mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({
       gateway: {
@@ -84,10 +100,16 @@ describe("fetchBrowserJson loopback auth", () => {
     });
     mocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue({ ok: true });
     mocks.dispatch.mockReset().mockResolvedValue(okDispatchResponse());
+    mocks.resolveBrowserControlAuth.mockReset().mockReturnValue({
+      token: "loopback-token",
+      password: undefined,
+    });
+    mocks.getBridgeAuthForPort.mockReset().mockReturnValue(null);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("adds bearer auth for loopback absolute HTTP URLs", async () => {

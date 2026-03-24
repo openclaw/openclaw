@@ -1,4 +1,10 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  createAccountListHelpers,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
@@ -9,29 +15,15 @@ import type {
   ResolvedFeishuAccount,
 } from "./types.js";
 
-/**
- * List all configured account IDs from the accounts field.
- */
-function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
+const {
+  listConfiguredAccountIds,
+  listAccountIds: listFeishuAccountIds,
+  resolveDefaultAccountId,
+} = createAccountListHelpers("feishu", {
+  allowUnlistedDefaultAccount: true,
+});
 
-/**
- * List all Feishu account IDs.
- * If no accounts are configured, returns [DEFAULT_ACCOUNT_ID] for backward compatibility.
- */
-export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    // Backward compatibility: no accounts configured, use default
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return [...ids].toSorted((a, b) => a.localeCompare(b));
-}
+export { listFeishuAccountIds };
 
 /**
  * Resolve the default account selection and its source.
@@ -40,8 +32,9 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
   accountId: string;
   source: FeishuDefaultAccountSelectionSource;
 } {
-  const preferredRaw = (cfg.channels?.feishu as FeishuConfig | undefined)?.defaultAccount?.trim();
-  const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
+  const preferred = normalizeOptionalAccountId(
+    (cfg.channels?.feishu as FeishuConfig | undefined)?.defaultAccount,
+  );
   if (preferred) {
     return {
       accountId: preferred,
@@ -65,21 +58,7 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
  * Resolve the default account ID.
  */
 export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
-  return resolveDefaultFeishuAccountSelection(cfg).accountId;
-}
-
-/**
- * Get the raw account-specific config.
- */
-function resolveAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): FeishuAccountConfig | undefined {
-  const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId];
+  return resolveDefaultAccountId(cfg);
 }
 
 /**
@@ -88,15 +67,12 @@ function resolveAccountConfig(
  */
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-
-  // Extract base config (exclude accounts field to avoid recursion)
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...base } = feishuCfg ?? {};
-
-  // Get account-specific overrides
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-
-  // Merge: account config overrides base config
-  return { ...base, ...account } as FeishuConfig;
+  return resolveMergedAccountConfig<FeishuConfig>({
+    channelConfig: feishuCfg,
+    accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+  });
 }
 
 /**

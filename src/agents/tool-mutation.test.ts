@@ -37,6 +37,22 @@ describe("tool mutation helpers", () => {
     expect(readFingerprint).toBeUndefined();
   });
 
+  it("treats coding-tool path aliases as the same stable target", () => {
+    const filePathFingerprint = buildToolActionFingerprint("edit", {
+      file_path: "/tmp/demo.txt",
+      old_string: "before",
+      new_string: "after",
+    });
+    const fileAliasFingerprint = buildToolActionFingerprint("edit", {
+      file: "/tmp/demo.txt",
+      oldText: "before",
+      newText: "after again",
+    });
+
+    expect(filePathFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
+    expect(fileAliasFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
+  });
+
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,

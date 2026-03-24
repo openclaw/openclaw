@@ -645,4 +645,91 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
   });
+
+  it("blocks internal operator.write exec persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+    );
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result?.text).toContain("operator.admin");
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionEntry.execSecurity).toBeUndefined();
+    expect(sessionEntry.execAsk).toBeUndefined();
+    expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("allows internal operator.admin exec persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+    );
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(result?.text).toContain("Exec defaults set");
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
+  });
+});
+
+describe("persistInlineDirectives internal exec scope gate", () => {
+  it("skips exec persistence for internal operator.write callers", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+    );
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionEntry.execSecurity).toBeUndefined();
+    expect(sessionEntry.execAsk).toBeUndefined();
+    expect(sessionEntry.execNode).toBeUndefined();
+  });
 });

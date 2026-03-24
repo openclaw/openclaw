@@ -319,8 +319,8 @@ describe("web_search brave mode resolution", () => {
       {
         title: "Example",
         url: "https://example.com",
-        description: "A B",
-        age: "2024-01-01",
+        siteName: "example.com",
+        snippets: ["A", "B"],
       },
     ]);
   });
@@ -339,6 +339,15 @@ describe("web_search grok config resolution", () => {
 
   it("uses config model when provided", () => {
     expect(resolveGrokModel({ model: "grok-4-fast" })).toBe("grok-4-fast");
+  });
+
+  it("normalizes deprecated grok 4.20 beta ids to GA ids", () => {
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-reasoning" })).toBe(
+      "grok-4.20-beta-latest-reasoning",
+    );
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-non-reasoning" })).toBe(
+      "grok-4.20-beta-latest-non-reasoning",
+    );
   });
 
   it("falls back to default model", () => {

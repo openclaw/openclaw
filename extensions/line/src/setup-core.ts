@@ -5,7 +5,7 @@ import {
   normalizeAccountId,
   resolveLineAccount,
   type LineConfig,
-} from "../runtime-api.js";
+} from "./setup-runtime-api.js";
 
 const channel = "line" as const;
 

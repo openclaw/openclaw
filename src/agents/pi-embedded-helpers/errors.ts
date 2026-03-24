@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
   extractLeadingHttpStatus,
@@ -12,7 +13,7 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
   isAuthErrorMessage,
@@ -61,6 +62,57 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
+  return undefined;
+}
+
+function formatTransportErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+
+  if (
+    /\beconnrefused\b/i.test(raw) ||
+    lower.includes("connection refused") ||
+    lower.includes("actively refused")
+  ) {
+    return "LLM request failed: connection refused by the provider endpoint.";
+  }
+
+  if (
+    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("connection aborted")
+  ) {
+    return "LLM request failed: network connection was interrupted.";
+  }
+
+  if (
+    /\benotfound\b|\beai_again\b/i.test(raw) ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("no such host") ||
+    lower.includes("dns")
+  ) {
+    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+  }
+
+  if (
+    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable")
+  ) {
+    return "LLM request failed: the provider endpoint is unreachable from this host.";
+  }
+
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("connection error") ||
+    lower.includes("network request failed")
+  ) {
+    return "LLM request failed: network connection error.";
+  }
+
   return undefined;
 }
 
@@ -223,9 +275,6 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
   return undefined;
 }
 
-// Allow provider-wrapped API payloads such as "Ollama API error 400: {...}".
-const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -482,63 +531,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
   );
 }
 
-type ErrorPayload = Record<string, unknown>;
-
-function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as ErrorPayload;
-  if (record.type === "error") {
-    return true;
-  }
-  if (typeof record.request_id === "string" || typeof record.requestId === "string") {
-    return true;
-  }
-  if ("error" in record) {
-    const err = record.error;
-    if (err && typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as ErrorPayload;
-      if (
-        typeof errRecord.message === "string" ||
-        typeof errRecord.type === "string" ||
-        typeof errRecord.code === "string"
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function parseApiErrorPayload(raw: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const candidates = [trimmed];
-  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
-  }
-  for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
-  return null;
-}
-
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -625,6 +617,11 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  const transportCopy = formatTransportErrorCopy(raw);
+  if (transportCopy) {
+    return transportCopy;
+  }
+
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
   }
@@ -685,6 +682,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       if (prefixedCopy) {
         return prefixedCopy;
       }
+      const transportCopy = formatTransportErrorCopy(trimmed);
+      if (transportCopy) {
+        return transportCopy;
+      }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
       }
@@ -729,14 +730,34 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
+// Transient signal patterns for api_error payloads. Only treat an api_error as
+// retryable when the message text itself indicates a transient server issue.
+// Non-transient api_error payloads (context overflow, validation/schema errors)
+// must NOT be classified as timeout.
+const API_ERROR_TRANSIENT_SIGNALS_RE =
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
+
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
   const value = raw.toLowerCase();
-  // Anthropic often wraps transient 500s in JSON payloads like:
+  // Providers wrap transient 5xx errors in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  // Non-standard providers (e.g. MiniMax) may use different message text:
+  // {"type":"api_error","message":"unknown error, 520 (1000)"}
+  if (!value.includes('"type":"api_error"')) {
+    return false;
+  }
+  // Billing and auth errors can also carry "type":"api_error". Exclude them so
+  // the more specific classifiers further down the chain handle them correctly.
+  if (isBillingErrorMessage(raw) || isAuthErrorMessage(raw) || isAuthPermanentErrorMessage(raw)) {
+    return false;
+  }
+  // Only match when the message contains a transient signal. api_error payloads
+  // with non-transient messages (e.g. context overflow, schema validation) should
+  // fall through to more specific classifiers or remain unclassified.
+  return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -889,23 +910,26 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
-  if (isJsonApiInternalServerError(raw)) {
-    return "timeout";
-  }
-  if (isCloudCodeAssistFormatError(raw)) {
-    return "format";
-  }
+  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
+  // check so that provider errors like {"type":"api_error","message":"insufficient
+  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
     return "billing";
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return "auth_permanent";
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
   }
   return null;
 }

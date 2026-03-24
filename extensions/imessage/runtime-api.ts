@@ -1,6 +1,7 @@
 export {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   formatTrimmedAllowFromEntries,

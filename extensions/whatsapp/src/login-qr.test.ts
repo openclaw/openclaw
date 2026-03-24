@@ -7,7 +7,8 @@ import {
   waitForWaConnection,
 } from "./session.js";
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const createWaSocket = vi.fn(
     async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
       const sock = { ws: { close: vi.fn() } };
@@ -30,6 +31,7 @@ vi.mock("./session.js", () => {
   const logoutWeb = vi.fn(async () => true);
   const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
+    ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,

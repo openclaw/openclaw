@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createUnitVitestConfig,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
 } from "../vitest.unit.config.ts";
@@ -75,5 +76,12 @@ describe("loadExtraExcludePatternsFromEnv", () => {
         OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: filePath,
       }),
     ).toThrow(/JSON array/u);
+  });
+});
+
+describe("unit vitest config", () => {
+  it("defaults unit tests to non-isolated mode", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.isolate).toBe(false);
   });
 });

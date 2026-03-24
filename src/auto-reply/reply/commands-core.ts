@@ -8,7 +8,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { handleAcpCommand } from "./commands-acp.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
@@ -46,7 +45,20 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-import { routeReply } from "./route-reply.js";
+
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let commandHandlersRuntimePromise: Promise<typeof import("./commands-handlers.runtime.js")> | null =
+  null;
+
+function loadRouteReplyRuntime() {
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
+}
+
+function loadCommandHandlersRuntime() {
+  commandHandlersRuntimePromise ??= import("./commands-handlers.runtime.js");
+  return commandHandlersRuntimePromise;
+}
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -85,6 +97,7 @@ export async function emitResetCommandHooks(params: {
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
     if (channel && to) {
+      const { routeReply } = await loadRouteReplyRuntime();
       const hookReply = { text: hookEvent.messages.join("\n\n") };
       await routeReply({
         payload: hookReply,
@@ -209,6 +222,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleLearnCommand,
       handleAbortTrigger,
     ];
+    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
   const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
   const resetRequested = Boolean(resetMatch);

@@ -13,6 +13,7 @@ import type {
 import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -105,6 +106,10 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
 });
+
+function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
+  return getProviderEnvVars(providerId);
+}
 
 function resolveImageGenerationModelCandidates(
   cfg: OpenClawConfig | undefined,
@@ -498,7 +503,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. If you want openai/*, google/*, fal/*, or another provider, configure that provider auth/API key first. Use action="list" to inspect available providers, models, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -510,6 +515,7 @@ export function createImageGenerateTool(options?: {
             ...(provider.label ? { label: provider.label } : {}),
             ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
             models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
+            authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
             capabilities: provider.capabilities,
           }),
         );
@@ -537,6 +543,9 @@ export function createImageGenerateTool(options?: {
           return [
             `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
             `  ${modelLine}`,
+            ...(provider.authEnvVars.length > 0
+              ? [`  auth: set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`]
+              : []),
             ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
           ];
         });
@@ -610,7 +619,6 @@ export function createImageGenerateTool(options?: {
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-        ...savedImages.map((image) => `MEDIA:${image.path}`),
       ];
 
       return {
@@ -619,6 +627,9 @@ export function createImageGenerateTool(options?: {
           provider: result.provider,
           model: result.model,
           count: savedImages.length,
+          media: {
+            mediaUrls: savedImages.map((image) => image.path),
+          },
           paths: savedImages.map((image) => image.path),
           ...(imageInputs.length === 1
             ? {

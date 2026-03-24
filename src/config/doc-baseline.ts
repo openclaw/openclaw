@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
-import { findWildcardHintMatch, schemaHasChildren } from "./schema.shared.js";
+import { schemaHasChildren } from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -72,6 +72,14 @@ const GENERATED_BY = "scripts/generate-config-doc-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/config-baseline.json";
 const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/config-baseline.jsonl";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
+const uiHintIndexCache = new WeakMap<
+  ConfigSchemaResponse["uiHints"],
+  Map<
+    number,
+    Array<{ path: string; parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>
+  >
+>();
+const schemaHasChildrenCache = new WeakMap<JsonSchemaObject, boolean>();
 
 function logConfigDocBaselineDebug(message: string): void {
   if (process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1") {
@@ -156,11 +164,77 @@ function resolveUiHintMatch(
   uiHints: ConfigSchemaResponse["uiHints"],
   path: string,
 ): ConfigSchemaResponse["uiHints"][string] | undefined {
-  return findWildcardHintMatch({
-    uiHints,
-    path,
-    splitPath: splitHintLookupPath,
-  })?.hint;
+  const targetParts = splitHintLookupPath(path);
+  if (targetParts.length === 0) {
+    return undefined;
+  }
+
+  let index = uiHintIndexCache.get(uiHints);
+  if (!index) {
+    index = new Map();
+    for (const [hintPath, hint] of Object.entries(uiHints)) {
+      const parts = splitHintLookupPath(hintPath);
+      const bucket = index.get(parts.length);
+      const entry = { path: hintPath, parts, hint };
+      if (bucket) {
+        bucket.push(entry);
+      } else {
+        index.set(parts.length, [entry]);
+      }
+    }
+    uiHintIndexCache.set(uiHints, index);
+  }
+
+  const candidates = index.get(targetParts.length);
+  if (!candidates) {
+    return undefined;
+  }
+
+  let bestMatch:
+    | {
+        hint: ConfigSchemaResponse["uiHints"][string];
+        wildcardCount: number;
+      }
+    | undefined;
+
+  for (const candidate of candidates) {
+    let wildcardCount = 0;
+    let matches = true;
+    for (let index = 0; index < candidate.parts.length; index += 1) {
+      const hintPart = candidate.parts[index];
+      const targetPart = targetParts[index];
+      if (hintPart === targetPart) {
+        continue;
+      }
+      if (hintPart === "*") {
+        wildcardCount += 1;
+        continue;
+      }
+      matches = false;
+      break;
+    }
+    if (!matches) {
+      continue;
+    }
+    if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
+      bestMatch = { hint: candidate.hint, wildcardCount };
+      if (wildcardCount === 0) {
+        break;
+      }
+    }
+  }
+
+  return bestMatch?.hint;
+}
+
+function resolveSchemaHasChildren(schema: JsonSchemaObject): boolean {
+  const cached = schemaHasChildrenCache.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const next = schemaHasChildren(schema);
+  schemaHasChildrenCache.set(schema, next);
+  return next;
 }
 
 function normalizeTypeValue(value: string | string[] | undefined): string | string[] | undefined {
@@ -269,7 +343,12 @@ function resolveFirstExistingPath(candidates: string[]): string | null {
 }
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
-  const [{ loadPluginManifestRegistry }, { buildConfigSchema }] = await Promise.all([
+  const [
+    { listChannelPluginCatalogEntries },
+    { loadPluginManifestRegistry },
+    { buildConfigSchema },
+  ] = await Promise.all([
+    import("../channels/plugins/catalog.js"),
     import("../plugins/manifest-registry.js"),
     import("./schema.js"),
   ]);
@@ -286,6 +365,12 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     env,
     config: {},
   });
+  const channelCatalogById = new Map(
+    listChannelPluginCatalogEntries({
+      workspaceDir: repoRoot,
+      env,
+    }).map((entry) => [entry.id, entry.meta] as const),
+  );
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledChannelPlugins = manifestRegistry.plugins.filter(
     (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
@@ -295,16 +380,20 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
       ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
           async (promise, plugin) => {
             const loaded = await promise;
+            const catalogMeta = channelCatalogById.get(plugin.id);
+            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
+            const description = catalogMeta?.blurb ?? plugin.description;
             loaded.push(
               (await loadChannelSurfaceMetadata(
                 plugin.rootDir,
                 plugin.id,
-                plugin.name ?? plugin.id,
+                label,
+                description,
                 repoRoot,
               )) ?? {
                 id: plugin.id,
-                label: plugin.name ?? plugin.id,
-                description: plugin.description,
+                label,
+                description,
                 configSchema: plugin.configSchema,
                 configUiHints: plugin.configUiHints,
               },
@@ -314,21 +403,26 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
           Promise.resolve([]),
         )
       : await Promise.all(
-          bundledChannelPlugins.map(
-            async (plugin) =>
+          bundledChannelPlugins.map(async (plugin) => {
+            const catalogMeta = channelCatalogById.get(plugin.id);
+            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
+            const description = catalogMeta?.blurb ?? plugin.description;
+            return (
               (await loadChannelSurfaceMetadata(
                 plugin.rootDir,
                 plugin.id,
-                plugin.name ?? plugin.id,
+                label,
+                description,
                 repoRoot,
               )) ?? {
                 id: plugin.id,
-                label: plugin.name ?? plugin.id,
-                description: plugin.description,
+                label,
+                description,
                 configSchema: plugin.configSchema,
                 configUiHints: plugin.configUiHints,
-              },
-          ),
+              }
+            );
+          }),
         );
   logConfigDocBaselineDebug(
     `loaded ${channelPlugins.length} bundled channel entries from channel surfaces`,
@@ -359,6 +453,7 @@ async function loadChannelSurfaceMetadata(
   rootDir: string,
   id: string,
   label: string,
+  description: string | undefined,
   repoRoot: string,
 ): Promise<ChannelSurfaceMetadata | null> {
   logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
@@ -386,6 +481,7 @@ async function loadChannelSurfaceMetadata(
     return {
       id,
       label,
+      description,
       configSchema: configSurface.schema,
       configUiHints: configSurface.uiHints as ConfigSchemaResponse["uiHints"] | undefined,
     };
@@ -431,7 +527,7 @@ export function collectConfigDocBaselineEntries(
       tags: [...(hint?.tags ?? [])].toSorted((left, right) => left.localeCompare(right)),
       label: hint?.label,
       help: hint?.help,
-      hasChildren: schemaHasChildren(schema),
+      hasChildren: resolveSchemaHasChildren(schema),
     });
   }
 
