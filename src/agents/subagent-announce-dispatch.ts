@@ -88,10 +88,7 @@ export async function runSubagentAnnounceDispatch(params: {
   }
 
   if (params.signal?.aborted) {
-    return withPhases({
-      delivered: false,
-      path: "none",
-    });
+    return withPhases(primaryDirect);
   }
 
   const fallbackQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
