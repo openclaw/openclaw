@@ -857,6 +857,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        usageWebhook: z
+          .object({
+            url: z.string().url(),
+            token: SecretInputSchema.optional().register(sensitive),
+            tokenHeader: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {
