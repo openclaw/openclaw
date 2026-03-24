@@ -82,7 +82,7 @@ fnm use 24
 ```
 
   <Warning>
-  Make sure your version manager is initialized in your shell startup file (`~/.zshrc` or `~/.bashrc`). If it isn't, `openclaw` may not be found in new terminal sessions because the PATH won't include Node's bin directory.
+  Make sure your version manager is initialized in **both** `~/.zshrc` (for interactive zsh sessions) **and** `~/.bashrc` (for bash sessions). This matters because the recommended install script runs under `bash` — if your version manager is only initialized in `~/.zshrc`, the installer won't see the fnm-managed Node and may fall back to a system-level npm prefix instead. If `~/.bashrc` doesn't exist yet, create it and add the initialization line there.
   </Warning>
 </Accordion>
 
