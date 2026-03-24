@@ -46,12 +46,18 @@ type ResolvedAgentConfig = {
 
 let defaultAgentWarned = false;
 
-export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+/** Returns all agent entries including disabled ones. Used by CLI listing and config operations. */
+export function listAllAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];
   }
   return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+}
+
+/** Returns only enabled agent entries. Agents with `enabled: false` are excluded. */
+export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+  return listAllAgentEntries(cfg).filter((entry) => entry.enabled !== false);
 }
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {

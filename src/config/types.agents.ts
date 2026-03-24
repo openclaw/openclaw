@@ -60,6 +60,9 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
+  /** When false, the agent is fully suspended: no routing, cron, heartbeat, or channel polling.
+   *  Omitting the field or setting it to true keeps the agent active. */
+  enabled?: boolean;
   default?: boolean;
   name?: string;
   workspace?: string;

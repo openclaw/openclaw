@@ -5,6 +5,8 @@ import {
   agentsBindingsCommand,
   agentsBindCommand,
   agentsDeleteCommand,
+  agentsDisableCommand,
+  agentsEnableCommand,
   agentsListCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
@@ -262,6 +264,40 @@ ${formatHelpExamples([
           {
             id: String(id),
             force: Boolean(opts.force),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("disable <id>")
+    .description(
+      "Temporarily disable an agent (stops routing, cron, heartbeat, and channel polling)",
+    )
+    .option("--json", "Output JSON summary", false)
+    .action(async (id, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsDisableCommand(
+          {
+            id: String(id),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("enable <id>")
+    .description("Re-enable a previously disabled agent")
+    .option("--json", "Output JSON summary", false)
+    .action(async (id, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsEnableCommand(
+          {
+            id: String(id),
             json: Boolean(opts.json),
           },
           defaultRuntime,

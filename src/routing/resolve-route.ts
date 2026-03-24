@@ -137,6 +137,10 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
     if (!rawId) {
       continue;
     }
+    if (agent.enabled === false) {
+      logDebug(`[routing] skipping disabled agent in lookup: ${rawId}`);
+      continue;
+    }
     byNormalizedId.set(normalizeAgentId(rawId), sanitizeAgentId(rawId));
   }
   const next: AgentLookupCache = {

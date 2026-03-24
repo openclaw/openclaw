@@ -3375,6 +3375,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 id: {
                   type: "string",
                 },
+                enabled: {
+                  type: "boolean",
+                },
                 default: {
                   type: "boolean",
                 },

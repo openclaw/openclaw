@@ -22,10 +22,11 @@ type AgentsListOptions = {
 
 function formatSummary(summary: AgentSummary) {
   const defaultTag = summary.isDefault ? " (default)" : "";
+  const disabledTag = !summary.enabled ? " [disabled]" : "";
   const header =
     summary.name && summary.name !== summary.id
-      ? `${summary.id}${defaultTag} (${summary.name})`
-      : `${summary.id}${defaultTag}`;
+      ? `${summary.id}${defaultTag}${disabledTag} (${summary.name})`
+      : `${summary.id}${defaultTag}${disabledTag}`;
 
   const identityParts = [];
   if (summary.identityEmoji) {

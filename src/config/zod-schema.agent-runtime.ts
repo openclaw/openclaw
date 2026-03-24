@@ -763,6 +763,7 @@ const AgentRuntimeSchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
+    enabled: z.boolean().optional(),
     default: z.boolean().optional(),
     name: z.string().optional(),
     workspace: z.string().optional(),
