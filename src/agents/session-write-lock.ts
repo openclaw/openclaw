@@ -63,6 +63,27 @@ type LockInspectionDetails = Pick<
   "pid" | "pidAlive" | "createdAt" | "ageMs" | "stale" | "staleReasons"
 >;
 
+function markFileHandleClosedSync(handle: fs.FileHandle): void {
+  const mutableHandle = handle as unknown as Record<PropertyKey, unknown>;
+  for (const key of Reflect.ownKeys(handle)) {
+    if (typeof key !== "symbol") {
+      continue;
+    }
+    const name = String(key);
+    if (name === "Symbol(kFd)") {
+      mutableHandle[key] = -1;
+      continue;
+    }
+    if (name === "Symbol(kRefs)") {
+      mutableHandle[key] = 0;
+      continue;
+    }
+    if (name === "Symbol(kClosePromise)") {
+      mutableHandle[key] = undefined;
+    }
+  }
+}
+
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 
 function resolveCleanupState(): CleanupState {
@@ -178,8 +199,9 @@ async function releaseHeldLock(
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
     try {
-      if (typeof held.handle.close === "function") {
-        void held.handle.close().catch(() => {});
+      if (typeof held.handle.fd === "number" && held.handle.fd >= 0) {
+        fsSync.closeSync(held.handle.fd);
+        markFileHandleClosedSync(held.handle);
       }
     } catch {
       // Ignore errors during cleanup - best effort
