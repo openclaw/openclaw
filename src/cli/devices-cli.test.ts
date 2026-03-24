@@ -471,14 +471,13 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 
-  it("passes env URL overrides through fallback auth resolution without using local fallback", async () => {
+  it("does not resolve local fallback auth for env URL override normal closures", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway closed (1000): no close reason"));
     buildGatewayConnectionDetails.mockReturnValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "env OPENCLAW_GATEWAY_URL",
       message: "",
     });
-    resolveGatewayCredentialsWithSecretInputs.mockResolvedValueOnce({});
     loadCurrentDeviceAuthStore.mockReturnValue({
       version: 1,
       deviceId: "device-1",
@@ -491,18 +490,13 @@ describe("devices cli local fallback", () => {
         },
       },
     });
-    verifyDeviceToken.mockResolvedValueOnce({ ok: true });
 
     await expect(runDevicesApprove(["req-latest"])).rejects.toThrow(
       "gateway closed (1000): no close reason",
     );
 
-    expect(resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        urlOverride: "ws://127.0.0.1:18789",
-        urlOverrideSource: "env",
-      }),
-    );
+    expect(resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
     expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 
@@ -723,6 +717,31 @@ describe("devices cli local fallback", () => {
       runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),
     ).rejects.toThrow("pairing required");
     expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve local approve auth before rejecting explicit --url normal closures", async () => {
+    callGateway.mockRejectedValueOnce(
+      new Error("gateway closed (1000 normal closure): no close reason"),
+    );
+    loadCurrentDeviceAuthStore.mockReturnValue({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "secret",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          updatedAtMs: 1,
+        },
+      },
+    });
+
+    await expect(
+      runDevicesApprove(["req-latest", "--url", "ws://127.0.0.1:18789"]),
+    ).rejects.toThrow("normal closure");
+
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
+    expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 });
 

@@ -201,12 +201,6 @@ async function shouldUseLocalPairingFallback(
   if (mode === "read" && isNormalClosureError && !isExplicitPairingError) {
     return false;
   }
-  if (mode === "mutate" && isNormalClosureError && !isExplicitPairingError) {
-    const resolvedFallbackAuth = fallbackAuth ?? (await resolveMutatingPairingFallbackAuth(opts));
-    if (resolvedFallbackAuth.suppressNormalClosureFallback) {
-      return false;
-    }
-  }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     // Explicit --url might point at a remote/tunneled gateway; never silently
     // switch to local pairing files in that case.
@@ -217,10 +211,19 @@ async function shouldUseLocalPairingFallback(
     return false;
   }
   try {
-    return isLoopbackHost(new URL(connection.url).hostname);
+    if (!isLoopbackHost(new URL(connection.url).hostname)) {
+      return false;
+    }
   } catch {
     return false;
   }
+  if (mode === "mutate" && isNormalClosureError && !isExplicitPairingError) {
+    const resolvedFallbackAuth = fallbackAuth ?? (await resolveMutatingPairingFallbackAuth(opts));
+    if (resolvedFallbackAuth.suppressNormalClosureFallback) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
@@ -269,14 +272,14 @@ async function approvePairingWithFallback(
   try {
     return await callGatewayCli("device.pair.approve", opts, { requestId });
   } catch (error) {
+    if (!(await shouldUseLocalPairingFallback(opts, error, "mutate"))) {
+      throw error;
+    }
     const message = normalizeErrorMessage(error).toLowerCase();
     const fallbackAuth =
       isNormalClosurePairingFallbackError(message) && !isExplicitPairingFallbackError(message)
         ? await resolveMutatingPairingFallbackAuth(opts)
         : undefined;
-    if (!(await shouldUseLocalPairingFallback(opts, error, "mutate", fallbackAuth))) {
-      throw error;
-    }
     if (opts.json !== true) {
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
