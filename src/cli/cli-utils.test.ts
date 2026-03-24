@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
-import { shouldSkipRespawnForArgv } from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
 
 const { registerDnsCli } = await import("./dns-cli.js");
@@ -18,21 +17,7 @@ describe("waitForever", () => {
   });
 });
 
-describe("shouldSkipRespawnForArgv", () => {
-  it("skips respawn for help/version calls", () => {
-    const cases = [
-      ["node", "openclaw", "--help"],
-      ["node", "openclaw", "-V"],
-    ] as const;
-    for (const argv of cases) {
-      expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-    }
-  });
-
-  it("keeps respawn path for normal commands", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "status"])).toBe(false);
-  });
-});
+// shouldSkipRespawnForArgv coverage lives in respawn-policy.test.ts
 
 describe("nodes canvas helpers", () => {
   it("parses canvas.snapshot payload", () => {

@@ -77,4 +77,19 @@ describe("shouldSkipRespawnForArgv", () => {
   it("skips for unknown commands (safe default)", () => {
     expect(shouldSkipRespawnForArgv(argv("some-future-command"))).toBe(true);
   });
+
+  describe("handles root options before command", () => {
+    it("respawns for --dev gateway", () => {
+      expect(shouldSkipRespawnForArgv(argv("--dev", "gateway"))).toBe(false);
+    });
+    it("respawns for --profile test memory search", () => {
+      expect(shouldSkipRespawnForArgv(argv("--profile", "test", "memory", "search"))).toBe(false);
+    });
+    it("skips for --dev config get", () => {
+      expect(shouldSkipRespawnForArgv(argv("--dev", "config", "get"))).toBe(true);
+    });
+    it("skips for --profile test pairing list", () => {
+      expect(shouldSkipRespawnForArgv(argv("--profile", "test", "pairing", "list"))).toBe(true);
+    });
+  });
 });
