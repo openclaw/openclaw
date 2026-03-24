@@ -7,6 +7,8 @@ type RegistryState = {
   registry: PluginRegistry | null;
   httpRouteRegistry: PluginRegistry | null;
   httpRouteRegistryPinned: boolean;
+  channelRegistry: PluginRegistry | null;
+  channelRegistryPinned: boolean;
   key: string | null;
   version: number;
 };
@@ -20,6 +22,8 @@ const state: RegistryState = (() => {
       registry: null,
       httpRouteRegistry: null,
       httpRouteRegistryPinned: false,
+      channelRegistry: null,
+      channelRegistryPinned: false,
       key: null,
       version: 0,
     };
@@ -31,6 +35,9 @@ export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: str
   state.registry = registry;
   if (!state.httpRouteRegistryPinned) {
     state.httpRouteRegistry = registry;
+  }
+  if (!state.channelRegistryPinned) {
+    state.channelRegistry = registry;
   }
   state.key = cacheKey ?? null;
   state.version += 1;
@@ -45,6 +52,9 @@ export function requireActivePluginRegistry(): PluginRegistry {
     state.registry = createEmptyPluginRegistry();
     if (!state.httpRouteRegistryPinned) {
       state.httpRouteRegistry = state.registry;
+    }
+    if (!state.channelRegistryPinned) {
+      state.channelRegistry = state.registry;
     }
     state.version += 1;
   }
@@ -91,6 +101,40 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
   return routeRegistry;
 }
 
+/** Pin the channel registry so that subsequent `setActivePluginRegistry` calls
+ *  do not replace the channel snapshot used by `getChannelPlugin`. Call at
+ *  gateway startup after the initial plugin load so that config-schema reads
+ *  and other non-primary registry loads cannot evict channel plugins. */
+export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
+  state.channelRegistry = registry;
+  state.channelRegistryPinned = true;
+}
+
+export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
+  if (registry && state.channelRegistry !== registry) {
+    return;
+  }
+  state.channelRegistryPinned = false;
+  state.channelRegistry = state.registry;
+}
+
+/** Return the registry that should be used for channel plugin resolution.
+ *  When pinned, this returns the startup registry regardless of subsequent
+ *  `setActivePluginRegistry` calls. */
+export function getActivePluginChannelRegistry(): PluginRegistry | null {
+  return state.channelRegistry ?? state.registry;
+}
+
+export function requireActivePluginChannelRegistry(): PluginRegistry {
+  const existing = getActivePluginChannelRegistry();
+  if (existing) {
+    return existing;
+  }
+  const created = requireActivePluginRegistry();
+  state.channelRegistry = created;
+  return created;
+}
+
 export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
@@ -103,6 +147,8 @@ export function resetPluginRuntimeStateForTest(): void {
   state.registry = null;
   state.httpRouteRegistry = null;
   state.httpRouteRegistryPinned = false;
+  state.channelRegistry = null;
+  state.channelRegistryPinned = false;
   state.key = null;
   state.version += 1;
 }

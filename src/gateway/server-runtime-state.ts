@@ -6,7 +6,9 @@ import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
@@ -99,6 +101,7 @@ export async function createGatewayRuntimeState(params: {
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
+  pinActivePluginChannelRegistry(params.pluginRegistry);
   try {
     let canvasHost: CanvasHostHandler | null = null;
     if (params.canvasHostEnabled) {
@@ -230,7 +233,10 @@ export async function createGatewayRuntimeState(params: {
 
     return {
       canvasHost,
-      releasePluginRouteRegistry: () => releasePinnedPluginHttpRouteRegistry(params.pluginRegistry),
+      releasePluginRouteRegistry: () => {
+        releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+        releasePinnedPluginChannelRegistry(params.pluginRegistry);
+      },
       httpServer,
       httpServers,
       httpBindHosts,
@@ -251,6 +257,7 @@ export async function createGatewayRuntimeState(params: {
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+    releasePinnedPluginChannelRegistry(params.pluginRegistry);
     throw err;
   }
 }
