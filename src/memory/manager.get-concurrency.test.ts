@@ -118,7 +118,7 @@ describe("memory manager cache hydration", () => {
     await secondManager?.close?.();
   });
 
-  it("caches status-only managers separately from full managers", async () => {
+  it("does not identity-cache status-only managers", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
     const cfg = createMemoryConcurrencyConfig(indexPath);
 
@@ -127,9 +127,10 @@ describe("memory manager cache hydration", () => {
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
-    expect(Object.is(second, first)).toBe(true);
+    expect(Object.is(second, first)).toBe(false);
     expect(hoisted.providerCreateCalls).toBe(0);
 
+    await second?.close?.();
     await first?.close?.();
   });
 });
