@@ -27,7 +27,11 @@ import {
 } from "../../../extensions/whatsapp/src/directory-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { LineProbeResult } from "../../plugin-sdk/line.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createMSTeamsTestPluginBase,
@@ -45,7 +49,7 @@ import {
   resolveChannelConfigWrites,
   resolveConfigWriteTargetFromPath,
 } from "./config-writes.js";
-import { listChannelPlugins } from "./index.js";
+import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import { loadChannelPlugin } from "./load.js";
 import { loadChannelOutboundAdapter } from "./outbound/load.js";
 import type { ChannelDirectoryEntry, ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
@@ -71,10 +75,12 @@ describe("channel plugin registry", () => {
   });
 
   beforeEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
 
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
 
@@ -112,6 +118,46 @@ describe("channel plugin registry", () => {
     setActivePluginRegistry(registry, "registry-test");
 
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["telegram"]);
+  });
+
+  it("keeps pinned channel lookups when the active registry changes later", () => {
+    const startupRegistry = createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createPlugin("telegram"),
+        source: "test",
+      },
+    ]);
+    const laterRegistry = createTestRegistry([]);
+
+    setActivePluginRegistry(startupRegistry, "channel-registry-startup");
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry, "channel-registry-later");
+
+    expect(getChannelPlugin("telegram")?.id).toBe("telegram");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["telegram"]);
+  });
+
+  it("refreshes cached channel lookups when the pinned registry is released", () => {
+    const startupRegistry = createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createPlugin("telegram"),
+        source: "test",
+      },
+    ]);
+    const laterRegistry = createTestRegistry([]);
+
+    setActivePluginRegistry(startupRegistry, "channel-registry-startup");
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry, "channel-registry-later");
+
+    expect(getChannelPlugin("telegram")?.id).toBe("telegram");
+
+    releasePinnedPluginChannelRegistry(startupRegistry);
+
+    expect(getChannelPlugin("telegram")).toBeUndefined();
+    expect(listChannelPlugins()).toEqual([]);
   });
 });
 
