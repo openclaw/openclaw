@@ -207,9 +207,7 @@ function createParallelToolCallsWrapper(
  * Without this, providers that follow the OpenAI Chat Completions spec
  * (e.g. Alibaba Bailian / DashScope) omit usage entirely in streaming mode.
  */
-function createOpenAIStreamUsageWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createOpenAIStreamUsageWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (model.api !== "openai-completions") {
