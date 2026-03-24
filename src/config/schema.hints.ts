@@ -6,7 +6,14 @@ import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const log = createSubsystemLogger("config/schema");
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+function getLog(): ReturnType<typeof createSubsystemLogger> {
+  if (!log) {
+    log = createSubsystemLogger("config/schema");
+  }
+  return log;
+}
 
 export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
@@ -198,7 +205,7 @@ export function mapSensitivePaths(
   if (isSensitive) {
     next[path] = { ...next[path], sensitive: true };
   } else if (isSensitiveConfigPath(path) && !next[path]?.sensitive) {
-    log.debug(`possibly sensitive key found: (${path})`);
+    getLog().debug(`possibly sensitive key found: (${path})`);
   }
 
   if (currentSchema instanceof z.ZodObject) {

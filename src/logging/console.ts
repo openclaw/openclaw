@@ -1,6 +1,6 @@
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
