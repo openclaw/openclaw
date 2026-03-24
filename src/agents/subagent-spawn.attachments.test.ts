@@ -240,6 +240,25 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it("keeps subagent attachments working and returns a note when attachMountPath is set", async () => {
+    const { spawnSubagentDirect } = await loadSubagentSpawnModule();
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachMountPath: "/tmp/openclaw-attach-test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+    });
+    expect(result.note).toContain(
+      "attachAs.mountPath is currently treated as a prompt hint only for runtime=subagent",
+    );
+  });
+
   it("removes materialized attachments when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {

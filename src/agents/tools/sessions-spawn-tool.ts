@@ -126,6 +126,10 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+      const attachMountPath =
+        params.attachAs && typeof params.attachAs === "object"
+          ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+          : undefined;
 
       if (streamTo && runtime !== "acp") {
         return jsonResult({
@@ -187,10 +191,7 @@ export function createSessionsSpawnTool(
           sandbox,
           expectsCompletionMessage: true,
           attachments,
-          attachMountPath:
-            params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
-              : undefined,
+          attachMountPath,
         },
         {
           agentSessionKey: opts?.agentSessionKey,

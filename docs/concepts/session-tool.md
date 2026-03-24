@@ -184,7 +184,7 @@ Parameters:
 - `cleanup?` (`delete|keep`, default `keep`)
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless the target child runtime is sandboxed)
 - `attachments?` (optional array of inline files; subagent runtime only, ACP rejects). Each entry: `{ name, content, encoding?: "utf8" | "base64", mimeType? }`. Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/`. Returns a receipt with sha256 per file.
-- `attachAs?` (optional; `{ mountPath? }` hint reserved for future mount implementations)
+- `attachAs?` (optional; `{ mountPath? }` hint reserved for future mount implementations; current subagent runtime passes it to the child as guidance only, still uses the default internal attachment path, and returns a note when `mountPath` is provided)
 
 Allowlist:
 

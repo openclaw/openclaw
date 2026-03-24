@@ -89,6 +89,8 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+export const SUBAGENT_ATTACH_MOUNT_PATH_NOTE =
+  "attachAs.mountPath is currently treated as a prompt hint only for runtime=subagent; attachments still stay in the default internal attachment path.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -166,6 +168,19 @@ function sanitizeMountPathHint(value?: string): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+function appendSpawnNote(base: string | undefined, extra: string | undefined): string | undefined {
+  if (base && extra) {
+    return `${base}\n\nNote: ${extra}`;
+  }
+  if (base) {
+    return base;
+  }
+  if (extra) {
+    return `Note: ${extra}`;
+  }
+  return undefined;
 }
 
 async function cleanupProvisionalSession(
@@ -338,6 +353,10 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
+  const attachMountPathIgnored =
+    Array.isArray(params.attachments) &&
+    params.attachments.length > 0 &&
+    Boolean(params.attachMountPath?.trim());
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -822,12 +841,16 @@ export async function spawnSubagentDirect(
   // because cron sessions end immediately after the agent produces a response,
   // so the agent needs to wait for subagent results to keep the turn alive.
   const isCronSession = isCronSessionKey(ctx.agentSessionKey);
-  const note =
+  const acceptedNote =
     spawnMode === "session"
       ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
       : isCronSession
         ? undefined
         : SUBAGENT_SPAWN_ACCEPTED_NOTE;
+  const note = appendSpawnNote(
+    acceptedNote,
+    attachMountPathIgnored ? SUBAGENT_ATTACH_MOUNT_PATH_NOTE : undefined,
+  );
 
   return {
     status: "accepted",

@@ -224,6 +224,43 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes attachAs.mountPath through and returns a note for subagent attachments", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:2",
+      runId: "run-subagent-2",
+      note: "Note: attachAs.mountPath is currently treated as a prompt hint only for runtime=subagent; attachments still stay in the default internal attachment path.",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-3a", {
+      runtime: "subagent",
+      task: "analyze file",
+      attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+      attachAs: { mountPath: "/tmp/openclaw-attach-test" },
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:2",
+      runId: "run-subagent-2",
+    });
+    const details = result.details as { note?: string };
+    expect(details.note).toContain(
+      "attachAs.mountPath is currently treated as a prompt hint only for runtime=subagent",
+    );
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+        attachMountPath: "/tmp/openclaw-attach-test",
+      }),
+      expect.any(Object),
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it('rejects streamTo when runtime is not "acp"', async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
