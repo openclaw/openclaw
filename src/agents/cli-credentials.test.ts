@@ -7,6 +7,7 @@ const execSyncMock = vi.fn();
 const execFileSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
+let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
 let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
 let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
@@ -56,6 +57,7 @@ describe("cli credentials", () => {
   beforeAll(async () => {
     ({
       readClaudeCliCredentialsCached,
+      readCodexCliCredentialsCached,
       resetCliCredentialCachesForTest,
       writeClaudeCliKeychainCredentials,
       writeClaudeCliCredentials,
@@ -291,5 +293,65 @@ describe("cli credentials", () => {
       provider: "openai-codex",
       expires: expSeconds * 1000,
     });
+  });
+
+  it("invalidates cached Codex credentials when auth.json changes within the TTL window", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
+    process.env.CODEX_HOME = tempHome;
+    const authPath = path.join(tempHome, "auth.json");
+    const firstExpiry = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    const secondExpiry = Math.floor(Date.parse("2026-03-25T12:34:56Z") / 1000);
+    try {
+      fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          tokens: {
+            access_token: createJwtWithExp(firstExpiry),
+            refresh_token: "stale-refresh",
+          },
+        }),
+        "utf8",
+      );
+      fs.utimesSync(authPath, new Date("2026-03-24T10:00:00Z"), new Date("2026-03-24T10:00:00Z"));
+      vi.setSystemTime(new Date("2026-03-24T10:00:00Z"));
+
+      const first = readCodexCliCredentialsCached({
+        ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+        platform: "linux",
+        execSync: execSyncMock,
+      });
+
+      expect(first).toMatchObject({
+        refresh: "stale-refresh",
+        expires: firstExpiry * 1000,
+      });
+
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          tokens: {
+            access_token: createJwtWithExp(secondExpiry),
+            refresh_token: "fresh-refresh",
+          },
+        }),
+        "utf8",
+      );
+      fs.utimesSync(authPath, new Date("2026-03-24T10:05:00Z"), new Date("2026-03-24T10:05:00Z"));
+      vi.advanceTimersByTime(60_000);
+
+      const second = readCodexCliCredentialsCached({
+        ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+        platform: "linux",
+        execSync: execSyncMock,
+      });
+
+      expect(second).toMatchObject({
+        refresh: "fresh-refresh",
+        expires: secondExpiry * 1000,
+      });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
