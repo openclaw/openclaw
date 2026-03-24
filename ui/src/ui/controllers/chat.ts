@@ -4,10 +4,6 @@ import { formatConnectError } from "../connect-error.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
@@ -91,13 +87,7 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
-    if (isMissingOperatorReadScopeError(err)) {
-      state.chatMessages = [];
-      state.chatThinkingLevel = null;
-      state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
-    } else {
-      state.lastError = String(err);
-    }
+    state.lastError = String(err);
   } finally {
     state.chatLoading = false;
   }
@@ -295,10 +285,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.state === "delta") {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
-      const current = state.chatStream ?? "";
-      if (!current || next.length >= current.length) {
-        state.chatStream = next;
-      }
+      // Always update stream content — length checks can cause blank UI when
+      // text processing (thinking tag stripping, etc.) reduces string length
+      state.chatStream = next;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
