@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
@@ -344,6 +347,121 @@ describe("subagent registry seam flow", () => {
         reason: "deleted",
         workspaceDir: undefined,
       });
+    });
+  });
+
+  it("loads runtime plugins before emitting killed subagent ended hooks", async () => {
+    const endedHookRunner = {
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded: mocks.runSubagentEnded,
+    };
+    mocks.getGlobalHookRunner.mockReturnValue(null);
+    mocks.ensureRuntimePluginsLoaded.mockImplementation(() => {
+      mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-killed-init",
+      childSessionKey: "agent:main:subagent:killed",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      task: "kill after init",
+      cleanup: "keep",
+      workspaceDir: "/tmp/killed-workspace",
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-init",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    await vi.waitFor(() => {
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+        config: {
+          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        workspaceDir: "/tmp/killed-workspace",
+        allowGatewaySubagentBinding: true,
+      });
+    });
+    expect(mocks.runSubagentEnded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: "agent:main:subagent:killed",
+        reason: "subagent-killed",
+        accountId: "acct-1",
+        runId: "run-killed-init",
+        outcome: "killed",
+        error: "manual kill",
+      }),
+      expect.objectContaining({
+        runId: "run-killed-init",
+        childSessionKey: "agent:main:subagent:killed",
+        requesterSessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("deletes killed delete-mode runs and notifies deleted cleanup", async () => {
+    mod.registerSubagentRun({
+      runId: "run-killed-delete",
+      childSessionKey: "agent:main:subagent:killed-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill and delete",
+      cleanup: "delete",
+      workspaceDir: "/tmp/killed-delete-workspace",
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-killed-delete"),
+    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:killed-delete",
+        reason: "deleted",
+        workspaceDir: "/tmp/killed-delete-workspace",
+      });
+    });
+  });
+
+  it("removes attachments for killed delete-mode runs", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-kill-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
+
+    mod.registerSubagentRun({
+      runId: "run-killed-delete-attachments",
+      childSessionKey: "agent:main:subagent:killed-delete-attachments",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill and delete attachments",
+      cleanup: "delete",
+      attachmentsDir,
+      attachmentsRootDir,
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete-attachments",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    await vi.waitFor(async () => {
+      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

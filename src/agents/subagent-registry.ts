@@ -1654,10 +1654,27 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        void safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
+      const cfg = loadConfig();
+      ensureRuntimePluginsLoaded({
+        config: cfg,
+        workspaceDir: entry.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,
