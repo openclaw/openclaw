@@ -53,6 +53,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -1195,6 +1196,10 @@ export async function startGatewayServer(
         baseMethods,
         logDiagnostics: false,
       }));
+      // Re-pin: the deferred reload replaces setup-entry channel objects with
+      // full runtime implementations. Update the pinned channel registry so
+      // getChannelPlugin() resolves against the complete set.
+      pinActivePluginChannelRegistry(pluginRegistry);
     }
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
