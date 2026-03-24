@@ -16,12 +16,8 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  computeBackoff,
-  createPerfTrace,
-  installRequestBodyLimitGuard,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
@@ -204,18 +200,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
-  const perfLog = (message: string) => runtime.log?.(message);
-  const startupPerf = createPerfTrace({
-    label: "slack.provider",
-    flags: ["slack.perf", "slack.perf.provider"],
-    cfg,
-    log: perfLog,
-    meta: {
-      accountId: account.accountId,
-      mode: slackMode,
-    },
-  });
-  startupPerf.mark("start");
   const signingSecret = normalizeResolvedSecretInputString({
     value: account.config.signingSecret,
     path: `channels.slack.accounts.${account.accountId}.signingSecret`,
@@ -320,10 +304,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
-  startupPerf.mark("bolt.app.ready", {
-    hasHttpReceiver: Boolean(receiver),
-    hasHttpHandler: Boolean(slackHttpHandler),
-  });
 
   let botUserId = "";
   let teamId = "";
@@ -334,14 +314,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botUserId = auth.user_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-    startupPerf.mark("auth.test.ok", {
-      botUserId,
-      teamId,
-      apiAppId,
-    });
   } catch {
     // auth test failing is non-fatal; message handler falls back to regex mentions.
-    startupPerf.mark("auth.test.failed");
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
@@ -384,11 +358,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     mediaMaxBytes,
     removeAckAfterReply,
   });
-  startupPerf.mark("context.ready", {
-    botUserId,
-    teamId,
-    channelConfigCount: Object.keys(channelsConfig ?? {}).length,
-  });
 
   // Wire up event liveness tracking: update lastEventAt on every inbound event
   // so the health monitor can detect "half-dead" sockets that pass health checks
@@ -403,9 +372,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
   await registerSlackMonitorSlashCommands({ ctx, account });
-  startupPerf.mark("handlers.ready", {
-    slashCommandEnabled: slashCommand.enabled,
-  });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -414,24 +380,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       accountId: account.accountId,
     });
   }
-  startupPerf.end({
-    webhookPath: slackMode === "http" ? slackWebhookPath : undefined,
-  });
 
   if (resolveToken) {
     void (async () => {
-      const resolvePerf = createPerfTrace({
-        label: "slack.provider.resolve",
-        flags: ["slack.perf", "slack.perf.provider", "slack.perf.resolve"],
-        cfg,
-        log: perfLog,
-        meta: {
-          accountId: account.accountId,
-        },
-      });
-      resolvePerf.mark("start");
       if (opts.abortSignal?.aborted) {
-        resolvePerf.end({ aborted: true });
         return;
       }
 
@@ -462,14 +414,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channels", mapping, unresolved, runtime);
-            resolvePerf.mark("channels.resolved", {
-              resolvedCount: mapping.length,
-              unresolvedCount: unresolved.length,
-            });
           }
         } catch (err) {
           runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
-          resolvePerf.fail("channels.resolve.error", err);
         }
       }
 
@@ -494,13 +441,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           allowFrom = mergeAllowlist({ existing: allowFrom, additions });
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
-          resolvePerf.mark("users.resolved", {
-            resolvedCount: mapping.length,
-            unresolvedCount: unresolved.length,
-          });
         } catch (err) {
           runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
-          resolvePerf.fail("users.resolve.error", err);
         }
       }
 
@@ -526,19 +468,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channel users", mapping, unresolved, runtime);
-            resolvePerf.mark("channel-users.resolved", {
-              resolvedCount: mapping.length,
-              unresolvedCount: unresolved.length,
-            });
           } catch (err) {
             runtime.log?.(
               `slack channel user resolve failed; using config entries. ${String(err)}`,
             );
-            resolvePerf.fail("channel-users.resolve.error", err);
           }
         }
       }
-      resolvePerf.end();
     })();
   }
 
@@ -553,25 +489,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
       while (!opts.abortSignal?.aborted) {
-        const socketPerf = createPerfTrace({
-          label: "slack.socket",
-          flags: ["slack.perf", "slack.perf.provider", "slack.perf.socket"],
-          cfg,
-          log: perfLog,
-          meta: {
-            accountId: account.accountId,
-            attempt: reconnectAttempts + 1,
-          },
-        });
-        socketPerf.mark("connect.start");
         try {
           await app.start();
           reconnectAttempts = 0;
           publishSlackConnectedStatus(opts.setStatus);
           runtime.log?.("slack socket mode connected");
-          socketPerf.mark("connect.ok");
         } catch (err) {
-          socketPerf.fail("connect.error", err);
           // Auth errors (account_inactive, invalid_auth, etc.) are permanent —
           // retrying will never succeed and blocks the entire gateway.  Fail fast.
           if (isNonRecoverableSlackAuthError(err)) {
@@ -605,14 +528,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
         const disconnect = await waitForSlackSocketDisconnect(app, opts.abortSignal);
         if (opts.abortSignal?.aborted) {
-          socketPerf.end({ aborted: true });
           break;
         }
         publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
-        socketPerf.end({
-          event: disconnect.event,
-          disconnectError: disconnect.error ? formatUnknownError(disconnect.error) : undefined,
-        });
 
         // Bail immediately on non-recoverable auth errors during reconnect too.
         if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
@@ -649,17 +567,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
-      perfLog(
-        `[perf:slack.provider] ${JSON.stringify({
-          trace: "slack.provider",
-          phase: "http.listening",
-          status: "mark",
-          pid: process.pid,
-          mode: "http",
-          accountId: account.accountId,
-          webhookPath: slackWebhookPath,
-        })}`,
-      );
       if (!opts.abortSignal?.aborted) {
         await new Promise<void>((resolve) => {
           opts.abortSignal?.addEventListener("abort", () => resolve(), {

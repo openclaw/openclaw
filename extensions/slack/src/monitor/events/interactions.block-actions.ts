@@ -5,7 +5,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { createPerfTrace, enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -718,97 +718,66 @@ async function handleSlackBlockAction(params: {
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body, action, respond } = params.args;
-  const perf = createPerfTrace({
-    label: "slack.interaction",
-    flags: ["slack.perf", "slack.perf.interaction"],
-    cfg: params.ctx.cfg,
-    log: (message) => params.ctx.runtime.log?.(message),
-    meta: {
-      accountId: params.ctx.accountId,
-    },
-  });
-  perf.mark("start");
-  try {
-    await ack();
-    perf.mark("ack.sent");
-    if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
-      params.ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
-      perf.end({ skipped: "mismatched-app-team" });
-      return;
-    }
-    const parsed = parseSlackBlockAction({
-      body,
-      action,
-      log: params.ctx.runtime.log,
-    });
-    if (!parsed) {
-      perf.end({ skipped: "parse-failed" });
-      return;
-    }
-    perf.mark("payload.parsed", {
-      actionId: parsed.actionId,
-      channelId: parsed.channelId,
-      messageTs: parsed.messageTs,
-      actionType: parsed.actionSummary.actionType,
-    });
-    const auth = await authorizeSlackBlockAction({
-      ctx: params.ctx,
-      parsed,
-      respond,
-    });
-    if (!auth.allowed) {
-      perf.end({ authorized: false });
-      return;
-    }
-    perf.mark("authorization.ok");
-    const pluginInteractionData = buildSlackPluginInteractionData({
-      actionId: parsed.actionId,
-      summary: parsed.actionSummary,
-    });
-    if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
-      const handledBindingApproval = await handleSlackPluginBindingApproval({
-        ctx: params.ctx,
-        parsed,
-        pluginInteractionData,
-        respond,
-      });
-      if (handledBindingApproval) {
-        perf.end({ handled: "binding-approval" });
-        return;
-      }
-    } else if (pluginInteractionData) {
-      const handled = await dispatchSlackPluginInteraction({
-        ctx: params.ctx,
-        parsed,
-        pluginInteractionData,
-        auth: {
-          isAuthorizedSender: true,
-        },
-        respond,
-      });
-      if (handled) {
-        perf.end({ handled: "plugin-interaction" });
-        return;
-      }
-      perf.mark("plugin.unhandled");
-    }
-    enqueueSlackBlockActionEvent({
-      ctx: params.ctx,
-      parsed,
-      auth,
-      formatSystemEvent: params.formatSystemEvent,
-    });
-    perf.mark("system-event.enqueued");
-    await updateSlackLegacyBlockAction({
-      ctx: params.ctx,
-      parsed,
-      respond,
-    });
-    perf.end({ handled: "legacy-confirmation" });
-  } catch (err) {
-    perf.fail("interaction.error", err);
-    throw err;
+  await ack();
+  if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
+    params.ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
+    return;
   }
+  const parsed = parseSlackBlockAction({
+    body,
+    action,
+    log: params.ctx.runtime.log,
+  });
+  if (!parsed) {
+    return;
+  }
+  const auth = await authorizeSlackBlockAction({
+    ctx: params.ctx,
+    parsed,
+    respond,
+  });
+  if (!auth.allowed) {
+    return;
+  }
+  const pluginInteractionData = buildSlackPluginInteractionData({
+    actionId: parsed.actionId,
+    summary: parsed.actionSummary,
+  });
+  if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
+    const handledBindingApproval = await handleSlackPluginBindingApproval({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      respond,
+    });
+    if (handledBindingApproval) {
+      return;
+    }
+  } else if (pluginInteractionData) {
+    const handled = await dispatchSlackPluginInteraction({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      auth: {
+        isAuthorizedSender: true,
+      },
+      respond,
+    });
+    if (handled) {
+      return;
+    }
+  }
+  enqueueSlackBlockActionEvent({
+    ctx: params.ctx,
+    parsed,
+    auth,
+    formatSystemEvent: params.formatSystemEvent,
+  });
+  await updateSlackLegacyBlockAction({
+    ctx: params.ctx,
+    parsed,
+    respond,
+  });
 }
 
 export function registerSlackBlockActionHandler(params: {

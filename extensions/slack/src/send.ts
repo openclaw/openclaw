@@ -2,7 +2,6 @@ import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
-  createPerfTrace,
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/infra-runtime";
@@ -281,147 +280,97 @@ export async function sendMessageSlack(
     throw new Error("Slack send requires text, blocks, or media");
   }
   const cfg = opts.cfg ?? loadConfig();
-  const perf = createPerfTrace({
-    label: "slack.send",
-    flags: ["slack.perf", "slack.perf.send"],
+  const account = resolveSlackAccount({
     cfg,
-    meta: {
-      to,
-      accountId: opts.accountId,
-      hasMedia: Boolean(opts.mediaUrl),
-      hasBlocks: Boolean(blocks?.length),
-      threadTs: opts.threadTs,
-    },
+    accountId: opts.accountId,
   });
-
-  perf.mark("start");
-  try {
-    const account = resolveSlackAccount({
-      cfg,
-      accountId: opts.accountId,
-    });
-    perf.mark("account.resolved", { resolvedAccountId: account.accountId });
-
-    const token = resolveToken({
-      explicit: opts.token,
-      accountId: account.accountId,
-      fallbackToken: account.botToken,
-      fallbackSource: account.botTokenSource,
-    });
-    const client = opts.client ?? createSlackWebClient(token);
-    perf.mark("client.ready", { reusedClient: Boolean(opts.client) });
-
-    const recipient = parseRecipient(to);
-    const { channelId, cacheHit } = await resolveChannelId(client, recipient, account.accountId);
-    perf.mark("channel.resolved", {
+  const token = resolveToken({
+    explicit: opts.token,
+    accountId: account.accountId,
+    fallbackToken: account.botToken,
+    fallbackSource: account.botTokenSource,
+  });
+  const client = opts.client ?? createSlackWebClient(token);
+  const recipient = parseRecipient(to);
+  const { channelId } = await resolveChannelId(client, recipient, account.accountId);
+  if (blocks) {
+    if (opts.mediaUrl) {
+      throw new Error("Slack send does not support blocks with mediaUrl");
+    }
+    const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const response = await postSlackMessageBestEffort({
+      client,
       channelId,
-      recipientKind: recipient.kind,
-      cacheHit,
+      text: fallbackText,
+      threadTs: opts.threadTs,
+      identity: opts.identity,
+      blocks,
     });
+    return {
+      messageId: response.ts ?? "unknown",
+      channelId,
+    };
+  }
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
+    fallbackLimit: SLACK_TEXT_LIMIT,
+  });
+  const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
+  const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
+  const markdownChunks =
+    chunkMode === "newline"
+      ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
+      : [trimmedMessage];
+  const chunks = markdownChunks.flatMap((markdown) =>
+    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
+  );
+  const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
+  const mediaMaxBytes =
+    typeof account.config.mediaMaxMb === "number"
+      ? account.config.mediaMaxMb * 1024 * 1024
+      : undefined;
 
-    if (blocks) {
-      if (opts.mediaUrl) {
-        throw new Error("Slack send does not support blocks with mediaUrl");
-      }
-      const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+  let lastMessageId = "";
+  if (opts.mediaUrl) {
+    const [firstChunk, ...rest] = resolvedChunks;
+    lastMessageId = await uploadSlackFile({
+      client,
+      channelId,
+      mediaUrl: opts.mediaUrl,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      caption: firstChunk,
+      threadTs: opts.threadTs,
+      maxBytes: mediaMaxBytes,
+    });
+    for (const chunk of rest) {
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: fallbackText,
+        text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
-        blocks,
       });
-      perf.end({
-        mode: "blocks",
-        blockCount: blocks.length,
-        messageId: response.ts ?? "unknown",
-      });
-      return {
-        messageId: response.ts ?? "unknown",
-        channelId,
-      };
+      lastMessageId = response.ts ?? lastMessageId;
     }
-
-    const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
-      fallbackLimit: SLACK_TEXT_LIMIT,
-    });
-    const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
-    const tableMode = resolveMarkdownTableMode({
-      cfg,
-      channel: "slack",
-      accountId: account.accountId,
-    });
-    const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
-    const markdownChunks =
-      chunkMode === "newline"
-        ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
-        : [trimmedMessage];
-    const chunks = markdownChunks.flatMap((markdown) =>
-      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-    );
-    const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
-    perf.mark("chunks.resolved", {
-      chunkMode,
-      chunkCount: resolvedChunks.length,
-      chunkLimit,
-    });
-
-    const mediaMaxBytes =
-      typeof account.config.mediaMaxMb === "number"
-        ? account.config.mediaMaxMb * 1024 * 1024
-        : undefined;
-
-    let lastMessageId = "";
-    if (opts.mediaUrl) {
-      const [firstChunk, ...rest] = resolvedChunks;
-      lastMessageId = await uploadSlackFile({
+  } else {
+    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
+      const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        mediaUrl: opts.mediaUrl,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        caption: firstChunk,
+        text: chunk,
         threadTs: opts.threadTs,
-        maxBytes: mediaMaxBytes,
+        identity: opts.identity,
       });
-      perf.mark("media.uploaded", {
-        captionChunk: Boolean(firstChunk),
-        followUpChunkCount: rest.length,
-      });
-      for (const chunk of rest) {
-        const response = await postSlackMessageBestEffort({
-          client,
-          channelId,
-          text: chunk,
-          threadTs: opts.threadTs,
-          identity: opts.identity,
-        });
-        lastMessageId = response.ts ?? lastMessageId;
-      }
-    } else {
-      for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
-        const response = await postSlackMessageBestEffort({
-          client,
-          channelId,
-          text: chunk,
-          threadTs: opts.threadTs,
-          identity: opts.identity,
-        });
-        lastMessageId = response.ts ?? lastMessageId;
-      }
+      lastMessageId = response.ts ?? lastMessageId;
     }
-
-    perf.end({
-      mode: opts.mediaUrl ? "media" : "text",
-      chunkCount: resolvedChunks.length,
-      messageId: lastMessageId || "unknown",
-    });
-    return {
-      messageId: lastMessageId || "unknown",
-      channelId,
-    };
-  } catch (err) {
-    perf.fail("send.error", err);
-    throw err;
   }
+
+  return {
+    messageId: lastMessageId || "unknown",
+    channelId,
+  };
 }

@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { createPerfTrace } from "../infra/perf-trace.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -41,49 +40,17 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const surface = finalized.Surface?.trim().toLowerCase() || undefined;
-  const provider = finalized.Provider?.trim().toLowerCase() || undefined;
-  const perf = createPerfTrace({
-    label: "reply.dispatch",
-    flags: [
-      "reply.perf",
-      "reply.dispatch.perf",
-      ...(surface ? [`${surface}.perf`, `${surface}.perf.reply`] : []),
-      ...(provider && provider !== surface ? [`${provider}.perf`, `${provider}.perf.reply`] : []),
-    ],
-    cfg: params.cfg,
-    meta: {
-      surface,
-      provider,
-      accountId: finalized.AccountId,
-      chatType: finalized.ChatType,
-      sessionKey: finalized.SessionKey,
-    },
+  return await withReplyDispatcher({
+    dispatcher: params.dispatcher,
+    run: () =>
+      dispatchReplyFromConfig({
+        ctx: finalized,
+        cfg: params.cfg,
+        dispatcher: params.dispatcher,
+        replyOptions: params.replyOptions,
+        replyResolver: params.replyResolver,
+      }),
   });
-
-  perf.mark("start");
-  try {
-    const result = await withReplyDispatcher({
-      dispatcher: params.dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: finalized,
-          cfg: params.cfg,
-          dispatcher: params.dispatcher,
-          replyOptions: params.replyOptions,
-          replyResolver: params.replyResolver,
-        }),
-    });
-    perf.end({
-      queuedFinal: result.queuedFinal,
-      finalCount: result.counts.final,
-      blockCount: result.counts.block,
-    });
-    return result;
-  } catch (err) {
-    perf.fail("dispatch.error", err);
-    throw err;
-  }
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
