@@ -712,9 +712,11 @@ function resumeSubagentRun(runId: string) {
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
-    logAnnounceGiveUp(entry, "retry-limit");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "retry-limit",
+    });
     return;
   }
   if (
@@ -722,9 +724,11 @@ function resumeSubagentRun(runId: string) {
     typeof entry.endedAt === "number" &&
     Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
-    logAnnounceGiveUp(entry, "expiry");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "expiry",
+    });
     return;
   }
 
@@ -1078,6 +1082,30 @@ async function finalizeSubagentCleanup(
   setTimeout(() => {
     resumeSubagentRun(runId);
   }, deferredDecision.resumeDelayMs).unref?.();
+}
+
+async function finalizeResumedAnnounceGiveUp(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: "retry-limit" | "expiry";
+}) {
+  params.entry.wakeOnDescendantSettle = undefined;
+  params.entry.fallbackFrozenResultText = undefined;
+  params.entry.fallbackFrozenResultCapturedAt = undefined;
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    await safeRemoveAttachmentsDir(params.entry);
+  }
+  const completionReason = resolveCleanupCompletionReason(params.entry);
+  await emitCompletionEndedHookIfNeeded(params.entry, completionReason);
+  logAnnounceGiveUp(params.entry, params.reason);
+  completeCleanupBookkeeping({
+    runId: params.runId,
+    entry: params.entry,
+    cleanup: params.entry.cleanup,
+    completedAt: Date.now(),
+  });
 }
 
 async function emitCompletionEndedHookIfNeeded(
