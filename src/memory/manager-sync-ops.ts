@@ -705,8 +705,7 @@ export abstract class MemoryManagerSyncOps {
       log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
       return;
     }
-    const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
-    const selectSourcePaths = this.db.prepare(`SELECT path FROM files WHERE source = ?`);
+    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
     );
@@ -744,6 +743,11 @@ export abstract class MemoryManagerSyncOps {
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
+    const existingRows = selectSourceFileState.all("memory") as Array<{
+      path: string;
+      hash: string;
+    }>;
+    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -755,8 +759,7 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = fileEntries.map((entry) => async () => {
-      const record = selectFileHash.get(entry.path, "memory") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
+      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -777,8 +780,7 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    const staleRows = selectSourcePaths.all("memory") as Array<{ path: string }>;
-    for (const stale of staleRows) {
+    for (const stale of existingRows) {
       if (activePaths.has(stale.path)) {
         continue;
       }
@@ -807,8 +809,7 @@ export abstract class MemoryManagerSyncOps {
       log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
       return;
     }
-    const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
-    const selectSourcePaths = this.db.prepare(`SELECT path FROM files WHERE source = ?`);
+    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
     );
@@ -835,6 +836,11 @@ export abstract class MemoryManagerSyncOps {
     const activePaths = targetSessionFiles
       ? null
       : new Set(files.map((file) => sessionPathForFile(file)));
+    const existingRows = selectSourceFileState.all("sessions") as Array<{
+      path: string;
+      hash: string;
+    }>;
+    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const indexAll =
       params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
@@ -876,8 +882,7 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const record = selectFileHash.get(entry.path, "sessions") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
+      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -906,8 +911,7 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const staleRows = selectSourcePaths.all("sessions") as Array<{ path: string }>;
-    for (const stale of staleRows) {
+    for (const stale of existingRows) {
       if (activePaths.has(stale.path)) {
         continue;
       }
