@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
@@ -56,6 +57,94 @@ type CdpTarget = {
   webSocketDebuggerUrl?: string;
   type?: string;
 };
+
+type ComparableUrlParts = {
+  exact: string;
+  origin: string;
+  pathname: string;
+};
+
+function traceOpenTabStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
+
+function normalizeComparableUrl(raw: string | undefined): ComparableUrlParts | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    return {
+      exact: url.toString(),
+      origin: url.origin,
+      pathname: url.pathname || "/",
+    };
+  } catch {
+    return {
+      exact: trimmed,
+      origin: "",
+      pathname: trimmed,
+    };
+  }
+}
+
+export function reconcileOpenedTabCandidate(params: {
+  createdTargetId: string;
+  requestedUrl?: string;
+  createdUrl?: string;
+  tabs: BrowserTab[];
+}): BrowserTab | null {
+  const pageTabs = params.tabs.filter((tab) => (tab.type ?? "page") === "page");
+  const created = pageTabs.find((tab) => tab.targetId === params.createdTargetId);
+  if (created) {
+    return created;
+  }
+
+  const candidateUrls = [params.createdUrl, params.requestedUrl]
+    .map((value) => normalizeComparableUrl(value))
+    .filter((value): value is ComparableUrlParts => value !== null);
+
+  for (const comparable of candidateUrls) {
+    const exactMatches = pageTabs.filter((tab) => {
+      const normalized = normalizeComparableUrl(tab.url);
+      return normalized?.exact === comparable.exact;
+    });
+    if (exactMatches.length === 1) {
+      return exactMatches[0] ?? null;
+    }
+  }
+
+  for (const comparable of candidateUrls) {
+    if (!comparable.origin) {
+      continue;
+    }
+    const originPathMatches = pageTabs.filter((tab) => {
+      const normalized = normalizeComparableUrl(tab.url);
+      return (
+        normalized?.origin === comparable.origin && normalized?.pathname === comparable.pathname
+      );
+    });
+    if (originPathMatches.length === 1) {
+      return originPathMatches[0] ?? null;
+    }
+  }
+
+  if (pageTabs.length === 1) {
+    return pageTabs[0] ?? null;
+  }
+
+  return null;
+}
 
 export function createProfileTabOps({
   profile,
@@ -136,6 +225,34 @@ export function createProfileTabOps({
     });
   };
 
+  const awaitOpenedTabResolution = async (params: {
+    createdTargetId: string;
+    requestedUrl: string;
+    createdUrl?: string;
+  }): Promise<BrowserTab | null> => {
+    const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+    while (Date.now() < deadline) {
+      const tabs = await listTabs().catch(() => [] as BrowserTab[]);
+      const resolved = reconcileOpenedTabCandidate({
+        createdTargetId: params.createdTargetId,
+        requestedUrl: params.requestedUrl,
+        createdUrl: params.createdUrl,
+        tabs,
+      });
+      if (resolved) {
+        traceOpenTabStage(
+          `browser-open-tab-resolved profile=${profile.name} createdTargetId=${params.createdTargetId} resolvedTargetId=${resolved.targetId}`,
+        );
+        return resolved;
+      }
+      await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
+    }
+    traceOpenTabStage(
+      `browser-open-tab-unresolved profile=${profile.name} createdTargetId=${params.createdTargetId}`,
+    );
+    return null;
+  };
+
   const openTab = async (url: string, timeoutMs?: number): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
@@ -187,19 +304,22 @@ export function createProfileTabOps({
       .catch(() => null);
 
     if (createdViaCdp) {
+      traceOpenTabStage(
+        `browser-open-tab-created profile=${profile.name} createdTargetId=${createdViaCdp} requestedUrl=${url}`,
+      );
+      const resolved = await awaitOpenedTabResolution({
+        createdTargetId: createdViaCdp,
+        requestedUrl: url,
+      });
+      if (resolved) {
+        const profileState = getProfileState();
+        profileState.lastTargetId = resolved.targetId;
+        await assertBrowserNavigationResultAllowed({ url: resolved.url, ...ssrfPolicyOpts });
+        triggerManagedTabLimit(resolved.targetId);
+        return resolved;
+      }
       const profileState = getProfileState();
       profileState.lastTargetId = createdViaCdp;
-      const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-      while (Date.now() < deadline) {
-        const tabs = await listTabs().catch(() => [] as BrowserTab[]);
-        const found = tabs.find((t) => t.targetId === createdViaCdp);
-        if (found) {
-          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-          triggerManagedTabLimit(found.targetId);
-          return found;
-        }
-        await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
-      }
       triggerManagedTabLimit(createdViaCdp);
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
@@ -225,18 +345,29 @@ export function createProfileTabOps({
     if (!created.id) {
       throw new Error("Failed to open tab (missing id)");
     }
-    const profileState = getProfileState();
-    profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
-    await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
-    triggerManagedTabLimit(created.id);
-    return {
-      targetId: created.id,
-      title: created.title ?? "",
-      url: resolvedUrl,
-      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
-      type: created.type,
-    };
+    traceOpenTabStage(
+      `browser-open-tab-created profile=${profile.name} createdTargetId=${created.id} requestedUrl=${url} createdUrl=${resolvedUrl}`,
+    );
+    const reconciled = await awaitOpenedTabResolution({
+      createdTargetId: created.id,
+      requestedUrl: url,
+      createdUrl: resolvedUrl,
+    });
+    const finalTab =
+      reconciled ??
+      ({
+        targetId: created.id,
+        title: created.title ?? "",
+        url: resolvedUrl,
+        wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
+        type: created.type,
+      } satisfies BrowserTab);
+    const profileState = getProfileState();
+    profileState.lastTargetId = finalTab.targetId;
+    await assertBrowserNavigationResultAllowed({ url: finalTab.url, ...ssrfPolicyOpts });
+    triggerManagedTabLimit(finalTab.targetId);
+    return finalTab;
   };
 
   return {
