@@ -29,7 +29,7 @@ import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
-  getSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -472,7 +472,7 @@ export async function killAllControlledSubagentRuns(params: {
     if (!childKey || seenChildSessionKeys.has(childKey)) {
       continue;
     }
-    const currentEntry = getSubagentRunByChildSessionKey(childKey);
+    const currentEntry = getLatestSubagentRunByChildSessionKey(childKey);
     if (!currentEntry || currentEntry.runId !== entry.runId) {
       continue;
     }
@@ -523,7 +523,7 @@ export async function killControlledSubagentRun(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
@@ -579,7 +579,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
   if (!targetSessionKey) {
     return { found: false as const, killed: false };
   }
-  const entry = getSubagentRunByChildSessionKey(targetSessionKey);
+  const entry = getLatestSubagentRunByChildSessionKey(targetSessionKey);
   if (!entry) {
     return { found: false as const, killed: false };
   }
@@ -669,7 +669,7 @@ export async function steerControlledSubagentRun(params: {
       error: "Subagents cannot steer themselves.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   const currentHasPendingDescendants =
     currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
   if (
@@ -814,7 +814,7 @@ export async function sendControlledSubagentMessage(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
-  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
   if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
