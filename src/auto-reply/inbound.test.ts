@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDiscordGroupRequireMention } from "../../extensions/discord/src/group-policy.js";
+import { resolveSlackGroupRequireMention } from "../../extensions/slack/src/group-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -786,6 +789,7 @@ describe("mention helpers", () => {
 
 describe("resolveGroupRequireMention", () => {
   it("respects Discord guild/channel requireMention settings", () => {
+    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
@@ -816,6 +820,7 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("respects Slack channel requireMention settings", () => {
+    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -840,7 +845,145 @@ describe("resolveGroupRequireMention", () => {
     expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
+  it("uses Slack fallback resolver semantics for default-account wildcard channels", () => {
+    resetPluginRuntimeStateForTest();
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+  });
+
+  it("matches the Slack plugin resolver for default-account wildcard fallbacks", () => {
+    resetPluginRuntimeStateForTest();
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
+      resolveSlackGroupRequireMention({
+        cfg,
+        groupId: groupResolution.id,
+        groupChannel: ctx.GroupSubject,
+      }),
+    );
+  });
+
+  it("uses Discord fallback resolver semantics for guild slug matches", () => {
+    resetPluginRuntimeStateForTest();
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "145": {
+              slug: "dev",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:123",
+      GroupChannel: "#general",
+      GroupSpace: "dev",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
+      channel: "discord",
+      id: "123",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+  });
+
+  it("matches the Discord plugin resolver for slug + wildcard guild fallbacks", () => {
+    resetPluginRuntimeStateForTest();
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "*": {
+              requireMention: false,
+              channels: {
+                help: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:999",
+      GroupChannel: "#help",
+      GroupSpace: "guild-slug",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:999",
+      channel: "discord",
+      id: "999",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
+      resolveDiscordGroupRequireMention({
+        cfg,
+        groupId: groupResolution.id,
+        groupChannel: ctx.GroupChannel,
+        groupSpace: ctx.GroupSpace,
+      }),
+    );
+  });
+
   it("respects LINE prefixed group keys in reply-stage requireMention resolution", () => {
+    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         line: {
@@ -865,6 +1008,7 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("preserves plugin-backed channel requireMention resolution", () => {
+    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         bluebubbles: {

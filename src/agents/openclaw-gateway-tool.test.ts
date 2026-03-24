@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async (method: string) => {
@@ -36,6 +35,43 @@ vi.mock("./tools/gateway.js", () => ({
   }),
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
+
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+
+async function loadFreshOpenClawToolsModuleForTest() {
+  vi.resetModules();
+  vi.doMock("./tools/gateway.js", () => ({
+    callGatewayTool: vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.schema.lookup") {
+        return {
+          path: "gateway.auth",
+          schema: {
+            type: "object",
+          },
+          hint: { label: "Gateway Auth" },
+          hintPath: "gateway.auth",
+          children: [
+            {
+              key: "token",
+              path: "gateway.auth.token",
+              type: "string",
+              required: true,
+              hasChildren: false,
+              hint: { label: "Token", sensitive: true },
+              hintPath: "gateway.auth.token",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }),
+    readGatewayCallOptions: vi.fn(() => ({})),
+  }));
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}
 
 function requireGatewayTool(agentSessionKey?: string) {
   const tool = createOpenClawTools({
@@ -72,6 +108,10 @@ function expectConfigMutationCall(params: {
 }
 
 describe("gateway tool", () => {
+  beforeEach(async () => {
+    await loadFreshOpenClawToolsModuleForTest();
+  });
+
   it("marks gateway as owner-only", async () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
