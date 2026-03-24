@@ -191,6 +191,23 @@ describe("buildBareSessionResetPromptForRun", () => {
     ).toBe(true);
   });
 
+  it("treats legacy bootstrap handlers as prompt-affecting", () => {
+    expect(
+      hasPromptAffectingBootstrapHooks({
+        workspaceDir: "/tmp/workspace",
+        cfg: {
+          hooks: {
+            internal: {
+              enabled: true,
+              handlers: [{ event: "agent:bootstrap", module: "hooks/bootstrap.ts" }],
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(hoisted.buildWorkspaceHookSnapshot).not.toHaveBeenCalled();
+  });
+
   it("skips preflight bootstrap resolution when another bootstrap hook is active", async () => {
     hoisted.buildWorkspaceHookSnapshot.mockReturnValueOnce({
       hooks: [{ name: "custom-bootstrap", events: ["agent:bootstrap"] }],

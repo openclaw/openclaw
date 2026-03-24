@@ -23,6 +23,16 @@ export function hasPromptAffectingBootstrapHooks(params: {
     return false;
   }
 
+  const legacyHandlers = params.cfg.hooks.internal.handlers ?? [];
+  if (
+    legacyHandlers.some((handler) => {
+      const event = handler.event.trim();
+      return event === "agent" || event === "agent:bootstrap";
+    })
+  ) {
+    return true;
+  }
+
   const snapshot = buildWorkspaceHookSnapshot(params.workspaceDir, {
     config: params.cfg,
   });

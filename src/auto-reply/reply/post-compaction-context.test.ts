@@ -448,6 +448,21 @@ Read WORKFLOW.md on startup.
       expect(result).not.toContain("injected sections below instead of rereading AGENTS.md");
     });
 
+    it("falls back to reread guidance when hook discovery fails", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      vi.spyOn(bootstrapPromptHooks, "hasPromptAffectingBootstrapHooks").mockImplementation(() => {
+        throw new Error("boom");
+      });
+
+      const result = await readPostCompactionContext(tmpDir);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain("Bootstrap inspection was unavailable");
+      expect(result).toContain("reread AGENTS.md before responding to the user");
+      expect(result).not.toContain("injected sections below instead of rereading AGENTS.md");
+    });
+
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
       // Older AGENTS.md templates use "Every Session" / "Safety" instead of
       // "Session Startup" / "Red Lines". Explicitly setting the defaults should

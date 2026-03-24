@@ -73,11 +73,11 @@ async function resolvePostCompactionBootstrapState(params: {
   sessionId?: string;
   agentId?: string;
 }): Promise<PostCompactionBootstrapState> {
-  if (hasPromptAffectingBootstrapHooks({ workspaceDir: params.workspaceDir, cfg: params.cfg })) {
-    return "customized";
-  }
-
   try {
+    if (hasPromptAffectingBootstrapHooks({ workspaceDir: params.workspaceDir, cfg: params.cfg })) {
+      return "customized";
+    }
+
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: params.workspaceDir,
       config: params.cfg,
