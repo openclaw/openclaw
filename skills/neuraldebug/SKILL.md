@@ -3,18 +3,14 @@ name: neuraldebug
 description: AI-powered debugging for software (8 languages) and LLM/transformer reasoning. Debug programs with natural language via real debuggers (GDB, LLDB, CDB, JDB, Delve, Node Inspector, rdbg). Debug LLM internals with Logit Lens, Attention Analysis, Probing, Activation Patching, and LoRA fine-tuning. Client-server architecture works with any AI agent.
 version: 0.1.0
 metadata:
-  openclaw:
-    requires:
-      bins:
-        - python3
-        - git
-    install:
-      - id: pip
-        kind: uv
-        package: "git+https://github.com/DennySun2020/DeepRhapsody.git"
-        label: "Install NeuralDebug (pip from GitHub)"
-    emoji: "🔍"
-    homepage: https://github.com/DennySun2020/DeepRhapsody
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["python3", "git"] },
+        "emoji": "🔍",
+      },
+  }
 ---
 
 # NeuralDebug
