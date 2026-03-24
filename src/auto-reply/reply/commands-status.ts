@@ -5,7 +5,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
+import {
+  countPendingDescendantRuns,
+  listSubagentRunsForRequester,
+} from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -188,7 +191,9 @@ export async function buildStatusReply(params: {
     const runs = listSubagentRunsForRequester(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
-      const active = runs.filter((entry) => !entry.endedAt);
+      const active = runs.filter(
+        (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+      );
       const done = runs.length - active.length;
       if (verboseEnabled) {
         const labels = active
