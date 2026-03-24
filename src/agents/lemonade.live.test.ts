@@ -1,16 +1,17 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { LEMONADE_DEFAULT_BASE_URL, LEMONADE_MODEL_PLACEHOLDER } from "./lemonade-defaults.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
-  isLiveTestEnabled,
 } from "./live-test-helpers.js";
 
 const LEMONADE_KEY = process.env.LEMONADE_API_KEY?.trim() || "lemonade-local";
 const LEMONADE_BASE_URL = process.env.LEMONADE_BASE_URL?.trim() || LEMONADE_DEFAULT_BASE_URL;
 const LEMONADE_MODEL = process.env.LEMONADE_MODEL?.trim() || LEMONADE_MODEL_PLACEHOLDER;
-const LIVE = isLiveTestEnabled(["LEMONADE_LIVE_TEST"]);
+// Lemonade requires a local server; don't enable on generic OPENCLAW_LIVE_TEST / LIVE flags.
+const LIVE = isTruthyEnvValue(process.env.LEMONADE_LIVE_TEST);
 
 const describeLive = LIVE ? describe : describe.skip;
 
