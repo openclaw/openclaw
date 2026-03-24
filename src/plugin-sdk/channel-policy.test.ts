@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GroupPolicy } from "../config/types.base.js";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+import type { GroupPolicy } from "../config/types.base.js";
 import { createRestrictSendersChannelSecurity } from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {

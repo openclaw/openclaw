@@ -288,7 +288,10 @@ export async function stopWindowsService({
   if (result.code !== 0 && !/service has not been started/i.test(detail)) {
     throw new Error(`sc stop failed: ${detail || "unknown error"}`.trim());
   }
-  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
+  await waitForServiceState(
+    serviceName,
+    (state) => state?.toLowerCase().includes("stopped") ?? false,
+  );
   stdout.write(`Stopped Windows service: ${serviceName}\n`);
 }
 
@@ -303,13 +306,19 @@ export async function restartWindowsService({
   if (stopResult.code !== 0 && !/service has not been started/i.test(stopDetail)) {
     throw new Error(`sc stop failed: ${stopDetail || "unknown error"}`.trim());
   }
-  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
+  await waitForServiceState(
+    serviceName,
+    (state) => state?.toLowerCase().includes("stopped") ?? false,
+  );
   const startResult = runWindowsCommand("sc.exe", ["start", serviceName]);
   if (startResult.code !== 0) {
     const detail = (startResult.stderr || startResult.stdout).trim();
     throw new Error(`sc start failed: ${detail || "unknown error"}`.trim());
   }
-  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("running") ?? false);
+  await waitForServiceState(
+    serviceName,
+    (state) => state?.toLowerCase().includes("running") ?? false,
+  );
   stdout.write(`Restarted Windows service: ${serviceName}\n`);
   return { outcome: "completed" };
 }
