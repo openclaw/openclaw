@@ -240,6 +240,44 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema tool policies", () => {
+  it("accepts groups toolsBySender with alsoAllow", () => {
+    const result = FeishuConfigSchema.parse({
+      groups: {
+        "*": {
+          tools: { allow: ["read"], deny: ["exec"] },
+          toolsBySender: {
+            "id:ou_owner": {
+              alsoAllow: ["fd_*"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.groups?.["*"]?.toolsBySender?.["id:ou_owner"]).toEqual({
+      alsoAllow: ["fd_*"],
+    });
+  });
+
+  it("rejects allow and alsoAllow in the same toolsBySender scope", () => {
+    const result = FeishuConfigSchema.safeParse({
+      groups: {
+        "*": {
+          toolsBySender: {
+            "id:ou_owner": {
+              allow: ["read"],
+              alsoAllow: ["exec"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

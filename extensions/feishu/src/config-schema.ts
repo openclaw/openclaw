@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { ToolPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
@@ -21,13 +22,7 @@ const FeishuDomainSchema = z.union([
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
 
-const ToolPolicySchema = z
-  .object({
-    allow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-  })
-  .strict()
-  .optional();
+const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const DmConfigSchema = z
   .object({
@@ -142,6 +137,7 @@ export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),

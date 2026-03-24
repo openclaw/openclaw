@@ -3,6 +3,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { resolveChannelGroupToolsPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
 import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -80,17 +81,17 @@ export function resolveFeishuGroupConfig(params: {
 export function resolveFeishuGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!cfg) {
-    return undefined;
-  }
-
-  const groupConfig = resolveFeishuGroupConfig({
-    cfg,
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "feishu",
     groupId: params.groupId,
+    accountId: params.accountId,
+    groupIdCaseInsensitive: true,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
-
-  return groupConfig?.tools;
 }
 
 export function isFeishuGroupAllowed(params: {
