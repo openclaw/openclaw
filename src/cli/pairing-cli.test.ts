@@ -44,6 +44,10 @@ vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadOpenClawPlugins: vi.fn(),
+}));
+
 describe("pairing cli", () => {
   let registerPairingCli: typeof import("./pairing-cli.js").registerPairingCli;
 
@@ -96,12 +100,16 @@ describe("pairing cli", () => {
     });
   }
 
-  it("evaluates pairing channels when registering the CLI (not at import)", async () => {
-    expect(listPairingChannels).not.toHaveBeenCalled();
-
+  it("defers pairing channel resolution to action time (not registration)", async () => {
     createProgram();
 
-    expect(listPairingChannels).toHaveBeenCalledTimes(1);
+    // listPairingChannels is not called at registration time.
+    expect(listPairingChannels).not.toHaveBeenCalled();
+
+    // It is called when an action runs.
+    listChannelPairingRequests.mockResolvedValueOnce([]);
+    await runPairing(["pairing", "list", "telegram"]);
+    expect(listPairingChannels).toHaveBeenCalled();
   });
 
   it.each([
