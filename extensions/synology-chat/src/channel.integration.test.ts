@@ -157,8 +157,8 @@ describe("Synology channel wiring integration", () => {
     const betaRes = makeRes();
     await betaRoute.handler(betaReq, betaRes);
 
-    expect(alphaRes._status).toBe(204);
-    expect(betaRes._status).toBe(204);
+    expect(alphaRes._status).toBe(200);
+    expect(betaRes._status).toBe(200);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     expect(finalizeInboundContextMock).toHaveBeenCalledTimes(2);
 
