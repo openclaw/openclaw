@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { HookRunner } from "../plugins/hooks.js";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
@@ -132,6 +133,7 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await Promise.resolve();
 
       await vi.waitFor(() => {
         expect(onBlockReply).toHaveBeenCalledTimes(1);
@@ -176,6 +178,7 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await Promise.resolve();
 
       await vi.waitFor(() => {
         expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
@@ -259,6 +262,120 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " files</think>\nFinal answer");
 
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes tagged reasoning text when message_end closes an open thinking hook", () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "thinking_start" || hookName === "thinking_end",
+      ),
+      runThinkingStart: vi.fn(),
+      runThinkingEnd: vi.fn(),
+    } as unknown as HookRunner;
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      hookRunner,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>Plan the fix");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<think>Plan the fix</think>Ship answer" }],
+      } as AssistantMessage,
+    });
+
+    expect(hookRunner.runThinkingStart).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runThinkingEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runThinkingEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Plan the fix" }),
+      expect.any(Object),
+    );
+  });
+
+  it("does not emit a second thinking_end when late text_end follows message_end fallback close", () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "thinking_start" || hookName === "thinking_end",
+      ),
+      runThinkingStart: vi.fn(),
+      runThinkingEnd: vi.fn(),
+    } as unknown as HookRunner;
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      hookRunner,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>Plan the fix");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<think>Plan the fix</think>Ship answer" }],
+      } as AssistantMessage,
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end", delta: "</think>" },
+    });
+
+    expect(hookRunner.runThinkingStart).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runThinkingEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate thinking hooks on empty text_end after single-chunk tagged reasoning", () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "thinking_start" || hookName === "thinking_end",
+      ),
+      runThinkingStart: vi.fn(),
+      runThinkingEnd: vi.fn(),
+    } as unknown as HookRunner;
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      hookRunner,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>Plan</think>Answer");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+
+    expect(hookRunner.runThinkingStart).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runThinkingEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits thinking agent events for plugin listeners without onReasoningStream", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>Plan");
+    emitAssistantTextDelta(emit, " more</think>Answer");
+
+    const thinkingEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as { stream?: unknown; data?: { text?: unknown; delta?: unknown } })
+      .filter((evt) => evt?.stream === "thinking");
+
+    expect(thinkingEvents.length).toBeGreaterThan(0);
+    expect(thinkingEvents.at(-1)?.data?.text).toBe("Reasoning:\n_Plan more_");
+    expect(typeof thinkingEvents.at(-1)?.data?.delta).toBe("string");
   });
 
   it("emits delta chunks in agent events for streaming assistant text", () => {

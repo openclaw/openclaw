@@ -27,6 +27,9 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     resolvePath(input: string) {
       return input;
     },
+    onAgentEvent() {
+      return () => {};
+    },
     on() {},
     ...api,
   };

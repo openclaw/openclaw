@@ -153,6 +153,38 @@ describe("agent-events sequencing", () => {
     expect(seen).toEqual(["run-safe"]);
   });
 
+  test("resolves session filters before listeners can clear run context", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-end", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+    });
+
+    const seen: string[] = [];
+    const stopClear = onAgentEvent((evt) => {
+      if (evt.runId === "run-hidden-end") {
+        clearAgentRunContext(evt.runId);
+      }
+    });
+    const stopFiltered = onAgentEvent(
+      (evt) => {
+        seen.push(String(evt.data.phase));
+      },
+      { sessionKey: "session-hidden" },
+    );
+
+    emitAgentEvent({
+      runId: "run-hidden-end",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    stopFiltered();
+    stopClear();
+
+    expect(seen).toEqual(["end"]);
+  });
+
   test("shares run context, listeners, and sequence state across duplicate module instances", async () => {
     const first = await importAgentEventsModule(`first-${Date.now()}`);
     const second = await importAgentEventsModule(`second-${Date.now()}`);

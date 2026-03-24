@@ -251,6 +251,17 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
+export function extractAssistantTextWithThinkingTags(msg: AssistantMessage): string {
+  return (
+    extractTextFromChatContent(msg.content, {
+      sanitizeText: (text) =>
+        stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))).trim(),
+      joinWith: "\n",
+      normalizeText: (text) => text.trim(),
+    }) ?? ""
+  );
+}
+
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";

@@ -34,6 +34,7 @@ export type ToolCallSummary = {
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
+  totalToolCallCount: number;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
@@ -54,6 +55,10 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
+  /** True once native thinking_start/thinking_delta/thinking_end events arrive,
+   *  used to suppress duplicate hooks from mirrored <think> tags in text deltas. */
+  nativeThinkingActive?: boolean;
+  thinkingStartedAt?: number;
   assistantMessageIndex: number;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
@@ -163,6 +168,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "totalToolCallCount"
 >;
 
 export type ToolHandlerContext = {

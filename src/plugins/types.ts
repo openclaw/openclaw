@@ -26,6 +26,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type { AgentEventPayload } from "../infra/agent-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -1374,6 +1375,24 @@ export type OpenClawPluginApi = {
     builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
   ) => void;
   resolvePath: (input: string) => string;
+  /**
+   * Subscribe to the real-time agent event stream.
+   * Receives all agent events (thinking deltas, tool start/result, assistant text,
+   * lifecycle phases) as they happen. Returns an unsubscribe function.
+   *
+   * For high-frequency events (thinking deltas, assistant text), prefer this over
+   * hooks. For lifecycle moments (tool complete, agent end), prefer `on()` hooks.
+   *
+   * @param listener - Callback invoked for each event.
+   * Plugin subscriptions are session-scoped. Pass the target `sessionKey`
+   * for the conversation you want to observe.
+   *
+   * @param filter - Required session filter.
+   */
+  onAgentEvent: (
+    listener: (evt: AgentEventPayload) => void,
+    filter: { sessionKey: string },
+  ) => () => void;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
     hookName: K,
@@ -1423,6 +1442,8 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "thinking_start"
+  | "thinking_end"
   | "gateway_start"
   | "gateway_stop";
 
@@ -1450,6 +1471,8 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "thinking_start",
+  "thinking_end",
   "gateway_start",
   "gateway_stop",
 ] as const satisfies readonly PluginHookName[];
@@ -1605,6 +1628,16 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /** Token usage totals for this agent run. */
+  tokenUsage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  /** Number of tool calls made during this agent run. */
+  toolCallCount?: number;
 };
 
 // Compaction hooks
@@ -1897,6 +1930,22 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// thinking_start hook
+export type PluginHookThinkingStartEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+};
+
+// thinking_end hook
+export type PluginHookThinkingEndEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Full thinking/reasoning text. */
+  text?: string;
+  /** Duration of the thinking phase in milliseconds. */
+  durationMs?: number;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -1998,6 +2047,14 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  thinking_start: (
+    event: PluginHookThinkingStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  thinking_end: (
+    event: PluginHookThinkingEndEvent,
+    ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
 };
 

@@ -8,6 +8,7 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
@@ -996,6 +997,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         registerMemoryPromptSection(builder);
       },
       resolvePath: (input: string) => resolveUserPath(input),
+      onAgentEvent:
+        registrationMode === "full"
+          ? (listener: (evt: AgentEventPayload) => void, filter: { sessionKey: string }) => {
+              const sk = filter?.sessionKey?.trim();
+              if (!sk) {
+                throw new Error("api.onAgentEvent requires a non-empty sessionKey filter");
+              }
+              return onAgentEvent(listener, { sessionKey: sk });
+            }
+          : () => () => {},
       on: (hookName, handler, opts) =>
         registrationMode === "full"
           ? registerTypedHook(record, hookName, handler, opts, params.hookPolicy)

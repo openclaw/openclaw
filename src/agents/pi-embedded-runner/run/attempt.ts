@@ -2602,6 +2602,7 @@ export async function runEmbeddedAttempt(
       const {
         assistantTexts,
         toolMetas,
+        getTotalToolCallCount,
         unsubscribe,
         waitForCompactionRetry,
         isCompactionInFlight,
@@ -3083,6 +3084,7 @@ export async function runEmbeddedAttempt(
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
+          const usage = getUsageTotals?.();
           hookRunner
             .runAgentEnd(
               {
@@ -3090,6 +3092,16 @@ export async function runEmbeddedAttempt(
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
+                tokenUsage: usage
+                  ? {
+                      input: usage.input ?? 0,
+                      output: usage.output ?? 0,
+                      cacheRead: usage.cacheRead ?? 0,
+                      cacheWrite: usage.cacheWrite ?? 0,
+                      total: usage.total ?? 0,
+                    }
+                  : undefined,
+                toolCallCount: getTotalToolCallCount(),
               },
               {
                 agentId: hookAgentId,

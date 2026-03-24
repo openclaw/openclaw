@@ -40,6 +40,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
+    totalToolCallCount: 0,
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
     lastToolError: undefined,
@@ -140,6 +141,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
+    state.nativeThinkingActive = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
@@ -392,6 +394,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let inThinking = state.thinking;
+    // Track whether thinking was entered during this call (for single-chunk detection).
+    // Reset each call so it only reflects the current stripBlockTags invocation.
+    (state as { thinkingTransitioned?: boolean }).thinkingTransitioned = false;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (codeSpans.isInside(idx)) {
@@ -401,6 +406,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         processed += text.slice(lastIndex, idx);
       }
       const isClose = match[1] === "/";
+      if (!isClose && !inThinking) {
+        // Opening tag outside code spans — mark that thinking was entered
+        (state as { thinkingTransitioned?: boolean }).thinkingTransitioned = true;
+      }
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
@@ -565,9 +574,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    if (!state.streamReasoning || !params.onReasoningStream) {
-      return;
-    }
     const formatted = formatReasoningMessage(text);
     if (!formatted) {
       return;
@@ -582,14 +588,24 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastStreamedReasoning = formatted;
 
     // Broadcast thinking event to WebSocket clients in real-time
-    emitAgentEvent({
+    const payload = {
       runId: params.runId,
       stream: "thinking",
       data: {
         text: formatted,
         delta,
       },
+    } as const;
+
+    emitAgentEvent(payload);
+    void params.onAgentEvent?.({
+      stream: payload.stream,
+      data: payload.data,
     });
+
+    if (!state.streamReasoning || !params.onReasoningStream) {
+      return;
+    }
 
     void params.onReasoningStream({
       text: formatted,
@@ -693,6 +709,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   return {
     assistantTexts,
     toolMetas,
+    getTotalToolCallCount: () => state.totalToolCallCount,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
