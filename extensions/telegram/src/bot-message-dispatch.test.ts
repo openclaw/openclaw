@@ -2515,4 +2515,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api.editForumTopic).not.toHaveBeenCalled();
   });
+
+  // Regression test for: final answer text dropped when reasoning delivery is
+  // skipped in a combined <think>…</think>answer payload after a tool boundary.
+  //
+  // Scenario:
+  //   Turn 1: onReasoningStream fires (marks reasoningLane.hasStreamedMessage=true),
+  //           then final deliver is answer-only. The answer segment processing sets
+  //           activePreviewLifecycleByLane.reasoning="complete".
+  //   Turn 2: final deliver contains "<think>…</think>answer". The reasoning segment
+  //           delivery is "skipped" (lifecycle="complete", sendPayload returns false),
+  //           so reasoningStatus stays "hinted" and the answer segment is buffered.
+  //           Without the fix, the early `return` at line 686 exits before flushing
+  //           the buffer, silently dropping the answer.
+  it("delivers final answer text when reasoning delivery is skipped in combined think-tag payload after tool boundary", async () => {
+    setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Turn 1: reasoning stream sets hasStreamedMessage on the reasoning lane.
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_step one_" });
+        // Turn 1 final: answer-only payload. The answer segment processing marks
+        // activePreviewLifecycleByLane.reasoning="complete" because hasStreamedMessage is true.
+        await dispatcherOptions.deliver({ text: "Here is my answer" }, { kind: "final" });
+        // Tool boundary: resets reasoningStatus to "none", rotates answer lane.
+        await replyOptions?.onAssistantMessageStart?.();
+        // Turn 2 final: combined reasoning+answer. Reasoning delivery is "skipped"
+        // (lifecycle="complete", sendPayload fails), leaving the answer buffered.
+        await dispatcherOptions.deliver(
+          { text: "<think>step two</think>final answer text" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    // sendPayload calls deliverReplies. Returning { delivered: false } causes the
+    // reasoning segment delivery to return "skipped", triggering the buffer path.
+    deliverReplies.mockResolvedValue({ delivered: false });
+    // editMessageTelegram is used for preview-based delivery (both turns).
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+    // The buffered final answer must be delivered — fix calls flushBufferedFinalAnswer()
+    // before the early return in the segment loop.
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "final answer text",
+      expect.any(Object),
+    );
+  });
 });
