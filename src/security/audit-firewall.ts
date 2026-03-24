@@ -81,7 +81,7 @@ export function readUfwConfEnabled(): boolean | null {
       if (trimmed.startsWith("#")) {
         continue;
       }
-      const match = trimmed.match(/^ENABLED\s*=\s*(.+)$/i);
+      const match = trimmed.match(/^ENABLED\s*=\s*([^\s#]+)/i);
       if (match) {
         return match[1].trim().toLowerCase() === "yes";
       }

@@ -154,6 +154,11 @@ describe("readUfwConfEnabled", () => {
     expect(readUfwConfEnabled()).toBeNull();
   });
 
+  it("ignores inline comments after the value", () => {
+    readFileSyncMock.mockReturnValue("ENABLED=yes # some comment\n");
+    expect(readUfwConfEnabled()).toBe(true);
+  });
+
   it("returns null when ENABLED key is absent", () => {
     readFileSyncMock.mockReturnValue("# Some other config\nLOGLEVEL=low\n");
     expect(readUfwConfEnabled()).toBeNull();
