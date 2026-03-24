@@ -53,6 +53,16 @@ beforeEach(async () => {
   } = await import("./client/config.js"));
   credentialsReadModule = await import("./credentials-read.js");
   sdkModule = await import("./sdk.js");
+
+vi.mock("matrix-js-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("matrix-js-sdk")>();
+  return {
+    ...actual,
+    createClient: vi.fn(() => ({
+      // Minimal stub — auth tests spy on MatrixClient.prototype.doRequest
+      // rather than exercising the underlying js-sdk client.
+    })),
+  };
 });
 
 describe("resolveMatrixConfig", () => {
