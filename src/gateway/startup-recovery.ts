@@ -71,8 +71,13 @@ function isUnanswered(entry: SessionEntry, agentId?: string): boolean {
 
 /**
  * Check the session's JSONL transcript to see if the last message
- * entry is from the assistant. Reads only the tail of the file
- * for efficiency.
+ * entry is a successfully completed assistant response. Reads only
+ * the tail of the file for efficiency.
+ *
+ * Returns false (allowing recovery) when the assistant's last turn
+ * ended with an error (e.g. stopReason="error", CLI exit code 143
+ * from SIGTERM), because the run was interrupted mid-task and the
+ * response was never fully delivered.
  */
 function transcriptShowsAssistantLast(entry: SessionEntry, agentId?: string): boolean {
   const sessionFile =
@@ -97,10 +102,24 @@ function transcriptShowsAssistantLast(entry: SessionEntry, agentId?: string): bo
     try {
       const parsed = JSON.parse(line) as {
         type?: string;
-        message?: { role?: string };
+        message?: { role?: string; stopReason?: string };
       };
       if (parsed.type === "message" && parsed.message?.role) {
-        return parsed.message.role === "assistant";
+        if (parsed.message.role !== "assistant") {
+          return false;
+        }
+        // If the assistant turn ended with an error (e.g. process
+        // killed by SIGTERM during a restart), the run was
+        // interrupted and the response is incomplete. Allow
+        // recovery so the agent can pick up where it left off.
+        if (parsed.message.stopReason === "error") {
+          logVerbose(
+            "startup-recovery: last assistant message has " +
+              'stopReason="error"; treating as interrupted run',
+          );
+          return false;
+        }
+        return true;
       }
     } catch {
       continue;

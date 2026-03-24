@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 
@@ -271,6 +272,52 @@ describe("runStartupRecovery", () => {
 
     // Should NOT dispatch again — the session is already answered.
     expect(dispatchInboundMessageWithDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("recovers sessions where transcript ends with an errored assistant message", async () => {
+    // Simulates gateway crash mid-run: the agent sent a partial
+    // acknowledgment (which was written to the transcript) but the
+    // process was killed (SIGTERM → stopReason="error") before the
+    // run completed. The transcript fallback should NOT mark this as
+    // answered because the run was interrupted.
+    const now = Date.now();
+    const sessionId = "interrupted-session";
+    const transcript = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "update my calendar" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Let me update the calendar..." }],
+          stopReason: "error",
+          errorMessage: "CLI exited with code 143",
+        },
+      }),
+    ].join("\n");
+
+    const readSpy = vi.spyOn(fs, "readFileSync").mockReturnValue(transcript);
+
+    vi.mocked(loadSessionStore).mockReturnValue({
+      alice: makeEntry({
+        sessionId,
+        lastUserMessageAt: now - 5000,
+        lastUserMessageText: "update my calendar",
+        deliveryContext: { channel: "discord", to: "456" },
+      }),
+    });
+    const log = makeLog();
+
+    await runStartupRecovery({ cfg: baseCfg, log });
+
+    expect(dispatchInboundMessageWithDispatcher).toHaveBeenCalledOnce();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("recovered 1 unanswered session"),
+    );
+
+    readSpy.mockRestore();
   });
 
   it("skips sessions where lastUserMessageAt equals lastAgentResponseAt", async () => {
