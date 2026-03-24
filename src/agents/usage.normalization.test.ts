@@ -34,6 +34,20 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("normalizes Ollama prompt/eval count usage", () => {
+    const usage = normalizeUsage({
+      prompt_eval_count: 26,
+      eval_count: 259,
+    });
+    expect(usage).toEqual({
+      input: 26,
+      output: 259,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

@@ -316,6 +316,25 @@ function makeResponseObject(
   };
 }
 
+function makeResponseObjectWithUsage(id: string, usage: Record<string, number>): ResponseObject {
+  return {
+    id,
+    object: "response",
+    created_at: Date.now(),
+    status: "completed",
+    model: "gpt-5.2",
+    output: [
+      {
+        type: "message",
+        id: "item_usage",
+        role: "assistant",
+        content: [{ type: "output_text", text: "ok" }],
+      },
+    ],
+    usage: usage as unknown as ResponseObject["usage"],
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test suite
 // ─────────────────────────────────────────────────────────────────────────────
@@ -649,6 +668,18 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.input).toBe(100);
     expect(msg.usage.output).toBe(50);
     expect(msg.usage.totalTokens).toBe(150);
+  });
+
+  it("maps OpenAI-compatible prompt/completion usage aliases", () => {
+    const response = makeResponseObjectWithUsage("resp_5b", {
+      prompt_tokens: 11,
+      completion_tokens: 1,
+      total_tokens: 12,
+    });
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(11);
+    expect(msg.usage.output).toBe(1);
+    expect(msg.usage.totalTokens).toBe(12);
   });
 
   it("sets model/provider/api from modelInfo", () => {

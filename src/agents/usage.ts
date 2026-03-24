@@ -15,6 +15,8 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  prompt_eval_count?: number;
+  eval_count?: number;
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
@@ -94,7 +96,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens ??
+      raw.prompt_eval_count,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -102,7 +109,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      raw.eval_count,
   );
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
