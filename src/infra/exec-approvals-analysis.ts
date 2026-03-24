@@ -11,7 +11,9 @@ export {
   resolveAllowlistCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolvePolicyAllowlistCandidatePath,
   type CommandResolution,
+  type ExecutableResolution,
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 

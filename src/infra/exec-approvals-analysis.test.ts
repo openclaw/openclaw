@@ -7,6 +7,7 @@ import {
   analyzeShellCommand,
   buildEnforcedShellCommand,
   buildSafeBinsShellCommand,
+  resolvePlannedSegmentArgv,
 } from "./exec-approvals-analysis.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
@@ -69,6 +70,31 @@ describe("exec approvals shell analysis", () => {
       expect(res.ok).toBe(true);
       expect(res.command).toMatch(/'(?:[^']*\/)?rg' '-n' 'needle'/);
       expect(res.command).not.toContain("'env'");
+    });
+
+    it("keeps shell multiplexer rebuilds as coherent execution argv", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const busybox = path.join(dir, "busybox");
+      fs.writeFileSync(busybox, "");
+      fs.chmodSync(busybox, 0o755);
+
+      const analysis = analyzeArgvCommand({
+        argv: [busybox, "sh", "-lc", "echo hi"],
+        cwd: dir,
+        env: { PATH: `/bin:/usr/bin${path.delimiter}${process.env.PATH ?? ""}` },
+      });
+      expect(analysis.ok).toBe(true);
+      const segment = analysis.segments[0];
+      if (!segment) {
+        throw new Error("expected first segment");
+      }
+
+      const planned = resolvePlannedSegmentArgv(segment);
+      expect(planned).toEqual([segment.resolution?.resolvedPath, "-lc", "echo hi"]);
+      expect(planned?.[0]).not.toBe(busybox);
     });
   });
 

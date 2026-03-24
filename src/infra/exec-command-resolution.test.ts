@@ -9,6 +9,7 @@ import {
   resolveAllowlistCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolvePolicyAllowlistCandidatePath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -154,7 +155,7 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.executableName).toBe(fixture.exeName);
   });
 
-  it("keeps shell multiplexer wrappers as the trusted executable target", () => {
+  it("keeps shell multiplexer wrappers as a separate policy target", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -164,11 +165,13 @@ describe("exec-command-resolution", () => {
     fs.chmodSync(busybox, 0o755);
 
     const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
-    expect(resolution?.rawExecutable).toBe(busybox);
+    expect(resolution?.rawExecutable).toBe("sh");
     expect(resolution?.effectiveArgv).toEqual(["sh", "-lc", "echo hi"]);
     expect(resolution?.wrapperChain).toEqual(["busybox"]);
-    expect(resolution?.resolvedPath).toBe(busybox);
-    expect(resolution?.executableName.toLowerCase()).toContain("busybox");
+    expect(resolution?.policyResolution?.rawExecutable).toBe(busybox);
+    expect(resolution?.policyResolution?.resolvedPath).toBe(busybox);
+    expect(resolvePolicyAllowlistCandidatePath(resolution ?? null, dir)).toBe(busybox);
+    expect(resolution?.executableName.toLowerCase()).toContain("sh");
   });
 
   it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {

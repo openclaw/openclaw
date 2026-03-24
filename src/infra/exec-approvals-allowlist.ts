@@ -5,6 +5,7 @@ import {
   matchAllowlist,
   resolveAllowlistCandidatePath,
   resolveCommandResolutionFromArgv,
+  resolvePolicyAllowlistCandidatePath,
   splitCommandChain,
   type ExecCommandAnalysis,
   type CommandResolution,
@@ -221,11 +222,12 @@ function evaluateSegments(
         : segment.argv;
     const allowlistSegment =
       effectiveArgv === segment.argv ? segment : { ...segment, argv: effectiveArgv };
-    const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+    const executableResolution = segment.resolution?.policyResolution ?? segment.resolution;
+    const candidatePath = resolvePolicyAllowlistCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
-      candidatePath && segment.resolution
-        ? { ...segment.resolution, resolvedPath: candidatePath }
-        : segment.resolution;
+      candidatePath && executableResolution
+        ? { ...executableResolution, resolvedPath: candidatePath }
+        : executableResolution;
     const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
     const inlineCommand = extractShellWrapperInlineCommand(allowlistSegment.argv);
     const shellPositionalArgvCandidatePath = resolveShellWrapperPositionalArgvCandidatePath({
