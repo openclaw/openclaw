@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -105,6 +106,63 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   openaiWsWarmup?: boolean;
 };
+type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+
+function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+  return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
+}
+
+function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
+  return Object.hasOwn(settings, "transport");
+}
+
+export function resolvePreparedExtraParams(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+}): Record<string, unknown> {
+  const resolvedExtraParams = resolveExtraParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const override =
+    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
+      ? Object.fromEntries(
+          Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+        )
+      : undefined;
+  const merged = Object.assign({}, resolvedExtraParams, override);
+  return (
+    providerRuntimeDeps.prepareProviderExtraParams({
+      provider: params.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        extraParams: merged,
+        thinkingLevel: params.thinkingLevel,
+      },
+    }) ?? merged
+  );
+}
+
+export function resolveAgentTransportOverride(params: {
+  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  effectiveExtraParams: Record<string, unknown> | undefined;
+}): SupportedTransport | undefined {
+  const globalSettings = params.settingsManager.getGlobalSettings();
+  const projectSettings = params.settingsManager.getProjectSettings();
+  if (hasExplicitTransportSetting(globalSettings) || hasExplicitTransportSetting(projectSettings)) {
+    return undefined;
+  }
+  return resolveSupportedTransport(params.effectiveExtraParams?.transport);
+}
 
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
@@ -122,11 +180,14 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
-  const transport = extraParams.transport;
-  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+  const transport = resolveSupportedTransport(extraParams.transport);
+  if (transport) {
     streamParams.transport = transport;
-  } else if (transport != null) {
-    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+  } else if (extraParams.transport != null) {
+    const transportSummary =
+      typeof extraParams.transport === "string"
+        ? extraParams.transport
+        : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
@@ -216,7 +277,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
   workspaceDir?: string,
-): void {
+): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
@@ -229,19 +290,14 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, resolvedExtraParams, override);
-  const effectiveExtraParams =
-    providerRuntimeDeps.prepareProviderExtraParams({
-      provider,
-      config: cfg,
-      context: {
-        config: cfg,
-        provider,
-        modelId,
-        extraParams: merged,
-        thinkingLevel,
-      },
-    }) ?? merged;
+  const effectiveExtraParams = resolvePreparedExtraParams({
+    cfg,
+    provider,
+    modelId,
+    extraParamsOverride,
+    thinkingLevel,
+    agentId,
+  });
 
   if (provider === "openai" || provider === "openai-codex") {
     if (provider === "openai") {
@@ -371,4 +427,6 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
+
+  return { effectiveExtraParams };
 }
