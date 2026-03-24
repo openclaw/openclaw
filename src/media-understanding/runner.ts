@@ -377,6 +377,7 @@ async function resolveKeyEntry(params: {
   };
 
   // Helper to check all providers in registry for a given capability
+  // Skips auth check for plugin media providers - they may be keyless
   const checkAllRegistryProviders = async (
     cap: MediaUnderstandingCapability,
   ): Promise<MediaUnderstandingModelConfig | null> => {
@@ -392,12 +393,10 @@ async function resolveKeyEntry(params: {
       if (!hasCapability) {
         continue;
       }
-      // Use default model for image capability
+      // Skip auth check for registry providers - they may be keyless plugins
+      // Just return the provider entry directly (auth will be resolved at execution)
       const model = cap === "image" ? DEFAULT_IMAGE_MODELS[providerId] : undefined;
-      const entry = await checkProvider(providerId, model);
-      if (entry) {
-        return entry;
-      }
+      return { type: "provider" as const, provider: providerId, model };
     }
     return null;
   };

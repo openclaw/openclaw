@@ -251,7 +251,7 @@ Common registration methods:
 | `registerTool`                       | Agent tool           |                                        |
 | `registerHook` / `on(...)`           | Lifecycle hooks      |                                        |
 | `registerSpeechProvider`             | Text-to-speech / STT | Legacy; use `registerProvider` instead |
-| `registerMediaUnderstandingProvider` | Image/audio analysis | Legacy; use `registerProvider instead  |
+| `registerMediaUnderstandingProvider` | Image/audio analysis | Legacy; use `registerProvider` instead |
 | `registerImageGenerationProvider`    | Image generation     |                                        |
 | `registerWebSearchProvider`          | Web search           |                                        |
 | `registerHttpRoute`                  | HTTP endpoint        |                                        |

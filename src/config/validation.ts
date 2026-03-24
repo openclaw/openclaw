@@ -529,10 +529,10 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryProviders.has(provider)) {
       return;
     }
-    // Warn about unknown providers - capability validation happens at runtime
-    warnings.push({
+    // Reject unknown providers - catches typos and enforces validation
+    issues.push({
       path: _path,
-      message: `memorySearch provider "${provider}" is not a known built-in; plugin capability will be validated at runtime`,
+      message: `unknown memorySearch provider: ${provider}`,
     });
   };
 
@@ -544,10 +544,10 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryFallbacks.has(fallback)) {
       return;
     }
-    // Warn about unknown fallbacks - capability validation happens at runtime
-    warnings.push({
+    // Reject unknown fallbacks - catches typos and enforces validation
+    issues.push({
       path: _path,
-      message: `memorySearch fallback "${fallback}" is not a known built-in; plugin capability will be validated at runtime`,
+      message: `unknown memorySearch fallback: ${fallback}`,
     });
   };
 

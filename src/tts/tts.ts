@@ -764,7 +764,8 @@ export async function synthesizeSpeech(params: {
     ? normalizeSpeechProviderId(primaryProvider)
     : undefined;
 
-  const builtinSet = new Set<string>(TTS_PROVIDERS.map((p) => p.toLowerCase()));
+  // Include both canonical forms (edge normalizes to microsoft)
+  const builtinSet = new Set<string>([...TTS_PROVIDERS.map((p) => p.toLowerCase()), "microsoft"]);
   const customPlugins: string[] = [];
   for (const [, pluginProvider] of pluginTtsRegistry) {
     if (pluginProvider.id !== normalizedPrimary && !builtinSet.has(pluginProvider.id)) {
