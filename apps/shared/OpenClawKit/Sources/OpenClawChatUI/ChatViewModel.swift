@@ -60,6 +60,9 @@ public final class OpenClawChatViewModel {
     private var nextThinkingSelectionRequestID: UInt64 = 0
     private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestThinkingLevelsBySession: [String: String] = [:]
+    private var isCompacting = false
+    private var lastCompactAt: Date?
+    private let compactCooldown: TimeInterval = 60
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -630,9 +633,26 @@ public final class OpenClawChatViewModel {
     }
 
     private func performCompact() async {
+        guard !self.isCompacting else { return }
+        guard !self.isSending, self.pendingRuns.isEmpty, !self.isAborting else {
+            self.errorText = "Wait for the current response before compacting the session."
+            return
+        }
+        if let lastCompactAt,
+           Date().timeIntervalSince(lastCompactAt) < self.compactCooldown
+        {
+            self.errorText = "Please wait before compacting this session again."
+            return
+        }
+
+        self.isCompacting = true
+        self.lastCompactAt = Date()
         self.isLoading = true
         self.errorText = nil
-        defer { self.isLoading = false }
+        defer {
+            self.isLoading = false
+            self.isCompacting = false
+        }
 
         do {
             try await self.transport.compactSession(sessionKey: self.sessionKey)
