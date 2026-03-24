@@ -3,9 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { clearConfigCache, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
@@ -21,6 +20,8 @@ vi.mock("../agents/cli-credentials.js", () => ({
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -35,7 +36,6 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   afterAll(async () => {
@@ -44,7 +44,11 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
+    ({ clearConfigCache } = await import("../config/config.js"));
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
     resolveProviderUsageAuthWithPluginMock.mockReset();

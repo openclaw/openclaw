@@ -259,7 +259,7 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("does not retry gateway timeout for externally delivered completion announces", async () => {
+  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
     vi.useFakeTimers();
     try {
       callGatewayImpl = async (request) => {
@@ -269,20 +269,20 @@ describe("subagent announce timeout config", () => {
         throw new Error("gateway timeout after 90000ms");
       };
 
-      await expect(
-        runAnnounceFlowForTest("run-completion-timeout-no-retry", {
-          requesterOrigin: {
-            channel: "telegram",
-            to: "12345",
-          },
-          expectsCompletionMessage: true,
-        }),
-      ).resolves.toBe(false);
+      const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
+        requesterOrigin: {
+          channel: "telegram",
+          to: "12345",
+        },
+        expectsCompletionMessage: true,
+      });
+      await vi.runAllTimersAsync();
+      await expect(announcePromise).resolves.toBe(false);
 
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
       );
-      expect(directAgentCalls).toHaveLength(1);
+      expect(directAgentCalls).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
@@ -482,7 +482,7 @@ describe("subagent announce timeout config", () => {
     ).toBeUndefined();
   });
 
-  it("prefers NO_REPLY partial progress over a longer latest assistant reply", async () => {
+  it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
       { role: "user", content: "do something" },
       {
@@ -508,8 +508,11 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toContain(
+      "A longer partial summary that should stay silent.",
+    );
   });
 });

@@ -253,7 +253,13 @@ beforeEach(async () => {
   FOLLOWUP_TEST_QUEUES.clear();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  clearFollowupQueue("main");
+  FOLLOWUP_TEST_QUEUES.clear();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  const { clearSessionStoreCacheForTest } = await import("../../config/sessions/store.js");
+  clearSessionStoreCacheForTest();
   if (!FOLLOWUP_DEBUG) {
     return;
   }
@@ -261,6 +267,10 @@ afterEach(() => {
     ._getActiveHandles?.()
     .map((handle) => handle?.constructor?.name ?? typeof handle);
   debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
+  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
+    ._getActiveRequests?.()
+    .map((request) => request?.constructor?.name ?? typeof request);
+  debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>

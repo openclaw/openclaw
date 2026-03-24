@@ -161,6 +161,7 @@ describe("announce loop guard (#18264)", () => {
         createdAt: now - 15 * 60_000,
         startedAt: now - 14 * 60_000,
         endedAt: now - 10 * 60_000,
+        cleanupCompletedAt: undefined,
         announceRetryCount: 3,
         lastAnnounceRetryAt: now - 9 * 60_000,
       }),
@@ -177,11 +178,12 @@ describe("announce loop guard (#18264)", () => {
         createdAt: now - 2 * 60_000,
         startedAt: now - 90_000,
         endedAt: now - 60_000,
+        cleanupCompletedAt: undefined,
         announceRetryCount: 3,
         lastAnnounceRetryAt: now - 30_000,
       }),
     },
-  ])("$name", ({ createEntry }) => {
+  ])("$name", async ({ createEntry }) => {
     announceFn.mockClear();
     registry.resetSubagentRegistryForTests();
 
@@ -190,6 +192,8 @@ describe("announce loop guard (#18264)", () => {
 
     // Initialization attempts resume once, then gives up for exhausted entries.
     registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(announceFn).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeDefined();

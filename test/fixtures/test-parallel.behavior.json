@@ -12,6 +12,10 @@
       {
         "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
+      },
+      {
+        "file": "src/auto-reply/reply/followup-runner.test.ts",
+        "reason": "This followup-runner suite is green under direct base-thread runs but can hang when targeted through the wrapper's default base fork lane; pin it to base threads so wrapper-targeted reruns match the stable raw-threads behavior."
       }
     ]
   },
