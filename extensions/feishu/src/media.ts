@@ -15,11 +15,12 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
 /**
- * Parse audio duration in milliseconds using music-metadata.
+ * Parse media duration in milliseconds using music-metadata.
+ * Works for both audio and video containers (e.g. mp4/mov).
  * Returns undefined if parsing fails (graceful degradation — Feishu will
  * still accept the upload, just without a seek bar in the player).
  */
-async function parseAudioDurationMs(
+async function parseMediaDurationMs(
   buffer: Buffer,
   options?: { fileName?: string; contentType?: string },
 ): Promise<number | undefined> {
@@ -30,10 +31,10 @@ async function parseAudioDurationMs(
       { duration: true, skipCovers: true },
     );
     const seconds = metadata.format.duration;
-    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
       return undefined;
     }
-    return Math.round(seconds * 1000);
+    return Math.max(0, Math.round(seconds * 1000));
   } catch {
     return undefined;
   }
@@ -657,7 +658,7 @@ export async function sendMediaFeishu(params: {
   } else {
     const duration =
       routing.msgType === "audio" || routing.msgType === "media"
-        ? await parseAudioDurationMs(buffer, { fileName: name, contentType })
+        ? await parseMediaDurationMs(buffer, { fileName: name, contentType })
         : undefined;
     const { fileKey } = await uploadFileFeishu({
       cfg,
