@@ -39,4 +39,17 @@ describe("parseSlashCommand", () => {
       args: "",
     });
   });
+
+  it("includes shared /tools with shared arg hints", () => {
+    const tools = SLASH_COMMANDS.find((entry) => entry.name === "tools");
+    expect(tools).toMatchObject({
+      description: "List available runtime tools.",
+      argOptions: ["compact", "verbose"],
+      executeLocal: false,
+    });
+    expect(parseSlashCommand("/tools verbose")).toMatchObject({
+      command: { name: "tools" },
+      args: "verbose",
+    });
+  });
 });
