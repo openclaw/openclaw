@@ -8,6 +8,7 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { resolveDiscordRestFetch } from "./monitor/rest-fetch.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -30,8 +31,9 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(token: string, rest?: RequestClient, proxyFetch?: typeof fetch) {
+  if (rest) return rest;
+  return proxyFetch ? new RequestClient(token, { fetch: proxyFetch }) : new RequestClient(token);
 }
 
 function resolveAccountWithoutToken(params: {
@@ -67,7 +69,14 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
+  // When no pre-built RequestClient is provided, honour the proxy config so
+  // all Discord REST calls route through the configured HTTP(S) proxy.
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch =
+    !opts.rest && proxyUrl
+      ? resolveDiscordRestFetch(proxyUrl, { log: () => {}, error: () => {}, exit: () => {} })
+      : undefined;
+  const rest = resolveRest(token, opts.rest, proxyFetch);
   return { token, rest, account };
 }
 
