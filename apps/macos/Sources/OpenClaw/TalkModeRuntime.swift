@@ -451,17 +451,21 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
-        do {
-            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+        if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+            do {
                 try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
-            } else {
-                try await self.playSystemVoice(input: input)
+            } catch {
+                self.ttsLogger
+                    .error(
+                        "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
+                            "falling back to system voice")
+                do {
+                    try await self.playSystemVoice(input: input)
+                } catch {
+                    self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        } catch {
-            self.ttsLogger
-                .error(
-                    "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                        "falling back to system voice")
+        } else {
             do {
                 try await self.playSystemVoice(input: input)
             } catch {
