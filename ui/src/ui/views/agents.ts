@@ -318,6 +318,7 @@ export function renderAgents(props: AgentsProps) {
                         error: props.channels.error,
                         lastSuccess: props.channels.lastSuccess,
                         onRefresh: props.onChannelsRefresh,
+                        onSelectPanel: props.onSelectPanel,
                       })
                     : nothing
                 }
@@ -338,6 +339,7 @@ export function renderAgents(props: AgentsProps) {
                         error: props.cron.error,
                         onRefresh: props.onCronRefresh,
                         onRunNow: props.onCronRunNow,
+                        onSelectPanel: props.onSelectPanel,
                       })
                     : nothing
                 }

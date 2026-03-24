@@ -18,9 +18,14 @@ import type {
   CronStatus,
 } from "../types.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import type { AgentsPanel } from "./agents.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
 
-function renderAgentContextCard(context: AgentContext, subtitle: string) {
+function renderAgentContextCard(
+  context: AgentContext,
+  subtitle: string,
+  onSelectPanel: (panel: AgentsPanel) => void,
+) {
   return html`
     <section class="card">
       <div class="card-title">Agent Context</div>
@@ -28,7 +33,14 @@ function renderAgentContextCard(context: AgentContext, subtitle: string) {
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
-          <div class="mono">${context.workspace}</div>
+          <div>
+            <button
+              type="button"
+              class="workspace-link mono"
+              @click=${() => onSelectPanel("files")}
+              title="Open Files tab"
+            >${context.workspace}</button>
+          </div>
         </div>
         <div class="agent-kv">
           <div class="label">Primary Model</div>
@@ -140,6 +152,7 @@ export function renderAgentChannels(params: {
   error: string | null;
   lastSuccess: number | null;
   onRefresh: () => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const entries = resolveChannelEntries(params.snapshot);
   const lastSuccessLabel = params.lastSuccess
@@ -147,7 +160,7 @@ export function renderAgentChannels(params: {
     : "never";
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.")}
+      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.", params.onSelectPanel)}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -247,11 +260,12 @@ export function renderAgentCron(params: {
   error: string | null;
   onRefresh: () => void;
   onRunNow: (jobId: string) => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.")}
+      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.", params.onSelectPanel)}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
