@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
+
 /**
  * Compute SHA-256 CSP hashes for inline `<script>` blocks in an HTML string.
  * Only scripts without a `src` attribute are considered inline.
@@ -24,57 +26,9 @@ export function computeInlineScriptHashes(html: string): string[] {
 }
 
 function hasScriptSrcAttribute(openTag: string): boolean {
-  let i = openTag.search(/\bscript\b/i);
-  if (i < 0) {
-    return false;
-  }
-  i += "script".length;
-  while (i < openTag.length) {
-    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
-      i += 1;
-    }
-    const current = openTag[i];
-    if (!current || current === ">") {
-      return false;
-    }
-    if (current === "/") {
-      i += 1;
-      continue;
-    }
-    const nameStart = i;
-    while (i < openTag.length && /[^\s=/>]/.test(openTag[i] ?? "")) {
-      i += 1;
-    }
-    const attributeName = openTag.slice(nameStart, i).toLowerCase();
-    if (attributeName === "src") {
-      return true;
-    }
-    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
-      i += 1;
-    }
-    if ((openTag[i] ?? "") !== "=") {
-      continue;
-    }
-    i += 1;
-    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
-      i += 1;
-    }
-    const quote = openTag[i];
-    if (quote === '"' || quote === "'") {
-      i += 1;
-      while (i < openTag.length && openTag[i] !== quote) {
-        i += 1;
-      }
-      if (openTag[i] === quote) {
-        i += 1;
-      }
-      continue;
-    }
-    while (i < openTag.length && /[^\s>]/.test(openTag[i] ?? "")) {
-      i += 1;
-    }
-  }
-  return false;
+  return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
+    (match) => (match[1] ?? "").toLowerCase() === "src",
+  );
 }
 
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
