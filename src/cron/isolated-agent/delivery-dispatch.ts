@@ -542,7 +542,7 @@ export async function dispatchCronDelivery(
         status: "ok",
         summary,
         outputText,
-        delivered: true,
+        delivered: false,
         ...params.telemetry,
       });
     }
