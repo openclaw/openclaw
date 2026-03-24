@@ -108,7 +108,38 @@ function extractMessage(message: proto.IMessage | undefined): proto.IMessage | u
 }
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessage(message);
+  let normalized = normalizeMessage(message);
+  if (!normalized) {
+    return undefined;
+  }
+  // Generic FutureProofMessage unwrap for wrappers that Baileys'
+  // normalizeMessageContent doesn't handle yet (e.g. botInvokeMessage,
+  // groupMentionedMessage). These wrappers have shape { message: IMessage }.
+  // Iterate up to 3 times to handle nested wrappers.
+  for (let i = 0; i < 3; i++) {
+    const contentType = getMessageContentType(normalized);
+    if (!contentType) {
+      break;
+    }
+    const value = (normalized as Record<string, unknown>)[contentType];
+    if (
+      value &&
+      typeof value === "object" &&
+      "message" in value &&
+      (value as { message?: unknown }).message &&
+      typeof (value as { message: unknown }).message === "object"
+    ) {
+      const inner = normalizeMessage((value as { message: proto.IMessage }).message);
+      if (inner) {
+        const innerType = getMessageContentType(inner);
+        if (innerType && innerType !== contentType) {
+          normalized = inner;
+          continue;
+        }
+      }
+    }
+    break;
+  }
   return normalized;
 }
 
@@ -145,12 +176,21 @@ function extractContextInfo(message: proto.IMessage | undefined): proto.IContext
     if (!value || typeof value !== "object") {
       continue;
     }
-    if (!("contextInfo" in value)) {
-      continue;
+    if ("contextInfo" in value) {
+      const candidateContext = (value as { contextInfo?: proto.IContextInfo }).contextInfo;
+      if (candidateContext) {
+        return candidateContext;
+      }
     }
-    const candidateContext = (value as { contextInfo?: proto.IContextInfo }).contextInfo;
-    if (candidateContext) {
-      return candidateContext;
+    // FutureProofMessage wrapper: dig into .message to find contextInfo
+    if ("message" in value) {
+      const inner = (value as { message?: proto.IMessage }).message;
+      if (inner) {
+        const innerCtx = extractContextInfo(inner);
+        if (innerCtx) {
+          return innerCtx;
+        }
+      }
     }
   }
   return undefined;
