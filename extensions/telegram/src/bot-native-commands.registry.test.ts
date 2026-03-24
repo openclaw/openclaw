@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
@@ -45,7 +45,7 @@ async function registerPairMenu(params: {
 }
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./bot/delivery.js", () => ({
       deliverReplies: deliveryMocks.deliverReplies,
@@ -62,6 +62,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       createPrivateCommandContext,
       waitForRegisteredCommands,
     } = await import("./bot-native-commands.menu-test-support.js"));
+  });
+
+  beforeEach(() => {
     clearPluginCommands();
     deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });

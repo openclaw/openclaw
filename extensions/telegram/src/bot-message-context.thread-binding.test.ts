@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const resolveByConversationMock = vi.fn();
@@ -27,12 +27,15 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 describe("buildTelegramMessageContext bound conversation override", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
-    hoisted.touchMock.mockReset();
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
+  });
+
+  beforeEach(() => {
+    hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.touchMock.mockReset();
   });
 
   it("routes forum topic messages to the bound session", async () => {

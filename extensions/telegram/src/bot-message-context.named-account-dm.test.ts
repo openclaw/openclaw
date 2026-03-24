@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
@@ -25,12 +25,16 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     recordInboundSessionMock.mockClear();
   });
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../../../src/config/config.js"));
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
+  });
+
+  beforeEach(() => {
+    recordInboundSessionMock.mockClear();
   });
 
   function getLastUpdateLastRoute(): { sessionKey?: string } | undefined {

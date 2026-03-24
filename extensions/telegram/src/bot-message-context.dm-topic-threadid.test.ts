@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock recordInboundSession to capture updateLastRoute parameter
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -36,11 +36,15 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     recordInboundSessionMock.mockClear();
   });
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ clearRuntimeConfigSnapshot } = await import("../../../src/config/config.js"));
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
+  });
+
+  beforeEach(() => {
+    recordInboundSessionMock.mockClear();
   });
 
   it("passes threadId to updateLastRoute for DM topics", async () => {
