@@ -3135,7 +3135,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 158,
+            "line": 155,
             "path": "src/channels/registry.ts"
           }
         },

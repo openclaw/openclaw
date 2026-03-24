@@ -27,7 +27,7 @@ export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>
     const value = Reflect.get(getPluginCommandMap(), property, getPluginCommandMap());
     return typeof value === "function" ? value.bind(getPluginCommandMap()) : value;
   },
-}) as Map<string, RegisteredPluginCommand>;
+});
 
 export function isPluginCommandRegistryLocked(): boolean {
   return getState().registryLocked;
