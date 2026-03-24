@@ -1,0 +1,75 @@
+{
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "mode": "socket",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    },
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": [
+      "persist-user-identity",
+      "persist-postgres",
+      "auth-memory-gate",
+      "memory-graphiti",
+      "voice-call",
+      "whatsapp"
+    ],
+    "entries": {
+      "persist-user-identity": {
+        "enabled": true,
+        "config": {
+          "auth": {
+            "mode": "jwt-hs256",
+            "jwtSecret": "e2e-test-secret-key-for-identity-verification"
+          }
+        }
+      },
+      "persist-postgres": {
+        "enabled": true,
+        "config": {}
+      },
+      "auth-memory-gate": {
+        "enabled": true,
+        "config": {
+          "hardGate": true,
+          "requireVerified": false
+        }
+      },
+      "memory-graphiti": {
+        "enabled": true,
+        "config": {
+          "groupIdStrategy": "identity",
+          "autoCapture": true,
+          "autoRecall": true,
+          "maxFacts": 10
+        }
+      },
+      "voice-call": {
+        "enabled": true,
+        "config": {
+          "provider": "twilio",
+          "inboundPolicy": "open",
+          "serve": {
+            "port": 3001,
+            "bind": "0.0.0.0",
+            "path": "/webhook/voice"
+          }
+        }
+      }
+    },
+    "slots": {
+      "memory": "memory-graphiti"
+    }
+  }
+}

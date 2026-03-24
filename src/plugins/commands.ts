@@ -35,7 +35,6 @@ const RESERVED_COMMANDS = new Set([
   "help",
   "commands",
   "status",
-  "whoami",
   "context",
   // Session management
   "stop",
@@ -171,7 +170,7 @@ export function matchPluginCommand(
   commandBody: string,
 ): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
-  if (!trimmed.startsWith("/")) {
+  if (!trimmed.startsWith("/") && !trimmed.startsWith("!")) {
     return null;
   }
 
@@ -180,7 +179,10 @@ export function matchPluginCommand(
   const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
-  const key = commandName.toLowerCase();
+  // Normalize "!" prefix to "/" for registry lookup (commands are stored with "/" prefix)
+  const key = commandName.startsWith("!")
+    ? `/${commandName.slice(1).toLowerCase()}`
+    : commandName.toLowerCase();
   const command = pluginCommands.get(key);
 
   if (!command) {
