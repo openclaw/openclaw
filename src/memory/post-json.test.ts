@@ -11,7 +11,9 @@ describe("postJson", () => {
   let remoteHttpMock: ReturnType<typeof vi.mocked<typeof withRemoteHttpResponse>>;
 
   beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    vi.resetModules();
     ({ postJson } = await import("./post-json.js"));
     ({ withRemoteHttpResponse } = await import("./remote-http.js"));
     remoteHttpMock = vi.mocked(withRemoteHttpResponse);

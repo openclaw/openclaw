@@ -1,13 +1,15 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
-import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import {
+  resolveProviderScopedAuthProfile,
+  resolveRunAuthProfile,
+} from "./agent-runner-auth-profile.js";
+export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -46,10 +48,13 @@ export function buildThreadingToolContext(params: {
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
+    const threadTs =
+      sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined;
     return {
       currentChannelId: originTo?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
+      currentThreadTs: threadTs || undefined,
       hasRepliedRef,
     };
   }
@@ -88,67 +93,6 @@ export const formatBunFetchSocketError = (message: string) => {
     trimmed || "Unknown error",
     "```",
   ].join("\n");
-};
-
-export const formatResponseUsageLine = (params: {
-  usage?: NormalizedUsage;
-  showCost: boolean;
-  costConfig?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
-}): string | null => {
-  const usage = params.usage;
-  if (!usage) {
-    return null;
-  }
-  const input = usage.input;
-  const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") {
-    return null;
-  }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
-  const cost =
-    params.showCost && typeof input === "number" && typeof output === "number"
-      ? estimateUsageCost({
-          usage: {
-            input,
-            output,
-            cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite,
-          },
-          cost: params.costConfig,
-        })
-      : undefined;
-  const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
-};
-
-export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  let index = -1;
-  for (let i = payloads.length - 1; i >= 0; i -= 1) {
-    if (payloads[i]?.text) {
-      index = i;
-      break;
-    }
-  }
-  if (index === -1) {
-    return [...payloads, { text: line }];
-  }
-  const existing = payloads[index];
-  const existingText = existing.text ?? "";
-  const separator = existingText.endsWith("\n") ? "" : "\n";
-  const next = {
-    ...existing,
-    text: `${existingText}${separator}${line}`,
-  };
-  const updated = payloads.slice();
-  updated[index] = next;
-  return updated;
 };
 
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
@@ -237,15 +181,6 @@ export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-export function resolveRunAuthProfile(run: FollowupRun["run"], provider: string) {
-  return resolveProviderScopedAuthProfile({
-    provider,
-    primaryProvider: run.provider,
-    authProfileId: run.authProfileId,
-    authProfileIdSource: run.authProfileIdSource,
-  });
-}
-
 export function buildEmbeddedRunContexts(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
@@ -285,19 +220,5 @@ export function buildEmbeddedRunExecutionParams(params: {
     embeddedContext,
     senderContext,
     runBaseParams,
-  };
-}
-
-export function resolveProviderScopedAuthProfile(params: {
-  provider: string;
-  primaryProvider: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
-  const authProfileId =
-    params.provider === params.primaryProvider ? params.authProfileId : undefined;
-  return {
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
   };
 }

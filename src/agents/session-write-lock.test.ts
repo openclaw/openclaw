@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock getProcessStartTime so PID-recycling detection works on non-Linux
 // (macOS, CI runners). isPidAlive is left unmocked.
@@ -18,6 +18,7 @@ import {
   __testing,
   acquireSessionWriteLock,
   cleanStaleLockFiles,
+  resetSessionWriteLockStateForTest,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
@@ -95,9 +96,13 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 }
 
 describe("acquireSessionWriteLock", () => {
+  afterEach(() => {
+    resetSessionWriteLockStateForTest();
+    vi.restoreAllMocks();
+  });
+
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
-      expect(true).toBe(true);
       return;
     }
 
@@ -110,12 +115,24 @@ describe("acquireSessionWriteLock", () => {
 
       const sessionReal = path.join(realDir, "sessions.json");
       const sessionLink = path.join(linkDir, "sessions.json");
+      const realLockPath = `${sessionReal}.lock`;
+      const linkLockPath = `${sessionLink}.lock`;
 
       const lockA = await acquireSessionWriteLock({ sessionFile: sessionReal, timeoutMs: 500 });
       const lockB = await acquireSessionWriteLock({ sessionFile: sessionLink, timeoutMs: 500 });
 
-      await lockB.release();
-      await lockA.release();
+      await expect(fs.access(realLockPath)).resolves.toBeUndefined();
+      await expect(fs.access(linkLockPath)).resolves.toBeUndefined();
+      const [realCanonicalLockPath, linkCanonicalLockPath] = await Promise.all([
+        fs.realpath(realLockPath),
+        fs.realpath(linkLockPath),
+      ]);
+      expect(linkCanonicalLockPath).toBe(realCanonicalLockPath);
+      await expectLockRemovedOnlyAfterFinalRelease({
+        lockPath: realLockPath,
+        firstLock: lockA,
+        secondLock: lockB,
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -208,6 +225,17 @@ describe("acquireSessionWriteLock", () => {
       warnSpy.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("removes lock files during process-exit cleanup", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      __testing.releaseAllLocksSync();
+
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      await lock.release();
+    });
   });
 
   it("derives max hold from timeout plus grace", () => {
@@ -313,6 +341,9 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("reclaims lock files with recycled PIDs", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       // Write a lock with a live PID (current process) but a wrong starttime,
       // simulating PID recycling: the PID is alive but belongs to a different
