@@ -16,8 +16,12 @@ const completeMock = vi.hoisted(() => vi.fn());
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
 let resolvePdfModelConfigForTool: PdfToolModule["resolvePdfModelConfigForTool"];
+let pdfToolModulePromise: Promise<PdfToolModule> | null = null;
 
 async function importPdfToolModule(): Promise<PdfToolModule> {
+  if (pdfToolModulePromise) {
+    return await pdfToolModulePromise;
+  }
   vi.resetModules();
   vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -26,7 +30,8 @@ async function importPdfToolModule(): Promise<PdfToolModule> {
       complete: completeMock,
     };
   });
-  return import("./pdf-tool.js");
+  pdfToolModulePromise = import("./pdf-tool.js");
+  return await pdfToolModulePromise;
 }
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
