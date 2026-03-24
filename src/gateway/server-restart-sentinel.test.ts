@@ -222,4 +222,40 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
   });
+
+  it("falls back to a system event when baseSessionKey is null and the session route stays incomplete", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
+        deliveryContext: delivery({
+          channel: "slack",
+        }),
+      },
+    });
+    mocks.parseSessionThreadInfo.mockReturnValueOnce({
+      baseSessionKey: null,
+      threadId: "1773827207.576549",
+    });
+    mocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      entry: {
+        deliveryContext: delivery({
+          channel: "slack",
+        }),
+      },
+    });
+    mocks.deliveryContextFromSession.mockReturnValueOnce(
+      delivery({
+        channel: "slack",
+      }),
+    );
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.loadSessionEntry).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
+    });
+  });
 });

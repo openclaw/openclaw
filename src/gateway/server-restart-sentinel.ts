@@ -40,6 +40,11 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   const sessionDeliveryContext = deliveryContextFromSession(entry);
+  // If the current session entry only captured a partial route, consult the base
+  // session for missing fields. When there is no distinct base session to inspect
+  // (baseSessionKey is null or points back to the same session), we intentionally
+  // keep the partial context and fall back to system-event wakeups if routing still
+  // cannot be resolved.
   const shouldConsultBaseSession =
     (!sessionDeliveryContext || !sessionDeliveryContext.channel || !sessionDeliveryContext.to) &&
     baseSessionKey &&

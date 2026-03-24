@@ -33,4 +33,20 @@ describe("resolveGroupSessionKey", () => {
       chatType: "channel",
     });
   });
+
+  it("falls back to the provider hint when an agent-prefixed key does not encode a group surface", () => {
+    const resolution = resolveGroupSessionKey({
+      From: "agent:main:main",
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "channel",
+    } as never);
+
+    expect(resolution).toEqual({
+      key: "webchat:channel:agent:main:main",
+      channel: "webchat",
+      id: "agent:main:main",
+      chatType: "channel",
+    });
+  });
 });
