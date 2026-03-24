@@ -274,6 +274,28 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("skips LID lookup when participant is already a hosted.lid", async () => {
+    const getLIDForPN = vi.fn(async () => "99999@lid");
+    const apiWithLid = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      getLIDForPN,
+    });
+    await apiWithLid.sendReaction("group@g.us", "msg-9", "👍", false, "12345@hosted.lid");
+    expect(getLIDForPN).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "group@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            participant: "12345@hosted.lid",
+          }),
+        },
+      }),
+    );
+  });
+
   it("skips LID lookup when no participant is provided for group reaction", async () => {
     const getLIDForPN = vi.fn(async () => "99999@lid");
     const apiWithLid = createWebSendApi({

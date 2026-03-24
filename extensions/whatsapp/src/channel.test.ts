@@ -104,6 +104,27 @@ describe("whatsappPlugin.actions.handleAction react participant fallback", () =>
     );
   });
 
+  it("uses requesterSenderId as participant fallback for @hosted.lid JIDs", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      cfg: enabledConfig,
+      params: {
+        chatJid: "group123@g.us",
+        messageId: "msg1",
+        emoji: "✅",
+      },
+      requesterSenderId: "143134247891105@hosted.lid",
+    });
+
+    expect(handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participant: "143134247891105@hosted.lid",
+      }),
+      enabledConfig,
+    );
+  });
+
   it("ignores requesterSenderId from non-WhatsApp contexts", async () => {
     await whatsappPlugin.actions!.handleAction!({
       channel: "whatsapp",

@@ -169,13 +169,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               messageId,
               emoji,
               remove,
-              // Fallback to requesterSenderId when it looks like a WhatsApp JID (@s.whatsapp.net or @lid).
+              // Fallback to requesterSenderId when it looks like a WhatsApp JID
+              // (@s.whatsapp.net, @lid, or @hosted.lid).
               // Correct when reacting to the requester's own message (the common case).
               // For reactions to other participants' messages the model must supply participant explicitly.
               // Guard: only use the fallback for WhatsApp-origin sender IDs to avoid cross-channel pollution.
               participant:
                 readStringParam(params, "participant") ??
-                (requesterSenderId && /\@(s\.whatsapp\.net|lid)$/.test(requesterSenderId)
+                (requesterSenderId && /\@(s\.whatsapp\.net|hosted\.lid|lid)$/.test(requesterSenderId)
                   ? requesterSenderId
                   : undefined),
               accountId: accountId ?? undefined,
