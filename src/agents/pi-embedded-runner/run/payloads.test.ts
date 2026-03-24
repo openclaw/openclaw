@@ -388,6 +388,54 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("scrubs Unix paths with apostrophes and Unicode segments", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot open /Users/O'Connor/Documents/file.txt: permission denied",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "permission denied",
+      absentDetail: "O'Connor",
+    });
+  });
+
+  it("scrubs Unix paths with Unicode letters in segments", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "ENOENT: /home/josé/資料/report.md not found",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "not found",
+      absentDetail: "josé",
+    });
+  });
+
+  it("preserves post-path reason text when redacting Windows paths", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Failed boundary read for C:\\Users\\Jane Doe\\file.txt (unsafe path)",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "(unsafe path)",
+      absentDetail: "Jane Doe",
+    });
+  });
+
   it("does not redact /dev/null in prose", () => {
     const payloads = buildPayloads({
       lastToolError: {

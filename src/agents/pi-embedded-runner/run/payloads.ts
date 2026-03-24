@@ -95,16 +95,36 @@ function truncateErrorReason(error: string): string {
     /\/(?!dev\/null\b)[a-zA-Z0-9_][a-zA-Z0-9._+-]*(?:\/[a-zA-Z0-9._+-]+)+/g,
     "<path>",
   );
-  // Second pass: absorb space-bearing remnants left after the strict pass.
-  // When directory names contain spaces (e.g. "/home/user name/docs/f.txt")
-  // the first pass only matches up to the space ("/home/user" → "<path>")
-  // leaving " name/docs/f.txt".  This pass detects "<path> word/..." tails
-  // and folds them back into the redacted token (#46592).
-  cleaned = cleaned.replace(/<path>(?:\s+[a-zA-Z0-9._+-]+)*(?:\/[a-zA-Z0-9._+ -]+)+/g, "<path>");
+  // Second pass (three sub-passes): absorb space-bearing remnants and Unicode
+  // characters/apostrophes left after the strict ASCII-only first pass.
+  // E.g. `/Users/O'Connor/…` becomes `<path>'Connor/…` after pass 1, and
+  // `/home/user name/docs/f.txt` becomes `<path> name/docs/f.txt`.
+  // Sub-passes are split so that trailing reason text like " not found" is
+  // never swallowed (#46592).
+
+  // 2a — directly-attached non-space remnants (Unicode chars, apostrophes)
+  // with optional slash-separated path continuations.
+  cleaned = cleaned.replace(/<path>['\p{L}\p{N}._+-]+(?:\/['\p{L}\p{N}._+-]+)*/gu, "<path>");
+  // 2b — space-separated words only when followed by `/` or another `<path>`
+  // (i.e. they are path-internal, not trailing reason text).
+  cleaned = cleaned.replace(/<path>(?:\s+['\p{L}\p{N}._+-]+)+(?=\/|<path>)/gu, "<path>");
+  // 2c — absorb remaining `/segment` runs directly after `<path>`.
+  cleaned = cleaned.replace(/<path>(?:\/['\p{L}\p{N}._+-]+)+/gu, "<path>");
+  // Collapse consecutive `<path>` markers left by multi-sub-pass rewrites.
+  cleaned = cleaned.replace(/(?:<path>)+/g, "<path>");
   // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
-  // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
-  // delimiter that cannot appear in a path context.
-  cleaned = cleaned.replace(/[A-Za-z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
+  // ("C:\Program Files (x86)\...").  A trailing parenthetical reason like
+  // " (unsafe path)" is restored so it isn't swallowed (#46592).
+  cleaned = cleaned.replace(/[A-Za-z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, (match) => {
+    // Don't swallow trailing parenthetical reasons like " (unsafe path)".
+    // Path-internal parens such as "(x86)" are always followed by a backslash
+    // segment, so they never appear at the very end of the matched text.
+    const reasonMatch = match.match(/\s+\([a-zA-Z][a-zA-Z\s]*\)\s*$/);
+    if (reasonMatch) {
+      return "<path>" + reasonMatch[0];
+    }
+    return "<path>";
+  });
   // UNC paths (\\server\share\...)
   cleaned = cleaned.replace(/\\\\[\w.-]+(?:\\[\w. ()+-]+)+/g, "<path>");
   // Scrub session keys that may embed channel-specific PII such as phone
