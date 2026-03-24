@@ -291,8 +291,9 @@ export function createBlueBubblesDebounceRegistry(params: {
               : undefined;
           const runEnqueue = async () => {
             if (stableIdentity) {
+              const messageId = entry.message.messageId?.trim();
               const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
-              if (associatedMessageGuid) {
+              if (associatedMessageGuid && !messageId) {
                 await debouncer.flushKey(
                   `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
                 );

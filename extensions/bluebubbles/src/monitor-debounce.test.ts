@@ -122,7 +122,7 @@ describe("createBlueBubblesDebounceRegistry", () => {
       enqueue: ReturnType<typeof vi.fn>;
       flushKey: ReturnType<typeof vi.fn>;
     };
-    expect(createdDebouncer.flushKey).toHaveBeenCalledWith("bluebubbles:default:balloon:assoc-1");
+    expect(createdDebouncer.flushKey).not.toHaveBeenCalled();
     expect(createdDebouncer.enqueue).toHaveBeenCalledTimes(1);
   });
 
