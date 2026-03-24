@@ -241,6 +241,26 @@ describe("FeishuConfigSchema actions", () => {
 });
 
 describe("FeishuConfigSchema tool policies", () => {
+  it("keeps dm tools optional for existing configs", () => {
+    const enabledOnly = FeishuConfigSchema.safeParse({
+      dms: {
+        ou_owner: {
+          enabled: true,
+        },
+      },
+    });
+    const promptOnly = FeishuConfigSchema.safeParse({
+      dms: {
+        ou_owner: {
+          systemPrompt: "Use the shared DM prompt.",
+        },
+      },
+    });
+
+    expect(enabledOnly.success).toBe(true);
+    expect(promptOnly.success).toBe(true);
+  });
+
   it("accepts dms tool policies", () => {
     const result = FeishuConfigSchema.parse({
       dms: {

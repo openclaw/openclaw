@@ -34,7 +34,7 @@ const DmConfigSchema = z
   .object({
     historyLimit: z.number().int().min(0).optional(),
     enabled: z.boolean().optional(),
-    tools: SharedToolPolicySchema,
+    tools: SharedToolPolicySchema.optional(),
     toolsBySender: z.record(z.string(), SharedToolPolicySchema).optional(),
     systemPrompt: z.string().optional(),
   })
