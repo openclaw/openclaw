@@ -89,8 +89,13 @@ function collectImageModelKeys(
       return;
     }
 
-    // Always add the raw string for backward compatibility
-    keys.add(trimmed);
+    // Only add provider-qualified raw strings; providerless entries are resolved below.
+    // This ensures image-safe matching uses provider-qualified keys, preventing incorrect
+    // matches when two providers share a model ID but only one supports images.
+    const trimmedSlash = trimmed.indexOf("/");
+    if (trimmedSlash > 0) {
+      keys.add(trimmed);
+    }
 
     // Also resolve alias and add canonical key
     if (aliasIndex && defaultProvider) {
@@ -124,12 +129,11 @@ function collectImageModelKeys(
 
 /**
  * Check if a given provider/model combination is in the set of image models.
- * Checks:
+ * Checks provider-qualified keys only:
  * 1. "provider/model" format (exact match against provider-qualified keys)
- * 2. Stored model string directly (matches raw IDs like "gpt-4.1" added by collectImageModelKeys)
- * 3. Pure model name against raw entries (providerless IDs from imageModel fallbacks)
- * 4. Pure model name against all entries' pure names (handles provider-qualified imageModel
- *    entries matching providerless stored models, e.g., imageModel "openai/gpt-4.1" vs stored "gpt-4.1")
+ * 2. Stored model string directly (for provider-qualified raw entries like "openai/gpt-4.1")
+ * 3. Pure name match requiring provider alignment (handles provider-qualified imageModel
+ *    entries matching providerless stored models)
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
   const modelSlash = model.indexOf("/");
@@ -142,38 +146,25 @@ function isImageModel(provider: string, model: string, imageModelKeys: Set<strin
     return true;
   }
 
-  // 2. Check stored model string directly against raw entries
-  // This handles providerless raw IDs added by collectImageModelKeys()
+  // 2. Check stored model string directly against provider-qualified entries
   if (imageModelKeys.has(model)) {
     return true;
   }
 
-  // 3. Check pure model name against raw entries (providerless config)
-  // This handles cases where imageModel is configured without a provider prefix
-  // and we're checking against a stored model that also lacks a provider prefix.
-  if (imageModelKeys.has(pureModel)) {
-    return true;
-  }
-
-  // 4. Compare stored model's pure name against all entries' pure names
-  // This handles provider-qualified imageModel entries matching providerless stored models.
-  // IMPORTANT: When the imageModel entry is provider-qualified (e.g., "provider-a/model-x"),
-  // it must match by provider-qualified key - the effectiveProvider must align with the entry's
-  // provider. This prevents incorrectly matching "provider-b/model-x" when only "provider-a/model-x"
-  // is configured as an image model.
+  // 3. Match by pure name with required provider alignment
+  // This handles provider-qualified imageModel entries (e.g., "provider-a/model-x")
+  // matching stored models. The effectiveProvider must match the entry's provider.
   for (const entry of imageModelKeys) {
     const slash = entry.indexOf("/");
-    const entryPureModel = slash > 0 ? entry.slice(slash + 1) : entry;
+    if (slash <= 0) {
+      // Skip providerless entries - all entries should be provider-qualified
+      // after collectImageModelKeys resolves them with defaultProvider
+      continue;
+    }
+    const entryPureModel = entry.slice(slash + 1);
     if (entryPureModel === pureModel) {
-      if (slash > 0) {
-        // Entry has provider prefix - require provider alignment
-        const entryProvider = entry.slice(0, slash);
-        if (effectiveProvider === entryProvider) {
-          return true;
-        }
-        // Provider mismatch - continue checking other entries
-      } else {
-        // Entry is providerless - matches any provider
+      const entryProvider = entry.slice(0, slash);
+      if (effectiveProvider === entryProvider) {
         return true;
       }
     }
