@@ -262,7 +262,8 @@ export function maybeRepairBundledPluginInstallPaths(
       continue;
     }
 
-    for (const field of ["sourcePath", "installPath"] as const) {
+    for (const fieldHit of hit.installFieldHits) {
+      const field = fieldHit.field;
       const previousPath = typeof install[field] === "string" ? install[field] : "(unset)";
       if (pathsEqual(previousPath, hit.nextPath, env)) {
         continue;

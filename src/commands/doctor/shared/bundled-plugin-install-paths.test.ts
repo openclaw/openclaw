@@ -131,6 +131,85 @@ describe("doctor bundled plugin install path repair", () => {
     expect(hits).toEqual([]);
   });
 
+  it("repairs only install fields that were flagged as stale", () => {
+    const stalePath = "/pkg/extensions/acpx";
+    const customInstallPath = "/custom/missing/acpx";
+    const nextPath = "/pkg/dist/extensions/acpx";
+
+    const hits = scanBundledPluginInstallPathRepairs(
+      {
+        plugins: {
+          installs: {
+            acpx: {
+              source: "path",
+              spec: "acpx",
+              sourcePath: stalePath,
+              installPath: customInstallPath,
+            },
+          },
+        },
+      },
+      {
+        bundledSources: new Map([
+          [
+            "acpx",
+            {
+              pluginId: "acpx",
+              localPath: nextPath,
+            },
+          ],
+        ]),
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    );
+
+    expect(hits).toEqual([
+      {
+        pluginId: "acpx",
+        nextPath,
+        installFieldHits: [{ field: "sourcePath", previousPath: stalePath }],
+        loadPathHits: [],
+      },
+    ]);
+
+    const repaired = maybeRepairBundledPluginInstallPaths(
+      {
+        plugins: {
+          installs: {
+            acpx: {
+              source: "path",
+              spec: "acpx",
+              sourcePath: stalePath,
+              installPath: customInstallPath,
+            },
+          },
+        },
+      },
+      {
+        bundledSources: new Map([
+          [
+            "acpx",
+            {
+              pluginId: "acpx",
+              localPath: nextPath,
+            },
+          ],
+        ]),
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    );
+
+    expect(repaired.config.plugins?.installs?.acpx).toMatchObject({
+      source: "path",
+      spec: "acpx",
+      sourcePath: nextPath,
+      installPath: customInstallPath,
+    });
+    expect(repaired.changes).toEqual([
+      `- plugins.installs.acpx.sourcePath: updated stale bundled path from ${stalePath} -> ${nextPath}`,
+    ]);
+  });
+
   it("repairs stale bundled paths when config and discovery use symlinked package roots", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-paths-"));
     const realPkgRoot = path.join(tempRoot, "real", "pkg");
