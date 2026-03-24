@@ -48,7 +48,10 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, speak } from "./outbound.js";
+async function loadOutboundModule() {
+  vi.resetModules();
+  return await import("./outbound.js");
+}
 
 describe("voice-call outbound helpers", () => {
   beforeEach(() => {
@@ -58,6 +61,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("guards initiateCall when provider, webhook, capacity, or fromNumber are missing", async () => {
+    const { initiateCall } = await loadOutboundModule();
     const base = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
@@ -116,6 +120,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("initiates notify-mode calls with inline TwiML and records provider ids", async () => {
+    const { initiateCall } = await loadOutboundModule();
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
       activeCalls: new Map(),
@@ -155,6 +160,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("fails initiateCall cleanly when provider initiation throws", async () => {
+    const { initiateCall } = await loadOutboundModule();
     const ctx = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
@@ -181,6 +187,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("speaks through connected calls and rolls back to listening on provider errors", async () => {
+    const { speak } = await loadOutboundModule();
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
     const playTts = vi.fn(async () => {});
     const ctx = {
@@ -212,6 +219,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("ends connected calls, clears timers, and rejects pending transcripts", async () => {
+    const { endCall } = await loadOutboundModule();
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
     const hangupCall = vi.fn(async () => {});
     const ctx = {
@@ -246,6 +254,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {
+    const { endCall, speak } = await loadOutboundModule();
     await expect(
       speak(
         {

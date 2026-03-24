@@ -20,6 +20,20 @@ function requireTurnToken(provider: Awaited<ReturnType<typeof createManagerHarne
   return firstStart.turnToken;
 }
 
+async function waitForListeningStarts(
+  provider: Awaited<ReturnType<typeof createManagerHarness>>["provider"],
+  expectedCount: number,
+) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (provider.startListeningCalls.length === expectedCount) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(provider.startListeningCalls).toHaveLength(expectedCount);
+}
+
 describe("CallManager closed-loop turns", () => {
   it("completes a closed-loop turn without live audio", async () => {
     const { manager, provider } = await createManagerHarness({
@@ -32,7 +46,7 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-closed-loop-answered");
 
     const turnPromise = manager.continueCall(started.callId, "How can I help?");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForListeningStarts(provider, 1);
 
     manager.processEvent({
       id: "evt-closed-loop-speech",
@@ -72,6 +86,7 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-overlap-answered");
 
     const first = manager.continueCall(started.callId, "First prompt");
+    await waitForListeningStarts(provider, 1);
     const second = await manager.continueCall(started.callId, "Second prompt");
     expect(second.success).toBe(false);
     expect(second.error).toBe("Already waiting for transcript");
@@ -107,9 +122,13 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-turn-token-answered");
 
     const turnPromise = manager.continueCall(started.callId, "Prompt");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForListeningStarts(provider, 1);
 
     const expectedTurnToken = requireTurnToken(provider);
+    let settled = false;
+    void turnPromise.finally(() => {
+      settled = true;
+    });
 
     manager.processEvent({
       id: "evt-turn-token-bad",
@@ -122,11 +141,8 @@ describe("CallManager closed-loop turns", () => {
       turnToken: "wrong-token",
     });
 
-    const pendingState = await Promise.race([
-      turnPromise.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
-    expect(pendingState).toBe("pending");
+    await Promise.resolve();
+    expect(settled).toBe(false);
 
     manager.processEvent({
       id: "evt-turn-token-good",
@@ -158,7 +174,7 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-multi-answered");
 
     const firstTurn = manager.continueCall(started.callId, "First question");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForListeningStarts(provider, 1);
     manager.processEvent({
       id: "evt-multi-speech-1",
       type: "call.speech",
@@ -171,7 +187,7 @@ describe("CallManager closed-loop turns", () => {
     await firstTurn;
 
     const secondTurn = manager.continueCall(started.callId, "Second question");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForListeningStarts(provider, 2);
     manager.processEvent({
       id: "evt-multi-speech-2",
       type: "call.speech",
@@ -212,7 +228,7 @@ describe("CallManager closed-loop turns", () => {
 
     for (let i = 1; i <= 5; i++) {
       const turnPromise = manager.continueCall(started.callId, `Prompt ${i}`);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitForListeningStarts(provider, i);
       manager.processEvent({
         id: `evt-loop-speech-${i}`,
         type: "call.speech",
