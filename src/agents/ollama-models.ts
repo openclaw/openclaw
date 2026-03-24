@@ -107,7 +107,9 @@ export async function enrichOllamaModelsWithContext(
  * reasoning capability contract during discovery.
  */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason|qwen3|qwq|glm-?5|kimi-?k2|marco-o|skywork-o/i.test(modelId);
+  return /r1|reasoning|think|reason|qwen3|qwq|glm-?5(?:[:\-_.]|$)|kimi-?k2|marco-o|skywork-o/i.test(
+    modelId,
+  );
 }
 
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */

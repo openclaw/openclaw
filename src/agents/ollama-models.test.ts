@@ -45,6 +45,8 @@ describe("ollama-models", () => {
     expect(isReasoningModelHeuristic("qwen3:32b")).toBe(true);
     expect(isReasoningModelHeuristic("qwq:latest")).toBe(true);
     expect(isReasoningModelHeuristic("glm-5:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("glm-50b:latest")).toBe(false);
+    expect(isReasoningModelHeuristic("glm-512k")).toBe(false);
     expect(isReasoningModelHeuristic("kimi-k2:latest")).toBe(true);
     expect(isReasoningModelHeuristic("skywork-o1:latest")).toBe(true);
     expect(isReasoningModelHeuristic("marco-o1:latest")).toBe(true);
