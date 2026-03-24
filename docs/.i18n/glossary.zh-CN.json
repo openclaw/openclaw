@@ -298,5 +298,9 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "TinyFish Plugin",
+    "target": "TinyFish 插件"
   }
 ]

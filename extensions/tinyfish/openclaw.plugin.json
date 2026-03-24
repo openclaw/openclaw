@@ -1,0 +1,36 @@
+{
+  "id": "tinyfish",
+  "name": "TinyFish",
+  "description": "Hosted browser automation for complex public web workflows.",
+  "providerAuthEnvVars": {
+    "tinyfish": ["TINYFISH_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "minLength": 1,
+        "description": "TinyFish API key. You can also set TINYFISH_API_KEY."
+      },
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Optional TinyFish API base URL. Defaults to https://agent.tinyfish.ai."
+      }
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "TinyFish API Key",
+      "help": "Set plugins.entries.tinyfish.config.apiKey or TINYFISH_API_KEY.",
+      "sensitive": true
+    },
+    "baseUrl": {
+      "label": "TinyFish Base URL",
+      "advanced": true,
+      "placeholder": "https://agent.tinyfish.ai"
+    }
+  }
+}

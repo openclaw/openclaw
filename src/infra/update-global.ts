@@ -16,12 +16,14 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+// Keep global-install verification pinned to extension public entrypoints. Matrix's
+// runtime-api surface pulls in its helper and thread-binding files transitively, so
+// core does not need to name those private implementation files directly here.
 const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
   "dist/extensions/whatsapp/light-runtime-api.js",
   "dist/extensions/whatsapp/runtime-api.js",
-  "dist/extensions/matrix/helper-api.js",
+  "dist/extensions/matrix/api.js",
   "dist/extensions/matrix/runtime-api.js",
-  "dist/extensions/matrix/thread-bindings-runtime.js",
   "dist/extensions/msteams/runtime-api.js",
 ] as const;
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
