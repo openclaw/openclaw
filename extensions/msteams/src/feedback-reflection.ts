@@ -27,6 +27,22 @@ const MAX_RESPONSE_CHARS = 500;
 /** Tracks last reflection time per session to enforce cooldown. */
 const lastReflectionBySession = new Map<string, number>();
 
+/** Maximum cooldown entries before pruning expired ones. */
+const MAX_COOLDOWN_ENTRIES = 500;
+
+/** Prune expired cooldown entries to prevent unbounded memory growth. */
+function pruneExpiredCooldowns(cooldownMs: number): void {
+  if (lastReflectionBySession.size <= MAX_COOLDOWN_ENTRIES) {
+    return;
+  }
+  const now = Date.now();
+  for (const [key, time] of lastReflectionBySession) {
+    if (now - time >= cooldownMs) {
+      lastReflectionBySession.delete(key);
+    }
+  }
+}
+
 export type FeedbackEvent = {
   type: "custom";
   event: "feedback";
@@ -109,6 +125,7 @@ export function isReflectionAllowed(sessionKey: string, cooldownMs?: number): bo
  */
 export function recordReflectionTime(sessionKey: string): void {
   lastReflectionBySession.set(sessionKey, Date.now());
+  pruneExpiredCooldowns(DEFAULT_COOLDOWN_MS);
 }
 
 /**
@@ -288,7 +305,7 @@ async function storeSessionLearning(params: {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
 
-  const safeKey = params.sessionKey.replace(/[^a-zA-Z0-9_:-]/g, "_");
+  const safeKey = params.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
   const learningsFile = path.join(params.storePath, `${safeKey}.learnings.json`);
 
   let learnings: string[] = [];
@@ -323,7 +340,7 @@ export async function loadSessionLearnings(
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
 
-  const safeKey = sessionKey.replace(/[^a-zA-Z0-9_:-]/g, "_");
+  const safeKey = sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
   const learningsFile = path.join(storePath, `${safeKey}.learnings.json`);
 
   try {

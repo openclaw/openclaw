@@ -235,7 +235,7 @@ async function handleFeedbackInvoke(
     });
     const fs = await import("node:fs/promises");
     const pathMod = await import("node:path");
-    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_:-]/g, "_");
+    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const transcriptFile = pathMod.join(storePath, `${safeKey}.jsonl`);
     await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
       // Best effort — transcript dir may not exist yet

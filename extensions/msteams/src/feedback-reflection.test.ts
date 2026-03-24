@@ -127,7 +127,8 @@ describe("loadSessionLearnings", () => {
 
   it("reads existing learnings", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    const safeKey = "msteams:user1";
+    // Colons are sanitized to underscores in filenames (Windows compat)
+    const safeKey = "msteams_user1";
     const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
     await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
 

@@ -253,6 +253,19 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
+
+  // Cheap pre-parse auth gate: reject requests without a Bearer token before
+  // spending CPU/memory on JSON body parsing. This prevents unauthenticated
+  // request floods from forcing body parsing on internet-exposed webhooks.
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
+
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
@@ -266,11 +279,8 @@ export async function monitorMSTeamsProvider(
   // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
   const jwtValidator = await createBotFrameworkJwtValidator(creds);
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
+    // Authorization header is guaranteed by the pre-parse auth gate above.
+    const authHeader = req.headers.authorization!;
     const serviceUrl = (req.body as Record<string, unknown>)?.serviceUrl as string | undefined;
     jwtValidator
       .validate(authHeader, serviceUrl)
