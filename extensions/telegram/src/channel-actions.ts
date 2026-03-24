@@ -111,7 +111,7 @@ function describeTelegramMessageTool({
   if (discovery.buttonsEnabled) {
     schema.push({
       properties: {
-        buttons: createMessageToolButtonsSchema(),
+        buttons: Type.Optional(createMessageToolButtonsSchema()),
       },
     });
   }
