@@ -58,7 +58,14 @@ function createChatHeaderState(
             matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
         }
       }
-      return { ok: true, key: "main" };
+      return {
+        ok: true,
+        key: "main",
+        resolved: {
+          modelProvider: currentModelProvider,
+          model: currentModel,
+        },
+      };
     }
     if (method === "chat.history") {
       return { messages: [], thinkingLevel: null };

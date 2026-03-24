@@ -7,7 +7,14 @@ import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import {
-  buildChatModelOption,
+  createCatalogRankedChatModelOption,
+  createSyntheticRankedChatModelOption,
+  loadRecentChatModels,
+  normalizeChatModelKey,
+  rememberRecentChatModel,
+  sortRankedChatModelOptions,
+} from "./chat-model-recents.ts";
+import {
   createChatModelOverride,
   formatChatModelDisplay,
   normalizeChatModelOverrideValue,
@@ -549,38 +556,59 @@ function resolveDefaultModelValue(state: AppViewState): string {
   return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
 }
 
-function buildChatModelOptions(
+export function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
   defaultModel: string,
 ): Array<{ value: string; label: string }> {
   const seen = new Set<string>();
-  const options: Array<{ value: string; label: string }> = [];
-  const addOption = (value: string, label?: string) => {
-    const trimmed = value.trim();
+  const options: ReturnType<typeof createCatalogRankedChatModelOption>[] = [];
+
+  const addOption = (option: ReturnType<typeof createCatalogRankedChatModelOption>) => {
+    const trimmed = option.value.trim();
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeChatModelKey(trimmed);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value: trimmed, label: label ?? trimmed });
+    options.push({ ...option, value: trimmed });
   };
 
   for (const entry of catalog) {
-    const option = buildChatModelOption(entry);
-    addOption(option.value, option.label);
+    addOption(createCatalogRankedChatModelOption(entry));
   }
 
   if (currentOverride) {
-    addOption(currentOverride);
+    addOption(createSyntheticRankedChatModelOption(currentOverride));
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    addOption(createSyntheticRankedChatModelOption(defaultModel));
   }
-  return options;
+
+  return sortRankedChatModelOptions(options, loadRecentChatModels()).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+}
+
+export function rememberResolvedChatModelRecent(patched?: {
+  resolved?: { modelProvider?: string | null; model?: string | null } | null;
+}) {
+  const resolvedModel = resolveServerChatModelValue(
+    patched?.resolved?.model ?? undefined,
+    patched?.resolved?.modelProvider ?? undefined,
+  );
+  if (!resolvedModel) {
+    return;
+  }
+  try {
+    rememberRecentChatModel(resolvedModel);
+  } catch {
+    // Non-critical: local storage may be unavailable or quota-limited.
+  }
 }
 
 function renderChatModelSelect(state: AppViewState) {
@@ -639,10 +667,13 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
-    await state.client.request("sessions.patch", {
+    const patched = await state.client.request<{
+      resolved?: { modelProvider?: string | null; model?: string | null } | null;
+    }>("sessions.patch", {
       key: targetSessionKey,
       model: nextModel || null,
     });
+    rememberResolvedChatModelRecent(patched);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.

@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  buildChatModelOptions,
+  rememberResolvedChatModelRecent,
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
@@ -282,5 +284,100 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("buildChatModelOptions", () => {
+  it("preserves the active override when it is missing from the catalog", () => {
+    expect(
+      buildChatModelOptions(
+        [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
+        "custom/missing-model",
+        "",
+      ).map((entry) => entry.value),
+    ).toContain("custom/missing-model");
+  });
+
+  it("prioritizes recent models from localStorage and ignores stale recent entries", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const storage = {
+      getItem: () =>
+        JSON.stringify([
+          { value: "anthropic/claude-sonnet", usedAt: 200 },
+          { value: "missing/old-model", usedAt: 100 },
+        ]),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 1,
+    } as unknown as Storage;
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storage,
+      configurable: true,
+    });
+
+    try {
+      expect(
+        buildChatModelOptions(
+          [
+            { id: "gpt-5", name: "GPT-5", provider: "openai" },
+            { id: "foo", name: "Foo", provider: "custom" },
+            { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+          ],
+          "",
+          "",
+        ).map((entry) => entry.value),
+      ).toEqual(["anthropic/claude-sonnet", "custom/foo", "openai/gpt-5"]);
+    } finally {
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      }
+    }
+  });
+
+  it("orders custom-provider models before built-ins when no recents are stored", () => {
+    expect(
+      buildChatModelOptions(
+        [
+          { id: "gpt-5", name: "GPT-5", provider: "openai" },
+          { id: "foo", name: "Foo", provider: "custom" },
+          { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+        ],
+        "",
+        "",
+      ).map((entry) => entry.value),
+    ).toEqual(["custom/foo", "openai/gpt-5", "anthropic/claude-sonnet"]);
+  });
+});
+
+describe("rememberResolvedChatModelRecent", () => {
+  it("stores the canonical resolved model ref for recent-model tracking", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const setItem = vi.fn();
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: () => null,
+        setItem,
+        removeItem: () => undefined,
+        clear: () => undefined,
+        key: () => null,
+        length: 0,
+      },
+      configurable: true,
+    });
+
+    try {
+      rememberResolvedChatModelRecent({
+        resolved: { modelProvider: "openai", model: "gpt-5-mini" },
+      });
+      expect(setItem).toHaveBeenCalled();
+      expect(setItem.mock.calls.at(-1)?.[1]).toContain("openai/gpt-5-mini");
+    } finally {
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      }
+    }
   });
 });
