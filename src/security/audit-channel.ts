@@ -896,7 +896,11 @@ export async function collectChannelSecurityFindings(params: {
             `Telegram group access is enabled but no sender allowlist is configured; this allows any group member to invoke /… commands` +
             (skillsEnabled ? " (including skill commands)." : "."),
           remediation:
-            "Approve yourself via pairing (recommended), or set channels.telegram.groupAllowFrom (or per-group groups.<id>.allowFrom).",
+            "Add your Telegram user ID to the sender allowlist. Two options:\n" +
+            "  1. Pairing (recommended): run `openclaw channels pair --channel telegram` and follow the prompts — your ID is added automatically.\n" +
+            "  2. Manual: find your numeric Telegram user ID (message @userinfobot on Telegram), then add it to your config:\n" +
+            '     channels.telegram.groupAllowFrom: ["<your-numeric-id>"]\n' +
+            "     Or per-group: channels.telegram.groups.<groupId>.allowFrom: [\"<your-numeric-id>\"]",
         });
       }
     }
