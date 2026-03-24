@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -233,23 +234,6 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     );
   }
   return normalized;
-}
-
-function parseImageGenerationModelRef(
-  raw: string | undefined,
-): { provider: string; model: string } | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
-    return null;
-  }
-  return {
-    provider: trimmed.slice(0, slashIndex).trim(),
-    model: trimmed.slice(slashIndex + 1).trim(),
-  };
 }
 
 function resolveSelectedImageGenerationProvider(params: {

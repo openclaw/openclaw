@@ -40,7 +40,6 @@ let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDis
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
 });

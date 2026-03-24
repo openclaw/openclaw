@@ -115,6 +115,35 @@ describe("subagent registry query regressions", () => {
     expect(countPendingDescendantRunsFromRuns(runs, middleSessionKey)).toBe(1);
   });
 
+  it("dedupes restarted descendant rows for the same child session when counting pending work", () => {
+    const parentSessionKey = "agent:main:subagent:parent-dedupe";
+    const childSessionKey = `${parentSessionKey}:subagent:worker`;
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-child-stale",
+        childSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: 100,
+        endedAt: 150,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-child-current",
+        childSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: 200,
+      }),
+      makeRun({
+        runId: "run-grandchild-current",
+        childSessionKey: `${childSessionKey}:subagent:leaf`,
+        requesterSessionKey: childSessionKey,
+        createdAt: 210,
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(2);
+  });
+
   it("regression excluding current run, countPendingDescendantRunsExcludingRun keeps sibling gating intact", () => {
     // Regression guard: excluding the currently announcing run must not hide sibling pending work.
     const runs = toRunMap([
@@ -173,6 +202,37 @@ describe("subagent registry query regressions", () => {
     );
 
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+  });
+
+  it("dedupes stale and current rows for the same child session when counting active runs", () => {
+    const childSessionKey = "agent:main:subagent:orch-restarted";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-old",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 100,
+        startedAt: 100,
+        endedAt: 150,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-current",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 200,
+        startedAt: 200,
+      }),
+      makeRun({
+        runId: "run-descendant-active",
+        childSessionKey: `${childSessionKey}:subagent:child`,
+        requesterSessionKey: childSessionKey,
+        createdAt: 210,
+        startedAt: 210,
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
   });
 
   it("scopes direct child listings to the requester run window when requesterRunId is provided", () => {
