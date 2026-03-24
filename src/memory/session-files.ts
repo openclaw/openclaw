@@ -18,6 +18,10 @@ export type SessionFileEntry = {
   lineMap: number[];
 };
 
+export type SessionEntryBuildOptions = {
+  previous?: SessionFileEntry;
+};
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -71,58 +75,89 @@ export function extractSessionText(content: unknown): string | null {
   return parts.join(" ");
 }
 
-export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
+function collectSessionLines(lines: string[], lineOffset = 0): { collected: string[]; lineMap: number[] } {
+  const collected: string[] = [];
+  const lineMap: number[] = [];
+  for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
+    const line = lines[jsonlIdx];
+    if (!line.trim()) {
+      continue;
+    }
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== "object" || (record as { type?: unknown }).type !== "message") {
+      continue;
+    }
+    const message = (record as { message?: unknown }).message as
+      | { role?: unknown; content?: unknown }
+      | undefined;
+    if (!message || typeof message.role !== "string") {
+      continue;
+    }
+    if (message.role !== "user" && message.role !== "assistant") {
+      continue;
+    }
+    const text = extractSessionText(message.content);
+    if (!text) {
+      continue;
+    }
+    const safe = redactSensitiveText(text, { mode: "tools" });
+    const label = message.role === "user" ? "User" : "Assistant";
+    collected.push(`${label}: ${safe}`);
+    lineMap.push(lineOffset + jsonlIdx + 1);
+  }
+  return { collected, lineMap };
+}
+
+export async function buildSessionEntry(
+  absPath: string,
+  options?: SessionEntryBuildOptions,
+): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
-    const raw = await fs.readFile(absPath, "utf-8");
-    const lines = raw.split("\n");
-    const collected: string[] = [];
-    const lineMap: number[] = [];
-    for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
-      const line = lines[jsonlIdx];
-      if (!line.trim()) {
-        continue;
+    const previous = options?.previous;
+    if (previous && previous.absPath === absPath && stat.size >= previous.size) {
+      const raw = await fs.readFile(absPath, "utf-8");
+      if (raw.length >= previous.size) {
+        const prevRaw = raw.slice(0, previous.size);
+        const appendRaw = raw.slice(previous.size);
+        const previousEndsCleanly = previous.size === 0 || prevRaw.endsWith("\n");
+        if (previousEndsCleanly) {
+          const lineOffset = prevRaw === "" ? 0 : prevRaw.split("\n").length - 1;
+          const appended = collectSessionLines(appendRaw.split("\n"), lineOffset);
+          const collected = previous.content
+            ? [...previous.content.split("\n"), ...appended.collected]
+            : appended.collected;
+          const lineMap = [...previous.lineMap, ...appended.lineMap];
+          const content = collected.join("\n");
+          return {
+            path: sessionPathForFile(absPath),
+            absPath,
+            mtimeMs: stat.mtimeMs,
+            size: stat.size,
+            hash: hashText(content + "\n" + lineMap.join(",")),
+            content,
+            lineMap,
+          };
+        }
       }
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (
-        !record ||
-        typeof record !== "object" ||
-        (record as { type?: unknown }).type !== "message"
-      ) {
-        continue;
-      }
-      const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
-        | undefined;
-      if (!message || typeof message.role !== "string") {
-        continue;
-      }
-      if (message.role !== "user" && message.role !== "assistant") {
-        continue;
-      }
-      const text = extractSessionText(message.content);
-      if (!text) {
-        continue;
-      }
-      const safe = redactSensitiveText(text, { mode: "tools" });
-      const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${safe}`);
-      lineMap.push(jsonlIdx + 1);
     }
-    const content = collected.join("\n");
+
+    const raw = await fs.readFile(absPath, "utf-8");
+    const parsed = collectSessionLines(raw.split("\n"));
+    const content = parsed.collected.join("\n");
     return {
       path: sessionPathForFile(absPath),
       absPath,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      hash: hashText(content + "\n" + lineMap.join(",")),
+      hash: hashText(content + "\n" + parsed.lineMap.join(",")),
       content,
-      lineMap,
+      lineMap: parsed.lineMap,
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);

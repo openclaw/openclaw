@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionEntry } from "./session-files.js";
 
 describe("buildSessionEntry", () => {
@@ -83,5 +83,33 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.lineMap).toEqual([3, 5]);
+  });
+
+  it("reuses previous entry for append-only transcript updates", async () => {
+    const filePath = path.join(tmpDir, "append-only.jsonl");
+    await fs.writeFile(
+      filePath,
+      [
+        JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
+        "",
+      ].join("\n"),
+    );
+
+    const first = await buildSessionEntry(filePath);
+    expect(first).not.toBeNull();
+
+    await fs.appendFile(
+      filePath,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "Third" } })}\n`,
+    );
+
+    const readSpy = vi.spyOn(fs, "readFile");
+    const next = await buildSessionEntry(filePath, { previous: first! });
+    expect(next).not.toBeNull();
+    expect(next!.content.split("\n")).toEqual(["User: First", "Assistant: Second", "User: Third"]);
+    expect(next!.lineMap).toEqual([1, 2, 3]);
+    expect(readSpy).toHaveBeenCalledTimes(1);
+    readSpy.mockRestore();
   });
 });
