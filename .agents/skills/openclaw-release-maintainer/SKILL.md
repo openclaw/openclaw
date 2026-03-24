@@ -72,8 +72,19 @@ pnpm test:install:smoke
 For a non-root smoke path:
 
 ```bash
-OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
+  OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 ```
+
+After npm publish, run:
+
+```bash
+node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
+```
+
+- This verifies the published registry install path in a fresh temp prefix.
+- For stable correction releases like `YYYY.M.D-N`, it also verifies the
+  upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
+  silently leave existing global installs on the old base stable payload.
 
 ## Check all relevant release builds
 
