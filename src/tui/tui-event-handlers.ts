@@ -259,6 +259,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
+    const priorActiveChatRunId = state.activeChatRunId;
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
@@ -273,7 +274,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
@@ -328,14 +329,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
