@@ -525,3 +525,89 @@ describe("executeSlashCommand directives", () => {
     });
   });
 });
+
+describe("executeSlashCommand /steer", () => {
+  it("steers the current session when no subagent target matches", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main")] };
+      }
+      if (method === "sessions.steer") {
+        return { status: "started", runId: "run-1", messageSeq: 2, interruptedActiveRun: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try a different approach",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "agent:main:main",
+      message: "try a different approach",
+    });
+  });
+
+  it("steers a matching subagent when the first word resolves to one", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:einstein", { spawnedBy: "agent:main:main" }),
+          ],
+        };
+      }
+      if (method === "sessions.steer") {
+        return { status: "started", runId: "run-2", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "einstein try a different approach",
+    );
+
+    expect(result.content).toBe("Steered `einstein`.");
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "agent:main:subagent:einstein",
+      message: "try a different approach",
+    });
+  });
+
+  it("returns usage when no message is provided", async () => {
+    const request = vi.fn();
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "",
+    );
+
+    expect(result.content).toBe("Usage: `/steer [id] <message>`");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("returns error message on RPC failure", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("connection lost");
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try again",
+    );
+
+    expect(result.content).toBe("Failed to steer: Error: connection lost");
+  });
+});
