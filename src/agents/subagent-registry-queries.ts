@@ -176,10 +176,18 @@ function forEachDescendantRun(
     if (!requester) {
       continue;
     }
+    const latestByChildSessionKey = new Map<string, [string, SubagentRunRecord]>();
     for (const [runId, entry] of runs.entries()) {
       if (entry.requesterSessionKey !== requester) {
         continue;
       }
+      const childKey = entry.childSessionKey.trim();
+      const existing = latestByChildSessionKey.get(childKey);
+      if (!existing || entry.createdAt > existing[1].createdAt) {
+        latestByChildSessionKey.set(childKey, [runId, entry]);
+      }
+    }
+    for (const [runId, entry] of latestByChildSessionKey.values()) {
       visitor(runId, entry);
       const childKey = entry.childSessionKey.trim();
       if (!childKey || visited.has(childKey)) {

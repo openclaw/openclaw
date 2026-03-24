@@ -115,6 +115,35 @@ describe("subagent registry query regressions", () => {
     expect(countPendingDescendantRunsFromRuns(runs, middleSessionKey)).toBe(1);
   });
 
+  it("dedupes restarted descendant rows for the same child session when counting pending work", () => {
+    const parentSessionKey = "agent:main:subagent:parent-dedupe";
+    const childSessionKey = `${parentSessionKey}:subagent:worker`;
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-child-stale",
+        childSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: 100,
+        endedAt: 150,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-child-current",
+        childSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: 200,
+      }),
+      makeRun({
+        runId: "run-grandchild-current",
+        childSessionKey: `${childSessionKey}:subagent:leaf`,
+        requesterSessionKey: childSessionKey,
+        createdAt: 210,
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(2);
+  });
+
   it("regression excluding current run, countPendingDescendantRunsExcludingRun keeps sibling gating intact", () => {
     // Regression guard: excluding the currently announcing run must not hide sibling pending work.
     const runs = toRunMap([
