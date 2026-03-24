@@ -18,6 +18,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
@@ -144,6 +145,11 @@ export type CompactEmbeddedPiSessionParams = {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /**
+   * When true, allows the plugin runtime subagent API to bind to the active
+   * gateway request context for this compaction run.
+   */
+  allowGatewaySubagentBinding?: boolean;
 };
 
 type CompactionMessageMetrics = {
@@ -513,6 +519,17 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
+    const ctxInfo = resolveContextWindowInfo({
+      cfg: params.config,
+      provider,
+      modelId,
+      modelContextWindow: model.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    const effectiveModel =
+      ctxInfo.tokens < (model.contextWindow ?? Infinity)
+        ? { ...model, contextWindow: ctxInfo.tokens }
+        : model;
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -781,6 +798,9 @@ export async function compactEmbeddedPiSessionDirect(
         // can read sessionFile asynchronously and process in parallel with
         // the compaction LLM call — no need to block or wait for after_compaction.
         const hookRunner = getGlobalHookRunner();
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const missingSessionKey = !params.sessionKey;
+        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {
           agentId: params.sessionKey?.split(":")[0] ?? "main",
           sessionKey: params.sessionKey,

@@ -125,4 +125,9 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * When true, allows the plugin runtime subagent API to bind to the active
+   * gateway request context for this run (gateway-hosted runs only).
+   */
+  allowGatewaySubagentBinding?: boolean;
 };

@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
+import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {

@@ -13,3 +13,12 @@ export const modelPickerRuntime = {
   resolvePluginProviders,
   runProviderPluginAuthMethod,
 };
+
+// Named re-exports so callers can destructure the dynamic import directly.
+export {
+  resolveProviderModelPickerEntries,
+  resolveProviderPluginChoice,
+  runProviderModelSelectedHook,
+  resolvePluginProviders,
+  runProviderPluginAuthMethod,
+};
