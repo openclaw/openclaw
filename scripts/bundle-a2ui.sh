@@ -85,7 +85,11 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
-pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
+if [[ -f "$ROOT_DIR/node_modules/typescript/bin/tsc" ]]; then
+  node "$ROOT_DIR/node_modules/typescript/bin/tsc" -p "$A2UI_RENDERER_DIR/tsconfig.json"
+else
+  pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
+fi
 if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 elif [[ -f "$ROOT_DIR/node_modules/.pnpm/node_modules/rolldown/bin/cli.mjs" ]]; then

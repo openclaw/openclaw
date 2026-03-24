@@ -87,8 +87,12 @@ export function resolveNpmRunner(params = {}) {
   const existsSync = params.existsSync ?? fs.existsSync;
   const platform = params.platform ?? process.platform;
   const nodeDir = path.dirname(execPath);
-  const npmCliPath = path.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js");
-  if (existsSync(npmCliPath)) {
+  const npmCliCandidatePaths =
+    platform === "win32"
+      ? [path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js")]
+      : [path.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js")];
+  const npmCliPath = npmCliCandidatePaths.find((candidate) => existsSync(candidate));
+  if (npmCliPath) {
     return {
       command: execPath,
       args: [npmCliPath],
