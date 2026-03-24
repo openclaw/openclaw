@@ -127,14 +127,19 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
+  const selfJid = params.msg.selfJid?.replace(/:\d+/, "");
+  const selfLid = params.msg.selfLid?.replace(/:\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\d+/, "");
   const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;
+  // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
+  // WhatsApp may report the quoted message sender as either a phone JID
+  // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
   const implicitMention = Boolean(
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
+    (selfLid && replySenderJid && selfLid === replySenderJid) ||
     (selfE164 && replySenderE164 && selfE164 === replySenderE164),
   );
   const mentionGate = resolveMentionGating({
