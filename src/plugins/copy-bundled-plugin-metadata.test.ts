@@ -84,6 +84,73 @@ describe("copyBundledPluginMetadata", () => {
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
+  it("keeps bundled package metadata scoped to declared plugin entry points when runtime helpers exist", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-runtime-metadata-");
+    const pluginDir = path.join(repoRoot, "extensions", "whatsapp");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "runtime-api.ts"),
+      "export const heavy = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "light-runtime-api.ts"),
+      "export const light = true;\n",
+      "utf8",
+    );
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "whatsapp",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/whatsapp",
+      openclaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    const packageJson = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "whatsapp", "package.json"),
+        "utf8",
+      ),
+    ) as { openclaw?: { extensions?: string[]; setupEntry?: string } };
+
+    expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+    expect(packageJson.openclaw?.setupEntry).toBe("./setup-entry.js");
+  });
+
+  it("handles malformed extension metadata without throwing while leaving extension discovery metadata unset", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-malformed-runtime-metadata-");
+    const pluginDir = path.join(repoRoot, "extensions", "telegram");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "runtime-api.ts"),
+      "export const runtime = true;\n",
+      "utf8",
+    );
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "telegram",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/telegram",
+      openclaw: { extensions: null, setupEntry: "./setup-entry.ts" },
+    });
+
+    expect(() => copyBundledPluginMetadata({ repoRoot })).not.toThrow();
+
+    const packageJson = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "telegram", "package.json"),
+        "utf8",
+      ),
+    ) as { openclaw?: { extensions?: string[]; setupEntry?: string } };
+
+    expect(packageJson.openclaw?.extensions).toBeUndefined();
+    expect(packageJson.openclaw?.setupEntry).toBe("./setup-entry.js");
+  });
+
   it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-node-modules-");
     const pluginDir = path.join(repoRoot, "extensions", "tlon");
