@@ -839,7 +839,10 @@ export abstract class MemoryManagerSyncOps {
         return;
       }
       const previousEntry = this.sessionEntryCache.get(absPath);
-      const entry = await buildSessionEntry(absPath, previousEntry ? { previous: previousEntry } : undefined);
+      const entry = await buildSessionEntry(
+        absPath,
+        previousEntry ? { previous: previousEntry } : undefined,
+      );
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;

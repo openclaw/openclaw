@@ -75,7 +75,10 @@ export function extractSessionText(content: unknown): string | null {
   return parts.join(" ");
 }
 
-function collectSessionLines(lines: string[], lineOffset = 0): { collected: string[]; lineMap: number[] } {
+function collectSessionLines(
+  lines: string[],
+  lineOffset = 0,
+): { collected: string[]; lineMap: number[] } {
   const collected: string[] = [];
   const lineMap: number[] = [];
   for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
@@ -89,7 +92,11 @@ function collectSessionLines(lines: string[], lineOffset = 0): { collected: stri
     } catch {
       continue;
     }
-    if (!record || typeof record !== "object" || (record as { type?: unknown }).type !== "message") {
+    if (
+      !record ||
+      typeof record !== "object" ||
+      (record as { type?: unknown }).type !== "message"
+    ) {
       continue;
     }
     const message = (record as { message?: unknown }).message as
