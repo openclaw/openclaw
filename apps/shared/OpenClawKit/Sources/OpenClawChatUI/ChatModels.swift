@@ -272,6 +272,7 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public var id: String { "\(self.runId)-\(self.seq ?? -1)" }
     public let runId: String
+    public let sessionKey: String?
     public let seq: Int?
     public let stream: String
     public let ts: Int?

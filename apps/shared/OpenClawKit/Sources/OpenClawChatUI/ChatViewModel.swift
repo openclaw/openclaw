@@ -49,6 +49,12 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+    private var assistantStreamText: String?
+    private var syntheticProgressText: String?
+    private var syntheticProgressStartedAtMs: Double?
+    private var syntheticProgressActiveRunId: String?
+    private var syntheticProgressPrimaryToolName: String?
+    private var syntheticProgressLastElapsedBucket: Int?
     // Session switches can overlap in-flight picker patches, so stale completions
     // must compare against the latest request and latest desired value for that session.
     private var nextModelSelectionRequestID: UInt64 = 0
@@ -219,7 +225,7 @@ public final class OpenClawChatViewModel {
         self.healthOK = false
         self.clearPendingRuns(reason: nil)
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.resetStreamingState()
         self.sessionId = nil
         defer { self.isLoading = false }
         do {
@@ -492,7 +498,7 @@ public final class OpenClawChatViewModel {
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.resetStreamingState()
 
         // Optimistically append user message to UI.
         var userContent: [OpenClawChatMessageContent] = [
@@ -897,6 +903,7 @@ public final class OpenClawChatViewModel {
         case let .health(ok):
             self.healthOK = ok
         case .tick:
+            self.refreshSyntheticProgressText(forceElapsedBucketAdvance: false)
             Task { await self.pollHealthIfNeeded(force: false) }
         case let .chat(chat):
             self.handleChatEvent(chat)
@@ -929,7 +936,7 @@ public final class OpenClawChatViewModel {
             // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
             switch chat.state {
             case "final", "aborted", "error":
-                self.streamingAssistantText = nil
+                self.resetStreamingState()
                 self.pendingToolCallsById = [:]
                 Task { await self.refreshHistoryAfterRun() }
             default:
@@ -949,7 +956,7 @@ public final class OpenClawChatViewModel {
                 self.clearPendingRuns(reason: nil)
             }
             self.pendingToolCallsById = [:]
-            self.streamingAssistantText = nil
+            self.resetStreamingState()
             Task { await self.refreshHistoryAfterRun() }
         default:
             break
@@ -972,15 +979,31 @@ public final class OpenClawChatViewModel {
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        if let sessionId, evt.runId != sessionId {
+        let isCurrentPendingRun = self.pendingRuns.contains(evt.runId)
+        let matchesCurrentSession =
+            evt.sessionKey.map {
+                Self.matchesCurrentSessionKey(incoming: $0, current: self.sessionKey)
+            } ?? false
+        let matchesLegacySessionId = self.sessionId.map { $0 == evt.runId } ?? false
+        if !isCurrentPendingRun, !matchesCurrentSession, !matchesLegacySessionId {
             return
         }
 
         switch evt.stream {
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
-                self.streamingAssistantText = text
+                self.assistantStreamText = text
+                if self.syntheticProgressActiveRunId == evt.runId {
+                    self.syntheticProgressActiveRunId = nil
+                    self.syntheticProgressPrimaryToolName = nil
+                    self.syntheticProgressStartedAtMs = nil
+                    self.syntheticProgressLastElapsedBucket = nil
+                    self.syntheticProgressText = nil
+                }
+                self.refreshVisibleStreamingText()
             }
+        case "lifecycle":
+            self.handleLifecycleAgentEvent(evt)
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
@@ -993,12 +1016,106 @@ public final class OpenClawChatViewModel {
                     args: args,
                     startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
                     isError: nil)
+                self.startSyntheticProgress(runId: evt.runId, primaryToolName: name, ts: evt.ts)
             } else if phase == "result" {
                 self.pendingToolCallsById[toolCallId] = nil
+                if self.pendingToolCallsById.isEmpty {
+                    self.syntheticProgressPrimaryToolName = nil
+                }
+                self.refreshSyntheticProgressText(forceElapsedBucketAdvance: true)
             }
         default:
             break
         }
+    }
+
+    private func handleLifecycleAgentEvent(_ evt: OpenClawAgentEventPayload) {
+        guard let phase = evt.data["phase"]?.value as? String else { return }
+        switch phase {
+        case "start":
+            self.startSyntheticProgress(runId: evt.runId, primaryToolName: nil, ts: evt.ts)
+        case "end", "error":
+            if self.syntheticProgressActiveRunId == evt.runId || self.pendingRuns.contains(evt.runId) {
+                self.syntheticProgressActiveRunId = nil
+                self.syntheticProgressPrimaryToolName = nil
+                self.syntheticProgressStartedAtMs = nil
+                self.syntheticProgressLastElapsedBucket = nil
+                self.syntheticProgressText = nil
+                self.refreshVisibleStreamingText()
+            }
+        default:
+            break
+        }
+    }
+
+    private func startSyntheticProgress(runId: String, primaryToolName: String?, ts: Int?) {
+        if self.syntheticProgressActiveRunId != runId {
+            self.syntheticProgressActiveRunId = runId
+            self.syntheticProgressStartedAtMs = ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000
+            self.syntheticProgressLastElapsedBucket = nil
+        }
+        if let primaryToolName, !primaryToolName.isEmpty {
+            self.syntheticProgressPrimaryToolName = primaryToolName
+        }
+        self.refreshSyntheticProgressText(forceElapsedBucketAdvance: true)
+    }
+
+    private func refreshSyntheticProgressText(forceElapsedBucketAdvance: Bool) {
+        guard self.syntheticProgressActiveRunId != nil || !self.pendingToolCallsById.isEmpty else {
+            self.syntheticProgressPrimaryToolName = nil
+            self.syntheticProgressStartedAtMs = nil
+            self.syntheticProgressLastElapsedBucket = nil
+            self.syntheticProgressText = nil
+            self.refreshVisibleStreamingText()
+            return
+        }
+
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        let startedAtMs = self.syntheticProgressStartedAtMs ?? nowMs
+        self.syntheticProgressStartedAtMs = startedAtMs
+        let elapsedSeconds = max(0, Int((nowMs - startedAtMs) / 1000))
+        let elapsedBucket = elapsedSeconds / 15
+        if !forceElapsedBucketAdvance, elapsedBucket == self.syntheticProgressLastElapsedBucket {
+            return
+        }
+        self.syntheticProgressLastElapsedBucket = elapsedBucket
+
+        let toolName = self.syntheticProgressPrimaryToolName ?? self.pendingToolCalls.first?.name
+        var status = "Working"
+        if let toolName, !toolName.isEmpty {
+            status += " while running `\(toolName)`"
+        }
+        if elapsedSeconds >= 15 {
+            status += " (\(elapsedSeconds)s)"
+        }
+        status += "."
+        self.syntheticProgressText = "_\(status)_"
+        self.refreshVisibleStreamingText()
+    }
+
+    private func refreshVisibleStreamingText() {
+        let assistantText = self.assistantStreamText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let syntheticText = self.syntheticProgressText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (assistantText?.isEmpty == false ? assistantText : nil, syntheticText?.isEmpty == false ? syntheticText : nil) {
+        case let (assistantText?, syntheticText?):
+            self.streamingAssistantText = "\(assistantText)\n\n\(syntheticText)"
+        case let (assistantText?, nil):
+            self.streamingAssistantText = assistantText
+        case let (nil, syntheticText?):
+            self.streamingAssistantText = syntheticText
+        case (nil, nil):
+            self.streamingAssistantText = nil
+        }
+    }
+
+    private func resetStreamingState() {
+        self.assistantStreamText = nil
+        self.syntheticProgressText = nil
+        self.syntheticProgressStartedAtMs = nil
+        self.syntheticProgressActiveRunId = nil
+        self.syntheticProgressPrimaryToolName = nil
+        self.syntheticProgressLastElapsedBucket = nil
+        self.streamingAssistantText = nil
     }
 
     private func refreshHistoryAfterRun() async {

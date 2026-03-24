@@ -151,6 +151,7 @@ private func sendMessageAndEmitFinal(
 private func emitAssistantText(
     transport: TestChatTransport,
     runId: String,
+    sessionKey: String? = "main",
     text: String,
     seq: Int = 1)
 {
@@ -158,6 +159,7 @@ private func emitAssistantText(
         .agent(
             OpenClawAgentEventPayload(
                 runId: runId,
+                sessionKey: sessionKey,
                 seq: seq,
                 stream: "assistant",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -167,12 +169,14 @@ private func emitAssistantText(
 private func emitToolStart(
     transport: TestChatTransport,
     runId: String,
+    sessionKey: String? = "main",
     seq: Int = 2)
 {
     transport.emit(
         .agent(
             OpenClawAgentEventPayload(
                 runId: runId,
+                sessionKey: sessionKey,
                 seq: seq,
                 stream: "tool",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -433,17 +437,17 @@ extension TestChatTransportState {
         await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
 
-        emitAssistantText(transport: transport, runId: sessionId, text: "streaming…")
+        let runId = try #require(await transport.lastSentRunId())
+        emitAssistantText(transport: transport, runId: runId, text: "streaming…")
 
         try await waitUntil("assistant stream visible") {
             await MainActor.run { vm.streamingAssistantText == "streaming…" }
         }
 
-        emitToolStart(transport: transport, runId: sessionId)
+        emitToolStart(transport: transport, runId: runId)
 
         try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
 
-        let runId = try #require(await transport.lastSentRunId())
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
@@ -683,8 +687,12 @@ extension TestChatTransportState {
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        emitAssistantText(transport: transport, runId: sessionId, text: "external stream")
-        emitToolStart(transport: transport, runId: sessionId)
+        emitAssistantText(
+            transport: transport,
+            runId: "external-run",
+            sessionKey: "main",
+            text: "external stream")
+        emitToolStart(transport: transport, runId: "external-run", sessionKey: "main")
 
         try await waitUntil("streaming active") {
             await MainActor.run { vm.streamingAssistantText == "external stream" }
@@ -695,6 +703,54 @@ extension TestChatTransportState {
 
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
+    }
+
+    @Test func acceptsAgentEventsForPendingRunsEvenWhenRunIDDiffersFromSessionID() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "check progress")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try #require(await transport.lastSentRunId())
+        #expect(runId != sessionId)
+
+        emitToolStart(transport: transport, runId: runId, sessionKey: "main")
+
+        try await waitUntil("pending tool shows for real run id") {
+            await MainActor.run { vm.pendingToolCalls.count == 1 }
+        }
+        try await waitUntil("synthetic progress visible") {
+            await MainActor.run {
+                vm.streamingAssistantText?.contains("Working while running `demo`.") == true
+            }
+        }
+    }
+
+    @Test func appendsSyntheticProgressToAssistantCommentaryForLongRuns() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "do the long task")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try #require(await transport.lastSentRunId())
+
+        emitAssistantText(
+            transport: transport,
+            runId: runId,
+            sessionKey: "main",
+            text: "I’ll keep you updated.")
+        emitToolStart(transport: transport, runId: runId, sessionKey: "main")
+
+        try await waitUntil("assistant text includes synthetic status") {
+            await MainActor.run {
+                vm.streamingAssistantText?.contains("I’ll keep you updated.") == true &&
+                    vm.streamingAssistantText?.contains("Working while running `demo`.") == true
+            }
+        }
     }
 
     @Test func seqGapClearsPendingRunsAndAutoRefreshesHistory() async throws {
