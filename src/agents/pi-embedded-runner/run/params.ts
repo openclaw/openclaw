@@ -125,4 +125,9 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * When true, the loader treats this agent run as gateway-bindable so that
+   * subagent spawning can resolve gateway-bound conversation contexts.
+   */
+  allowGatewaySubagentBinding?: boolean;
 };

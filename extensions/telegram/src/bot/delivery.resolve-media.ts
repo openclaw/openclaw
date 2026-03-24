@@ -7,7 +7,7 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveTelegramApiBase,
-  shouldRetryTelegramTransportFallback,
+  shouldRetryTelegramIpv4Fallback,
   type TelegramTransport,
 } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
@@ -42,7 +42,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
  */
 function isFileTooBigError(err: unknown): boolean {
   if (err instanceof GrammyError) {
-    return FILE_TOO_BIG_RE.test(err.description);
+    return FILE_TOO_BIG_RE.test((err as GrammyError).description);
   }
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
 }

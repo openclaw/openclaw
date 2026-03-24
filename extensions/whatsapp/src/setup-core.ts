@@ -1,5 +1,5 @@
 import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/plugin-sdk-internal/setup.js";
+import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 
 const channel = "whatsapp" as const;
 

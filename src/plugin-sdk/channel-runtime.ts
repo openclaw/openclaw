@@ -22,7 +22,24 @@ export * from "../channels/session.js";
 export * from "../channels/session-envelope.js";
 export * from "../channels/session-meta.js";
 export * from "../channels/status-reactions.js";
-export * from "../channels/targets.js";
+// Export all from targets except DirectoryConfigParams which is already
+// re-exported from directory-runtime.ts to avoid duplicate identifier errors.
+export type {
+  MessagingTarget,
+  MessagingTargetKind,
+  MessagingTargetParseOptions,
+} from "../channels/targets.js";
+export {
+  buildMessagingTarget,
+  ensureTargetId,
+  normalizeTargetId,
+  parseAtUserTarget,
+  parseMentionPrefixOrAtUserTarget,
+  parseTargetMention,
+  parseTargetPrefix,
+  parseTargetPrefixes,
+  requireTargetKind,
+} from "../channels/targets.js";
 export * from "../channels/thread-binding-id.js";
 export * from "../channels/thread-bindings-messages.js";
 export * from "../channels/thread-bindings-policy.js";
@@ -47,7 +64,9 @@ export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../polls.js";
 export * from "../utils/message-channel.js";
-export * from "../whatsapp/normalize.js";
+// Note: whatsapp normalize exports are already available via
+// ../channels/plugins/normalize/whatsapp.js (which re-exports from extensions/whatsapp).
+// Avoid re-exporting here to prevent duplicate identifier errors.
 export { createActionGate, jsonResult, readStringParam } from "../agents/tools/common.js";
 export * from "./channel-lifecycle.js";
 export * from "./directory-runtime.js";

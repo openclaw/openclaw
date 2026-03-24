@@ -595,7 +595,7 @@ function listPluginDockEntries(): Array<{ id: ChannelId; dock: ChannelDock; orde
     if (CHAT_CHANNEL_ORDER.includes(plugin.id as ChatChannelId)) {
       continue;
     }
-    const dock = entry.dock ?? buildDockFromPlugin(plugin);
+    const dock = (entry.dock as ChannelDock | undefined) ?? buildDockFromPlugin(plugin);
     entries.push({ id: plugin.id, dock, order: plugin.meta.order });
   }
   return entries;
@@ -632,5 +632,5 @@ export function getChannelDock(id: ChannelId): ChannelDock | undefined {
   if (!pluginEntry) {
     return undefined;
   }
-  return pluginEntry.dock ?? buildDockFromPlugin(pluginEntry.plugin);
+  return (pluginEntry.dock as ChannelDock | undefined) ?? buildDockFromPlugin(pluginEntry.plugin);
 }
