@@ -239,9 +239,12 @@ export async function getReplyFromConfig(
 
   // Auto model routing based on message complexity
   // Apply routing after session state is initialized but before other overrides
+  const hasSessionModelOverride = Boolean(
+    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+  );
   const triggerMessage = finalized.Body || triggerBodyNormalized || "";
-  const autoModelResult = getAutoModelForMessage(triggerMessage, cfg);
-  if (autoModelResult && !hasResolvedHeartbeatModelOverride) {
+  const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
+  if (autoModelResult && !hasResolvedHeartbeatModelOverride && !hasSessionModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: autoModelResult.model,
       defaultProvider,
@@ -289,9 +292,6 @@ export async function getReplyFromConfig(
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
   });
-  const hasSessionModelOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
-  );
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,

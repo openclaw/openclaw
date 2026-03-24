@@ -4,12 +4,15 @@
  * 根据消息复杂度自动选择本地或云端模型
  */
 
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("auto-model-router");
+
+const execFileAsync = promisify(execFile);
 
 interface RouterConfig {
   enabled: boolean;
@@ -27,7 +30,7 @@ interface RouterAnalysis {
 }
 
 const DEFAULT_CONFIG: RouterConfig = {
-  enabled: true,
+  enabled: false,
   threshold: 40,
   localModel: "ollama/qwen3:14b",
   cloudModel: "bailian/qwen3.5-plus",
@@ -52,20 +55,17 @@ function resolveRouterConfig(cfg: OpenClawConfig): RouterConfig {
   };
 }
 
-export function analyzeMessageComplexity(
+export async function analyzeMessageComplexity(
   message: string,
   config: RouterConfig,
-): RouterAnalysis | null {
+): Promise<RouterAnalysis> {
   try {
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\n/g, " ");
-
-    const result = execSync(`node "${config.routerScript}" "${escapedMessage}" --json`, {
+    const { stdout } = await execFileAsync("node", [config.routerScript, message, "--json"], {
       encoding: "utf8",
-      stdio: ["pipe", "pipe", "ignore"],
       timeout: 5000,
     });
 
-    return JSON.parse(result) as RouterAnalysis;
+    return JSON.parse(stdout) as RouterAnalysis;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     log.warn(`Router analysis failed: ${errorMessage}, using cloud model`);
@@ -78,21 +78,17 @@ export function analyzeMessageComplexity(
   }
 }
 
-export function getAutoModelForMessage(
+export async function getAutoModelForMessage(
   message: string,
   cfg: OpenClawConfig,
-): { model: string; emoji?: string } | null {
+): Promise<{ model: string; emoji?: string } | null> {
   const config = resolveRouterConfig(cfg);
 
   if (!config.enabled || !message?.trim()) {
     return null;
   }
 
-  const analysis = analyzeMessageComplexity(message, config);
-
-  if (!analysis) {
-    return null;
-  }
+  const analysis = await analyzeMessageComplexity(message, config);
 
   log.info(
     `Route: ${analysis.route} ${analysis.emoji} | ` +
