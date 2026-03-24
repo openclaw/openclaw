@@ -6,7 +6,7 @@ import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { setGatewayAgentAbort, setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
@@ -294,6 +294,30 @@ async function dispatchGatewayMethod<T>(
   return result.payload as T;
 }
 
+function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
+  return async (params) => {
+    const ctx = getFallbackGatewayContext();
+    if (!ctx) {
+      return { aborted: false };
+    }
+    const active = ctx.chatAbortControllers.get(params.runId);
+    if (!active) {
+      return { aborted: false };
+    }
+    const { abortChatRunById } = await import("./chat-abort.js");
+    return abortChatRunById(ctx, {
+      runId: params.runId,
+      // When sessionKey is omitted, fall back to the entry's own sessionKey.
+      // This intentionally bypasses the cross-session ownership check in
+      // abortChatRunById, allowing any gateway-bound plugin to abort any run
+      // it knows the runId of. This is acceptable because abort access is
+      // gated by allowGatewaySubagentBinding at the runtime level.
+      sessionKey: params.sessionKey ?? active.sessionKey,
+      stopReason: "plugin",
+    });
+  };
+}
+
 function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
@@ -400,12 +424,13 @@ export function loadGatewayPlugins(params: {
   logDiagnostics?: boolean;
 }) {
   setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
+  // Set the process-global gateway runtimes BEFORE loading plugins.
   // Gateway-owned registries may already exist from schema loads, so the
   // gateway path opts those runtimes into late binding rather than changing
   // the default subagent behavior for every plugin runtime in the process.
   const gatewaySubagent = createGatewaySubagentRuntime();
   setGatewaySubagentRuntime(gatewaySubagent);
+  setGatewayAgentAbort(createGatewayAgentAbort());
 
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
