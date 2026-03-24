@@ -38,7 +38,8 @@ async function* streamElevenLabsTelephony(
   signal?: AbortSignal,
 ): AsyncGenerator<Buffer, void, unknown> {
   const elevenlabs = config.elevenlabs;
-  if (!elevenlabs?.apiKey || !elevenlabs?.voiceId) {
+  const apiKey = typeof elevenlabs?.apiKey === "string" ? elevenlabs.apiKey : null;
+  if (!apiKey || !elevenlabs?.voiceId) {
     throw new Error("ElevenLabs API key and voice ID required for streaming TTS");
   }
 
@@ -77,7 +78,7 @@ async function* streamElevenLabsTelephony(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "xi-api-key": elevenlabs.apiKey,
+      "xi-api-key": apiKey,
     },
     body: JSON.stringify(body),
     signal,

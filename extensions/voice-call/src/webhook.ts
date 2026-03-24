@@ -164,9 +164,10 @@ export class VoiceCallWebhookServer {
     let sttProvider: OpenAIRealtimeSTTProvider | ElevenLabsScribeSTTProvider;
 
     if (sttProviderType === "elevenlabs-scribe") {
+      const configuredApiKey =
+        this.config.streaming?.elevenlabsApiKey || this.config.tts?.elevenlabs?.apiKey;
       const apiKey =
-        this.config.streaming?.elevenlabsApiKey ||
-        this.config.tts?.elevenlabs?.apiKey ||
+        (typeof configuredApiKey === "string" ? configuredApiKey : null) ||
         process.env.ELEVENLABS_API_KEY;
 
       if (!apiKey) {
