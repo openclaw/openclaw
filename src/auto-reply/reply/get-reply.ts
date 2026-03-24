@@ -308,13 +308,17 @@ export async function getReplyFromConfig(
   // Check if channel model is already a vision model (skip image model switch if so)
   let channelModelIsVisionModel = false;
   if (channelModelOverride) {
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+    // Use the active default provider when building the alias index so that
+    // aliases defined on providerless model keys resolve correctly to the
+    // agent's default provider. This ensures channel model aliases that point
+    // to vision models are properly detected.
+    const channelAliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
 
     // Resolve the channel model to get provider/model
     const channelResolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
-      aliasIndex,
+      aliasIndex: channelAliasIndex,
     });
 
     if (channelResolved) {
@@ -327,8 +331,8 @@ export async function getReplyFromConfig(
           imageModelKeys.add(rawModel.trim());
           const resolved = resolveModelRefFromString({
             raw: rawModel.trim(),
-            defaultProvider: "",
-            aliasIndex,
+            defaultProvider,
+            aliasIndex: channelAliasIndex,
           });
           if (resolved) {
             imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
