@@ -1469,6 +1469,60 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not report queued delivery when active announce queue drops a new item", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-drop-new",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "followup",
+        queueDebounceMs: 0,
+        queueCap: 1,
+        queueDrop: "new",
+      },
+    };
+
+    let resolveFirstSend = () => {};
+    const firstSendPending = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    agentSpy.mockImplementation(async (_req: AgentCallRequest) => {
+      await firstSendPending;
+      return { runId: "run-main", status: "ok" };
+    });
+
+    const firstDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-first",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const secondDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-dropped",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(firstDidAnnounce).toBe(true);
+    expect(secondDidAnnounce).toBe(false);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+
+    resolveFirstSend();
+    await Promise.resolve();
+  });
+
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
