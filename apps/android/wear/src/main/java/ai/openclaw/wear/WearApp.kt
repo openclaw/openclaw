@@ -7,8 +7,11 @@ import ai.openclaw.wear.R
 import ai.openclaw.wear.chat.WearChatController
 import ai.openclaw.wear.gateway.GatewayClientInterface
 import ai.openclaw.wear.gateway.PhoneProxyClient
+import ai.openclaw.wear.gateway.SharedPrefsWearGatewayTlsPinStore
 import ai.openclaw.wear.gateway.WearGatewayClient
+import ai.openclaw.wear.gateway.WearGatewayConfig
 import ai.openclaw.wear.gateway.WearGatewayConfigStore
+import ai.openclaw.wear.gateway.resolveWearGatewayStableId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,10 +28,22 @@ private const val TAG = "WearApp"
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearApp : Application() {
+  private data class DirectConnectionSpec(
+    val host: String,
+    val port: Int,
+    val token: String,
+    val bootstrapToken: String,
+    val password: String,
+    val useTls: Boolean,
+  )
+
   val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   lateinit var configStore: WearGatewayConfigStore
   lateinit var chatController: WearChatController
   private lateinit var replyNotifier: WearReplyNotifier
+  private lateinit var tlsPinStore: SharedPrefsWearGatewayTlsPinStore
+  private val _config = MutableStateFlow(WearGatewayConfig())
+  val config: StateFlow<WearGatewayConfig> = _config
 
   // Emits the current active client — derived flows auto-switch via flatMapLatest
   private val _activeClientFlow = MutableStateFlow<GatewayClientInterface?>(null)
@@ -38,10 +53,16 @@ class WearApp : Application() {
   lateinit var activeClient: GatewayClientInterface
     private set
 
-  var directClient: WearGatewayClient? = null
+  lateinit var directClient: WearGatewayClient
     private set
-  var proxyClient: PhoneProxyClient? = null
+  lateinit var proxyClient: PhoneProxyClient
     private set
+
+  private var proxyPolicyJob: Job? = null
+  private var proxyStarted = false
+  private var directStarted = false
+  private var lastDirectSpec: DirectConnectionSpec? = null
+  private var reconnectPaused = false
 
   /** Always tracks the CURRENT active client's connected state. */
   val connected: StateFlow<Boolean> by lazy {
@@ -64,34 +85,22 @@ class WearApp : Application() {
     super.onCreate()
     configStore = WearGatewayConfigStore(this)
     replyNotifier = WearReplyNotifier(this)
-    val config = configStore.load()
+    tlsPinStore = SharedPrefsWearGatewayTlsPinStore(this)
+    val initialConfig = configStore.load()
+    _config.value = initialConfig
 
-    if (config.usePhoneProxy) {
-      val proxy = PhoneProxyClient(this)
-      proxyClient = proxy
-      activeClient = proxy
-    } else {
-      val direct = WearGatewayClient(this)
-      directClient = direct
-      activeClient = direct
-    }
+    directClient = WearGatewayClient(this, tlsPinStore)
+    proxyClient = PhoneProxyClient(this, onGatewayConfigSynced = ::applySyncedGatewayConfig)
+    activeClient = if (initialConfig.usePhoneProxy) proxyClient else directClient
 
     _activeClientFlow.value = activeClient
     chatController = WearChatController(scope, activeClient, ::getString)
 
-    // Connect with the configured mode
-    if (config.usePhoneProxy) {
-      Log.i(TAG, "Starting phone proxy connection")
-      proxyClient?.connect()
-    } else if (config.isValid) {
-      Log.i(TAG, "Starting direct gateway connection")
-      directClient?.configure(config)
-      directClient?.connect()
-    }
-
     // Watch connection state — uses flatMapLatest so it auto-tracks client switches
     startConnectionWatcher()
     startReplyNotificationWatcher()
+    applyConnectionPolicy(forceReconnect = true)
+    startProxyPolicyWatcher()
   }
 
   private fun startConnectionWatcher() {
@@ -132,39 +141,182 @@ class WearApp : Application() {
     return !activityVisible || !isScreenInteractive
   }
 
-  /**
-   * Switch between direct and phone proxy mode.
-   * Disconnects the current client and connects the new one.
-   */
+  /** Updates whether the watch should prefer the phone proxy over direct fallback. */
   fun switchConnectionMode(usePhoneProxy: Boolean) {
-    Log.i(TAG, "Switching connection mode: usePhoneProxy=$usePhoneProxy")
+    saveConnectionConfig(_config.value.copy(usePhoneProxy = usePhoneProxy))
+  }
 
-    // Disconnect current
-    directClient?.shutdown()
-    proxyClient?.disconnect()
+  fun saveChatConfig(config: WearGatewayConfig) {
+    persistConfig(config)
+  }
 
-    val config = configStore.load()
-
-    if (usePhoneProxy) {
-      directClient = null
-      val proxy = PhoneProxyClient(this)
-      proxyClient = proxy
-      activeClient = proxy
-      _activeClientFlow.value = proxy // triggers flatMapLatest → ViewModel sees new flows
-      chatController.switchClient(proxy)
-      Log.i(TAG, "Created PhoneProxyClient, calling connect()")
-      proxy.connect()
-    } else {
-      proxyClient = null
-      val direct = WearGatewayClient(this)
-      directClient = direct
-      activeClient = direct
-      _activeClientFlow.value = direct
-      chatController.switchClient(direct)
-      if (config.isValid) {
-        direct.configure(config)
-        direct.connect()
-      }
+  fun saveConnectionConfig(config: WearGatewayConfig) {
+    val previous = _config.value
+    persistConfig(config)
+    if (!reconnectPaused) {
+      applyConnectionPolicy(forceReconnect = hasConnectionRelevantChanges(previous, config))
     }
+  }
+
+  fun reconnect() {
+    reconnectPaused = false
+    applyConnectionPolicy(forceReconnect = true)
+  }
+
+  fun disconnect() {
+    reconnectPaused = true
+    stopDirectClient()
+    stopProxyClient()
+  }
+
+  private fun startProxyPolicyWatcher() {
+    proxyPolicyJob?.cancel()
+    proxyPolicyJob =
+      scope.launch {
+        proxyClient.connected.collect {
+          if (!reconnectPaused && _config.value.usePhoneProxy) {
+            applyConnectionPolicy(forceReconnect = false)
+          }
+        }
+      }
+  }
+
+  private fun persistConfig(config: WearGatewayConfig) {
+    configStore.save(config)
+    _config.value = config
+  }
+
+  private fun applySyncedGatewayConfig(config: WearGatewayConfig, tlsFingerprintSha256: String?) {
+    val previous = _config.value
+    val merged =
+      previous.copy(
+        host = config.host,
+        port = config.port,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+        useTls = config.useTls,
+      )
+
+    tlsFingerprintSha256?.trim()?.takeIf { it.isNotEmpty() }?.let { fingerprint ->
+      tlsPinStore.save(resolveWearGatewayStableId(merged), fingerprint)
+    }
+
+    if (merged == previous) {
+      if (!reconnectPaused && previous.usePhoneProxy) {
+        applyConnectionPolicy(forceReconnect = false)
+      }
+      return
+    }
+
+    persistConfig(merged)
+    if (!reconnectPaused) {
+      applyConnectionPolicy(forceReconnect = activeClient === directClient && hasConnectionRelevantChanges(previous, merged))
+    }
+  }
+
+  private fun applyConnectionPolicy(forceReconnect: Boolean) {
+    val config = _config.value
+    Log.i(
+      TAG,
+      "Applying connection policy: usePhoneProxy=${config.usePhoneProxy} directConfigured=${config.hasDirectConnection} forceReconnect=$forceReconnect",
+    )
+
+    if (config.usePhoneProxy) {
+      startProxyClient(forceReconnect = forceReconnect)
+      if (proxyClient.connected.value) {
+        activateClient(proxyClient)
+        stopDirectClient()
+        return
+      }
+
+      if (config.hasDirectConnection) {
+        activateClient(directClient)
+        startDirectClient(config, forceReconnect = forceReconnect)
+      } else {
+        activateClient(proxyClient)
+        stopDirectClient()
+      }
+      return
+    }
+
+    stopProxyClient()
+    activateClient(directClient)
+    if (config.hasDirectConnection) {
+      startDirectClient(config, forceReconnect = forceReconnect)
+    } else {
+      stopDirectClient()
+    }
+  }
+
+  private fun activateClient(client: GatewayClientInterface) {
+    if (activeClient === client) {
+      return
+    }
+    activeClient = client
+    _activeClientFlow.value = client
+    chatController.switchClient(client)
+  }
+
+  private fun startProxyClient(forceReconnect: Boolean) {
+    if (forceReconnect && proxyStarted) {
+      proxyClient.disconnect()
+      proxyStarted = false
+    }
+    if (!proxyStarted) {
+      Log.i(TAG, "Starting phone proxy connection")
+      proxyStarted = true
+      proxyClient.connect()
+    }
+  }
+
+  private fun stopProxyClient() {
+    if (!proxyStarted) {
+      return
+    }
+    proxyStarted = false
+    proxyClient.disconnect()
+  }
+
+  private fun startDirectClient(config: WearGatewayConfig, forceReconnect: Boolean) {
+    val spec = config.toDirectConnectionSpec()
+    directClient.configure(config)
+    if (!directStarted || forceReconnect || lastDirectSpec != spec) {
+      Log.i(TAG, "Starting direct gateway connection")
+      directStarted = true
+      lastDirectSpec = spec
+      directClient.connect()
+    }
+  }
+
+  private fun stopDirectClient() {
+    if (!directStarted && !directClient.connected.value) {
+      lastDirectSpec = null
+      return
+    }
+    directStarted = false
+    lastDirectSpec = null
+    directClient.disconnect()
+  }
+
+  private fun hasConnectionRelevantChanges(previous: WearGatewayConfig, current: WearGatewayConfig): Boolean {
+    return previous.host != current.host ||
+      previous.port != current.port ||
+      previous.token != current.token ||
+      previous.bootstrapToken != current.bootstrapToken ||
+      previous.password != current.password ||
+      previous.useTls != current.useTls ||
+      previous.usePhoneProxy != current.usePhoneProxy
+  }
+
+  private fun WearGatewayConfig.toDirectConnectionSpec(): DirectConnectionSpec {
+    return DirectConnectionSpec(
+      host = host,
+      port = port,
+      token = token,
+      bootstrapToken = bootstrapToken,
+      password = password,
+      useTls = useTls,
+    )
   }
 }

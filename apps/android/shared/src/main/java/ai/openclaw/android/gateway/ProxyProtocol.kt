@@ -42,6 +42,23 @@ object ProxyPaths {
 data class ProxyHandshakePayload(
   val ready: Boolean,
   val statusText: String? = null,
+  val gatewayConfig: ProxyGatewayConfigPayload? = null,
+)
+
+/**
+ * Direct gateway configuration snapshot synced from the phone to the watch.
+ *
+ * This lets the watch reuse the phone's current gateway settings as a local
+ * fallback when the phone proxy is unavailable.
+ */
+data class ProxyGatewayConfigPayload(
+  val host: String,
+  val port: Int,
+  val useTls: Boolean,
+  val token: String? = null,
+  val bootstrapToken: String? = null,
+  val password: String? = null,
+  val tlsFingerprintSha256: String? = null,
 )
 
 /**

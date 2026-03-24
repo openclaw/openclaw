@@ -2,6 +2,7 @@ package ai.openclaw.app.gateway
 
 import android.content.Context
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.android.gateway.ProxyGatewayConfigPayload
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.DEFAULT_SEAM_COLOR_ARGB
 import kotlinx.coroutines.CoroutineScope
@@ -210,6 +211,25 @@ class NodeGatewayCoordinator(
     _statusText.value = "Offline"
   }
 
+  fun buildWearProxyGatewayConfig(): ProxyGatewayConfigPayload? {
+    val endpoint = resolveWearProxyGatewayEndpoint() ?: return null
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    val token = prefs.loadGatewayToken()?.trim()?.takeIf { it.isNotEmpty() }
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()?.trim()?.takeIf { it.isNotEmpty() }
+    val password = prefs.loadGatewayPassword()?.trim()?.takeIf { it.isNotEmpty() }
+    val fingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim()?.takeIf { it.isNotEmpty() }
+
+    return ProxyGatewayConfigPayload(
+      host = endpoint.host,
+      port = endpoint.port,
+      useTls = tls != null,
+      token = token,
+      bootstrapToken = bootstrapToken,
+      password = password,
+      tlsFingerprintSha256 = fingerprint,
+    )
+  }
+
   fun updateSeamColorArgb(value: Long) {
     _seamColorArgb.value = value
   }
@@ -303,5 +323,23 @@ class NodeGatewayCoordinator(
       }
     // Keep derived status centralized so home canvas and UI stay in sync.
     callbacks.onStatusChanged()
+  }
+
+  private fun resolveWearProxyGatewayEndpoint(): GatewayEndpoint? {
+    connectedEndpoint?.let { return it }
+
+    if (prefs.manualEnabled.value) {
+      val host = prefs.manualHost.value.trim()
+      val port = prefs.manualPort.value
+      if (host.isNotEmpty() && port in 1..65535) {
+        return GatewayEndpoint.manual(host = host, port = port)
+      }
+    }
+
+    resolvePreferredGatewayEndpoint()?.let { return it }
+
+    val targetStableId = prefs.lastDiscoveredStableId.value.trim()
+    if (targetStableId.isEmpty()) return null
+    return gateways.value.firstOrNull { it.stableId == targetStableId }
   }
 }

@@ -36,6 +36,7 @@ data class WearGatewayConfig(
   val host: String = "",
   val port: Int = 18789,
   val token: String = "",
+  val bootstrapToken: String = "",
   val password: String = "",
   val useTls: Boolean = false,
   val usePhoneProxy: Boolean = false,
@@ -43,8 +44,11 @@ data class WearGatewayConfig(
   val nativeTtsEnabled: Boolean = false,
   val screenAwakeMode: WearScreenAwakeMode = WearScreenAwakeMode.DEFAULT,
 ) {
+  val hasDirectConnection: Boolean
+    get() = host.isNotBlank() && port in 1..65535
+
   val isValid: Boolean
-    get() = if (usePhoneProxy) true else (host.isNotBlank() && port in 1..65535)
+    get() = if (usePhoneProxy) true else hasDirectConnection
 
   fun wsUrl(): String {
     val scheme = if (useTls) "wss" else "ws"
@@ -74,6 +78,7 @@ class WearGatewayConfigStore(context: Context) {
       host = prefs.getString("gw_host", "") ?: "",
       port = prefs.getInt("gw_port", 18789),
       token = securePrefs.getString("gw_token", "") ?: "",
+      bootstrapToken = securePrefs.getString("gw_bootstrap_token", "") ?: "",
       password = securePrefs.getString("gw_password", "") ?: "",
       useTls = prefs.getBoolean("gw_tls", false),
       usePhoneProxy = prefs.getBoolean("gw_phone_proxy", false),
@@ -98,6 +103,7 @@ class WearGatewayConfigStore(context: Context) {
 
     securePrefs.edit {
       putString("gw_token", config.token)
+      putString("gw_bootstrap_token", config.bootstrapToken)
       putString("gw_password", config.password)
     }
   }

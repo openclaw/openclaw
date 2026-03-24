@@ -1058,6 +1058,7 @@ class NodeRuntime(
       isConnected = { isConnected.value },
       operatorStatusText = { gatewayCoordinator.operatorStatusText.value },
       statusText = { statusText.value },
+      gatewayConfig = { gatewayCoordinator.buildWearProxyGatewayConfig() },
     )
   val wearProxyEvents: kotlinx.coroutines.flow.SharedFlow<GatewayEvent> =
     wearProxyBridge.events
