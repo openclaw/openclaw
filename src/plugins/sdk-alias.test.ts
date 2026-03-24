@@ -341,6 +341,9 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
         "./plugin-sdk/telegram": { default: "./dist/plugin-sdk/telegram.js" },
         "./plugin-sdk/nested/value": { default: "./dist/plugin-sdk/nested/value.js" },
+        "./plugin-sdk/..\\..\\evil": { default: "./dist/plugin-sdk/evil.js" },
+        "./plugin-sdk/C:temp": { default: "./dist/plugin-sdk/drive.js" },
+        "./plugin-sdk/.hidden": { default: "./dist/plugin-sdk/hidden.js" },
       },
     });
     const subpaths = listPluginSdkExportedSubpaths({
