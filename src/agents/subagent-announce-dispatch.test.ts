@@ -135,6 +135,25 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fall through to direct delivery when non-completion queue drops the new item", async () => {
+    const queue = vi.fn(async () => "dropped" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      path: "none",
+      phases: [{ phase: "queue-primary", delivered: false, path: "none", error: undefined }],
+    });
+  });
+
   it("preserves direct failure when completion dispatch aborts before fallback queue", async () => {
     const controller = new AbortController();
     const queue = vi.fn(async () => "queued" as const);
