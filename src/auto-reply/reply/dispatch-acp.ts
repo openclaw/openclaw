@@ -30,7 +30,10 @@ import {
 } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  createAcpDispatchDeliveryCoordinator,
+  type AcpDispatchDeliveryCoordinator,
+} from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
 type DispatchProcessedRecorder = (
@@ -184,6 +187,85 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+async function finalizeAcpTurnOutput(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  delivery: AcpDispatchDeliveryCoordinator;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  shouldEmitResolvedIdentityNotice: boolean;
+}): Promise<boolean> {
+  let queuedFinal = false;
+  const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
+  const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
+  const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+
+  let finalMediaDelivered = false;
+  if (ttsMode === "final" && hasAccumulatedBlockText) {
+    try {
+      const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        payload: { text: accumulatedBlockText },
+        cfg: params.cfg,
+        channel: params.ttsChannel,
+        kind: "final",
+        inboundAudio: params.inboundAudio,
+        ttsAuto: params.sessionTtsAuto,
+      });
+      if (ttsSyntheticReply.mediaUrl) {
+        const delivered = await params.delivery.deliver("final", {
+          mediaUrl: ttsSyntheticReply.mediaUrl,
+          audioAsVoice: ttsSyntheticReply.audioAsVoice,
+        });
+        queuedFinal = queuedFinal || delivered;
+        finalMediaDelivered = delivered;
+      }
+    } catch (err) {
+      logVerbose(
+        `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Some ACP parent surfaces only expose terminal replies, so block routing alone is not enough
+  // to prove the final result was visible to the user.
+  const shouldDeliverTextFallback =
+    ttsMode !== "all" &&
+    hasAccumulatedBlockText &&
+    !finalMediaDelivered &&
+    !params.delivery.hasDeliveredFinalReply();
+  if (shouldDeliverTextFallback) {
+    const delivered = await params.delivery.deliver(
+      "final",
+      { text: accumulatedBlockText },
+      { skipTts: true },
+    );
+    queuedFinal = queuedFinal || delivered;
+  }
+
+  if (params.shouldEmitResolvedIdentityNotice) {
+    const currentMeta = readAcpSessionEntry({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    })?.acp;
+    const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
+    if (!isSessionIdentityPending(identityAfterTurn)) {
+      const resolvedDetails = resolveAcpThreadSessionDetailLines({
+        sessionKey: params.sessionKey,
+        meta: currentMeta,
+      });
+      if (resolvedDetails.length > 0) {
+        const delivered = await params.delivery.deliver("final", {
+          text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
+        });
+        queuedFinal = queuedFinal || delivered;
+      }
+    }
+  }
+
+  return queuedFinal;
+}
+
 export async function tryDispatchAcpReply(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -314,81 +396,16 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
-    const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
-    const routedCounts = delivery.getRoutedCounts();
-    // Attempt final TTS synthesis for ttsMode="final" (independent of delivery status).
-    // This ensures routed ACP flows still get final audio even after block delivery.
-    let ttsSucceeded = false;
-    if (ttsMode === "final" && hasAccumulatedBlockText) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
-          cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind: "final",
-          inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
-        if (ttsSyntheticReply.mediaUrl) {
-          // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
-          // Pass audioAsVoice to avoid re-entering TTS synthesis.
-          const delivered = await delivery.deliver("final", {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          });
-          queuedFinal = queuedFinal || delivered;
-          if (delivered) {
-            ttsSucceeded = true; // TTS succeeded AND delivered, skip text fallback
-          }
-        }
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        // TTS failed, fall through to text fallback
-      }
-    }
-    // Only attempt text fallback if a terminal delivery has not happened yet.
-    // Block routing alone is not enough here because some ACP parent surfaces only expose
-    // terminal replies, so routed block text can still leave the user with no visible result.
-    // For non-routed flows, we still skip the final-only guard because dispatcher counts are not
-    // tracked here and we want to recover when earlier block sends fail.
-    // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
-    const shouldSkipTextFallback =
-      ttsMode === "all" ||
-      ttsSucceeded ||
-      (params.shouldRouteToOriginating && routedCounts.final > 0);
-    if (!shouldSkipTextFallback && hasAccumulatedBlockText) {
-      // Fallback to text-only delivery (no TTS).
-      // For routed flows, use delivery.deliver with skipTts to bypass TTS re-entry.
-      // For non-routed flows, use dispatcher directly to bypass TTS.
-      const delivered = params.shouldRouteToOriginating
-        ? await delivery.deliver("final", { text: accumulatedBlockText }, { skipTts: true })
-        : params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
-      queuedFinal = queuedFinal || delivered;
-    }
-
-    if (shouldEmitResolvedIdentityNotice) {
-      const currentMeta = readAcpSessionEntry({
+    queuedFinal =
+      (await finalizeAcpTurnOutput({
         cfg: params.cfg,
         sessionKey,
-      })?.acp;
-      const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
-      if (!isSessionIdentityPending(identityAfterTurn)) {
-        const resolvedDetails = resolveAcpThreadSessionDetailLines({
-          sessionKey,
-          meta: currentMeta,
-        });
-        if (resolvedDetails.length > 0) {
-          const delivered = await delivery.deliver("final", {
-            text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
-          });
-          queuedFinal = queuedFinal || delivered;
-        }
-      }
-    }
+        delivery,
+        inboundAudio: params.inboundAudio,
+        sessionTtsAuto: params.sessionTtsAuto,
+        ttsChannel: params.ttsChannel,
+        shouldEmitResolvedIdentityNotice,
+      })) || queuedFinal;
 
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
