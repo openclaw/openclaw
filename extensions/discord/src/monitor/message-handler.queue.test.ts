@@ -128,7 +128,6 @@ async function createLifecycleStopScenario(params: {
 
 describe("createDiscordMessageHandler queue behavior", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({
       createDiscordMessageHandler,
       preflightDiscordMessageMock,
