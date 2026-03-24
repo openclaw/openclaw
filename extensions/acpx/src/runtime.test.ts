@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -154,88 +155,20 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
-  it("replaces dead named sessions returned by sessions ensure", async () => {
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:dead-session";
+  it("passes the bundled plugin-local codex-acp command to acpx by default", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
 
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:local-command",
+      agent: "codex",
+      mode: "persistent",
+    });
 
-      expect(handle.backend).toBe("acpx");
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBeGreaterThan(statusIndex);
-    } finally {
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-    }
-  });
-
-  it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "alive";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:ensure-fallback-alive";
-
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBe(-1);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-    }
-  });
-
-  it("creates a fresh named session when sessions ensure exits and status is dead", async () => {
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:ensure-fallback-dead";
-
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBeGreaterThan(statusIndex);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-    }
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(ensureArgs[agentFlagIndex + 1]).toBe(ACPX_CODEX_ACP_BUNDLED_BIN);
   });
 
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
@@ -482,7 +415,7 @@ describe("AcpxRuntime", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai-codex/gpt-5.3-codex",
     });
     const status = await runtime.getStatus({ handle });
     const ensuredSessionName = "agent:codex:acp:controls";
@@ -548,6 +481,63 @@ describe("AcpxRuntime", () => {
         };
         expect(payload.targetCommand).toContain("custom-codex-acp");
       }
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("keeps MCP proxying for unresolved agent ids when MCP servers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+        },
+      },
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:custom-agent:acp:mcp",
+      agent: "custom-agent",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+    expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+    const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+    expect(payloadMatch?.[1]).toBeDefined();
+    const payload = JSON.parse(
+      Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+    ) as {
+      targetCommand: string;
+    };
+    expect(payload.targetCommand).toBe("custom-agent");
+  });
+
+  it("quotes plugin-local agent command paths that include spaces", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "/tmp/dir with spaces/codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:quoted-command",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const agentFlagIndex = ensureArgs.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(ensureArgs[agentFlagIndex + 1]).toBe('"/tmp/dir with spaces/codex-acp"');
     } finally {
       delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
     }

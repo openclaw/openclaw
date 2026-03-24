@@ -295,6 +295,23 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("restarts a disconnected Feishu websocket account", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      feishu: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          mode: "websocket",
+          lastStartAt: now - 300_000,
+        },
+      },
+    });
+    await expectRestartedChannel(manager, "feishu");
+  });
+
   it("skips restart when channel is busy with active runs", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
@@ -505,6 +522,24 @@ describe("channel-health-monitor", () => {
         }),
       );
       await expectRestartedChannel(manager, "slack");
+    });
+
+    it("restarts a Feishu websocket account with a stale socket", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        feishu: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "websocket",
+            lastStartAt: now - 60 * 60_000,
+            lastEventAt: now - (STALE_THRESHOLD + 5_000),
+          },
+        },
+      });
+      await expectRestartedChannel(manager, "feishu");
     });
 
     it("skips channels with recent events", async () => {

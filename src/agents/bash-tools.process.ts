@@ -13,6 +13,7 @@ import {
   listFinishedSessions,
   listRunningSessions,
   markExited,
+  resolveTerminalStatus,
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
@@ -312,7 +313,7 @@ export function createProcessTool(
                   },
                 ],
                 details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
+                  status: resolveTerminalStatus(scopedFinished),
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
@@ -340,7 +341,7 @@ export function createProcessTool(
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            const status = resolveTerminalStatus(scopedSession);
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
@@ -348,11 +349,7 @@ export function createProcessTool(
               status,
             );
           }
-          const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
-            : "running";
+          const status = exited ? resolveTerminalStatus(scopedSession) : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
@@ -425,7 +422,7 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
+            const status = resolveTerminalStatus(scopedFinished);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [

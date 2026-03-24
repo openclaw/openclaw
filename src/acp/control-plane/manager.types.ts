@@ -62,6 +62,13 @@ export type AcpRunTurnInput = {
   requestId: string;
   signal?: AbortSignal;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
+  onLifecycleStage?: (
+    info:
+      | { stage: "acp_ensure_session_started" }
+      | { stage: "acp_ensure_session_completed"; durationMs: number; backend?: string }
+      | { stage: "acp_run_started"; durationMs: number; backend?: string }
+      | { stage: "acp_first_event"; durationMs: number; backend?: string; eventType?: string },
+  ) => Promise<void> | void;
 };
 
 export type AcpCloseSessionInput = {

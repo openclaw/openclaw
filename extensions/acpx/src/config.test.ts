@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ACPX_BUNDLED_BIN,
+  ACPX_CODEX_ACP_BUNDLED_BIN,
+  ACPX_CODEX_ACP_PINNED_VERSION,
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
   resolveAcpxPluginRoot,
@@ -72,6 +74,13 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.stripProviderAuthEnvVars).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
+  });
+
+  it("resolves a bundled codex-acp binary alongside the bundled acpx binary", () => {
+    expect(ACPX_CODEX_ACP_BUNDLED_BIN).toContain("node_modules");
+    expect(ACPX_CODEX_ACP_BUNDLED_BIN).toContain(".bin");
+    expect(ACPX_CODEX_ACP_BUNDLED_BIN).toContain("codex-acp");
+    expect(ACPX_CODEX_ACP_PINNED_VERSION).toBe("0.9.5");
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
