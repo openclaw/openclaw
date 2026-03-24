@@ -85,6 +85,8 @@ export async function emitSubagentEndedHookOnce(params: {
           runId: params.entry.runId,
           childSessionKey: params.entry.childSessionKey,
           requesterSessionKey: params.entry.requesterSessionKey,
+          channelId: params.entry.requesterOrigin?.channel,
+          accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
         },
       );
     }

@@ -61,11 +61,6 @@ describe("bot-name-registry", () => {
       expect(resolveBotName("feishu", undefined)).toBe("DefaultBot");
     });
 
-    it("falls back to 'default' when exact accountId match is absent", () => {
-      registerBotName("feishu", "default", "DefaultBot");
-      expect(resolveBotName("feishu", "cli_missing")).toBe("DefaultBot");
-    });
-
     it("returns undefined when channelId is undefined", () => {
       registerBotName("feishu", "default", "DefaultBot");
       expect(resolveBotName(undefined, "default")).toBeUndefined();

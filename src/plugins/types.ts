@@ -1885,6 +1885,10 @@ export type PluginHookSubagentContext = {
   runId?: string;
   childSessionKey?: string;
   requesterSessionKey?: string;
+  /** Channel id of the requester — used to resolve bot_name via the registry. */
+  channelId?: string;
+  /** Account id of the requester — used to resolve bot_name via the registry. */
+  accountId?: string;
 };
 
 export type PluginHookSubagentTargetKind = "subagent" | "acp";

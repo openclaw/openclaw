@@ -54,10 +54,9 @@ export function resolveBotName(
   }
   const registry = getRegistry();
   if (accountId) {
-    const name = registry.get(makeKey(channelId, accountId));
-    if (name) {
-      return name;
-    }
+    // Explicit accountId: do not fall back to "default" on a miss, which would
+    // mislabel events from one account as another account's bot.
+    return registry.get(makeKey(channelId, accountId));
   }
   return registry.get(makeKey(channelId, "default"));
 }
