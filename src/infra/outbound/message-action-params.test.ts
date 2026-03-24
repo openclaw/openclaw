@@ -253,7 +253,7 @@ describe("message action media helpers", () => {
     expect(mediaArgs.filename).toBe("pic.png");
 
     const fileArgs: Record<string, unknown> = {
-      fileUrl: "file:///workspace/docs/report.pdf",
+      fileUrl: "https://example.com/docs/report.pdf",
     };
     await hydrateAttachmentParamsForAction({
       cfg,
