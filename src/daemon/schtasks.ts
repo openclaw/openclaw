@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
+import { throwIfAborted } from "../infra/outbound/abort.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
@@ -31,6 +32,49 @@ function resolveTaskName(env: GatewayServiceEnv): string {
     return override;
   }
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
+function decodeTaskXmlValue(raw: string | undefined): string {
+  return (raw ?? "")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .trim();
+}
+
+function parseScheduledTaskRunTarget(command?: string, args?: string): string | null {
+  const candidates = [decodeTaskXmlValue(command), decodeTaskXmlValue(args)].filter(Boolean);
+  if (candidates.length === 2) {
+    candidates.unshift(`${candidates[0]} ${candidates[1]}`);
+  }
+  for (const raw of candidates) {
+    const parsed = parseCmdScriptCommandLine(raw);
+    if (!parsed.includes(raw)) {
+      parsed.unshift(raw);
+    }
+    for (const candidate of parsed) {
+      const unquoted = candidate.trim().replace(/^"(.*)"$/s, "$1");
+      if (/\.(cmd|bat)$/i.test(unquoted)) {
+        return unquoted;
+      }
+    }
+  }
+  return null;
+}
+
+function parseScheduledTaskRunTargetFromXml(xml: string): string | null {
+  const command = /<Command>([\s\S]*?)<\/Command>/i.exec(xml)?.[1];
+  const args = /<Arguments>([\s\S]*?)<\/Arguments>/i.exec(xml)?.[1];
+  if (!command && !args) {
+    return null;
+  }
+  const trimmedCommand = decodeTaskXmlValue(command);
+  if (!trimmedCommand) {
+    return null;
+  }
+  return parseScheduledTaskRunTarget(trimmedCommand, args);
 }
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
@@ -106,53 +150,93 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
-export async function readScheduledTaskCommand(
+async function resolveRegisteredTaskScriptPath(
   env: GatewayServiceEnv,
-): Promise<GatewayServiceCommandConfig | null> {
-  const scriptPath = resolveTaskScriptPath(env);
-  try {
-    const content = await fs.readFile(scriptPath, "utf8");
-    let workingDirectory = "";
-    let commandLine = "";
-    const environment: Record<string, string> = {};
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      const lower = line.toLowerCase();
-      if (line.startsWith("@echo")) {
-        continue;
-      }
-      if (lower.startsWith("rem ")) {
-        continue;
-      }
-      if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
-        if (assignment) {
-          environment[assignment.key] = assignment.value;
-        }
-        continue;
-      }
-      if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
-        continue;
-      }
-      commandLine = line;
-      break;
-    }
-    if (!commandLine) {
-      return null;
-    }
-    return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      sourcePath: scriptPath,
-    };
-  } catch {
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const taskName = resolveTaskName(env);
+  const query = await (
+    signal
+      ? execSchtasks(["/Query", "/TN", taskName, "/XML"], { signal })
+      : execSchtasks(["/Query", "/TN", taskName, "/XML"])
+  ).catch(() => null);
+  if (query?.code !== 0) {
     return null;
   }
+  return parseScheduledTaskRunTargetFromXml(query.stdout);
+}
+
+export async function readScheduledTaskCommand(
+  env: GatewayServiceEnv,
+  options?: { signal?: AbortSignal },
+): Promise<GatewayServiceCommandConfig | null> {
+  const derivedScriptPath = resolveTaskScriptPath(env);
+  const hasExplicitScriptPath =
+    Boolean(env.OPENCLAW_TASK_SCRIPT?.trim()) ||
+    Boolean(env.OPENCLAW_STATE_DIR?.trim()) ||
+    Boolean(env.OPENCLAW_TASK_SCRIPT_NAME?.trim());
+  const registeredScriptPath = hasExplicitScriptPath
+    ? null
+    : await resolveRegisteredTaskScriptPath(env, options?.signal).catch(() => null);
+  const candidatePaths = [
+    ...(registeredScriptPath && registeredScriptPath !== derivedScriptPath
+      ? [registeredScriptPath]
+      : []),
+    derivedScriptPath,
+  ];
+
+  let scriptPath: string | null = null;
+  let content: string | null = null;
+  for (const candidatePath of candidatePaths) {
+    try {
+      content = await fs.readFile(candidatePath, "utf8");
+      scriptPath = candidatePath;
+      break;
+    } catch {
+      continue;
+    }
+  }
+  if (content == null || scriptPath == null) {
+    return null;
+  }
+  let workingDirectory = "";
+  let commandLine = "";
+  const environment: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const lower = line.toLowerCase();
+    if (line.startsWith("@echo")) {
+      continue;
+    }
+    if (lower.startsWith("rem ")) {
+      continue;
+    }
+    if (lower.startsWith("set ")) {
+      const assignment = parseCmdSetAssignment(line.slice(4));
+      if (assignment) {
+        environment[assignment.key] = assignment.value;
+      }
+      continue;
+    }
+    if (lower.startsWith("cd /d ")) {
+      workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+      continue;
+    }
+    commandLine = line;
+    break;
+  }
+  if (!commandLine) {
+    return null;
+  }
+  return {
+    programArguments: parseCmdScriptCommandLine(commandLine),
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    sourcePath: scriptPath,
+  };
 }
 
 export type ScheduledTaskInfo = {
@@ -354,8 +438,11 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
-async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+async function resolveScheduledTaskPort(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  const command = await readScheduledTaskCommand(env, { signal }).catch(() => null);
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
@@ -401,13 +488,19 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
   );
 }
 
-async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
-  const port = await resolveScheduledTaskPort(env);
+async function terminateScheduledTaskGatewayListeners(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<number[]> {
+  throwIfAborted(signal);
+  const port = await resolveScheduledTaskPort(env, signal);
   if (!port) {
     return [];
   }
+  throwIfAborted(signal);
   const pids = await resolveScheduledTaskGatewayListenerPids(port);
   for (const pid of pids) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(pid, 300);
   }
   return pids;
@@ -459,19 +552,27 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
   await waitForProcessExit(pid, 5_000);
 }
 
-async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promise<boolean> {
+async function waitForGatewayPortRelease(
+  port: number,
+  timeoutMs = 5_000,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfAborted(signal);
     const diagnostics = await inspectPortUsage(port).catch(() => null);
     if (diagnostics?.status === "free") {
       return true;
     }
+    throwIfAborted(signal);
     await sleep(250);
   }
+  throwIfAborted(signal);
   return false;
 }
 
-async function terminateBusyPortListeners(port: number): Promise<number[]> {
+async function terminateBusyPortListeners(port: number, signal?: AbortSignal): Promise<number[]> {
+  throwIfAborted(signal);
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
     return [];
@@ -484,6 +585,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
     ),
   );
   for (const pid of pids) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(pid, 300);
   }
   return pids;
@@ -526,12 +628,18 @@ async function stopStartupEntry(
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
-async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
+async function terminateInstalledStartupRuntime(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
+  throwIfAborted(signal);
   const runtime = await resolveFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
 }
@@ -696,37 +804,47 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
+      throwIfAborted(signal);
       return await restartStartupEntry(effectiveEnv, stdout);
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
+      throwIfAborted(signal);
       return await restartStartupEntry(effectiveEnv, stdout);
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  await execSchtasks(["/End", "/TN", taskName]);
-  const restartPort = await resolveScheduledTaskPort(effectiveEnv);
-  await terminateScheduledTaskGatewayListeners(effectiveEnv);
-  await terminateInstalledStartupRuntime(effectiveEnv);
+  const sig = signal ? { signal } : undefined;
+  await execSchtasks(["/End", "/TN", taskName], sig);
+  throwIfAborted(signal);
+  const restartPort = await resolveScheduledTaskPort(effectiveEnv, signal);
+  throwIfAborted(signal);
+  await terminateScheduledTaskGatewayListeners(effectiveEnv, signal);
+  throwIfAborted(signal);
+  await terminateInstalledStartupRuntime(effectiveEnv, signal);
+  throwIfAborted(signal);
   if (restartPort) {
-    const released = await waitForGatewayPortRelease(restartPort);
+    const released = await waitForGatewayPortRelease(restartPort, 5_000, signal);
     if (!released) {
-      await terminateBusyPortListeners(restartPort);
-      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
+      throwIfAborted(signal);
+      await terminateBusyPortListeners(restartPort, signal);
+      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000, signal);
       if (!releasedAfterForce) {
         throw new Error(`gateway port ${restartPort} is still busy before restart`);
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
+  throwIfAborted(signal);
+  const res = await execSchtasks(["/Run", "/TN", taskName], sig);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }

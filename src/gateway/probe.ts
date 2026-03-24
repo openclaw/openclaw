@@ -4,7 +4,6 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -39,8 +38,10 @@ export function clampProbeTimeoutMs(timeoutMs: number): number {
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
+  tlsFingerprint?: string;
   timeoutMs: number;
   includeDetails?: boolean;
+  disableDeviceIdentity?: boolean;
   detailLevel?: "none" | "presence" | "full";
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
@@ -49,16 +50,9 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
-    try {
-      const hostname = new URL(opts.url).hostname;
-      // Local authenticated probes should stay device-bound so read/detail RPCs
-      // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
-    } catch {
-      return false;
-    }
-  })();
+  // Keep the default probe path device-bound. Callers that need a
+  // device-less probe, such as the rescue watchdog, must opt in.
+  const disableDeviceIdentity = opts.disableDeviceIdentity ?? false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
@@ -89,6 +83,7 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
+      tlsFingerprint: opts.tlsFingerprint,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

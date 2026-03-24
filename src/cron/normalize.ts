@@ -89,6 +89,8 @@ function coercePayload(payload: UnknownRecord) {
   const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
+  } else if (kindRaw === "rescuewatchdog") {
+    next.kind = "rescueWatchdog";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
   } else if (kindRaw) {
@@ -152,6 +154,18 @@ function coercePayload(payload: UnknownRecord) {
       next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
+    }
+  }
+  if ("monitoredProfile" in next) {
+    if (typeof next.monitoredProfile === "string") {
+      const trimmed = next.monitoredProfile.trim();
+      if (trimmed) {
+        next.monitoredProfile = trimmed;
+      } else {
+        delete next.monitoredProfile;
+      }
+    } else {
+      delete next.monitoredProfile;
     }
   }
   if (
@@ -443,11 +457,11 @@ export function normalizeCronJobInput(
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       // Keep default behavior unchanged for backward compatibility:
       // - systemEvent defaults to "main"
-      // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
+      // - agentTurn / rescueWatchdog default to "isolated" (NOT "current", to avoid token accumulation)
       // Users must explicitly specify "current" or "session:xxx" for custom session binding
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
+      } else if (kind === "agentTurn" || kind === "rescueWatchdog") {
         next.sessionTarget = "isolated";
       }
     }
@@ -464,14 +478,6 @@ export function normalizeCronJobInput(
       // If "current" wasn't resolved, fall back to "isolated" behavior
       // This handles CLI/headless usage where no session context exists
       if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
-    if (next.sessionTarget === "current") {
-      const sessionKey = options.sessionContext?.sessionKey?.trim();
-      if (sessionKey) {
-        next.sessionTarget = `session:${sessionKey}`;
-      } else {
         next.sessionTarget = "isolated";
       }
     }

@@ -5,10 +5,12 @@ import path from "node:path";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
+  assertValidLaunchAgentLabel,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveTrustedLaunchAgentPlistPath } from "../../daemon/launchd-paths.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -36,9 +38,9 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
 function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (override) {
-    return override;
+    return assertValidLaunchAgentLabel(override);
   }
-  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE));
 }
 
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
@@ -84,10 +86,7 @@ rm -f "$0"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
-      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const plistPath = resolveTrustedLaunchAgentPlistPath(label);
       const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh

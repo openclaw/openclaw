@@ -77,4 +77,27 @@ describe("runCommandWithTimeout no-output timer", () => {
     expect(result.stdout).toBe("...");
     expect(fake.kill).not.toHaveBeenCalled();
   });
+
+  it("swallows synchronous kill errors from abort handlers", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeSpawnedChild();
+    fake.kill.mockImplementation(() => {
+      throw new Error("already exited");
+    });
+    spawnMock.mockReturnValue(fake.child);
+    const abort = new AbortController();
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+      timeoutMs: 1_000,
+      signal: abort.signal,
+    });
+
+    expect(() => abort.abort()).not.toThrow();
+    fake.child.emit("close", null, "SIGKILL");
+    const result = await runPromise;
+
+    expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(result.termination).toBe("signal");
+    expect(result.signal).toBe("SIGKILL");
+  });
 });

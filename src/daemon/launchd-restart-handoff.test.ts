@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -39,5 +40,37 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects path-like launchd labels before spawning the handoff", () => {
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_LABEL: "../escape",
+      },
+      mode: "kickstart",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("Invalid launchd label");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the trusted home instead of HOME overrides for the plist path", () => {
+    const userInfoSpy = vi.spyOn(os, "userInfo").mockReturnValue({
+      homedir: "/Users/trusted",
+    } as os.UserInfo<string>);
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/tmp/attacker-home",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "kickstart",
+    });
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[5]).toBe("/Users/trusted/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    userInfoSpy.mockRestore();
   });
 });

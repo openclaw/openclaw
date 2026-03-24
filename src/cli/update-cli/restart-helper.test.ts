@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
@@ -117,6 +118,18 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("returns null for path-like launchd labels on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const scriptPath = await prepareRestartScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_LAUNCHD_LABEL: "../escape",
+      });
+
+      expect(scriptPath).toBeNull();
+    });
+
     it("creates a schtasks restart script on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
 
@@ -226,7 +239,7 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
-    it("expands HOME in plist path instead of leaving literal $HOME", async () => {
+    it("uses a concrete plist path instead of leaving literal $HOME", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
 
@@ -234,22 +247,26 @@ describe("restart-helper", () => {
         HOME: "/Users/testuser",
         OPENCLAW_PROFILE: "default",
       });
-      // The plist path must contain the resolved home dir, not literal $HOME
-      expect(content).toMatch(/[\\/]Users[\\/]testuser[\\/]Library[\\/]LaunchAgents[\\/]/);
+      // The plist path must be fully expanded, not shell-expanded at runtime.
+      expect(content).toContain("/Library/LaunchAgents/ai.openclaw.gateway.plist");
       expect(content).not.toContain("$HOME");
       await cleanupScript(scriptPath);
     });
 
-    it("prefers env parameter HOME over process.env.HOME for plist path", async () => {
+    it("uses the trusted home instead of HOME overrides for plist path", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 502;
+      const userInfoSpy = vi.spyOn(os, "userInfo").mockReturnValue({
+        homedir: "/Users/trusted-home",
+      } as os.UserInfo<string>);
 
       const { scriptPath, content } = await prepareAndReadScript({
         HOME: "/Users/envhome",
         OPENCLAW_PROFILE: "default",
       });
-      expect(content).toMatch(/[\\/]Users[\\/]envhome[\\/]Library[\\/]LaunchAgents[\\/]/);
+      expect(content).toMatch(/[\\/]Users[\\/]trusted-home[\\/]Library[\\/]LaunchAgents[\\/]/);
       await cleanupScript(scriptPath);
+      userInfoSpy.mockRestore();
     });
 
     it("shell-escapes the label in the plist path on macOS", async () => {

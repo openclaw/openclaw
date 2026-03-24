@@ -77,13 +77,46 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 
-  it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+  it("keeps device identity enabled for unauthenticated loopback probes", async () => {
     await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
     });
 
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+  });
+
+  it("can disable device identity for remote probes", async () => {
+    await probeGateway({
+      url: "wss://gateway.example/ws",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      disableDeviceIdentity: true,
+    });
+
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+  });
+
+  it("can keep device identity enabled for loopback probes", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      disableDeviceIdentity: false,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+  });
+
+  it("passes tls fingerprints through to the gateway client", async () => {
+    await probeGateway({
+      url: "wss://gateway.example/ws",
+      auth: { token: "secret" },
+      tlsFingerprint: "sha256:11:22:33:44",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.tlsFingerprint).toBe("sha256:11:22:33:44");
   });
 
   it("skips detail RPCs for lightweight reachability probes", async () => {

@@ -438,6 +438,9 @@ describe("GatewayClient connect auth payload", () => {
           token?: string;
           deviceToken?: string;
         };
+        device?: {
+          id?: string;
+        };
       };
     };
   }
@@ -563,6 +566,24 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
+    client.stop();
+  });
+
+  it("omits device identity when explicitly disabled", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com/ws",
+      token: "shared-token",
+      deviceIdentity: null,
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params?.auth).toMatchObject({
+      token: "shared-token",
+    });
+    expect(connect.params?.auth?.deviceToken).toBeUndefined();
+    expect(connect.params?.device).toBeUndefined();
     client.stop();
   });
 

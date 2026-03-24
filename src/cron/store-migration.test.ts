@@ -97,6 +97,26 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
+  it("does not report legacyPayloadKind for already-normalized rescue watchdog kinds", () => {
+    const jobs = [
+      {
+        id: "normalized-rescue-watchdog",
+        name: "normalized rescue",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "rescueWatchdog", monitoredProfile: "work", timeoutSeconds: 120 },
+        sessionTarget: "isolated",
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(false);
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+  });
+
   it("normalizes whitespace-padded and non-canonical payload kinds", () => {
     const jobs = [
       {

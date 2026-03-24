@@ -152,9 +152,7 @@ export class GatewayClient {
     this.opts = {
       ...opts,
       deviceIdentity:
-        opts.deviceIdentity === null
-          ? undefined
-          : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
+        opts.deviceIdentity === null ? null : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)

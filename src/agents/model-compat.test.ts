@@ -174,6 +174,7 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://my-deployment.openai.azure.com/openai",
     });
   });
+
   it("forces supportsDeveloperRole off for generic custom openai-completions provider", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "custom-cpa",

@@ -214,6 +214,115 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("accepts isolated rescue watchdog jobs without announce delivery defaults", () => {
+    const now = Date.now();
+    const job = createJob(
+      {
+        deps: {
+          defaultAgentId: "main",
+          nowMs: () => now,
+        },
+      } as unknown as CronServiceState,
+      {
+        name: "rescue",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "default",
+          timeoutSeconds: 120,
+        },
+      },
+    );
+
+    expect(job.payload).toEqual({
+      kind: "rescueWatchdog",
+      monitoredProfile: "default",
+      timeoutSeconds: 120,
+    });
+    expect(job.delivery).toBeUndefined();
+  });
+
+  it("updates monitoredProfile on rescue watchdog payload patches", () => {
+    const job = createIsolatedAgentTurnJob("job-rescue", undefined, {
+      payload: {
+        kind: "rescueWatchdog",
+        monitoredProfile: "default",
+        timeoutSeconds: 120,
+      },
+      delivery: undefined,
+    });
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "rescueWatchdog",
+        monitoredProfile: "work",
+      },
+    });
+
+    expect(job.payload).toEqual({
+      kind: "rescueWatchdog",
+      monitoredProfile: "work",
+      timeoutSeconds: 120,
+    });
+  });
+
+  it("rejects delivery on rescue watchdog jobs", () => {
+    const expectedError = 'cron payload.kind="rescueWatchdog" does not support delivery';
+
+    expect(() =>
+      createJob(
+        {
+          deps: {
+            defaultAgentId: "main",
+            nowMs: () => Date.now(),
+          },
+        } as unknown as CronServiceState,
+        {
+          name: "rescue-delivery",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "rescueWatchdog",
+            monitoredProfile: "default",
+          },
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+      ),
+    ).toThrow(expectedError);
+  });
+
+  it("rejects failure destinations on rescue watchdog jobs", () => {
+    const expectedError =
+      'cron payload.kind="rescueWatchdog" does not support delivery.failureDestination';
+    const job = createIsolatedAgentTurnJob(
+      "job-rescue-failure-destination",
+      {
+        mode: "none",
+      },
+      {
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "default",
+        },
+        delivery: { mode: "none" },
+      },
+    );
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "none",
+          failureDestination: { mode: "webhook", to: "https://example.invalid/rescue" },
+        },
+      }),
+    ).toThrow(expectedError);
+  });
+
   it("rejects webhook delivery without a valid http(s) target URL", () => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
     const cases = [
