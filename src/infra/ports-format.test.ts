@@ -63,9 +63,7 @@ describe("ports-format", () => {
       ],
       18789,
     );
-    expect(hints).toContainEqual(
-      expect.stringContaining("Dual-stack loopback listeners detected"),
-    );
+    expect(hints).toContainEqual(expect.stringContaining("Dual-stack loopback listeners detected"));
     expect(hints).not.toContainEqual(expect.stringContaining("Multiple listeners detected"));
   });
 
@@ -78,9 +76,7 @@ describe("ports-format", () => {
       ],
       18789,
     );
-    expect(hints).toContainEqual(
-      expect.stringContaining("Multiple listeners detected"),
-    );
+    expect(hints).toContainEqual(expect.stringContaining("Multiple listeners detected"));
     expect(hints).not.toContainEqual(expect.stringContaining("Dual-stack loopback"));
   });
 
