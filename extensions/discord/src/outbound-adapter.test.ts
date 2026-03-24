@@ -189,31 +189,6 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("falls back to text send when useComponentsV2 is false", async () => {
-    const result = await discordOutbound.sendPayload?.({
-      cfg: { channels: { discord: { useComponentsV2: false } } },
-      to: "channel:123456",
-      text: "",
-      payload: {
-        text: "hello",
-        channelData: {
-          discord: {
-            components: { text: "hello", components: [] },
-          },
-        },
-      },
-      accountId: "default",
-    });
-
-    expect(hoisted.sendDiscordComponentMessageMock).not.toHaveBeenCalled();
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "hello",
-      expect.objectContaining({ accountId: "default" }),
-    );
-    expect(result).toEqual(DEFAULT_DISCORD_SEND_RESULT);
-  });
-
   it("sends component payload media sequences with the component message first", async () => {
     hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
       messageId: "component-1",

@@ -133,9 +133,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
     const discordData = payload.channelData?.discord as
       | { components?: DiscordComponentMessageSpec }
       | undefined;
-    const rawComponentSpec = isComponentsV2Enabled(ctx.cfg, ctx.accountId)
-      ? (discordData?.components ?? buildDiscordInteractiveComponents(payload.interactive))
-      : undefined;
+    const rawComponentSpec =
+      discordData?.components ?? buildDiscordInteractiveComponents(payload.interactive);
     const componentSpec = rawComponentSpec
       ? rawComponentSpec.text
         ? rawComponentSpec
