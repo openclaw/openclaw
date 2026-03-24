@@ -13,7 +13,9 @@ describe("Mem0Client", () => {
     global.fetch = originalFetch;
   });
 
-  it("adds a memory successfully to Mem0 API", async () => {
+  // ─── addMemory ───────────────────────────────────────────────────────────────
+
+  it("adds a memory successfully — uses localhost default URL", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ id: "123" }),
@@ -40,6 +42,32 @@ describe("Mem0Client", () => {
       }),
     );
   });
+
+  it("strips trailing slash from custom baseUrl", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const client = new Mem0Client("key", "http://my-server:9000/v1/");
+    await client.addMemory("test", "u", "a");
+
+    expect(mockFetch).toHaveBeenCalledWith("http://my-server:9000/v1/memories/", expect.anything());
+  });
+
+  it("throws on addMemory API failure", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "Internal Server Error",
+    });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const client = new Mem0Client("key");
+    await expect(client.addMemory("data", "u", "a")).rejects.toThrowError(
+      "Mem0 API Error [500]: Internal Server Error",
+    );
+  });
+
+  // ─── searchMemories ───────────────────────────────────────────────────────────
 
   it("searches memory and formats OpenClaw MemorySearchResult correctly", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
@@ -79,7 +107,20 @@ describe("Mem0Client", () => {
     );
   });
 
-  it("throws standard error on failure", async () => {
+  it("returns empty array when search yields no results", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const client = new Mem0Client("key");
+    const results = await client.searchMemories("unknown topic", "u", "a");
+
+    expect(results).toEqual([]);
+  });
+
+  it("throws standard error on search API failure", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -90,6 +131,19 @@ describe("Mem0Client", () => {
     const client = new Mem0Client("bad-key");
     await expect(client.searchMemories("query", "u", "a")).rejects.toThrowError(
       "Mem0 API Error [401]: Unauthorized",
+    );
+  });
+
+  it("uses cloud API URL when explicitly set in config", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const client = new Mem0Client("cloud-key", "https://api.mem0.ai/v1");
+    await client.searchMemories("test", "u", "a");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.mem0.ai/v1/memories/search/",
+      expect.anything(),
     );
   });
 });
