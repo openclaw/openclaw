@@ -834,6 +834,57 @@ describe("forceReload repairs externally changed schedules", () => {
     expect(merged?.state.lastStatus).toBe("ok");
   });
 
+  it("keeps one-shot terminal disable when external reload stays enabled during force-run", async () => {
+    const store = await makeStorePath();
+    let nowMs = Date.parse("2026-03-19T01:44:00.000Z");
+    const jobId = "manual-run-reload-oneshot-terminal-disable";
+    const initialAt = Date.parse("2026-03-19T23:30:00.000Z");
+    const rewrittenAt = Date.parse("2026-03-20T00:30:00.000Z");
+
+    const createJob = (atMs: number) =>
+      ({
+        id: jobId,
+        name: jobId,
+        enabled: true,
+        createdAtMs: Date.parse("2026-03-18T00:30:00.000Z"),
+        updatedAtMs: Date.parse("2026-03-19T01:44:00.000Z"),
+        schedule: { kind: "at" as const, at: new Date(atMs).toISOString() },
+        sessionTarget: "isolated" as const,
+        wakeMode: "next-heartbeat" as const,
+        payload: { kind: "agentTurn" as const, message: "tick" },
+        state: { nextRunAtMs: atMs },
+      }) satisfies CronJob;
+
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [createJob(initialAt)],
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        await writeCronStoreSnapshot({
+          storePath: store.storePath,
+          jobs: [createJob(rewrittenAt)],
+        });
+        nowMs += 500;
+        return { status: "error" as const, error: "invalid API key" };
+      }),
+    });
+
+    expect(await run(state, jobId, "force")).toEqual({ ok: true, ran: true });
+
+    const merged = state.store?.jobs[0];
+    expect(merged?.enabled).toBe(false);
+    expect(merged?.state.nextRunAtMs).toBeUndefined();
+    expect(merged?.state.lastStatus).toBe("error");
+  });
+
   it("keeps scheduleErrorCount cleared when external reload fixes schedule during force-run", async () => {
     const store = await makeStorePath();
     let nowMs = Date.parse("2026-03-19T01:44:00.000Z");

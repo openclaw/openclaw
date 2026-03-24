@@ -384,7 +384,7 @@ export function applyJobResult(
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
         // consecutiveErrors is always set to ≥1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
-        if (skipImmediateScheduleRecompute) {
+        if (skipImmediateScheduleRecompute && job.state.scheduleErrorCount !== undefined) {
           state.deps.log.info(
             {
               jobId: job.id,
@@ -395,7 +395,13 @@ export function applyJobResult(
         } else if (transient && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
           const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
-          job.state.nextRunAtMs = result.endedAt + backoff;
+          const retryNextRunAtMs = result.endedAt + backoff;
+          job.state.nextRunAtMs =
+            skipImmediateScheduleRecompute &&
+            typeof job.state.nextRunAtMs === "number" &&
+            Number.isFinite(job.state.nextRunAtMs)
+              ? Math.max(job.state.nextRunAtMs, retryNextRunAtMs)
+              : retryNextRunAtMs;
           state.deps.log.info(
             {
               jobId: job.id,
@@ -428,7 +434,22 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      if (!skipImmediateScheduleRecompute) {
+      if (skipImmediateScheduleRecompute && job.state.scheduleErrorCount === undefined) {
+        const backoffNext = result.endedAt + backoff;
+        job.state.nextRunAtMs =
+          typeof job.state.nextRunAtMs === "number" && Number.isFinite(job.state.nextRunAtMs)
+            ? Math.max(job.state.nextRunAtMs, backoffNext)
+            : backoffNext;
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            consecutiveErrors: job.state.consecutiveErrors,
+            backoffMs: backoff,
+            nextRunAtMs: job.state.nextRunAtMs,
+          },
+          "cron: preserving repaired schedule with error backoff",
+        );
+      } else if (!skipImmediateScheduleRecompute) {
         let normalNext: number | undefined;
         try {
           normalNext =

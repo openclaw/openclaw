@@ -88,6 +88,10 @@ function mergeManualRunSnapshotAfterReload(params: {
     params.baseline !== null &&
     (preservedEnabled !== params.baseline.enabled ||
       !schedulesEqual(reloaded.schedule, params.baseline.schedule));
+  const preserveOneShotTerminalState =
+    params.baseline?.schedule.kind === "at" &&
+    !params.snapshot.enabled &&
+    params.snapshot.state.nextRunAtMs === undefined;
 
   const mergedUpdatedAtMs = [reloaded.updatedAtMs, params.snapshot.updatedAtMs]
     .filter((value) => Number.isFinite(value))
@@ -104,11 +108,12 @@ function mergeManualRunSnapshotAfterReload(params: {
   // schedule or enabled flag was externally changed while the manual run was executing.
   // Otherwise, keep the manual-run terminal state (e.g. one-shot disable on success).
   if (externalScheduleOrEnabledChanged) {
-    reloaded.enabled = preservedEnabled;
-    reloaded.state.nextRunAtMs =
-      params.snapshot.state.lastStatus === "error" &&
-      isFiniteTimestamp(params.snapshot.state.nextRunAtMs) &&
-      isFiniteTimestamp(preservedNextRunAtMs)
+    reloaded.enabled = preserveOneShotTerminalState ? params.snapshot.enabled : preservedEnabled;
+    reloaded.state.nextRunAtMs = preserveOneShotTerminalState
+      ? params.snapshot.state.nextRunAtMs
+      : params.snapshot.state.lastStatus === "error" &&
+          isFiniteTimestamp(params.snapshot.state.nextRunAtMs) &&
+          isFiniteTimestamp(preservedNextRunAtMs)
         ? Math.max(preservedNextRunAtMs, params.snapshot.state.nextRunAtMs)
         : preservedNextRunAtMs;
     reloaded.state.scheduleErrorCount = preservedScheduleErrorCount;

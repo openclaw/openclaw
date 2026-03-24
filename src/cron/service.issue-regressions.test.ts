@@ -903,6 +903,61 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
+  it("applies one-shot retry backoff when a valid external reload edit lands mid-run", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const jobId = "oneshot-external-valid-edit-retry-backoff";
+
+    const cronJob = createIsolatedRegressionJob({
+      id: jobId,
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const laterAt = scheduledAt + 5_000;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      await writeCronJobs(store.storePath, [
+        {
+          ...cronJob,
+          updatedAtMs: scheduledAt + 1,
+          schedule: { kind: "at", at: new Date(laterAt).toISOString() },
+          state: { ...cronJob.state, nextRunAtMs: scheduledAt },
+        },
+      ]);
+      now = scheduledAt + 10 * 60_000;
+      return {
+        status: "error" as const,
+        error: "429 rate limit exceeded",
+      };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(true);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.nextRunAtMs).toBe(now + 1000);
+    expect(job!.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
   it("preserves successful external schedule repairs across timer-run completion", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
@@ -948,6 +1003,60 @@ describe("Cron issue regressions", () => {
     expect(job!.state.lastStatus).toBe("ok");
     expect(job!.state.nextRunAtMs).toBe(scheduledAt + 60_000);
     expect(job!.state.nextRunAtMs).toBeLessThan(now);
+  });
+
+  it("applies recurring error backoff when a valid external reload edit lands mid-run", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const jobId = "recurring-external-valid-repair-backoff";
+
+    const cronJob = createIsolatedRegressionJob({
+      id: jobId,
+      name: "poll",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 10_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "poll" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      await writeCronJobs(store.storePath, [
+        {
+          ...cronJob,
+          updatedAtMs: scheduledAt + 1,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+          state: { ...cronJob.state, nextRunAtMs: scheduledAt },
+        },
+      ]);
+      now = scheduledAt + 10 * 60_000;
+      return {
+        status: "error" as const,
+        error: "429 rate limit exceeded",
+      };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(true);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.nextRunAtMs).toBe(now + 30_000);
+    expect(job!.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
   it("consumes successful external schedule repair markers after the replayed run", async () => {
