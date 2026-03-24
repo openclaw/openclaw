@@ -277,6 +277,16 @@ type DirectToolPolicyEntry = {
   toolsBySender?: DirectToolPolicyBySenderConfig;
 };
 
+function omitWildcardToolsBySender(
+  toolsBySender: DirectToolPolicyBySenderConfig | undefined,
+): DirectToolPolicyBySenderConfig | undefined {
+  if (!toolsBySender || !Object.prototype.hasOwnProperty.call(toolsBySender, "*")) {
+    return toolsBySender;
+  }
+  const entries = Object.entries(toolsBySender).filter(([key]) => key !== "*");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function resolveDirectToolPolicyEntries(
   entries: Record<string, DirectToolPolicyEntry> | undefined,
   directId: string,
@@ -358,9 +368,26 @@ function resolveDirectToolPolicyFromConfig(params: {
           : []),
       ];
   const resolveSenderScopedPolicy = (toolsBySender: DirectToolPolicyBySenderConfig | undefined) => {
-    for (const senderId of senderIdsToTry) {
+    if (!toolsBySender) {
+      return undefined;
+    }
+    if (params.senderId) {
       const senderPolicy = resolveToolsBySender({
         toolsBySender,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+      return senderPolicy && pickSandboxToolPolicy(senderPolicy) ? senderPolicy : undefined;
+    }
+
+    // When we only have derived fallback IDs (for example a threaded DM directId and its parent),
+    // check all explicit sender keys before falling back to the wildcard entry.
+    const explicitToolsBySender = omitWildcardToolsBySender(toolsBySender);
+    for (const senderId of senderIdsToTry) {
+      const senderPolicy = resolveToolsBySender({
+        toolsBySender: explicitToolsBySender,
         senderId,
         senderName: params.senderName,
         senderUsername: params.senderUsername,
@@ -370,7 +397,9 @@ function resolveDirectToolPolicyFromConfig(params: {
         return senderPolicy;
       }
     }
-    return undefined;
+
+    const wildcardPolicy = toolsBySender["*"];
+    return wildcardPolicy && pickSandboxToolPolicy(wildcardPolicy) ? wildcardPolicy : undefined;
   };
 
   const senderPolicy = resolveSenderScopedPolicy(directEntry?.toolsBySender);
