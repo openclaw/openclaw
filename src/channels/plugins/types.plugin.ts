@@ -1,20 +1,23 @@
-import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
+  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
+  ChannelAllowlistAdapter,
+  ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -41,11 +44,13 @@ export type ChannelConfigUiHint = {
   itemTemplate?: unknown;
 };
 
+/** JSON-schema-like config description published by a channel plugin. */
 export type ChannelConfigSchema = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, ChannelConfigUiHint>;
 };
 
+/** Full capability contract for a native channel plugin. */
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -57,8 +62,6 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  // CLI onboarding wizard hooks for this channel.
-  onboarding?: ChannelOnboardingAdapter;
   setupWizard?: ChannelSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
@@ -74,6 +77,10 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   auth?: ChannelAuthAdapter;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
+  lifecycle?: ChannelLifecycleAdapter;
+  execApprovals?: ChannelExecApprovalAdapter;
+  allowlist?: ChannelAllowlistAdapter;
+  bindings?: ChannelConfiguredBindingProvider;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

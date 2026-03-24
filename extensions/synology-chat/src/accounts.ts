@@ -9,7 +9,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
 
 /** Extract the channel config from the full OpenClaw config object. */
@@ -112,7 +112,7 @@ export function resolveAccount(
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
-    dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
+    dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled({
       providerConfig: channelCfg,
       accountConfig: accountOverrides,
     }),

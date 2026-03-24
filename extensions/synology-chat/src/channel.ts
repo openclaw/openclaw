@@ -5,7 +5,7 @@
  */
 
 import {
-  createHybridChannelConfigAdapter,
+  createScopedChannelConfigBase,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
@@ -41,7 +41,7 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
   normalizeEntry: (raw) => raw.toLowerCase().trim(),
 });
 
-const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynologyChatAccount>({
+const synologyChatConfigAdapter = createScopedChannelConfigBase<ResolvedSynologyChatAccount>({
   sectionKey: CHANNEL_ID,
   listAccountIds,
   resolveAccount,

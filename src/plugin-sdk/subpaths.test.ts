@@ -69,7 +69,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");
     expect(typeof compatSdk.createScopedChannelConfigAdapter).toBe("function");
     expect(typeof compatSdk.createTopLevelChannelConfigAdapter).toBe("function");
-    expect(typeof compatSdk.createHybridChannelConfigAdapter).toBe("function");
+    expect(typeof compatSdk.createScopedChannelConfigBase).toBe("function");
   });
 
   it("keeps core focused on generic shared exports", () => {

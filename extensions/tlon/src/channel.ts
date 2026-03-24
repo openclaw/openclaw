@@ -1,4 +1,4 @@
-import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createRuntimeOutboundDelegates,
   type ChannelAccountSnapshot,
@@ -43,7 +43,7 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
     ).tlonSetupWizard.finalize!(params),
 }) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
 
-const tlonConfigAdapter = createHybridChannelConfigAdapter({
+const tlonConfigAdapter = createScopedChannelConfigBase({
   sectionKey: TLON_CHANNEL_ID,
   listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
