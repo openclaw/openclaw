@@ -1,0 +1,24 @@
+{
+  "id": "jarvis",
+  "name": "Jarvis",
+  "description": "Neuroscience-inspired persistent memory and cognitive profiling via MCP bridge.",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pythonCommand": {
+        "type": "string",
+        "description": "Python binary path or command (default: python3)"
+      },
+      "jarvisPath": {
+        "type": "string",
+        "description": "Path to Jarvis plugin root (auto-detected if omitted)"
+      },
+      "startupTimeoutMs": {
+        "type": "number",
+        "description": "Max time to wait for MCP server startup (default: 15000)"
+      }
+    }
+  }
+}
