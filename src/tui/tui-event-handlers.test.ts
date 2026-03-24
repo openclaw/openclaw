@@ -452,10 +452,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("orphan-clear sets idle, not error, when inactive local BTW run ends in chat error state", () => {
-    const { state, setActivityStatus, handleChatEvent, noteLocalBtwRunId } =
-      createHandlersHarness({
-        state: { activeChatRunId: null },
-      });
+    const { state, setActivityStatus, handleChatEvent, noteLocalBtwRunId } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
     noteLocalBtwRunId("run-btw-chat-err");
 
     handleChatEvent({
