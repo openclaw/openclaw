@@ -33,6 +33,13 @@ import {
   waitForExit,
 } from "./runtime-internals/process.js";
 import {
+  appendStderr,
+  appendStdout,
+  createRunArtifacts,
+  finalizeRun,
+  setRunStarted,
+} from "./runtime-internals/run-artifacts.js";
+import {
   asOptionalString,
   asTrimmedString,
   buildPermissionArgs,
@@ -548,7 +555,9 @@ export class AcpxRuntime implements AcpRuntime {
         this.logger?.warn?.(`acpx runtime abort-cancel failed: ${String(err)}`);
       });
     };
+    let abortRequested = false;
     const onAbort = () => {
+      abortRequested = true;
       void cancelOnAbort();
     };
 
@@ -559,44 +568,129 @@ export class AcpxRuntime implements AcpRuntime {
     if (input.signal) {
       input.signal.addEventListener("abort", onAbort, { once: true });
     }
-    const child = spawnWithResolvedCommand(
-      {
-        command: this.config.command,
-        args,
-        cwd: state.cwd,
-        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
-      },
-      this.spawnCommandOptions,
-    );
-    child.stdin.on("error", () => {
-      // Ignore EPIPE when the child exits before stdin flush completes.
+
+    const artifacts = await createRunArtifacts({
+      requestId: input.requestId,
+      sessionKey: input.handle.sessionKey,
+      runtimeSessionName: input.handle.runtimeSessionName,
+      agent: state.agent,
+      promptMode: input.mode,
+      routeKind: "prompt_session",
+      routeArgs: args,
+      cwd: state.cwd,
+      acpxRecordId: input.handle.acpxRecordId,
+      backendSessionId: input.handle.backendSessionId,
+      agentSessionId: input.handle.agentSessionId,
     });
 
-    if (input.attachments && input.attachments.length > 0) {
-      const blocks: unknown[] = [];
-      if (input.text) {
-        blocks.push({ type: "text", text: input.text });
-      }
-      for (const attachment of input.attachments) {
-        if (attachment.mediaType.startsWith("image/")) {
-          blocks.push({ type: "image", mimeType: attachment.mediaType, data: attachment.data });
-        }
-      }
-      child.stdin.end(blocks.length > 0 ? JSON.stringify(blocks) : input.text);
-    } else {
-      child.stdin.end(input.text);
-    }
+    let child: ReturnType<typeof spawnWithResolvedCommand> | null = null;
+    let lines: ReturnType<typeof createInterface> | null = null;
+    let finalized = false;
+    let startedAt: string | undefined;
+    let streamWriteError: Error | null = null;
+    let stderrWriteChain: Promise<void> = Promise.resolve();
 
     let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-
+    let stderrBytes = 0;
+    let stderrLines = 0;
+    let stdoutBytes = 0;
+    let stdoutLines = 0;
     let sawDone = false;
     let sawError = false;
-    const lines = createInterface({ input: child.stdout });
+    let syntheticDone = false;
+    let stopReason: string | undefined;
+    let finalErrorCode: string | undefined;
+    let finalErrorMessage: string | undefined;
+
     try {
+      if (abortRequested || input.signal?.aborted) {
+        await cancelOnAbort();
+        finalErrorCode = "ABORTED";
+        finalErrorMessage = "ACP turn aborted before spawn.";
+        await finalizeRun({
+          artifacts,
+          state: "lost",
+          captureStatus: "captured",
+          doneSeen: false,
+          syntheticDone: false,
+          errorSeen: true,
+          exitCode: null,
+          signal: null,
+          errorCode: finalErrorCode,
+          errorMessage: finalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          endedAt: new Date().toISOString(),
+        });
+        finalized = true;
+        return;
+      }
+
+      child = spawnWithResolvedCommand(
+        {
+          command: this.config.command,
+          args,
+          cwd: state.cwd,
+          stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
+        },
+        this.spawnCommandOptions,
+      );
+      startedAt = new Date().toISOString();
+      await setRunStarted({
+        artifacts,
+        startedAt,
+        ...(typeof child.pid === "number" ? { pid: child.pid } : {}),
+      });
+
+      child.stdin.on("error", () => {
+        // Ignore EPIPE when the child exits before stdin flush completes.
+      });
+
+      if (input.attachments && input.attachments.length > 0) {
+        const blocks: unknown[] = [];
+        if (input.text) {
+          blocks.push({ type: "text", text: input.text });
+        }
+        for (const attachment of input.attachments) {
+          if (attachment.mediaType.startsWith("image/")) {
+            blocks.push({ type: "image", mimeType: attachment.mediaType, data: attachment.data });
+          }
+        }
+        child.stdin.end(blocks.length > 0 ? JSON.stringify(blocks) : input.text);
+      } else {
+        child.stdin.end(input.text);
+      }
+
+      child.stderr.on("data", (chunk) => {
+        const text = String(chunk);
+        stderr += text;
+        stderrBytes += Buffer.byteLength(text);
+        stderrLines += text.length > 0 ? text.split(/\r?\n/).filter(Boolean).length : 0;
+        stderrWriteChain = stderrWriteChain
+          .then(async () => {
+            await appendStderr({ artifacts, chunk: text });
+          })
+          .catch((err: unknown) => {
+            if (!streamWriteError) {
+              streamWriteError = err instanceof Error ? err : new Error(String(err));
+            }
+          });
+      });
+
+      lines = createInterface({ input: child.stdout });
       for await (const line of lines) {
+        stdoutBytes += Buffer.byteLength(line + "\n");
+        stdoutLines += 1;
+        try {
+          await appendStdout({ artifacts, line });
+        } catch (err) {
+          if (!streamWriteError) {
+            streamWriteError = err instanceof Error ? err : new Error(String(err));
+          }
+        }
+
         const parsed = parsePromptEventLine(line);
         if (!parsed) {
           continue;
@@ -606,18 +700,47 @@ export class AcpxRuntime implements AcpRuntime {
             continue;
           }
           sawDone = true;
+          stopReason = parsed.stopReason;
+          continue;
         }
         if (parsed.type === "error") {
           sawError = true;
+          finalErrorCode = parsed.code;
+          finalErrorMessage = parsed.message;
         }
         yield parsed;
       }
 
       const exit = await waitForExit(child);
+      await stderrWriteChain;
+      const endedAt = new Date().toISOString();
+      const captureStatus = streamWriteError ? "missing" : "captured";
+
       if (exit.error) {
         const spawnFailure = resolveSpawnFailure(exit.error, state.cwd);
         if (spawnFailure === "missing-command") {
           this.healthy = false;
+        }
+        finalErrorMessage = exit.error.message;
+        await finalizeRun({
+          artifacts,
+          state: "lost",
+          captureStatus,
+          doneSeen: sawDone,
+          syntheticDone: false,
+          errorSeen: true,
+          exitCode: exit.code,
+          signal: exit.signal,
+          errorMessage: finalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          startedAt,
+          endedAt,
+        });
+        finalized = true;
+        if (spawnFailure === "missing-command") {
           throw new AcpRuntimeError(
             "ACP_BACKEND_UNAVAILABLE",
             `acpx command not found: ${this.config.command}`,
@@ -635,23 +758,156 @@ export class AcpxRuntime implements AcpRuntime {
       }
 
       if ((exit.code ?? 0) !== 0 && !sawError) {
+        finalErrorMessage = formatAcpxExitMessage({
+          stderr,
+          exitCode: exit.code,
+        });
+        await finalizeRun({
+          artifacts,
+          state: "failed",
+          captureStatus,
+          doneSeen: sawDone,
+          syntheticDone: false,
+          errorSeen: true,
+          exitCode: exit.code,
+          signal: exit.signal,
+          errorMessage: finalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          startedAt,
+          endedAt,
+        });
+        finalized = true;
         yield {
           type: "error",
-          message: formatAcpxExitMessage({
-            stderr,
-            exitCode: exit.code,
-          }),
+          message: finalErrorMessage,
         };
         return;
       }
 
       if (!sawDone && !sawError) {
-        yield { type: "done" };
+        syntheticDone = true;
       }
+
+      if (sawError || streamWriteError) {
+        if (streamWriteError && !finalErrorMessage) {
+          finalErrorMessage = `ACP terminal artifact write failed: ${streamWriteError.message}`;
+        }
+        await finalizeRun({
+          artifacts,
+          state: sawError ? "failed" : "lost",
+          captureStatus,
+          doneSeen: sawDone,
+          syntheticDone,
+          errorSeen: true,
+          exitCode: exit.code,
+          signal: exit.signal,
+          stopReason,
+          errorCode: finalErrorCode,
+          errorMessage: finalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          startedAt,
+          endedAt,
+        });
+        finalized = true;
+        if (!sawError && finalErrorMessage) {
+          yield {
+            type: "error",
+            message: finalErrorMessage,
+          };
+        }
+        return;
+      }
+
+      await finalizeRun({
+        artifacts,
+        state: "completed",
+        captureStatus: "captured",
+        doneSeen: sawDone || syntheticDone,
+        syntheticDone,
+        errorSeen: false,
+        exitCode: exit.code,
+        signal: exit.signal,
+        stopReason,
+        stdoutBytes,
+        stderrBytes,
+        stdoutLines,
+        stderrLines,
+        startedAt,
+        endedAt,
+      });
+      finalized = true;
+      yield {
+        type: "done",
+        ...(stopReason ? { stopReason } : {}),
+      };
+    } catch (error) {
+      await stderrWriteChain;
+      if (!finalized) {
+        const endedAt = new Date().toISOString();
+        const acpError = error instanceof AcpRuntimeError ? error : null;
+        finalErrorCode = acpError?.code ?? finalErrorCode;
+        finalErrorMessage =
+          (error instanceof Error ? error.message : String(error)) ||
+          finalErrorMessage ||
+          "ACP turn failed before terminal classification.";
+        await finalizeRun({
+          artifacts,
+          state: "lost",
+          captureStatus: streamWriteError ? "missing" : "captured",
+          doneSeen: sawDone,
+          syntheticDone,
+          errorSeen: true,
+          exitCode: null,
+          signal: null,
+          stopReason,
+          errorCode: finalErrorCode,
+          errorMessage: finalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          startedAt,
+          endedAt,
+        });
+        finalized = true;
+      }
+      throw error;
     } finally {
-      lines.close();
+      lines?.close();
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
+      }
+      if (!finalized) {
+        await stderrWriteChain;
+        const endedAt = new Date().toISOString();
+        const terminalErrorMessage = streamWriteError
+          ? `ACP terminal artifact write failed: ${streamWriteError.message}`
+          : "ACP turn exited before terminal classification.";
+        await finalizeRun({
+          artifacts,
+          state: "lost",
+          captureStatus: streamWriteError ? "missing" : "captured",
+          doneSeen: sawDone,
+          syntheticDone,
+          errorSeen: true,
+          exitCode: null,
+          signal: null,
+          stopReason,
+          errorCode: finalErrorCode,
+          errorMessage: terminalErrorMessage,
+          stdoutBytes,
+          stderrBytes,
+          stdoutLines,
+          stderrLines,
+          startedAt,
+          endedAt,
+        });
       }
     }
   }
