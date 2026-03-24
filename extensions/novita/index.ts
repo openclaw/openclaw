@@ -36,7 +36,7 @@ export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Novita AI Provider",
   description:
-    "Bundled Novita AI provider plugin — 200+ models from DeepSeek, Qwen, MiniMax, Kimi, GLM, Llama, and more",
+    "Bundled Novita AI provider plugin — 90+ models from DeepSeek, Qwen, MiniMax, Kimi, GLM, Llama, and more",
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -72,10 +72,9 @@ export default definePluginEntry({
           if (!apiKey) {
             return null;
           }
-          // Fetch models dynamically from Novita AI API
+          // Populate cache layers: in-memory → disk → API fetch.
+          // ensureNovitaModelCache is a no-op when already populated.
           ensureNovitaModelCache(apiKey);
-          // Wait for fetch if cache is not yet populated
-          await loadNovitaModelCapabilities("__catalog_init__", apiKey);
           return {
             provider: {
               ...buildNovitaProvider(),
@@ -84,7 +83,7 @@ export default definePluginEntry({
           };
         },
       },
-      // Novita aggregates 200+ models from diverse vendors; disable strict
+      // Novita aggregates 90+ models from diverse vendors; disable strict
       // OpenAI-compat turn validation since upstream models may diverge.
       capabilities: {
         openAiCompatTurnValidation: false,

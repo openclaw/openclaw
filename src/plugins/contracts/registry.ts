@@ -19,6 +19,7 @@ import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
 import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
 import moonshotPlugin from "../../../extensions/moonshot/index.js";
+import novitaPlugin from "../../../extensions/novita/index.js";
 import nvidiaPlugin from "../../../extensions/nvidia/index.js";
 import ollamaPlugin from "../../../extensions/ollama/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
@@ -369,6 +370,7 @@ const bundledProviderPlugins = dedupePlugins([
   mistralPlugin,
   modelStudioPlugin,
   moonshotPlugin,
+  novitaPlugin,
   nvidiaPlugin,
   ollamaPlugin,
   openAIPlugin,

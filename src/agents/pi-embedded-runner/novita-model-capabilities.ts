@@ -148,12 +148,17 @@ function isValidCapabilities(value: unknown): value is NovitaModelCapabilities {
     return false;
   }
   const record = value as Record<string, unknown>;
+  const cost = record.cost as Record<string, unknown> | undefined;
   return (
     typeof record.name === "string" &&
     Array.isArray(record.input) &&
     typeof record.reasoning === "boolean" &&
     typeof record.contextWindow === "number" &&
-    typeof record.maxTokens === "number"
+    typeof record.maxTokens === "number" &&
+    typeof cost === "object" &&
+    cost !== null &&
+    typeof cost.input === "number" &&
+    typeof cost.output === "number"
   );
 }
 
