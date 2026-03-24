@@ -70,3 +70,78 @@ export async function persist(state: CronServiceState, opts?: { skipBackup?: boo
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
+
+/**
+ * Watch jobs.json for external changes (e.g. direct file writes when CLI RPC
+ * is unavailable). When a change is detected, invalidates the in-memory store
+ * so the next timer tick picks it up immediately via forceReload.
+ * Falls back gracefully on environments where fs.watch is unreliable (NFS, containers).
+ *
+ * Returns a cleanup function to stop watching.
+ */
+export function watchStore(state: CronServiceState): () => void {
+  const path = state.deps.storePath;
+  let watcher: import("node:fs").FSWatcher | null = null;
+
+  try {
+    watcher = fs.watch(path, { persistent: false }, () => {
+      // Invalidate in-memory store — next ensureLoaded will force a reload.
+      state.store = null;
+      state.storeFileMtimeMs = null;
+      state.deps.log.debug(
+        { storePath: path },
+        "cron: jobs.json changed externally, invalidating store cache",
+      );
+    });
+    watcher.on("error", () => {
+      watcher?.close();
+      watcher = null;
+    });
+  } catch {
+    // fs.watch unavailable — periodic reload via MAX_TIMER_DELAY_MS (60s) tick is the fallback.
+  }
+
+  return () => {
+    watcher?.close();
+    watcher = null;
+  };
+}
+/**
+ * Watch jobs.json for external changes (e.g. direct file writes as a workaround
+ * when CLI RPC is unavailable). When a change is detected, invalidates the
+ * in-memory store so the next timer tick picks it up immediately.
+ * Falls back gracefully on environments where fs.watch is unreliable (NFS, some containers).
+ *
+ * Returns a cleanup function to stop watching.
+ */
+export function watchStore(state: CronServiceState): () => void {
+  const path = state.deps.storePath;
+  let watcher: import("node:fs").FSWatcher | null = null;
+
+  const tryWatch = () => {
+    try {
+      watcher = fs.watch(path, { persistent: false }, () => {
+        // Invalidate in-memory store — next ensureLoaded will force a reload.
+        state.store = null;
+        state.storeFileMtimeMs = null;
+        state.deps.log.debug(
+          { storePath: path },
+          "cron: jobs.json changed externally, invalidating store cache",
+        );
+      });
+      watcher.on("error", () => {
+        watcher?.close();
+        watcher = null;
+      });
+    } catch {
+      // fs.watch unavailable — periodic reload via MAX_TIMER_DELAY_MS tick is the fallback.
+    }
+  };
+
+  tryWatch();
+
+  return () => {
+    watcher?.close();
+    watcher = null;
+  };
+}

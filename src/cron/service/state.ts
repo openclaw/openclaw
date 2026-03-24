@@ -127,6 +127,7 @@ export type CronServiceState = {
   warnedDisabled: boolean;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
+  storeWatcherCleanup: (() => void) | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -139,6 +140,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     warnedDisabled: false,
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
+    storeWatcherCleanup: null,
   };
 }
 
