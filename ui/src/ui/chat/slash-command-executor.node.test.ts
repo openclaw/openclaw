@@ -562,7 +562,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
         return {
           sessions: [
             row("agent:main:main"),
-            row("agent:main:subagent:einstein", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:researcher", { spawnedBy: "agent:main:main" }),
           ],
         };
       }
@@ -576,14 +576,14 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
       "steer",
-      "einstein try a different approach",
+      "researcher try a different approach",
     );
 
-    expect(result.content).toBe("Steered `einstein`.");
+    expect(result.content).toBe("Steered `researcher`.");
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
-        sessionKey: "agent:main:subagent:einstein",
+        sessionKey: "agent:main:subagent:researcher",
         message: "try a different approach",
         deliver: false,
       }),
@@ -655,7 +655,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
         return {
           sessions: [
             row("agent:main:main"),
-            row("agent:main:subagent:einstein", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:researcher", { spawnedBy: "agent:main:main" }),
           ],
         };
       }
@@ -669,12 +669,12 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
       "redirect",
-      "einstein start over completely",
+      "researcher start over completely",
     );
 
-    expect(result.content).toBe("Redirected `einstein`.");
+    expect(result.content).toBe("Redirected `researcher`.");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main:subagent:einstein",
+      key: "agent:main:subagent:researcher",
       message: "start over completely",
     });
   });
