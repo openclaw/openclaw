@@ -2,9 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const fsMocks = vi.hoisted(() => ({
+  readFile: vi.fn(),
+}));
+
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: fsMocks.readFile,
+  },
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -46,10 +56,12 @@ describe("emitResetCommandHooks", () => {
   }
 
   beforeEach(() => {
+    fsMocks.readFile.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
+    fsMocks.readFile.mockResolvedValue("");
   });
 
   afterEach(() => {
@@ -84,5 +96,42 @@ describe("emitResetCommandHooks", () => {
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
     });
+  });
+
+  it("still fires before_reset when the original transcript path has already been archived", async () => {
+    fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const command = {
+      surface: "telegram",
+      senderId: "vac",
+      channel: "telegram",
+      from: "telegram:vac",
+      to: "telegram:bot",
+      resetHookTriggered: false,
+    } as HandleCommandsParams["command"];
+
+    await emitResetCommandHooks({
+      action: "new",
+      ctx: {} as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command,
+      sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: "/tmp/prev-session.jsonl",
+      } as HandleCommandsParams["previousSessionEntry"],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/prev-session.jsonl",
+        messages: [],
+        reason: "new",
+      }),
+      expect.objectContaining({
+        sessionId: "prev-session",
+      }),
+    );
   });
 });

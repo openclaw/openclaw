@@ -273,10 +273,16 @@ function emitGatewayBeforeResetPluginHook(params: {
   const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  const messages =
-    typeof sessionId === "string" && sessionId.trim().length > 0
-      ? readSessionMessages(sessionId, params.storePath, sessionFile)
-      : [];
+  let messages: unknown[] = [];
+  try {
+    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
+      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+    }
+  } catch (err) {
+    logVerbose(
+      `before_reset: failed to read session messages for ${sessionId ?? "(none)"}; firing hook with empty messages (${String(err)})`,
+    );
+  }
 
   void hookRunner
     .runBeforeReset(
@@ -324,14 +330,6 @@ export async function performGatewaySessionReset(params: {
     },
   );
   await triggerInternalHook(hookEvent);
-  emitGatewayBeforeResetPluginHook({
-    cfg,
-    key: params.key,
-    target,
-    storePath,
-    entry,
-    reason: params.reason,
-  });
   const mutationCleanupError = await cleanupSessionBeforeMutation({
     cfg,
     key: params.key,
@@ -344,6 +342,14 @@ export async function performGatewaySessionReset(params: {
   if (mutationCleanupError) {
     return { ok: false, error: mutationCleanupError };
   }
+  emitGatewayBeforeResetPluginHook({
+    cfg,
+    key: params.key,
+    target,
+    storePath,
+    entry,
+    reason: params.reason,
+  });
 
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;

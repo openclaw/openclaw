@@ -85,9 +85,9 @@ export async function emitResetCommandHooks(params: {
     const sessionFile = prevEntry?.sessionFile;
     // Fire-and-forget: read old session messages and run hook
     void (async () => {
-      try {
-        const messages: unknown[] = [];
-        if (sessionFile) {
+      const messages: unknown[] = [];
+      if (sessionFile) {
+        try {
           const content = await fs.readFile(sessionFile, "utf-8");
           for (const line of content.split("\n")) {
             if (!line.trim()) {
@@ -102,9 +102,16 @@ export async function emitResetCommandHooks(params: {
               // skip malformed lines
             }
           }
-        } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
+        } catch (err: unknown) {
+          logVerbose(
+            `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
+          );
         }
+      } else {
+        logVerbose("before_reset: no session file available, firing hook with empty messages");
+      }
+
+      try {
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {
