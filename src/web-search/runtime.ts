@@ -206,7 +206,7 @@ export function resolveWebSearchDefinition(
   const definition = provider.createTool({
     config: options?.config,
     searchConfig: search as Record<string, unknown> | undefined,
-    runtimeMetadata: options?.runtimeWebSearch,
+    runtimeMetadata: runtimeWebSearch,
   });
   if (!definition) {
     return null;

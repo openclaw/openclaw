@@ -225,8 +225,11 @@ describe("runtime web tools resolution", () => {
     }
   });
 
-  it("skips loading web search providers when search config is absent", async () => {
-    const providerSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+  it("auto-selects a default web search provider when search config is absent", async () => {
+    const bundledProviderSpy = vi.mocked(
+      bundledWebSearchProviders.resolveBundledPluginWebSearchProviders,
+    );
+    const runtimeProviderSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -245,8 +248,10 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(providerSpy).not.toHaveBeenCalled();
-    expect(metadata.search.providerSource).toBe("none");
+    expect(bundledProviderSpy).toHaveBeenCalledOnce();
+    expect(runtimeProviderSpy).not.toHaveBeenCalled();
+    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.providerSource).toBe("auto-detect");
     expect(metadata.fetch.firecrawl.active).toBe(true);
     expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
   });

@@ -298,8 +298,15 @@ export async function resolveRuntimeWebTools(params: {
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
+
+  const searchMetadata: RuntimeWebSearchMetadata = {
+    providerSource: "none",
+    diagnostics: [],
+  };
+
+  const searchEnabled = search?.enabled !== false;
   const providers = sortWebSearchProvidersForAutoDetect(
-    search
+    searchEnabled
       ? configuredBundledPluginId
         ? resolveBundledPluginWebSearchProviders({
             config: params.sourceConfig,
@@ -320,13 +327,6 @@ export async function resolveRuntimeWebTools(params: {
             })
       : [],
   );
-
-  const searchMetadata: RuntimeWebSearchMetadata = {
-    providerSource: "none",
-    diagnostics: [],
-  };
-
-  const searchEnabled = search?.enabled !== false;
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
   if (rawProvider && !configuredProvider) {
@@ -349,7 +349,7 @@ export async function resolveRuntimeWebTools(params: {
     searchMetadata.providerSource = "configured";
   }
 
-  if (searchEnabled && search) {
+  if (searchEnabled) {
     const candidates = configuredProvider
       ? providers.filter((provider) => provider.id === configuredProvider)
       : providers;
@@ -515,7 +515,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && !configuredProvider && searchMetadata.selectedProvider) {
     for (const provider of providers) {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;

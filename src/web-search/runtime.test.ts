@@ -178,10 +178,14 @@ describe("web search runtime", () => {
         autoDetectOrder: 1,
         getCredentialValue: () => "alpha-configured",
         setCredentialValue: () => {},
-        createTool: () => ({
+        createTool: ({ runtimeMetadata }) => ({
           description: "alpha",
           parameters: {},
-          execute: async (args) => ({ ...args, provider: "alpha" }),
+          execute: async (args) => ({
+            ...args,
+            provider: "alpha",
+            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          }),
         }),
       },
       source: "test",
@@ -200,10 +204,14 @@ describe("web search runtime", () => {
         autoDetectOrder: 2,
         getCredentialValue: () => "beta-configured",
         setCredentialValue: () => {},
-        createTool: () => ({
+        createTool: ({ runtimeMetadata }) => ({
           description: "beta",
           parameters: {},
-          execute: async (args) => ({ ...args, provider: "beta" }),
+          execute: async (args) => ({
+            ...args,
+            provider: "beta",
+            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          }),
         }),
       },
       source: "test",
@@ -238,7 +246,7 @@ describe("web search runtime", () => {
       }),
     ).resolves.toEqual({
       provider: "beta",
-      result: { query: "runtime", provider: "beta" },
+      result: { query: "runtime", provider: "beta", runtimeSelectedProvider: "beta" },
     });
   });
 });
