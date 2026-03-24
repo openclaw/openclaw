@@ -88,7 +88,24 @@ export function createWebOnMessageHandler(params: {
       logVerbose(`📱 Same-phone mode detected (from === to: ${msg.from})`);
     }
 
-    // Skip if this is a message we just sent (echo detection)
+    // Skip messages sent by the bot itself.  Baileys delivers the bot's own
+    // outbound messages back through the inbound event stream with
+    // `key.fromMe = true`.  In direct chats this is already handled by
+    // `checkInboundAccessControl`, but in groups the flag was previously
+    // unchecked, so the bot's replies would re-enter the auto-reply pipeline
+    // whenever the text-based echo tracker failed to match (e.g. due to
+    // minor formatting differences or Set eviction under load).
+    if (msg.fromMe) {
+      logVerbose(
+        `Skipping auto-reply: fromMe message in ${msg.chatType} chat ${conversationId}`,
+      );
+      return;
+    }
+
+    // Skip if this is a message we just sent (echo detection).
+    // This is a secondary safeguard; the `fromMe` check above is the
+    // authoritative gate.  The text-based tracker is kept for edge cases
+    // where Baileys does not set `fromMe` reliably (e.g. multi-device lag).
     if (params.echoTracker.has(msg.body)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
       params.echoTracker.forget(msg.body);
