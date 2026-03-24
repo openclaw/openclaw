@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
+    hasHooks: vi.fn<(name: string) => boolean>((_name) => false),
+    runMessageSending: vi.fn(async () => undefined),
     runMessageSent: vi.fn(async () => {}),
   },
 }));
@@ -210,6 +211,8 @@ describe("deliverOutboundPayloads", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1031,6 +1034,167 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("uses the same resolved sessionKey in message_sending and message_sent", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      session: { key: "agent:sender:session", agentId: "sender-agent" },
+      mirror: { sessionKey: "agent:mirror:session", agentId: "mirror-agent" },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("uses replyToId as hook threadId for Slack threaded sends", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "slack-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "slack",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "hello" }],
+      replyToId: "1741719181.247349",
+      threadId: null,
+      session: { key: "agent:sender:session", agentId: "sender-agent" },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          threadId: "1741719181.247349",
+          sessionKey: "agent:sender:session",
+          agentId: "sender-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          threadId: "1741719181.247349",
+          sessionKey: "agent:sender:session",
+          agentId: "sender-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("uses payload-level replyToId as hook threadId for Slack threaded sends", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "slack-2" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "slack",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "hello", replyToId: "1741719181.999999" }],
+      replyToId: undefined,
+      threadId: null,
+      session: { key: "agent:sender:session", agentId: "sender-agent" },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          threadId: "1741719181.999999",
+          sessionKey: "agent:sender:session",
+          agentId: "sender-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          threadId: "1741719181.999999",
+          sessionKey: "agent:sender:session",
+          agentId: "sender-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("falls back to mirror metadata for message_sending when session is absent", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      mirror: { sessionKey: "agent:mirror:session", agentId: "mirror-agent" },
+      skipQueue: true,
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
@@ -1245,6 +1409,47 @@ describe("deliverOutboundPayloads", () => {
         error: "downstream failed",
       }),
       expect.objectContaining({ channelId: "whatsapp" }),
+    );
+  });
+
+  it("emits payload-level threadId in message_sent failure metadata for Slack threaded sends", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockRejectedValue(new Error("downstream failed"));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "slack",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "hi", replyToId: "1741719181.424242" }],
+        threadId: null,
+        session: { key: "agent:sender:session", agentId: "sender-agent" },
+      }),
+    ).rejects.toThrow("downstream failed");
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          threadId: "1741719181.424242",
+          sessionKey: "agent:sender:session",
+          agentId: "sender-agent",
+        }),
+        success: false,
+        error: "downstream failed",
+      }),
+      expect.anything(),
     );
   });
 });
