@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
 
@@ -24,12 +24,15 @@ describe("web outbound", () => {
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    vi.clearAllMocks();
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
     ({ setActiveWebListener } = await import("./active-listener.js"));
     ({ resetLogger, setLoggerOverride } = await import("../../../src/logging.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
