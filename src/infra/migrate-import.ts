@@ -403,6 +403,14 @@ export async function importMigrateArchive(
   const merge = Boolean(opts.merge);
   const dryRun = Boolean(opts.dryRun);
 
+  // Check archive size before any extraction work (including manifest parsing).
+  const archiveStat = await fs.stat(archivePath);
+  if (archiveStat.size > MIGRATE_IMPORT_LIMITS.maxArchiveBytes) {
+    throw new Error(
+      `Migration archive exceeds size limit (${archiveStat.size} bytes > ${MIGRATE_IMPORT_LIMITS.maxArchiveBytes} bytes).`,
+    );
+  }
+
   const manifest = await extractManifestFromArchive(archivePath);
   const warnings: string[] = [];
 
@@ -466,19 +474,10 @@ export async function importMigrateArchive(
   // Extraction safety limits — exported for testing.
   const MAX_EXTRACT_ENTRIES = MIGRATE_IMPORT_LIMITS.maxEntries;
   const MAX_EXTRACT_BYTES = MIGRATE_IMPORT_LIMITS.maxExtractedBytes;
-  const MAX_ARCHIVE_BYTES = MIGRATE_IMPORT_LIMITS.maxArchiveBytes;
 
   // Extract to a temporary directory.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-import-"));
   try {
-    // Check archive size before extraction.
-    const archiveStat = await fs.stat(archivePath);
-    if (archiveStat.size > MAX_ARCHIVE_BYTES) {
-      throw new Error(
-        `Migration archive exceeds size limit (${archiveStat.size} bytes > ${MAX_ARCHIVE_BYTES} bytes).`,
-      );
-    }
-
     const blockedTarEntryTypes = new Set([
       "SymbolicLink",
       "Link",
