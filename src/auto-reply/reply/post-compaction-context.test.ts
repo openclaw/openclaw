@@ -347,6 +347,8 @@ Read WORKFLOW.md on startup.
       expect(result).not.toContain("Session Startup");
       // Must reference the actual configured section names
       expect(result).toContain("Boot Sequence");
+      expect(result).toContain("Use the configured AGENTS.md sections below (Boot Sequence) first");
+      expect(result).toContain("missing or truncated here, reread AGENTS.md");
     });
 
     it("uses default 'Session Startup' prose when default sections are active", async () => {
@@ -355,6 +357,8 @@ Read WORKFLOW.md on startup.
       const result = await readPostCompactionContext(tmpDir);
       expect(result).not.toBeNull();
       expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("using the AGENTS.md sections below first");
+      expect(result).toContain("missing or truncated here, reread AGENTS.md");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
