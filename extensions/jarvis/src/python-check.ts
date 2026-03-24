@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 
 const MIN_PYTHON_VERSION = "3.10";
 
@@ -66,6 +69,45 @@ export async function checkPythonEnvironment(opts: {
   }
 
   return { ok: true, pythonCommand: cmd, pythonVersion: version };
+}
+
+/** Well-known locations where the Jarvis plugin may be installed. */
+export const JARVIS_PROBE_PATHS: string[] = (() => {
+  const home = homedir();
+  const cacheBase = join(home, ".claude", "plugins", "cache", "jarvis-plugins", "jarvis");
+  return [cacheBase, join(home, ".local", "share", "jarvis"), join(home, ".jarvis")];
+})();
+
+/**
+ * Resolve the path to the Jarvis plugin root.
+ * If explicit is provided, use it directly.
+ * Otherwise, probe well-known locations for a directory containing
+ * mcp_server/__main__.py.
+ */
+export function resolveJarvisPath(explicit?: string): string | null {
+  if (explicit) return resolve(explicit);
+
+  for (const base of JARVIS_PROBE_PATHS) {
+    if (existsSync(join(base, "mcp_server", "__main__.py"))) {
+      return base;
+    }
+    // Check versioned subdirectories (e.g., .../jarvis/2.1.0/)
+    try {
+      const entries = readdirSync(base, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const versionedPath = join(base, entry.name);
+          if (existsSync(join(versionedPath, "mcp_server", "__main__.py"))) {
+            return versionedPath;
+          }
+        }
+      }
+    } catch {
+      // Directory doesn't exist, skip.
+    }
+  }
+
+  return null;
 }
 
 function spawnCollect(command: string, args: string[]): Promise<string> {

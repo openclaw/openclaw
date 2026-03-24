@@ -37,3 +37,19 @@ describe("checkPythonEnvironment", () => {
     expect(meetsMinVersion("2.7.18", "3.10")).toBe(false);
   });
 });
+
+describe("resolveJarvisPath", () => {
+  it("returns the explicit path when provided", async () => {
+    const { resolveJarvisPath } = await import("./python-check.js");
+    const result = resolveJarvisPath("/explicit/path");
+    expect(result).toBe("/explicit/path");
+  });
+
+  it("probes well-known plugin cache locations", async () => {
+    const { JARVIS_PROBE_PATHS } = await import("./python-check.js");
+    expect(JARVIS_PROBE_PATHS.length).toBeGreaterThan(0);
+    for (const p of JARVIS_PROBE_PATHS) {
+      expect(p).toContain("jarvis");
+    }
+  });
+});
