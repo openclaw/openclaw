@@ -36,6 +36,49 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("uses a 5s default connect-challenge timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const close = vi.fn();
+      const client = new GatewayClient({ onConnectError });
+      (
+        client as unknown as {
+          ws:
+            | WebSocket
+            | {
+                readyState: number;
+                send: () => void;
+                close: (code: number, reason: string) => void;
+              };
+          queueConnect: () => void;
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close,
+      };
+
+      (
+        client as unknown as {
+          queueConnect: () => void;
+        }
+      ).queueConnect();
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "gateway connect challenge timeout" }),
+      );
+      expect(close).toHaveBeenCalledWith(1008, "connect challenge timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("closes on missing ticks", async () => {
     const port = await getFreePort();
     wss = new WebSocketServer({ port, host: "127.0.0.1" });
