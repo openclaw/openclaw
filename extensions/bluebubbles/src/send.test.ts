@@ -810,6 +810,92 @@ describe("send", () => {
       }
     });
 
+    it("skips lazy-refresh when privateApiStatus is null but no reply or effect requested", async () => {
+      // When no reply threading or effect is needed, there's no reason to refresh
+      // the Private API cache — a plain send works without it.
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValue(null);
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-plain" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Just a plain message", {
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://localhost:1234",
+              password: "test",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("msg-uuid-plain");
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+    });
+
+    it("skips lazy-refresh when privateApiStatus is already known (true)", async () => {
+      // When the cache has a definite value (true = enabled), no refresh is needed.
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValue(true);
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-known-true" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Reply with known status", {
+        replyToMessageGuid: "reply-guid-known",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://localhost:1234",
+              password: "test",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("msg-uuid-known-true");
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+
+      // Should use private-api method since status is true
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBe("private-api");
+      expect(body.selectedMessageGuid).toBe("reply-guid-known");
+    });
+
+    it("skips lazy-refresh when privateApiStatus is already known (false)", async () => {
+      // When the cache says Private API is disabled, no refresh is needed.
+      // The send should degrade to a plain message (no reply threading).
+      const runtimeLog = vi.fn();
+      setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValue(false);
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-known-false" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Reply with disabled API", {
+          replyToMessageGuid: "reply-guid-disabled",
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://localhost:1234",
+                password: "test",
+              },
+            },
+          },
+        });
+
+        expect(result.messageId).toBe("msg-uuid-known-false");
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+      } finally {
+        clearBlueBubblesRuntime();
+      }
+    });
+
     it("sends message with chat_guid target directly", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
