@@ -73,8 +73,8 @@ describe("ports-format", () => {
     // Same PID but on non-loopback interfaces — likely a real conflict.
     const hints = buildPortHints(
       [
-        { pid: 12345, commandLine: "node dist/index.js gateway", address: "0.0.0.0:18789" },
         { pid: 12345, commandLine: "node dist/index.js gateway", address: "192.168.1.10:18789" },
+        { pid: 12345, commandLine: "node dist/index.js gateway", address: "10.0.0.5:18789" },
       ],
       18789,
     );

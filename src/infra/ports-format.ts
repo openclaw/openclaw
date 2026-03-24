@@ -45,10 +45,10 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
     const allLoopback = listeners.every(
       (l) =>
         l.address !== undefined &&
-        (l.address.startsWith("127.") ||
-          l.address.startsWith("::1") ||
-          l.address === "0.0.0.0" ||
-          l.address === "::"),
+        (l.address.startsWith("127.") || // IPv4 loopback: 127.x.x.x
+          l.address.startsWith("[::1]") || // IPv6 loopback with port: [::1]:18789
+          l.address === "::1" || // IPv6 loopback without port
+          l.address.startsWith("[::ffff:127.")), // IPv4-mapped IPv6: [::ffff:127.0.0.1]
     );
     if (allSamePid && allLoopback) {
       // Same PID on loopback dual-stack (IPv4 + IPv6) — this is expected, downgrade to info.
