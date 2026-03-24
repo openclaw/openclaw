@@ -11171,6 +11171,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          consolidation: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              retentionDays: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              maxFilesPerRun: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              schedule: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },

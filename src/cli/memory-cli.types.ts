@@ -12,3 +12,12 @@ export type MemorySearchCommandOptions = MemoryCommandOptions & {
   maxResults?: number;
   minScore?: number;
 };
+
+export type MemoryConsolidateCommandOptions = MemoryCommandOptions & {
+  agent?: string;
+  retentionDays?: number;
+  maxFiles?: number;
+  force?: boolean;
+  verbose?: boolean;
+  json?: boolean;
+};

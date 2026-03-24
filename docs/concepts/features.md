@@ -45,6 +45,7 @@ title: "Features"
 - Multi-agent routing with isolated sessions per workspace or sender
 - Sessions: direct chats collapse into shared `main`; groups are isolated
 - Streaming and chunking for long responses
+- **Sleep Memory Consolidation**: automated summarization of daily logs into long-term `MEMORY.md`
 
 **Auth and providers:**
 

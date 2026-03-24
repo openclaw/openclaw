@@ -24,6 +24,7 @@ openclaw memory status --deep
 openclaw memory index --force
 openclaw memory search "meeting notes"
 openclaw memory search --query "deployment" --max-results 20
+openclaw memory consolidate --agent main
 openclaw memory status --json
 openclaw memory status --deep --index
 openclaw memory status --deep --index --verbose
@@ -33,10 +34,10 @@ openclaw memory index --agent main --verbose
 
 ## Options
 
-`memory status` and `memory index`:
+`memory status`, `memory index`, and `memory consolidate`:
 
 - `--agent <id>`: scope to a single agent. Without it, these commands run for each configured agent; if no agent list is configured, they fall back to the default agent.
-- `--verbose`: emit detailed logs during probes and indexing.
+- `--verbose`: emit detailed logs during operations.
 
 `memory status`:
 
@@ -47,6 +48,12 @@ openclaw memory index --agent main --verbose
 `memory index`:
 
 - `--force`: force a full reindex.
+
+`memory consolidate`:
+
+- `--retention-days <n>`: number of days to keep as raw logs (default: 7).
+- `--max-files <n>`: maximum number of files to process in one run (default: 30).
+- `--json`: print JSON summary of consolidated facts.
 
 `memory search`:
 

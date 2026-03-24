@@ -97,6 +97,15 @@ const LoggingLevelSchema = z.union([
   z.literal("trace"),
 ]);
 
+const MemoryConsolidationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    retentionDays: z.number().int().nonnegative().optional(),
+    maxFilesPerRun: z.number().int().positive().optional(),
+    schedule: z.string().optional(),
+  })
+  .strict();
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
@@ -116,6 +125,7 @@ const MemorySchema = z
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    consolidation: MemoryConsolidationSchema.optional(),
   })
   .strict()
   .optional();

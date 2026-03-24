@@ -4,10 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { extractAssistantText } from "../agents/pi-embedded-utils.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../agents/simple-completion-runtime.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
+import {
+  buildConsolidationUserPrompt,
+  CONSOLIDATION_SYSTEM_PROMPT,
+} from "../memory/consolidation-prompt.ts";
+import { listConsolidationCandidates, mergeIntoMemoryMd } from "../memory/consolidation.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -18,7 +28,11 @@ import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getMemoryCommandSecretTargetIds } from "./command-secret-targets.js";
 import { formatHelpExamples } from "./help-format.js";
-import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./memory-cli.types.js";
+import type {
+  MemoryCommandOptions,
+  MemoryConsolidateCommandOptions,
+  MemorySearchCommandOptions,
+} from "./memory-cli.types.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
@@ -744,6 +758,141 @@ export async function runMemorySearch(
         lines.push("");
       }
       defaultRuntime.log(lines.join("\n").trim());
+    },
+  });
+}
+
+export async function runMemoryConsolidate(opts: MemoryConsolidateCommandOptions) {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory consolidate");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+
+  const agentId = resolveAgent(cfg, opts.agent);
+
+  const retentionDays = opts.retentionDays ?? cfg.memory?.consolidation?.retentionDays ?? 7;
+  const maxFiles = opts.maxFiles ?? cfg.memory?.consolidation?.maxFilesPerRun ?? 30;
+
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      const workspaceDir = status.workspaceDir;
+      if (!workspaceDir) {
+        throw new Error("Workspace directory not resolved for agent.");
+      }
+
+      const memoryDir = path.join(workspaceDir, "memory");
+      const candidates = await listConsolidationCandidates({
+        memoryDir,
+        retentionDays,
+        maxFiles,
+      });
+
+      if (candidates.length === 0 && !opts.force) {
+        if (opts.json) {
+          defaultRuntime.writeJson({ consolidated: 0, message: "No candidates for consolidation" });
+        } else {
+          defaultRuntime.log(theme.info("No daily logs found for consolidation."));
+        }
+        return;
+      }
+
+      if (opts.verbose) {
+        defaultRuntime.log(theme.info(`Found ${candidates.length} candidates for consolidation.`));
+      }
+
+      // Read candidate files
+      const logs = await Promise.all(
+        candidates.map(async (c) => {
+          const content = await fs.readFile(c.absPath, "utf-8");
+          return `--- ${c.date} ---\n${content}`;
+        }),
+      );
+
+      const memoryMdPath = path.join(workspaceDir, "MEMORY.md");
+      let existingMemoryMd = "";
+      try {
+        existingMemoryMd = await fs.readFile(memoryMdPath, "utf-8");
+      } catch {
+        // MEMORY.md might not exist yet
+      }
+
+      // Prepare LLM
+      const prepared = await prepareSimpleCompletionModelForAgent({
+        cfg,
+        agentId,
+      });
+
+      if ("error" in prepared) {
+        throw new Error(`Failed to prepare LLM for consolidation: ${prepared.error}`);
+      }
+
+      if (opts.verbose) {
+        defaultRuntime.log(theme.info("Summarizing logs with LLM..."));
+      }
+
+      const completion = await completeWithPreparedSimpleCompletionModel({
+        model: prepared.model,
+        auth: prepared.auth,
+        context: {
+          messages: [
+            {
+              role: "user",
+              content: buildConsolidationUserPrompt({
+                logs: logs.join("\n\n"),
+                existingContext: existingMemoryMd,
+              }),
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        options: {
+          systemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
+        },
+      });
+
+      const consolidatedFacts = extractAssistantText(completion);
+      if (
+        !consolidatedFacts ||
+        consolidatedFacts.trim() === "" ||
+        consolidatedFacts.includes("No new facts")
+      ) {
+        if (opts.json) {
+          defaultRuntime.writeJson({ consolidated: 0, message: "No new facts found" });
+        } else {
+          defaultRuntime.log(theme.info("Consolidation finished: no new lasting facts extracted."));
+        }
+        return;
+      }
+
+      const updatedMemoryMd = mergeIntoMemoryMd({
+        existingContent: existingMemoryMd,
+        consolidatedFacts,
+      });
+
+      // Atomic write
+      const tmpPath = `${memoryMdPath}.tmp-${Date.now()}`;
+      await fs.writeFile(tmpPath, updatedMemoryMd, "utf-8");
+      await fs.rename(tmpPath, memoryMdPath);
+
+      // Delete daily files
+      await Promise.all(candidates.map((c) => fs.unlink(c.absPath)));
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          consolidated: candidates.length,
+          facts: consolidatedFacts,
+        });
+      } else {
+        defaultRuntime.log(
+          theme.success(`Successfully consolidated ${candidates.length} files into MEMORY.md`),
+        );
+        if (opts.verbose) {
+          defaultRuntime.log(theme.muted(consolidatedFacts));
+        }
+      }
     },
   });
 }

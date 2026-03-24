@@ -29,6 +29,14 @@ The default workspace layout uses two memory layers:
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
+## Sleep Memory Consolidation (Layer 2)
+
+Over time, daily `memory/YYYY-MM-DD.md` files grow in number. OpenClaw provides an automated **Sleep Consolidation** mechanism to keep memory manageable:
+
+- **What it does**: Reads daily files older than a retention threshold (default 7 days), summarizes the core facts using the agent's LLM, appends them to the curated `MEMORY.md` index, and deletes the original raw logs.
+- **Why it matters**: It prevents the semantic index from becoming cluttered with transient noise while preserving durable facts and user preferences.
+- **How to run**: Use the [CLI command](/cli/memory) `openclaw memory consolidate` or schedule it via [Cron](/cli/cron).
+
 ## Memory tools
 
 OpenClaw exposes two agent-facing tools for these Markdown files:

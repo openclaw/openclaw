@@ -2,7 +2,11 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { formatHelpExamples } from "./help-format.js";
-import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./memory-cli.types.js";
+import type {
+  MemoryCommandOptions,
+  MemoryConsolidateCommandOptions,
+  MemorySearchCommandOptions,
+} from "./memory-cli.types.js";
 
 type MemoryCliRuntime = typeof import("./memory-cli.runtime.js");
 
@@ -28,6 +32,11 @@ async function runMemorySearch(queryArg: string | undefined, opts: MemorySearchC
   await runtime.runMemorySearch(queryArg, opts);
 }
 
+async function runMemoryConsolidate(opts: MemoryConsolidateCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryConsolidate(opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -43,6 +52,10 @@ export function registerMemoryCli(program: Command) {
           [
             'openclaw memory search --query "deployment" --max-results 20',
             "Limit results for focused troubleshooting.",
+          ],
+          [
+            "openclaw memory consolidate --agent main",
+            "Consolidate old daily logs into MEMORY.md.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
@@ -81,5 +94,18 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
       await runMemorySearch(queryArg, opts);
+    });
+
+  memory
+    .command("consolidate")
+    .description("Consolidate daily memory logs into long-term memory")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--retention-days <n>", "Retention period in days", (value: string) => Number(value))
+    .option("--max-files <n>", "Maximum files to process", (value: string) => Number(value))
+    .option("--force", "Force consolidation even if no candidates found", false)
+    .option("--verbose", "Verbose logging", false)
+    .option("--json", "Print JSON result", false)
+    .action(async (opts: MemoryConsolidateCommandOptions) => {
+      await runMemoryConsolidate(opts);
     });
 }

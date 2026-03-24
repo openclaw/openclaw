@@ -8,6 +8,17 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  consolidation?: MemoryConsolidationConfig;
+};
+
+export type MemoryConsolidationConfig = {
+  enabled?: boolean;
+  /** Number of days to keep daily log files before consolidation (default: 7) */
+  retentionDays?: number;
+  /** Maximum number of files to process in a single consolidation run (default: 30) */
+  maxFilesPerRun?: number;
+  /** Cron schedule for automatic consolidation (e.g., "0 3 * * *") */
+  schedule?: string;
 };
 
 export type MemoryQmdConfig = {

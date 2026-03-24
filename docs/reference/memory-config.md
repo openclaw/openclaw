@@ -44,6 +44,25 @@ local policy).
 When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
+## Memory consolidation (Layer 2)
+
+Sleep Memory Consolidation summarizes old daily files into `MEMORY.md`. Configure it under `memory.consolidation`:
+
+```json5
+memory: {
+  consolidation: {
+    enabled: true,
+    retentionDays: 7,      // number of days to keep raw logs
+    maxFilesPerRun: 30,     // safety cap per execution
+    schedule: "0 3 * * *"  // cron expression (requires openclaw cron)
+  }
+}
+```
+
+- **Retention**: files older than `retentionDays` are summarized and then deleted.
+- **LLM Selection**: uses the agent's primary model for summarization.
+- **Scheduling**: if `schedule` is set, OpenClaw automatically registers the task with the built-in [Cron](/cli/cron) system.
+
 ## QMD backend (experimental)
 
 Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for
