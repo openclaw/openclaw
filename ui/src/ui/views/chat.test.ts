@@ -6,6 +6,12 @@ import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import {
+  createModelCatalog,
+  createSessionsListResult,
+  DEEPSEEK_CHAT_MODEL,
+  DEFAULT_CHAT_MODEL_CATALOG,
+} from "../chat-model.test-helpers.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -25,17 +31,15 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : null;
+  let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
-  const catalog = overrides.models ?? [
-    { id: "gpt-5", name: "GPT-5", provider: "openai" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
-  ];
+  const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
       const nextModel = (params.model as string | null | undefined) ?? null;
@@ -64,23 +68,11 @@ function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      return {
-        ts: 0,
-        path: "",
-        count: omitSessionFromList ? 0 : 1,
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: omitSessionFromList
-          ? []
-          : [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                modelProvider: currentModelProvider,
-                model: currentModel,
-              },
-            ],
-      };
+      return createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+      });
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -91,23 +83,11 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: omitSessionFromList ? 0 : 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: omitSessionFromList
-        ? []
-        : [
-            {
-              key: "main",
-              kind: "direct",
-              updatedAt: null,
-              modelProvider: currentModelProvider,
-              model: currentModel,
-            },
-          ],
-    },
+    sessionsResult: createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      omitSessionFromList,
+    }),
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
@@ -850,7 +830,7 @@ describe("chat view", () => {
       key: "main",
       model: null,
     });
-    expect(state.sessionsResult?.sessions[0]?.model).toBeNull();
+    expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
     vi.unstubAllGlobals();
   });
 
@@ -907,6 +887,43 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("openai/gpt-5-mini");
+    expect(optionValues).not.toContain("gpt-5-mini");
+  });
+
+  it("prefers the catalog provider when the active session reports a stale provider", () => {
+    const { state } = createChatHeaderState({
+      model: "deepseek-chat",
+      modelProvider: "zai",
+      models: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect?.value).toBe("deepseek/deepseek-chat");
+  });
+
+  it("falls back to the server-qualified session model when catalog lookup fails", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5-mini",
+      models: [],
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
     expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(

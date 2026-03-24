@@ -234,6 +234,7 @@ describe("channel plugin catalog", () => {
       env: {
         ...process.env,
         OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+        OPENCLAW_HOME: home,
         HOME: home,
       },
     }).map((entry) => entry.id);

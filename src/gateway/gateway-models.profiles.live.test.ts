@@ -19,7 +19,7 @@ import {
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -44,7 +44,7 @@ import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
-const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -64,6 +64,9 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
+  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-3.1-pro-preview-customtools",
 ]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
@@ -297,7 +300,7 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
-  it("strips scaffolding for the gemini 3.1 flash alias and targeted live models", () => {
+  it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
@@ -307,7 +310,19 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
-        "google/gemini-3-pro-preview",
+        "google/gemini-3.1-flash-lite-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview-customtools",
       ),
     ).toBe("Visible");
     expect(
