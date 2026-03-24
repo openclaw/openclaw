@@ -6,6 +6,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -203,6 +204,34 @@ describe("runtime snapshot staleness detection", () => {
 
       const result = ensureAuthProfileStore();
       expect(getApiKey(result, "openai:default")).toBe("sk-test");
+    });
+  });
+
+  it("preserves runtime snapshot after self-induced saveAuthProfileStore", async () => {
+    await withTempHome("runtime-snapshot-self-save-", async (home) => {
+      const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const authPath = path.join(agentDir, "auth-profiles.json");
+
+      const initialStore = createAuthStore({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-original" },
+      });
+
+      await fs.writeFile(authPath, JSON.stringify(initialStore, null, 2), "utf8");
+
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: undefined, store: initialStore }]);
+
+      const beforeSave = ensureAuthProfileStore();
+      expect(getApiKey(beforeSave, "openai:default")).toBe("sk-original");
+
+      const updatedStore = createAuthStore({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-updated" },
+        usageStats: { "openai:default": { lastUsedAtMs: Date.now() } },
+      });
+      saveAuthProfileStore(updatedStore);
+
+      const afterSave = ensureAuthProfileStore();
+      expect(getApiKey(afterSave, "openai:default")).toBe("sk-updated");
     });
   });
 });
