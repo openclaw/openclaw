@@ -190,9 +190,20 @@ async function extractManifestFromArchive(archivePath: string): Promise<MigrateM
         return;
       }
       contentPromise = new Promise<string>((resolve, reject) => {
+        const MAX_MANIFEST_BYTES = 4 * 1024 * 1024; // 4 MB
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buf.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            reject(
+              new Error(`Migration manifest exceeds size limit (${MAX_MANIFEST_BYTES} bytes).`),
+            );
+            entry.destroy();
+            return;
+          }
+          chunks.push(buf);
         });
         entry.on("error", reject);
         entry.on("end", () => {
@@ -295,7 +306,7 @@ function remapSourceToTarget(params: {
   // Agent data: remap from source state dir to local state dir.
   if (kind === "agents" && params.sourceStateDir) {
     const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
-    if (relative !== undefined) {
+    if (relative !== undefined && relative !== "") {
       const target = path.join(params.localStateDir, relative);
       assertTargetWithinRoot(target, params.localStateDir, "agents");
       return target;
@@ -342,7 +353,7 @@ function remapSourceToTarget(params: {
   // Fallback: place under local state dir using relative path from source state dir.
   if (params.sourceStateDir) {
     const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
-    if (relative !== undefined) {
+    if (relative !== undefined && relative !== "") {
       const target = path.join(params.localStateDir, relative);
       assertTargetWithinRoot(target, params.localStateDir, kind);
       return target;
