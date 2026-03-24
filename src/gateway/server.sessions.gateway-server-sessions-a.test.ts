@@ -6,9 +6,13 @@ import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import { loadConfig } from "../config/config.js";
+import { withSessionStoreLockForTest } from "../config/sessions/store.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import { performGatewaySessionReset } from "./session-reset-service.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -2394,6 +2398,99 @@ describe("gateway server sessions", () => {
     expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
 
     ws.close();
+  });
+
+  test("sessions.reset emits before_reset for the entry actually reset under the store lock", async () => {
+    const { dir } = await createSessionStoreDir();
+    const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
+    const newTranscriptPath = path.join(dir, "sess-new.jsonl");
+    await fs.writeFile(
+      oldTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-old",
+        message: { role: "user", content: "old transcript" },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      newTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-new",
+        message: { role: "user", content: "new transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-old",
+          sessionFile: oldTranscriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    beforeResetHookState.hasBeforeResetHook = true;
+    const gatewayStorePath = resolveGatewaySessionStoreTarget({
+      cfg: loadConfig(),
+      key: "main",
+    }).storePath;
+
+    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    await withSessionStoreLockForTest(gatewayStorePath, async () => {
+      pendingReset = performGatewaySessionReset({
+        key: "main",
+        reason: "new",
+        commandSource: "gateway:sessions.reset",
+      });
+      await vi.waitFor(() => {
+        expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+      });
+      await fs.writeFile(
+        gatewayStorePath,
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "sess-new",
+              sessionFile: newTranscriptPath,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    });
+
+    const reset = await pendingReset!;
+    expect(reset.ok).toBe(true);
+    const internalEvent = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { previousSessionEntry?: { sessionId?: string } } } | undefined;
+    expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-old");
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = (
+      beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionFile: newTranscriptPath,
+      reason: "new",
+      messages: [
+        {
+          role: "user",
+          content: "new transcript",
+        },
+      ],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-new",
+    });
   });
 
   test("sessions.delete returns unavailable when active run does not stop", async () => {

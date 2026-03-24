@@ -342,17 +342,10 @@ export async function performGatewaySessionReset(params: {
   if (mutationCleanupError) {
     return { ok: false, error: mutationCleanupError };
   }
-  emitGatewayBeforeResetPluginHook({
-    cfg,
-    key: params.key,
-    target,
-    storePath,
-    entry,
-    reason: params.reason,
-  });
 
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
+  let resetSourceEntry: SessionEntry | undefined;
   const next = await updateSessionStore(storePath, (store) => {
     const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg,
@@ -360,6 +353,7 @@ export async function performGatewaySessionReset(params: {
       store,
     });
     const currentEntry = store[primaryKey];
+    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
@@ -441,6 +435,14 @@ export async function performGatewaySessionReset(params: {
     };
     store[primaryKey] = nextEntry;
     return nextEntry;
+  });
+  emitGatewayBeforeResetPluginHook({
+    cfg,
+    key: params.key,
+    target,
+    storePath,
+    entry: resetSourceEntry,
+    reason: params.reason,
   });
 
   archiveSessionTranscriptsForSession({
