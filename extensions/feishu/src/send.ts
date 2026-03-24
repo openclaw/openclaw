@@ -585,7 +585,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      enable_forward: true,
     },
     body: {
       elements: [
@@ -632,7 +632,7 @@ export function buildStructuredCard(
   }
   const card: Record<string, unknown> = {
     schema: "2.0",
-    config: { wide_screen_mode: true },
+    config: { enable_forward: true },
     body: { elements },
   };
   if (options?.header) {
