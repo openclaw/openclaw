@@ -35,10 +35,14 @@ describe("tsdown config", () => {
     expect(entryKeys(distGraphs[0])).toEqual(
       expect.arrayContaining([
         "index",
+        "cli/memory-cli",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
         "extensions/openai/index",
+        "extensions/matrix/index",
+        "extensions/msteams/index",
+        "extensions/whatsapp/index",
         "bundled/boot-md/handler",
       ]),
     );

@@ -122,6 +122,14 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    routeReply: mocks.routeReply,
+  };
+});
+
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
@@ -2618,6 +2626,58 @@ describe("dispatchReplyFromConfig", () => {
         reason: "duplicate",
       }),
     );
+  });
+
+  it("passes configOverride to replyResolver when provided", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
+
+    const overrideCfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      configOverride: overrideCfg,
+    });
+
+    expect(receivedCfg).toBe(overrideCfg);
+  });
+
+  it("does not pass cfg as implicit configOverride when configOverride is not provided", async () => {
+    setNoAbort();
+    const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(receivedCfg).toBeUndefined();
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {

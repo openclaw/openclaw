@@ -4,7 +4,8 @@ import type {
   ReactionType,
   ReactionTypeEmoji,
 } from "@grammyjs/types";
-import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import * as grammy from "grammy";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
@@ -43,7 +44,16 @@ import {
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramApi = Bot["api"];
-type TelegramApiOverride = Partial<TelegramApi>;
+export type TelegramApiOverride = Partial<TelegramApi>;
+const InputFileCtor: typeof grammy.InputFile =
+  typeof grammy.InputFile === "function"
+    ? grammy.InputFile
+    : (class InputFileFallback {
+        constructor(
+          public readonly buffer: Buffer,
+          public readonly fileName?: string,
+        ) {}
+      } as unknown as typeof grammy.InputFile);
 
 type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -781,7 +791,7 @@ export async function sendMessageTelegram(
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
-    const file = new InputFile(media.buffer, fileName);
+    const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
 

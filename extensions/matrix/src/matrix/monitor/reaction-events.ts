@@ -1,3 +1,4 @@
+import { getSessionBindingService } from "../../runtime-api.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../accounts.js";
@@ -72,7 +73,7 @@ export async function handleInboundMatrixReaction(params: {
         content: targetContent,
       })
     : undefined;
-  const { route } = resolveMatrixInboundRoute({
+  const { route, runtimeBindingId } = resolveMatrixInboundRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
@@ -83,6 +84,9 @@ export async function handleInboundMatrixReaction(params: {
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
+  if (runtimeBindingId) {
+    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts);
+  }
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,

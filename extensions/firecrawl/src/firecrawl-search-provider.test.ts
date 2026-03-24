@@ -1,12 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFirecrawlSearch = vi.fn(async (params: Record<string, unknown>) => params);
+const { runFirecrawlSearch } = vi.hoisted(() => ({
+  runFirecrawlSearch: vi.fn(async (params: Record<string, unknown>) => params),
+}));
 
 vi.mock("./firecrawl-client.js", () => ({
   runFirecrawlSearch,
 }));
 
 describe("firecrawl web search provider", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    runFirecrawlSearch.mockReset();
+    runFirecrawlSearch.mockImplementation(async (params: Record<string, unknown>) => params);
+  });
+
   it("exposes selection metadata and enables the plugin in config", async () => {
     const { createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js");
 

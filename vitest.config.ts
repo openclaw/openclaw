@@ -3,6 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  behaviorManifestPath,
+  unitMemoryHotspotManifestPath,
+  unitTimingManifestPath,
+} from "./scripts/test-runner-manifest.mjs";
+import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -37,6 +43,27 @@ export default defineConfig({
     unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
+    forceRerunTriggers: [
+      "package.json",
+      "pnpm-lock.yaml",
+      "test/setup.ts",
+      "scripts/test-parallel.mjs",
+      "scripts/test-runner-manifest.mjs",
+      "vitest.channel-paths.mjs",
+      "vitest.channels.config.ts",
+      "vitest.config.ts",
+      "vitest.e2e.config.ts",
+      "vitest.extensions.config.ts",
+      "vitest.gateway.config.ts",
+      "vitest.live.config.ts",
+      "vitest.performance-config.ts",
+      "vitest.scoped-config.ts",
+      "vitest.unit.config.ts",
+      "vitest.unit-paths.mjs",
+      behaviorManifestPath,
+      unitTimingManifestPath,
+      unitMemoryHotspotManifestPath,
+    ],
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
@@ -154,5 +181,6 @@ export default defineConfig({
         "src/infra/tailscale.ts",
       ],
     },
+    ...loadVitestExperimentalConfig(),
   },
 });

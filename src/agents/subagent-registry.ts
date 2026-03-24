@@ -436,6 +436,12 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  const cfg = loadConfig();
+  ensureRuntimePluginsLoaded({
+    config: cfg,
+    workspaceDir: params.entry.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
   const reason = params.reason ?? params.entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   const outcome = resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
   const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
@@ -706,9 +712,11 @@ function resumeSubagentRun(runId: string) {
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
-    logAnnounceGiveUp(entry, "retry-limit");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "retry-limit",
+    });
     return;
   }
   if (
@@ -716,9 +724,11 @@ function resumeSubagentRun(runId: string) {
     typeof entry.endedAt === "number" &&
     Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
-    logAnnounceGiveUp(entry, "expiry");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "expiry",
+    });
     return;
   }
 
@@ -1054,7 +1064,7 @@ async function finalizeSubagentCleanup(
     completeCleanupBookkeeping({
       runId,
       entry,
-      cleanup: "keep",
+      cleanup,
       completedAt: now,
     });
     return;
@@ -1072,6 +1082,30 @@ async function finalizeSubagentCleanup(
   setTimeout(() => {
     resumeSubagentRun(runId);
   }, deferredDecision.resumeDelayMs).unref?.();
+}
+
+async function finalizeResumedAnnounceGiveUp(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: "retry-limit" | "expiry";
+}) {
+  params.entry.wakeOnDescendantSettle = undefined;
+  params.entry.fallbackFrozenResultText = undefined;
+  params.entry.fallbackFrozenResultCapturedAt = undefined;
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    await safeRemoveAttachmentsDir(params.entry);
+  }
+  const completionReason = resolveCleanupCompletionReason(params.entry);
+  await emitCompletionEndedHookIfNeeded(params.entry, completionReason);
+  logAnnounceGiveUp(params.entry, params.reason);
+  completeCleanupBookkeeping({
+    runId: params.runId,
+    entry: params.entry,
+    cleanup: params.entry.cleanup,
+    completedAt: Date.now(),
+  });
 }
 
 async function emitCompletionEndedHookIfNeeded(
@@ -1140,9 +1174,24 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
     if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
-      logAnnounceGiveUp(entry, "expiry");
-      entry.cleanupCompletedAt = now;
-      persistSubagentRuns();
+      if (!beginSubagentCleanup(runId)) {
+        continue;
+      }
+      void finalizeResumedAnnounceGiveUp({
+        runId,
+        entry,
+        reason: "expiry",
+      }).catch((error) => {
+        defaultRuntime.log(
+          `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
+        );
+        const current = subagentRuns.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        persistSubagentRuns();
+      });
       continue;
     }
     resumedRuns.delete(runId);
@@ -1605,10 +1654,23 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
+      const cfg = loadConfig();
+      ensureRuntimePluginsLoaded({
+        config: cfg,
+        workspaceDir: entry.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,

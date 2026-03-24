@@ -3,10 +3,15 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
+import { loggingState } from "../../logging/state.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallPreactionRequest,
+} from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
@@ -80,6 +85,18 @@ function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: bool
   }
   return true;
 }
+function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(
+      resolvePluginInstallPreactionRequest({
+        actionCommand,
+        commandPath,
+        argv: process.argv,
+      }),
+    ) === "recover-matrix-only"
+  );
+}
+
 function getRootCommand(command: Command): Command {
   let current = command;
   while (current.parent) {
@@ -132,16 +149,28 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
+    const allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
+      ...(allowInvalid ? { allowInvalid: true } : {}),
       ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
     });
-    // Load plugins for commands that need channel access
+    // Load plugins for commands that need channel access.
+    // When --json output is active, temporarily route logs to stderr so plugin
+    // registration messages don't corrupt the JSON payload on stdout.
     if (shouldLoadPluginsForCommand(commandPath, jsonOutputMode)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
+      const prev = loggingState.forceConsoleToStderr;
+      if (jsonOutputMode) {
+        loggingState.forceConsoleToStderr = true;
+      }
+      try {
+        ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
+      } finally {
+        loggingState.forceConsoleToStderr = prev;
+      }
     }
   });
 }

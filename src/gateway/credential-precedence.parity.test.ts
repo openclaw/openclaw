@@ -42,8 +42,6 @@ function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
     "OPENCLAW_SERVICE_KIND",
-    "CLAWDBOT_GATEWAY_TOKEN",
-    "CLAWDBOT_GATEWAY_PASSWORD",
   ] as const;
   const previous = new Map<string, string | undefined>();
   for (const key of keys) {
@@ -118,25 +116,6 @@ describe("gateway credential precedence coverage", () => {
         probe: { token: undefined, password: "env-password" }, // pragma: allowlist secret
         status: { token: undefined, password: "remote-password" }, // pragma: allowlist secret
         auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
-      },
-    },
-    {
-      name: "legacy env vars are ignored by probe/status/auth but still supported for call path",
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {},
-        },
-      } as OpenClawConfig,
-      env: {
-        CLAWDBOT_GATEWAY_TOKEN: "legacy-token", // pragma: allowlist secret
-        CLAWDBOT_GATEWAY_PASSWORD: "legacy-password", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-      expected: {
-        call: { token: "legacy-token", password: "legacy-password" }, // pragma: allowlist secret
-        probe: { token: undefined, password: undefined },
-        status: { token: undefined, password: undefined },
-        auth: { token: undefined, password: undefined },
       },
     },
     {

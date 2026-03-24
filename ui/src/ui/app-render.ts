@@ -253,6 +253,8 @@ const INFRASTRUCTURE_SECTION_KEYS = [
   "canvasHost",
   "discovery",
   "media",
+  "acp",
+  "mcp",
 ] as const;
 const AI_AGENTS_SECTION_KEYS = [
   "agents",
@@ -964,6 +966,7 @@ export function renderApp(state: AppViewState) {
                     error: state.toolsCatalogError,
                     result: state.toolsCatalogResult,
                   },
+                  modelCatalog: state.chatModelCatalog ?? [],
                   onRefresh: async () => {
                     await loadAgents(state);
                     const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
@@ -1276,16 +1279,21 @@ export function renderApp(state: AppViewState) {
                   report: state.skillsReport,
                   error: state.skillsError,
                   filter: state.skillsFilter,
+                  statusFilter: state.skillsStatusFilter,
                   edits: state.skillEdits,
                   messages: state.skillMessages,
                   busyKey: state.skillsBusyKey,
+                  detailKey: state.skillsDetailKey,
                   onFilterChange: (next) => (state.skillsFilter = next),
+                  onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
                   onRefresh: () => loadSkills(state, { clearMessages: true }),
                   onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
                   onEdit: (key, value) => updateSkillEdit(state, key, value),
                   onSaveKey: (key) => saveSkillApiKey(state, key),
                   onInstall: (skillKey, name, installId) =>
                     installSkill(state, skillKey, name, installId),
+                  onDetailOpen: (key) => (state.skillsDetailKey = key),
+                  onDetailClose: () => (state.skillsDetailKey = null),
                 }),
               )
             : nothing

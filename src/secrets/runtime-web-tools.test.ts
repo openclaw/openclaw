@@ -1,13 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import * as bundledWebSearchProviders from "../plugins/web-search-providers.js";
-import * as runtimeWebSearchProviders from "../plugins/web-search-providers.runtime.js";
-import * as secretResolve from "./resolve.js";
-import { createResolverContext } from "./runtime-shared.js";
-import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -21,6 +16,12 @@ const mockedModuleIds = [
   "../plugins/web-search-providers.js",
   "../plugins/web-search-providers.runtime.js",
 ] as const;
+
+let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
+let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
+let secretResolve: typeof import("./resolve.js");
+let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
+let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 
 vi.mock("../plugins/web-search-providers.js", () => ({
   resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
@@ -36,6 +37,8 @@ function asConfig(value: unknown): OpenClawConfig {
 
 function providerPluginId(provider: ProviderUnderTest): string {
   switch (provider) {
+    case "duckduckgo":
+      return "duckduckgo";
     case "gemini":
       return "google";
     case "grok":
@@ -81,13 +84,15 @@ function createTestProvider(params: {
     id: params.provider,
     label: params.provider,
     hint: `${params.provider} test provider`,
-    envVars: [`${params.provider.toUpperCase()}_API_KEY`],
-    placeholder: `${params.provider}-...`,
+    requiresCredential: params.provider === "duckduckgo" ? false : undefined,
+    envVars: params.provider === "duckduckgo" ? [] : [`${params.provider.toUpperCase()}_API_KEY`],
+    placeholder: params.provider === "duckduckgo" ? "(no key needed)" : `${params.provider}-...`,
     signupUrl: `https://example.com/${params.provider}`,
     autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: (searchConfig) => searchConfig?.apiKey,
+    credentialPath: params.provider === "duckduckgo" ? "" : credentialPath,
+    inactiveSecretPaths: params.provider === "duckduckgo" ? [] : [credentialPath],
+    getCredentialValue: (searchConfig) =>
+      params.provider === "duckduckgo" ? "duckduckgo-no-key-needed" : searchConfig?.apiKey,
     setCredentialValue: (searchConfigTarget, value) => {
       searchConfigTarget.apiKey = value;
     },
@@ -117,6 +122,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ provider: "duckduckgo", pluginId: "duckduckgo", order: 100 }),
   ];
 }
 
@@ -189,7 +195,13 @@ function expectInactiveFirecrawlSecretRef(params: {
 }
 
 describe("runtime web tools resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
+    runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
+    secretResolve = await import("./resolve.js");
+    ({ createResolverContext } = await import("./runtime-shared.js"));
+    ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
     vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
     vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
   });
@@ -229,6 +241,31 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.firecrawl.active).toBe(true);
     expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
+  });
+
+  it("auto-selects a keyless provider when no credentials are configured", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_AUTODETECT_SELECTED",
+          message: expect.stringContaining('keyless provider "duckduckgo"'),
+        }),
+      ]),
+    );
   });
 
   it.each([
