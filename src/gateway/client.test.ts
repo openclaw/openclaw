@@ -1,117 +1,127 @@
 import { Buffer } from "node:buffer";
+import type { ClientOptions } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
-const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const { wsInstances, MockWebSocket } = vi.hoisted(() => {
+  type WsEvent = "open" | "message" | "close" | "error";
+  type WsEventHandlers = {
+    open: () => void;
+    message: (data: string | Buffer) => void;
+    close: (code: number, reason: Buffer) => void;
+    error: (err: unknown) => void;
+  };
+
+  class MockWebSocket {
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    static readonly CLOSING = 2;
+    static readonly CLOSED = 3;
+
+    private openHandlers: WsEventHandlers["open"][] = [];
+    private messageHandlers: WsEventHandlers["message"][] = [];
+    private closeHandlers: WsEventHandlers["close"][] = [];
+    private errorHandlers: WsEventHandlers["error"][] = [];
+    readonly sent: string[] = [];
+    closeCalls = 0;
+    terminateCalls = 0;
+    autoCloseOnClose = true;
+    readyState = MockWebSocket.CONNECTING;
+
+    constructor(_url: string, _options?: unknown) {
+      wsInstances.push(this);
+    }
+
+    on(event: "open", handler: WsEventHandlers["open"]): void;
+    on(event: "message", handler: WsEventHandlers["message"]): void;
+    on(event: "close", handler: WsEventHandlers["close"]): void;
+    on(event: "error", handler: WsEventHandlers["error"]): void;
+    on(event: WsEvent, handler: WsEventHandlers[WsEvent]): void {
+      switch (event) {
+        case "open":
+          this.openHandlers.push(handler as WsEventHandlers["open"]);
+          return;
+        case "message":
+          this.messageHandlers.push(handler as WsEventHandlers["message"]);
+          return;
+        case "close":
+          this.closeHandlers.push(handler as WsEventHandlers["close"]);
+          return;
+        case "error":
+          this.errorHandlers.push(handler as WsEventHandlers["error"]);
+          return;
+        default:
+          return;
+      }
+    }
+
+    close(code?: number, reason?: string): void {
+      this.closeCalls += 1;
+      this.readyState = MockWebSocket.CLOSING;
+      if (this.autoCloseOnClose) {
+        this.emitClose(code ?? 1000, reason ?? "");
+      }
+    }
+
+    terminate(): void {
+      this.terminateCalls += 1;
+      this.readyState = MockWebSocket.CLOSED;
+    }
+
+    send(data: string): void {
+      this.sent.push(data);
+    }
+
+    emitOpen(): void {
+      this.readyState = MockWebSocket.OPEN;
+      for (const handler of this.openHandlers) {
+        handler();
+      }
+    }
+
+    emitMessage(data: string): void {
+      for (const handler of this.messageHandlers) {
+        handler(data);
+      }
+    }
+
+    emitClose(code: number, reason: string): void {
+      this.readyState = MockWebSocket.CLOSED;
+      for (const handler of this.closeHandlers) {
+        handler(code, Buffer.from(reason));
+      }
+    }
+  }
+
+  return { wsInstances: [] as MockWebSocket[], MockWebSocket };
+});
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 
-type WsEvent = "open" | "message" | "close" | "error";
-type WsEventHandlers = {
-  open: () => void;
-  message: (data: string | Buffer) => void;
-  close: (code: number, reason: Buffer) => void;
-  error: (err: unknown) => void;
-};
-
-class MockWebSocket {
-  private openHandlers: WsEventHandlers["open"][] = [];
-  private messageHandlers: WsEventHandlers["message"][] = [];
-  private closeHandlers: WsEventHandlers["close"][] = [];
-  private errorHandlers: WsEventHandlers["error"][] = [];
-  readonly sent: string[] = [];
-  closeCalls = 0;
-  terminateCalls = 0;
-  autoCloseOnClose = true;
-
-  constructor(_url: string, _options?: unknown) {
-    wsInstances.push(this);
-  }
-
-  on(event: "open", handler: WsEventHandlers["open"]): void;
-  on(event: "message", handler: WsEventHandlers["message"]): void;
-  on(event: "close", handler: WsEventHandlers["close"]): void;
-  on(event: "error", handler: WsEventHandlers["error"]): void;
-  on(event: WsEvent, handler: WsEventHandlers[WsEvent]): void {
-    switch (event) {
-      case "open":
-        this.openHandlers.push(handler as WsEventHandlers["open"]);
-        return;
-      case "message":
-        this.messageHandlers.push(handler as WsEventHandlers["message"]);
-        return;
-      case "close":
-        this.closeHandlers.push(handler as WsEventHandlers["close"]);
-        return;
-      case "error":
-        this.errorHandlers.push(handler as WsEventHandlers["error"]);
-        return;
-      default:
-        return;
-    }
-  }
-
-  close(code?: number, reason?: string): void {
-    this.closeCalls += 1;
-    if (this.autoCloseOnClose) {
-      this.emitClose(code ?? 1000, reason ?? "");
-    }
-  }
-
-  terminate(): void {
-    this.terminateCalls += 1;
-  }
-
-  send(data: string): void {
-    this.sent.push(data);
-  }
-
-  emitOpen(): void {
-    for (const handler of this.openHandlers) {
-      handler();
-    }
-  }
-
-  emitMessage(data: string): void {
-    for (const handler of this.messageHandlers) {
-      handler(data);
-    }
-  }
-
-  emitClose(code: number, reason: string): void {
-    for (const handler of this.closeHandlers) {
-      handler(code, Buffer.from(reason));
-    }
-  }
-}
-
-vi.mock("ws", () => ({
-  WebSocket: MockWebSocket,
+vi.mock("../infra/device-auth-store.js", () => ({
+  clearDeviceAuthToken: clearDeviceAuthTokenMock,
+  loadDeviceAuthToken: loadDeviceAuthTokenMock,
+  storeDeviceAuthToken: storeDeviceAuthTokenMock,
 }));
 
-vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
   return {
     ...actual,
-    loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
-    storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
-    clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
+    logDebug: logDebugMock,
   };
 });
 
-vi.mock("../logger.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logger.js")>();
-  return {
-    ...actual,
-    logDebug: (...args: unknown[]) => logDebugMock(...args),
-  };
-});
-
+vi.resetModules();
 const { GatewayClient } = await import("./client.js");
 type GatewayClientInstance = InstanceType<typeof GatewayClient>;
+
+function createSocketFactory() {
+  return (_url: string, _options: ClientOptions) => new MockWebSocket(_url, _options) as never;
+}
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -133,6 +143,7 @@ function createClientWithIdentity(
   return new GatewayClient({
     url: "ws://127.0.0.1:18789",
     deviceIdentity: identity,
+    socketFactory: createSocketFactory(),
     onClose,
   });
 }
@@ -200,6 +211,7 @@ describe("GatewayClient security checks", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       onConnectError,
     });
 
@@ -214,6 +226,7 @@ describe("GatewayClient security checks", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "wss://remote.example.com:18789",
+      socketFactory: createSocketFactory(),
       onConnectError,
     });
 
@@ -229,6 +242,7 @@ describe("GatewayClient security checks", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://192.168.1.100:18789",
+      socketFactory: createSocketFactory(),
       onConnectError,
     });
 
@@ -244,6 +258,7 @@ describe("GatewayClient security checks", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://openclaw-gateway.ai:18789",
+      socketFactory: createSocketFactory(),
       onConnectError,
     });
 
@@ -318,6 +333,7 @@ describe("GatewayClient close handling", () => {
     try {
       const client = new GatewayClient({
         url: "ws://127.0.0.1:18789",
+        socketFactory: createSocketFactory(),
       });
 
       client.start();
@@ -341,6 +357,7 @@ describe("GatewayClient close handling", () => {
     try {
       const client = new GatewayClient({
         url: "ws://127.0.0.1:18789",
+        socketFactory: createSocketFactory(),
       });
 
       client.start();
@@ -379,6 +396,7 @@ describe("GatewayClient close handling", () => {
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: identity,
+      socketFactory: createSocketFactory(),
       token: "shared-token",
       onClose,
     });
@@ -498,10 +516,58 @@ describe("GatewayClient connect auth payload", () => {
     }
   }
 
+  it("does not self-timeout connect before a delayed hello response arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const onHelloOk = vi.fn();
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        socketFactory: createSocketFactory(),
+        requestTimeoutMs: 25,
+        onHelloOk,
+        onConnectError,
+      });
+
+      const { ws, connect } = startClientAndConnect({ client });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(ws.closeCalls).toBe(0);
+
+      ws.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connect.id,
+          ok: true,
+          payload: {
+            protocol: 2,
+            server: { version: "dev", connId: "c1" },
+            features: { methods: ["health"], events: [] },
+            snapshot: {
+              presence: [],
+              health: {},
+              stateVersion: { presence: 1, health: 1 },
+              uptimeMs: 1,
+            },
+            policy: { tickIntervalMs: 30_000, maxPayload: 1024, maxBufferedBytes: 1024 },
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(onHelloOk).toHaveBeenCalledTimes(1));
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses explicit shared token and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       token: "shared-token",
     });
 
@@ -521,6 +587,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       password: "shared-password", // pragma: allowlist secret
     });
 
@@ -541,6 +608,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
     });
 
     client.start();
@@ -559,6 +627,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue(undefined);
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       bootstrapToken: "bootstrap-token",
     });
 
@@ -579,6 +648,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       deviceToken: "explicit-device-token",
     });
 
@@ -598,6 +668,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       token: "shared-token",
     });
 
@@ -621,6 +692,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       token: "shared-token",
     });
 
@@ -640,6 +712,7 @@ describe("GatewayClient connect auth payload", () => {
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
+      socketFactory: createSocketFactory(),
       token: "shared-token",
     });
 
@@ -656,6 +729,7 @@ describe("GatewayClient connect auth payload", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "wss://gateway.example.com:18789",
+      socketFactory: createSocketFactory(),
       token: "shared-token",
     });
 

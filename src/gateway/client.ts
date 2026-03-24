@@ -101,6 +101,7 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  socketFactory?: (url: string, options: ClientOptions) => WebSocket;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -225,7 +226,9 @@ export class GatewayClient {
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
     }
-    const ws = new WebSocket(url, wsOptions);
+    const ws = this.opts.socketFactory
+      ? this.opts.socketFactory(url, wsOptions)
+      : new WebSocket(url, wsOptions);
     this.ws = ws;
 
     ws.on("open", () => {
@@ -465,7 +468,7 @@ export class GatewayClient {
       device,
     };
 
-    void this.request<HelloOk>("connect", params)
+    void this.request<HelloOk>("connect", params, { timeoutMs: null })
       .then((helloOk) => {
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;

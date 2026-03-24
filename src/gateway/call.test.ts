@@ -29,6 +29,42 @@ let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 
+class MockGatewayClient {
+  constructor(opts: {
+    url?: string;
+    token?: string;
+    password?: string;
+    scopes?: string[];
+    onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+    onClose?: (code: number, reason: string) => void;
+  }) {
+    lastClientOptions = opts;
+  }
+
+  async request(
+    method: string,
+    params: unknown,
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+  ) {
+    lastRequestOptions = { method, params, opts };
+    return { ok: true };
+  }
+
+  start() {
+    if (startMode === "hello") {
+      void lastClientOptions?.onHelloOk?.({
+        features: {
+          methods: helloMethods,
+        },
+      });
+    } else if (startMode === "close") {
+      lastClientOptions?.onClose?.(closeCode, closeReason);
+    }
+  }
+
+  stop() {}
+}
+
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
     if (code === 1000) {
@@ -39,40 +75,10 @@ vi.mock("./client.js", () => ({
     }
     return undefined;
   },
-  GatewayClient: class {
-    constructor(opts: {
-      url?: string;
-      token?: string;
-      password?: string;
-      scopes?: string[];
-      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
-    }) {
-      lastClientOptions = opts;
-    }
-    async request(
-      method: string,
-      params: unknown,
-      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
-    ) {
-      lastRequestOptions = { method, params, opts };
-      return { ok: true };
-    }
-    start() {
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
-      }
-    }
-    stop() {}
-  },
+  GatewayClient: MockGatewayClient,
 }));
 
+vi.resetModules();
 const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
 
@@ -562,6 +568,7 @@ describe("callGateway error details", () => {
     await vi.advanceTimersByTimeAsync(5);
     await promise;
 
+    expect(lastRequestOptions).toBeNull();
     expect(errMessage).toContain("gateway timeout after 5ms");
     expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(errMessage).toContain("Source: local loopback");

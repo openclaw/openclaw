@@ -159,6 +159,47 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("does not auto-timeout connect requests when timeout is disabled", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 25,
+      });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+        close: vi.fn(),
+      };
+
+      let settled = false;
+      const requestPromise = client.request("connect", undefined, { timeoutMs: null });
+      void requestPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(settled).toBe(false);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      client.stop();
+      await expect(requestPromise).rejects.toThrow("gateway client stopped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("clamps oversized explicit request timeouts before scheduling", async () => {
     vi.useFakeTimers();
     try {
