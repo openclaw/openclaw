@@ -16,6 +16,10 @@ import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers
 import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  mergeFirecrawlApiKeyIntoOpenClawConfig,
+  obtainFirecrawlApiKeyThroughBrowser,
+} from "./firecrawl-browser-auth.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 export type SearchProvider = NonNullable<
@@ -284,7 +288,7 @@ export type SetupSearchOptions = {
 
 export async function setupSearch(
   config: OpenClawConfig,
-  _runtime: RuntimeEnv,
+  runtime: RuntimeEnv,
   prompter: WizardPrompter,
   opts?: SetupSearchOptions,
 ): Promise<OpenClawConfig> {
@@ -304,7 +308,8 @@ export async function setupSearch(
   await prompter.note(
     [
       "Web search lets your agent look things up online.",
-      "Choose a provider. Some providers need an API key, and some work key-free.",
+      "Firecrawl: browser sign-in opens their page where you can use the free tier or optional add-on credits.",
+      "Choose a provider. Some need an API key; some are key-free.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -398,6 +403,35 @@ export async function setupSearch(
     return applySearchKey(config, choice, ref);
   }
 
+  const tryFirecrawlBrowserAuth = choice === "firecrawl" && !keyConfigured && !envAvailable;
+  if (tryFirecrawlBrowserAuth) {
+    const useBrowser = await prompter.confirm({
+      message:
+        "Sign in with your browser to create your Firecrawl account and get an API key? (Recommended.)",
+      initialValue: true,
+    });
+    if (useBrowser) {
+      const auth = await obtainFirecrawlApiKeyThroughBrowser({ prompter, runtime });
+      if (auth) {
+        const secretInput = resolveSearchSecretInput(
+          config,
+          choice,
+          auth.apiKey,
+          opts?.secretInputMode,
+        );
+        let next = applySearchKey(config, choice, secretInput);
+        next = mergeFirecrawlApiKeyIntoOpenClawConfig(next, auth.apiKey);
+        const teamNote = auth.teamName ? ` (team: ${auth.teamName})` : "";
+        await prompter.note(`Firecrawl connected${teamNote}.`, "Web search");
+        return preserveDisabledState(config, next);
+      }
+      await prompter.note(
+        "Browser sign-in did not complete. Paste an API key below, or leave blank to skip.",
+        "Web search",
+      );
+    }
+  }
+
   const keyInput = await prompter.text({
     message: keyConfigured
       ? `${credentialLabel} (leave blank to keep current)`
@@ -410,7 +444,11 @@ export async function setupSearch(
   const key = keyInput?.trim() ?? "";
   if (key) {
     const secretInput = resolveSearchSecretInput(config, choice, key, opts?.secretInputMode);
-    return applySearchKey(config, choice, secretInput);
+    let next = applySearchKey(config, choice, secretInput);
+    if (choice === "firecrawl" && typeof secretInput === "string" && secretInput.trim()) {
+      next = mergeFirecrawlApiKeyIntoOpenClawConfig(next, secretInput.trim());
+    }
+    return next;
   }
 
   if (existingKey) {
