@@ -128,7 +128,9 @@ export function createEventHandlers(context: EventHandlerContext) {
    * never overwrite a terminal status (error/aborted) set by the most recent active run.
    */
   const shouldClearOrphanedActivityStatus = (): boolean =>
-    !state.activeChatRunId && sessionRuns.size === 0 && busyActivityStatuses.has(state.activityStatus);
+    !state.activeChatRunId &&
+    sessionRuns.size === 0 &&
+    busyActivityStatuses.has(state.activityStatus);
 
   const finalizeRun = (params: {
     runId: string;
