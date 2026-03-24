@@ -81,9 +81,9 @@ describe("extractOutboundMentions", () => {
 
   it("skips mentions inside backtick code spans", () => {
     expect(extractOutboundMentions("see `@+1234567890` for details")).toEqual([]);
-    expect(
-      extractOutboundMentions("code `@+1234567890` but also @+9876543210 outside"),
-    ).toEqual(["9876543210@s.whatsapp.net"]);
+    expect(extractOutboundMentions("code `@+1234567890` but also @+9876543210 outside")).toEqual([
+      "9876543210@s.whatsapp.net",
+    ]);
   });
 
   it("does not create false mention when code span removal merges tokens", () => {
@@ -94,12 +94,8 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("hey @+1234567890, what's up?")).toEqual([
       "1234567890@s.whatsapp.net",
     ]);
-    expect(extractOutboundMentions("ask @+1234567890.")).toEqual([
-      "1234567890@s.whatsapp.net",
-    ]);
-    expect(extractOutboundMentions("(@+1234567890)")).toEqual([
-      "1234567890@s.whatsapp.net",
-    ]);
+    expect(extractOutboundMentions("ask @+1234567890.")).toEqual(["1234567890@s.whatsapp.net"]);
+    expect(extractOutboundMentions("(@+1234567890)")).toEqual(["1234567890@s.whatsapp.net"]);
   });
 
   describe("with participantJidMap", () => {
