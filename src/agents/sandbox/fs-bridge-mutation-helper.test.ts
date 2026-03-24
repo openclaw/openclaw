@@ -87,7 +87,7 @@ describe("sandbox pinned mutation helper", () => {
   it.runIf(process.platform !== "win32")(
     "rejects stdin size mismatches before committing the target file",
     async () => {
-      await withTempRoot("openclaw-mutation-helper-", async (root) => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
         const workspace = path.join(root, "workspace");
         const targetPath = path.join(workspace, "nested", "note.txt");
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
