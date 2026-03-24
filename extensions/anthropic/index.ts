@@ -267,7 +267,7 @@ async function runAnthropicSetupTokenNonInteractive(ctx: {
     return null;
   }
 
-  const token = normalizeSecretInput(ctx.opts.token);
+  const token = normalizeSecretInput(ctx.opts.token).replace(/\s+/g, "");
   if (!token) {
     ctx.runtime.error("Missing --token for --auth-choice token.");
     ctx.runtime.exit(1);
