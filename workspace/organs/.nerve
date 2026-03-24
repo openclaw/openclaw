@@ -1,0 +1,105 @@
+{
+  "entries": [
+    {
+      "ts": "2026-03-24T15:46:56.974707",
+      "who": "hormone",
+      "what": "threads cold 6h — suppressing scan frequency"
+    },
+    {
+      "ts": "2026-03-24T15:46:56.985083",
+      "who": "hormone",
+      "what": "hormone TTL expired — Cruz 需要重新評估 season + focus"
+    },
+    {
+      "ts": "2026-03-24T15:46:56.985676",
+      "who": "hormone",
+      "what": "triggers fired: threads_cold, ttl_expired"
+    },
+    {
+      "ts": "2026-03-24T16:03:15.004761",
+      "who": "hormone",
+      "what": "threads cold 6h — suppressing scan frequency"
+    },
+    {
+      "ts": "2026-03-24T16:03:15.013309",
+      "who": "hormone",
+      "what": "hormone TTL expired — Cruz 需要重新評估 season + focus"
+    },
+    {
+      "ts": "2026-03-24T16:03:15.014058",
+      "who": "hormone",
+      "what": "triggers fired: threads_cold, ttl_expired"
+    },
+    {
+      "ts": "2026-03-24T16:45:01.242640",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 10/10 (2 forced<7.5)"
+    },
+    {
+      "ts": "2026-03-24T17:00:26.807369",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 8/10 (2 failed)"
+    },
+    {
+      "ts": "2026-03-24T17:10:57.128968",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 9/10 (1 failed)"
+    },
+    {
+      "ts": "2026-03-24T17:16:14.541883",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/1 (1 failed)"
+    },
+    {
+      "ts": "2026-03-24T17:21:29.350771",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/1 (1 failed)"
+    },
+    {
+      "ts": "2026-03-24T17:26:58.733892",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/1 (1 failed)"
+    },
+    {
+      "ts": "2026-03-24T17:32:23.137817",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/1 (1 failed)"
+    },
+    {
+      "ts": "2026-03-24T22:32:41.676351",
+      "who": "threads-sync",
+      "what": "threads: 16 unreplied comments detected (coverage=186%)"
+    },
+    {
+      "ts": "2026-03-24T23:14:57.064641",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/10 (10 failed)"
+    },
+    {
+      "ts": "2026-03-24T23:16:12.559505",
+      "who": "hormone",
+      "what": "threads spike → season:grow, all hands on deck"
+    },
+    {
+      "ts": "2026-03-24T23:16:12.582801",
+      "who": "hormone",
+      "what": "triggers fired: threads_spike"
+    },
+    {
+      "ts": "2026-03-24T23:19:18.704268",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/10 (10 failed)"
+    },
+    {
+      "ts": "2026-03-24T23:58:51.662021",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 2/10 (8 failed)"
+    },
+    {
+      "ts": "2026-03-24T23:59:51.373292",
+      "who": "threads-reply-loop",
+      "what": "threads-reply-loop: sent 0/7 (7 failed)"
+    }
+  ],
+  "ts": "2026-03-24T23:59:51.373302"
+}
