@@ -57,6 +57,35 @@ describe("image-generation provider registry", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to loading plugins when the active registry has no image providers", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry, "existing-registry");
+
+    const fallbackRegistry = createEmptyPluginRegistry();
+    fallbackRegistry.imageGenerationProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        label: "Google",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+        }),
+      },
+    });
+    loadOpenClawPluginsMock.mockReturnValueOnce(fallbackRegistry);
+
+    const provider = getImageGenerationProvider("google", {} as never);
+
+    expect(provider?.id).toBe("google");
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledOnce();
+  });
+
   it("ignores prototype-like provider ids and aliases", () => {
     const registry = createEmptyPluginRegistry();
     registry.imageGenerationProviders.push(
