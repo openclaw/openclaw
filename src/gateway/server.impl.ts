@@ -182,7 +182,7 @@ function warnLegacyClawdbotEnvVars(): void {
     return;
   }
   log.warn(
-    `Legacy CLAWDBOT_* environment variables detected and will be ignored: ${legacyKeys.join(", ")}. ` +
+    `Legacy CLAWDBOT_* environment variables detected: ${legacyKeys.join(", ")}. ` +
       `Rename them to use the OPENCLAW_ prefix or run \`openclaw onboard\` to migrate.`,
   );
 }
