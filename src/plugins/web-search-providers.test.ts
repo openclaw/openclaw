@@ -6,6 +6,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     const providers = resolveBundledPluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "bocha:bocha",
       "brave:brave",
       "duckduckgo:duckduckgo",
       "exa:exa",
@@ -17,6 +18,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "tavily:tavily",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
+      "plugins.entries.bocha.config.webSearch.apiKey",
       "plugins.entries.brave.config.webSearch.apiKey",
       "",
       "plugins.entries.exa.config.webSearch.apiKey",
@@ -46,6 +48,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     });
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
+      "bocha",
       "brave",
       "duckduckgo",
       "exa",
@@ -102,6 +105,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     });
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "bocha:bocha",
       "brave:brave",
       "duckduckgo:duckduckgo",
       "exa:exa",

@@ -248,12 +248,12 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "bocha",
-    idHint: "plugin-bocha",
+    idHint: "bocha-plugin",
     source: {
       source: "./index.ts",
       built: "index.js",
     },
-    packageName: "@openclaw/plugin-bocha",
+    packageName: "@openclaw/bocha-plugin",
     packageVersion: "2026.3.22",
     packageDescription: "OpenClaw Bocha plugin",
     packageManifest: {
@@ -294,7 +294,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         "webSearch.baseUrl": {
           label: "Bocha Base URL",
-          help: "Optional Bocha chat-completions base URL override. Default is 'https://open.bocha.cn/v1'.",
+          help: "Optional Bocha chat-completions base URL override. Default is 'https://api.bocha.cn/v1'.",
         },
         "webSearch.content": {
           label: "Bocha Content",
