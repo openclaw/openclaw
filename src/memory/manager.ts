@@ -5,6 +5,7 @@ import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -35,22 +36,21 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
-const MEMORY_INDEX_MANAGER_CACHE_KEY = "__openclawMemoryIndexManagerCache";
+const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 type MemoryIndexManagerCacheStore = {
   indexCache: Map<string, MemoryIndexManager>;
   indexCachePending: Map<string, Promise<MemoryIndexManager>>;
 };
 
 function getMemoryIndexManagerCacheStore(): MemoryIndexManagerCacheStore {
-  const globalCache = globalThis as typeof globalThis & {
-    [MEMORY_INDEX_MANAGER_CACHE_KEY]?: MemoryIndexManagerCacheStore;
-  };
   // Keep manager caches reachable across `vi.resetModules()` so cleanup still reaches older managers.
-  globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY] ??= {
-    indexCache: new Map<string, MemoryIndexManager>(),
-    indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
-  };
-  return globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY];
+  return resolveGlobalSingleton<MemoryIndexManagerCacheStore>(
+    MEMORY_INDEX_MANAGER_CACHE_KEY,
+    () => ({
+      indexCache: new Map<string, MemoryIndexManager>(),
+      indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
+    }),
+  );
 }
 
 const log = createSubsystemLogger("memory");

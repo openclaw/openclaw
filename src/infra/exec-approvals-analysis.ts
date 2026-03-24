@@ -3,15 +3,17 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+export { DEFAULT_SAFE_BINS } from "./exec-safe-bin-policy.js";
 
 export {
-  DEFAULT_SAFE_BINS,
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolvePolicyAllowlistCandidatePath,
   type CommandResolution,
+  type ExecutableResolution,
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 

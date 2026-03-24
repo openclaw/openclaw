@@ -1,10 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveTelegramTransport,
-  shouldRetryTelegramTransportFallback,
-} from "../../extensions/telegram/src/fetch.js";
-import { makeProxyFetch } from "../../extensions/telegram/src/proxy.js";
-import { fetchRemoteMedia } from "./fetch.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../infra/net/undici-runtime.js";
 
 const undiciMocks = vi.hoisted(() => {
   const createDispatcherCtor = <T extends Record<string, unknown> | string>() =>
@@ -20,6 +15,14 @@ const undiciMocks = vi.hoisted(() => {
   };
 });
 
+const mockedModuleIds = [
+  "openclaw/plugin-sdk/infra-runtime",
+  "../../extensions/telegram/src/fetch.js",
+  "../../extensions/telegram/src/proxy.js",
+  "./fetch.js",
+  "undici",
+] as const;
+
 vi.mock("undici", () => ({
   Agent: undiciMocks.agentCtor,
   EnvHttpProxyAgent: undiciMocks.envHttpProxyAgentCtor,
@@ -27,14 +30,38 @@ vi.mock("undici", () => ({
   fetch: undiciMocks.fetch,
 }));
 
+let fetchRemoteMedia: typeof import("./fetch.js").fetchRemoteMedia;
+let makeProxyFetch: typeof import("../../extensions/telegram/src/proxy.js").makeProxyFetch;
+let resolveTelegramTransport: typeof import("../../extensions/telegram/src/fetch.js").resolveTelegramTransport;
+let shouldRetryTelegramTransportFallback: typeof import("../../extensions/telegram/src/fetch.js").shouldRetryTelegramTransportFallback;
+
+async function loadTelegramNetworkModules(): Promise<void> {
+  vi.resetModules();
+  for (const id of mockedModuleIds) {
+    if (id !== "undici") {
+      vi.doUnmock(id);
+    }
+  }
+  ({ fetchRemoteMedia } = await import("./fetch.js"));
+  ({ makeProxyFetch } = await import("../../extensions/telegram/src/proxy.js"));
+  ({ resolveTelegramTransport, shouldRetryTelegramTransportFallback } =
+    await import("../../extensions/telegram/src/fetch.js"));
+}
+
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     undiciMocks.fetch.mockReset();
     undiciMocks.agentCtor.mockClear();
     undiciMocks.envHttpProxyAgentCtor.mockClear();
     undiciMocks.proxyAgentCtor.mockClear();
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: undiciMocks.agentCtor,
+      EnvHttpProxyAgent: undiciMocks.envHttpProxyAgentCtor,
+      ProxyAgent: undiciMocks.proxyAgentCtor,
+    };
+    await loadTelegramNetworkModules();
   });
 
   function createTelegramFetchFailedError(code: string): Error {
@@ -44,7 +71,16 @@ describe("fetchRemoteMedia telegram network policy", () => {
   }
 
   afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
   });
 
   it("preserves Telegram resolver transport policy for file downloads", async () => {
@@ -131,12 +167,19 @@ describe("fetchRemoteMedia telegram network policy", () => {
           dispatcher?: {
             options?: {
               uri?: string;
+              requestTls?: Record<string, unknown>;
             };
           };
         })
       | undefined;
 
     expect(init?.dispatcher?.options?.uri).toBe("http://127.0.0.1:7890");
+    expect(init?.dispatcher?.options?.requestTls).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: false,
+        lookup: expect.any(Function),
+      }),
+    );
     expect(undiciMocks.proxyAgentCtor).toHaveBeenCalled();
   });
 

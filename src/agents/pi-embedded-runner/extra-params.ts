@@ -4,18 +4,22 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  prepareProviderExtraParams,
-  wrapProviderStreamFn,
+  prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
 import {
   createAnthropicBetaHeadersWrapper,
+  createBedrockNoCacheWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
+  isAnthropicBedrockModel,
   resolveAnthropicFastMode,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -24,12 +28,40 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
+import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
+
+const defaultProviderRuntimeDeps = {
+  prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
+  wrapProviderStreamFn: wrapProviderStreamFnRuntime,
+};
+
+const providerRuntimeDeps = {
+  ...defaultProviderRuntimeDeps,
+};
+
+export const __testing = {
+  setProviderRuntimeDepsForTest(
+    deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
+  ): void {
+    providerRuntimeDeps.prepareProviderExtraParams =
+      deps?.prepareProviderExtraParams ?? defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.wrapProviderStreamFn =
+      deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
+  },
+  resetProviderRuntimeDepsForTest(): void {
+    providerRuntimeDeps.prepareProviderExtraParams =
+      defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
+  },
+};
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -199,7 +231,7 @@ export function applyExtraParamsToAgent(
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
   const effectiveExtraParams =
-    prepareProviderExtraParams({
+    providerRuntimeDeps.prepareProviderExtraParams({
       provider,
       config: cfg,
       context: {
@@ -210,6 +242,14 @@ export function applyExtraParamsToAgent(
         thinkingLevel,
       },
     }) ?? merged;
+
+  if (provider === "openai" || provider === "openai-codex") {
+    if (provider === "openai") {
+      // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+      agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+    }
+    agent.streamFn = createOpenAIAttributionHeadersWrapper(agent.streamFn);
+  }
 
   const wrappedStreamFn = createStreamFnWithExtraParams(
     agent.streamFn,
@@ -242,7 +282,7 @@ export function applyExtraParamsToAgent(
     workspaceDir,
   });
   const providerStreamBase = agent.streamFn;
-  const pluginWrappedStreamFn = wrapProviderStreamFn({
+  const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
     context: {
@@ -269,10 +309,28 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
+  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
+    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
   const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
     agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  if (typeof effectiveExtraParams?.fastMode === "boolean") {
+    log.debug(
+      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
   }
 
   const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
