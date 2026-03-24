@@ -124,9 +124,6 @@ function normalizeFeishuWsError(text: string): string {
   if (text.includes("PingInterval")) {
     return "Feishu WebSocket reconnect failed while parsing PingInterval. This usually follows an upstream connection-limit or system-busy response.";
   }
-  if (text.includes("unable to connect to the server after trying")) {
-    return "Feishu WebSocket reconnect attempts failed to reach the server.";
-  }
   return text;
 }
 
@@ -177,7 +174,11 @@ export function createFeishuWsLifecycleLogger(params: {
         text.includes("reconnect") ||
         text.includes("unable to connect to the server after trying")
       ) {
-        updateConnected(false);
+        updateConnected(false, {
+          error: text.includes("unable to connect to the server after trying")
+            ? "Feishu WebSocket reconnect attempts failed to reach the server."
+            : undefined,
+        });
         return;
       }
     },

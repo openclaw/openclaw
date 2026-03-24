@@ -111,6 +111,7 @@ describe("createFeishuWsLifecycleLogger", () => {
       expect.objectContaining({
         connected: false,
         reconnectAttempts: 1,
+        lastError: "Feishu WebSocket reconnect attempts failed to reach the server.",
       }),
     );
   });
