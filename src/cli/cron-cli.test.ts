@@ -614,6 +614,23 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --tz with --every on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid",
+      "--every",
+      "10m",
+      "--tz",
+      "UTC",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
+  });
+
   it("applies --tz to --at for offset-less datetimes on cron add", async () => {
     await runCronCommand([
       "cron",
