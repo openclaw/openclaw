@@ -24,10 +24,14 @@ function parseComponents(value: string): MigrateComponent[] {
 }
 
 function parseAgents(value: string): string[] {
-  return value
+  const agents = value
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  if (agents.length === 0) {
+    throw new Error('--agents requires at least one agent ID (e.g. "--agents main").');
+  }
+  return agents;
 }
 
 export function registerMigrateCommand(program: Command) {

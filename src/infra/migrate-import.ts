@@ -550,17 +550,8 @@ export async function importMigrateArchive(
       strip: 0,
       preservePaths: false,
       onReadEntry(entry) {
-        if (abortEntryTypes.has(entry.type)) {
-          const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
-          const emitter = this as unknown as { abort?: (error: Error) => void };
-          emitter.abort?.(error);
-          return;
-        }
-        if (entry.type === "SymbolicLink") {
-          // Skip symlinks silently — they won't be extracted to disk.
-          entry.resume();
-          return;
-        }
+        // Count all entries (including skipped ones) toward the limit
+        // to prevent entry-count bypass via many symlink headers.
         entryCount += 1;
         if (entryCount > MAX_EXTRACT_ENTRIES) {
           const error = new Error(
@@ -568,6 +559,16 @@ export async function importMigrateArchive(
           );
           const emitter = this as unknown as { abort?: (error: Error) => void };
           emitter.abort?.(error);
+          return;
+        }
+        if (abortEntryTypes.has(entry.type)) {
+          const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
+          const emitter = this as unknown as { abort?: (error: Error) => void };
+          emitter.abort?.(error);
+          return;
+        }
+        if (entry.type === "SymbolicLink") {
+          entry.resume();
           return;
         }
         const size = typeof entry.size === "number" ? entry.size : 0;
