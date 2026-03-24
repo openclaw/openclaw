@@ -310,3 +310,29 @@ describe("safeFallbackName", () => {
     expect(safeFallbackName("/../..", "safe")).toBe("safe");
   });
 });
+
+describe("import abort on missing assets", () => {
+  it("detects missing-asset warnings correctly", () => {
+    const warnings = [
+      "Asset not found in archive: some/payload/path",
+      "Skipping asset with unsafe archive path: ../escape",
+      "Source platform (linux) differs from this machine (darwin). Paths will be remapped.",
+    ];
+    const missingWarnings = warnings.filter(
+      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
+    );
+    expect(missingWarnings).toHaveLength(2);
+    expect(missingWarnings[0]).toContain("Asset not found");
+    expect(missingWarnings[1]).toContain("Skipping asset");
+  });
+
+  it("non-missing warnings are not treated as import failures", () => {
+    const warnings = [
+      "Source platform (linux) differs from this machine (darwin). Paths will be remapped.",
+    ];
+    const missingWarnings = warnings.filter(
+      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
+    );
+    expect(missingWarnings).toHaveLength(0);
+  });
+});

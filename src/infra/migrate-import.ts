@@ -524,14 +524,10 @@ export async function importMigrateArchive(
   // Extract to a temporary directory.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-import-"));
   try {
-    const blockedTarEntryTypes = new Set([
-      "SymbolicLink",
-      "Link",
-      "BlockDevice",
-      "CharacterDevice",
-      "FIFO",
-      "Socket",
-    ]);
+    // Hard-links and special types are dangerous — abort extraction.
+    const abortEntryTypes = new Set(["Link", "BlockDevice", "CharacterDevice", "FIFO", "Socket"]);
+    // Symlinks are skipped (not extracted) but don't abort the whole archive,
+    // since self-generated archives may contain workspace symlinks.
     let entryCount = 0;
     let extractedBytes = 0;
     await tar.x({
@@ -541,10 +537,15 @@ export async function importMigrateArchive(
       strip: 0,
       preservePaths: false,
       onReadEntry(entry) {
-        if (blockedTarEntryTypes.has(entry.type)) {
+        if (abortEntryTypes.has(entry.type)) {
           const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
           const emitter = this as unknown as { abort?: (error: Error) => void };
           emitter.abort?.(error);
+          return;
+        }
+        if (entry.type === "SymbolicLink") {
+          // Skip symlinks silently — they won't be extracted to disk.
+          entry.resume();
           return;
         }
         entryCount += 1;
@@ -626,6 +627,17 @@ export async function importMigrateArchive(
         }
         await copyRecursive(realExtracted, targetPath);
       }
+    }
+
+    // Fail if any declared assets were missing or skipped — partial imports
+    // leave state inconsistent and are easy to miss in automation.
+    const missingWarnings = warnings.filter(
+      (w) => w.startsWith("Asset not found") || w.startsWith("Skipping asset"),
+    );
+    if (missingWarnings.length > 0) {
+      throw new Error(
+        `Import aborted: ${missingWarnings.length} declared asset(s) were missing or unsafe in the archive. Warnings:\n${missingWarnings.map((w) => `  - ${w}`).join("\n")}`,
+      );
     }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
