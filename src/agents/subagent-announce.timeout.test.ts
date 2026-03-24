@@ -31,47 +31,59 @@ let fallbackRequesterResolution: {
 } | null = null;
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: GatewayCall) => {
-    gatewayCalls.push(request);
-    if (request.method === "chat.history") {
-      return { messages: chatHistoryMessages };
-    }
-    return await callGatewayImpl(request);
-  }),
-}));
+function createGatewayCallModuleMock() {
+  return {
+    callGateway: vi.fn(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(request);
+    }),
+  };
+}
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+async function createConfigModuleMock(
+  importOriginal: () => Promise<typeof import("../config/config.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadConfig: () => configOverride,
   };
-});
+}
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => sessionStore),
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions-main.json",
-  resolveMainSessionKey: () => "agent:main:main",
-}));
+function createSessionsModuleMock() {
+  return {
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+}
 
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
-}));
+function createSubagentDepthModuleMock() {
+  return {
+    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+  };
+}
 
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+async function createPiEmbeddedModuleMock(
+  importOriginal: () => Promise<typeof import("./pi-embedded.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     isEmbeddedPiRunActive: () => false,
     queueEmbeddedPiMessage: () => false,
     waitForEmbeddedPiRunEnd: async () => true,
   };
-});
+}
 
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+async function createSubagentRegistryModuleMock(
+  importOriginal: () => Promise<typeof import("./subagent-registry.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     countActiveDescendantRuns: () => 0,
@@ -81,7 +93,32 @@ vi.mock("./subagent-registry.js", async (importOriginal) => {
     shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
     resolveRequesterForChildSession: () => fallbackRequesterResolution,
   };
-});
+}
+
+function createTimeoutHistoryWithNoReply() {
+  return [
+    { role: "user", content: "do something" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Still working through the files." },
+        { type: "toolCall", id: "call1", name: "read", arguments: {} },
+      ],
+    },
+    { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    },
+  ];
+}
+
+vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("../config/config.js", createConfigModuleMock);
+vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
+vi.mock("./pi-embedded.js", createPiEmbeddedModuleMock);
+vi.mock("./subagent-registry.js", createSubagentRegistryModuleMock);
 
 let runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
 type AnnounceFlowParams = Parameters<
@@ -90,52 +127,12 @@ type AnnounceFlowParams = Parameters<
 
 async function loadFreshSubagentAnnounceFlowForTest() {
   vi.resetModules();
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway: vi.fn(async (request: GatewayCall) => {
-      gatewayCalls.push(request);
-      if (request.method === "chat.history") {
-        return { messages: chatHistoryMessages };
-      }
-      return await callGatewayImpl(request);
-    }),
-  }));
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: () => configOverride,
-    };
-  });
-  vi.doMock("../config/sessions.js", () => ({
-    loadSessionStore: vi.fn(() => sessionStore),
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
-    resolveMainSessionKey: () => "agent:main:main",
-  }));
-  vi.doMock("./subagent-depth.js", () => ({
-    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
-  }));
-  vi.doMock("./pi-embedded.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./pi-embedded.js")>();
-    return {
-      ...actual,
-      isEmbeddedPiRunActive: () => false,
-      queueEmbeddedPiMessage: () => false,
-      waitForEmbeddedPiRunEnd: async () => true,
-    };
-  });
-  vi.doMock("./subagent-registry.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-    return {
-      ...actual,
-      countActiveDescendantRuns: () => 0,
-      countPendingDescendantRuns: () => pendingDescendantRuns,
-      listSubagentRunsForRequester: () => [],
-      isSubagentSessionRunActive: () => subagentSessionRunActive,
-      shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-      resolveRequesterForChildSession: () => fallbackRequesterResolution,
-    };
-  });
+  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
+  vi.doMock("../config/config.js", createConfigModuleMock);
+  vi.doMock("../config/sessions.js", createSessionsModuleMock);
+  vi.doMock("./subagent-depth.js", createSubagentDepthModuleMock);
+  vi.doMock("./pi-embedded.js", createPiEmbeddedModuleMock);
+  vi.doMock("./subagent-registry.js", createSubagentRegistryModuleMock);
   ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
 }
 
@@ -453,19 +450,7 @@ describe("subagent announce timeout config", () => {
 
   it("preserves NO_REPLY when timeout partial-progress history mixes prior text and later silence", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call2", name: "exec", arguments: {} }],
@@ -484,19 +469,7 @@ describe("subagent announce timeout config", () => {
 
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "text", text: "A longer partial summary that should stay silent." }],
