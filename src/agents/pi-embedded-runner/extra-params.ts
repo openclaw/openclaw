@@ -202,6 +202,33 @@ function createParallelToolCallsWrapper(
 }
 
 /**
+ * Inject `stream_options: { include_usage: true }` for OpenAI-compatible
+ * streaming endpoints so that the final chunk includes token-usage metadata.
+ * Without this, providers that follow the OpenAI Chat Completions spec
+ * (e.g. Alibaba Bailian / DashScope) omit usage entirely in streaming mode.
+ */
+function createOpenAIStreamUsageWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload, payloadModel) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).stream_options = { include_usage: true };
+        }
+        return originalOnPayload?.(payload, payloadModel);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
  *
@@ -261,6 +288,10 @@ export function applyExtraParamsToAgent(
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
+
+  // Inject stream_options for OpenAI-compatible providers to enable usage tracking.
+  // See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-stream_options
+  agent.streamFn = createOpenAIStreamUsageWrapper(agent.streamFn);
 
   const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
   if (anthropicBetas?.length) {
