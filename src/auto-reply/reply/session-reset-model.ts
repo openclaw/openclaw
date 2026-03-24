@@ -1,4 +1,4 @@
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   modelKey,
@@ -99,6 +99,7 @@ export async function applyResetModelOverride(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  modelCatalog?: ModelCatalogEntry[];
 }): Promise<ResetModelResult> {
   if (!params.resetTriggered) {
     return {};
@@ -113,7 +114,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.modelCatalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,

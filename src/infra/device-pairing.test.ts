@@ -196,7 +196,11 @@ describe("device pairing tokens", () => {
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    });
 
     await expect(
       verifyDeviceBootstrapToken({
@@ -290,7 +294,11 @@ describe("device pairing tokens", () => {
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.scopes).toEqual(["operator.admin"]);
     expect(paired?.approvedScopes).toEqual(["operator.admin"]);
-    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
   });
 
   test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {

@@ -90,7 +90,7 @@ describe("skills-cli", () => {
       ]);
       const output = formatSkillsList(report, { verbose: true });
       expect(output).toContain("needs-stuff");
-      expect(output).toContain("missing");
+      expect(output).toContain("needs setup");
       expect(output).toContain("anyBins");
       expect(output).toContain("os:");
     });

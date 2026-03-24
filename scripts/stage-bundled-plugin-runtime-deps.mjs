@@ -82,16 +82,45 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   }
 }
 
+export function resolveNpmRunner(params = {}) {
+  const execPath = params.execPath ?? process.execPath;
+  const existsSync = params.existsSync ?? fs.existsSync;
+  const platform = params.platform ?? process.platform;
+  const nodeDir = path.dirname(execPath);
+  const npmCliPath = path.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js");
+  if (existsSync(npmCliPath)) {
+    return {
+      command: execPath,
+      args: [npmCliPath],
+      shell: false,
+    };
+  }
+  return {
+    command: "npm",
+    args: [],
+    shell: platform === "win32",
+  };
+}
+
 function installPluginRuntimeDeps(pluginDir, pluginId) {
   sanitizeBundledManifestForRuntimeInstall(pluginDir);
+  const npmRunner = resolveNpmRunner();
   const result = spawnSync(
-    "npm",
-    ["install", "--omit=dev", "--silent", "--ignore-scripts", "--package-lock=false"],
+    npmRunner.command,
+    [
+      ...npmRunner.args,
+      "install",
+      "--omit=dev",
+      "--silent",
+      "--ignore-scripts",
+      "--legacy-peer-deps",
+      "--package-lock=false",
+    ],
     {
       cwd: pluginDir,
       encoding: "utf8",
       stdio: "pipe",
-      shell: process.platform === "win32",
+      shell: npmRunner.shell,
     },
   );
   if (result.status === 0) {

@@ -8,6 +8,7 @@ export const runtimeLogs = lifecycleRuntimeCapture.runtimeLogs;
 type LifecycleRuntimeHarness = typeof lifecycleRuntimeCapture.defaultRuntime;
 
 type LifecycleServiceHarness = GatewayService & {
+  stage: MockFn<GatewayService["stage"]>;
   install: MockFn<GatewayService["install"]>;
   uninstall: MockFn<GatewayService["uninstall"]>;
   stop: MockFn<GatewayService["stop"]>;
@@ -23,6 +24,7 @@ export const service: LifecycleServiceHarness = {
   label: "TestService",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(),
   install: vi.fn(),
   uninstall: vi.fn(),
   stop: vi.fn(),
@@ -37,6 +39,7 @@ export function resetLifecycleRuntimeLogs() {
 }
 
 export function resetLifecycleServiceMocks() {
+  service.stage.mockClear();
   service.isLoaded.mockClear();
   service.readCommand.mockClear();
   service.restart.mockClear();
@@ -48,7 +51,5 @@ export function resetLifecycleServiceMocks() {
 export function stubEmptyGatewayEnv() {
   vi.unstubAllEnvs();
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-  vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  vi.stubEnv("CLAWDBOT_GATEWAY_URL", "");
 }

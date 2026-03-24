@@ -25,9 +25,13 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveGatewayStartupPluginIds,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", () => ({
-  primeConfiguredBindingRegistry,
-}));
+vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/binding-registry.js")>();
+  return {
+    ...actual,
+    primeConfiguredBindingRegistry,
+  };
+});
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
@@ -615,5 +619,32 @@ describe("loadGatewayPlugins", () => {
       | (GatewayRequestContext & { marker: string })
       | undefined;
     expect(dispatched?.marker).toBe("after-mutation");
+  });
+
+  test("resolves fallback context lazily when a resolver is registered", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    let currentContext = createTestContext("before-resolver-update");
+
+    serverPlugins.setFallbackGatewayContextResolver(() => currentContext);
+    await runtime.run({ sessionKey: "s-4", message: "before resolver update" });
+    expect(getLastDispatchedContext()).toBe(currentContext);
+
+    currentContext = createTestContext("after-resolver-update");
+    await runtime.run({ sessionKey: "s-4", message: "after resolver update" });
+    expect(getLastDispatchedContext()).toBe(currentContext);
+  });
+
+  test("prefers resolver output over an older fallback context snapshot", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const staleContext = createTestContext("stale-snapshot");
+    const freshContext = createTestContext("fresh-resolver");
+
+    serverPlugins.setFallbackGatewayContext(staleContext);
+    serverPlugins.setFallbackGatewayContextResolver(() => freshContext);
+
+    await runtime.run({ sessionKey: "s-5", message: "prefer resolver" });
+    expect(getLastDispatchedContext()).toBe(freshContext);
   });
 });

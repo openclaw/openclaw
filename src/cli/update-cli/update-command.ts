@@ -24,10 +24,12 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
@@ -73,9 +75,7 @@ const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
-  "CLAWDBOT_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
-  "CLAWDBOT_CONFIG_PATH",
 ] as const;
 
 const UPDATE_QUIPS = [
@@ -345,9 +345,27 @@ async function runPackageInstallUpdate(params: {
   const steps = [updateStep];
   let afterVersion = beforeVersion;
 
-  if (pkgRoot) {
-    afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+  const verifiedPackageRoot =
+    (await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs)) ?? pkgRoot;
+  if (verifiedPackageRoot) {
+    afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+        stdoutTail: null,
+      });
+    }
+    const entryPath = path.join(verifiedPackageRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -363,7 +381,7 @@ async function runPackageInstallUpdate(params: {
   return {
     status: failedStep ? "error" : "ok",
     mode: manager,
-    root: pkgRoot ?? params.root,
+    root: verifiedPackageRoot ?? params.root,
     reason: failedStep ? failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: afterVersion },
@@ -387,10 +405,12 @@ async function runGitUpdate(params: {
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? 20 * 60_000;
+  const installEnv = await createGlobalInstallEnv();
 
   const cloneStep = params.switchToGit
     ? await ensureGitCheckout({
         dir: updateRoot,
+        env: installEnv,
         timeoutMs: effectiveTimeout,
         progress: params.progress,
       })
@@ -431,7 +451,7 @@ async function runGitUpdate(params: {
       name: "global install",
       argv: globalInstallArgs(manager, updateRoot),
       cwd: updateRoot,
-      env: await createGlobalInstallEnv(),
+      env: installEnv,
       timeoutMs: effectiveTimeout,
       progress: params.progress,
     });
@@ -861,20 +881,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     );
   }
 
-  if (requestedChannel && configSnapshot.valid) {
-    const next = {
-      ...configSnapshot.config,
-      update: {
-        ...configSnapshot.config.update,
-        channel: requestedChannel,
-      },
-    };
-    await writeConfigFile(next);
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-    }
-  }
-
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
@@ -958,10 +964,31 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  let postUpdateConfigSnapshot = configSnapshot;
+  if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
+    const next = {
+      ...configSnapshot.config,
+      update: {
+        ...configSnapshot.config.update,
+        channel: requestedChannel,
+      },
+    };
+    await writeConfigFile(next);
+    postUpdateConfigSnapshot = {
+      ...configSnapshot,
+      parsed: next,
+      resolved: next,
+      config: next,
+    };
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
+    }
+  }
+
   await updatePluginsAfterCoreUpdate({
     root,
     channel,
-    configSnapshot,
+    configSnapshot: postUpdateConfigSnapshot,
     opts,
   });
 

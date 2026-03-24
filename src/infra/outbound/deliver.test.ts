@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
 import {
   signalOutbound,
@@ -7,7 +7,6 @@ import {
   whatsappOutbound,
 } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -201,11 +200,9 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -454,14 +451,19 @@ describe("deliverOutboundPayloads", () => {
       payload: { text: "hi", mediaUrl: "file:///tmp/f.png" },
     });
 
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
     expect(sendTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
       expect.objectContaining({
         mediaUrl: "file:///tmp/f.png",
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
     );
+    expect(
+      sendOpts?.mediaLocalRoots?.some((root) =>
+        root.endsWith(path.join(".openclaw", "workspace-work")),
+      ),
+    ).toBe(true);
   });
 
   it("includes OpenClaw tmp root in telegram mediaLocalRoots", async () => {
