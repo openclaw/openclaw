@@ -1,5 +1,5 @@
 import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -71,13 +71,17 @@ let resolveTarget: NonNullable<
 >;
 
 describe("whatsapp resolveTarget", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     const outbound = (await import("./channel.js")).whatsappPlugin.outbound;
     if (!outbound?.resolveTarget) {
       throw new Error("expected whatsapp outbound resolveTarget");
     }
     resolveTarget = outbound.resolveTarget;
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("should resolve valid target in explicit mode", () => {
