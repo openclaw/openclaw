@@ -534,7 +534,7 @@ function stemFromRelativePath(relativePath) {
 function describeSeamKinds(relativePath, source) {
   const seamKinds = [];
   const isReplyDeliveryPath =
-    /reply-delivery|reply-dispatcher|deliver-reply|reply\/.*delivery|monitor\/(?:replies|deliver)|outbound\/deliver|outbound\/message/.test(
+    /reply-delivery|reply-dispatcher|deliver-reply|reply\/.*delivery|monitor\/(?:replies|deliver|native-command)|outbound\/deliver|outbound\/message/.test(
       relativePath,
     );
   const isChannelMediaAdapterPath =
