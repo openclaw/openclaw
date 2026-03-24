@@ -136,11 +136,19 @@ export function countActiveRunsForSessionFromRuns(
     return pending;
   };
 
-  let count = 0;
+  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const entry of runs.values()) {
     if (resolveControllerSessionKey(entry) !== key) {
       continue;
     }
+    const existing = latestByChildSessionKey.get(entry.childSessionKey);
+    if (!existing || entry.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(entry.childSessionKey, entry);
+    }
+  }
+
+  let count = 0;
+  for (const entry of latestByChildSessionKey.values()) {
     if (typeof entry.endedAt !== "number") {
       count += 1;
       continue;
