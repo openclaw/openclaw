@@ -819,7 +819,7 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
     name: "consult_oracle",
     label: "Consult Oracle",
     description:
-      "Ask Pythia Oracle for a sideways reading on the real structure of a project or decision problem.",
+      "Ask Pythia Oracle for a sideways reading on the real structure of a project or decision problem. Use this tool whenever the user explicitly says to ask the oracle, consult the oracle, or asks an oracle question.",
     parameters: Type.Object({
       query: Type.String({
         minLength: 1,
