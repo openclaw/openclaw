@@ -251,6 +251,9 @@ export function buildBootstrapContextFiles(
     result.push({
       path: pathValue,
       content: contentWithinBudget,
+      ...(trimmed.truncated || contentWithinBudget.length < trimmed.content.length
+        ? { truncated: true }
+        : {}),
     });
   }
   return result;

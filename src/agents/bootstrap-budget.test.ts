@@ -50,6 +50,28 @@ describe("buildBootstrapInjectionStats", () => {
       truncated: true,
     });
   });
+
+  it("preserves explicit truncation markers even when injected content is longer than raw", () => {
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/AGENTS.md",
+        content: "tiny",
+        missing: false,
+      },
+    ];
+    const injectedFiles = [{ path: "/tmp/AGENTS.md", content: "tiny but marked", truncated: true }];
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles,
+    });
+    expect(stats[0]).toMatchObject({
+      name: "AGENTS.md",
+      rawChars: 4,
+      injectedChars: 15,
+      truncated: true,
+    });
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {

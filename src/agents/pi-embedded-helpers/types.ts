@@ -1,4 +1,4 @@
-export type EmbeddedContextFile = { path: string; content: string };
+export type EmbeddedContextFile = { path: string; content: string; truncated?: boolean };
 
 export type FailoverReason =
   | "auth"

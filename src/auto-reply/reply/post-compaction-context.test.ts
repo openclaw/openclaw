@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as bootstrapFiles from "../../agents/bootstrap-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as bootstrapPromptHooks from "./bootstrap-prompt-hooks.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
   const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
@@ -118,6 +121,8 @@ Ignore this.
     const result = await readPostCompactionContext(tmpDir);
     expect(result).not.toBeNull();
     expect(result).toContain("[truncated]");
+    expect(result).toContain("The injected sections below are truncated");
+    expect(result).toContain("reread AGENTS.md only if you need omitted content");
   });
 
   it("matches section names case-insensitively", async () => {
@@ -355,6 +360,92 @@ Read WORKFLOW.md on startup.
       const result = await readPostCompactionContext(tmpDir);
       expect(result).not.toBeNull();
       expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("injected sections below instead of rereading AGENTS.md");
+      expect(result).not.toContain("The injected sections below are truncated");
+      expect(result).not.toContain("new-prompt.mjs");
+    });
+
+    it("mentions rereading AGENTS.md only when the injected default sections are truncated", async () => {
+      const content = `## Session Startup\n\n${"A".repeat(4000)}\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).not.toBeNull();
+      expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("The injected sections below are truncated");
+      expect(result).toContain("reread AGENTS.md only if you need omitted content");
+    });
+
+    it("mentions rereading AGENTS.md when normal bootstrap injection truncates AGENTS.md", async () => {
+      const content =
+        "## Session Startup\n\nDo startup.\n\n## Red Lines\n\nDo not break.\n\n## Other\n\n" +
+        "A".repeat(500);
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const cfg = {
+        agents: {
+          defaults: {
+            bootstrapMaxChars: 120,
+          },
+        },
+      } as OpenClawConfig;
+      const result = await readPostCompactionContext(tmpDir, cfg);
+      expect(result).not.toBeNull();
+      expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("Your normal injected AGENTS.md context may be partial");
+      expect(result).not.toContain("The injected sections below are truncated");
+    });
+
+    it("avoids bootstrap inspection and falls back to reread guidance when hooks may customize AGENTS", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const hookSpy = vi
+        .spyOn(bootstrapPromptHooks, "hasPromptAffectingBootstrapHooks")
+        .mockReturnValue(true);
+      const resolveSpy = vi.spyOn(bootstrapFiles, "resolveBootstrapContextForRun");
+
+      const result = await readPostCompactionContext(tmpDir);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain("Bootstrap hooks may customize your runtime AGENTS.md context");
+      expect(result).toContain("reread AGENTS.md before responding to the user");
+      expect(result).not.toContain("injected sections below instead of rereading AGENTS.md");
+      expect(hookSpy).toHaveBeenCalled();
+      expect(resolveSpy).not.toHaveBeenCalled();
+    });
+
+    it("uses reference labeling for custom sections when bootstrap hooks may customize AGENTS", async () => {
+      const content = `## Boot Sequence\n\nCustom boot.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      vi.spyOn(bootstrapPromptHooks, "hasPromptAffectingBootstrapHooks").mockReturnValue(true);
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: { postCompactionSections: ["Boot Sequence"] },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await readPostCompactionContext(tmpDir, cfg);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain("Reference sections from AGENTS.md (Boot Sequence):");
+      expect(result).not.toContain("Injected sections from AGENTS.md");
+      expect(result).toContain("Bootstrap hooks may customize your runtime AGENTS.md context");
+    });
+
+    it("falls back to reread guidance when bootstrap inspection fails", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      vi.spyOn(bootstrapPromptHooks, "hasPromptAffectingBootstrapHooks").mockReturnValue(false);
+      vi.spyOn(bootstrapFiles, "resolveBootstrapContextForRun").mockRejectedValueOnce(
+        new Error("boom"),
+      );
+
+      const result = await readPostCompactionContext(tmpDir);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain("Bootstrap inspection was unavailable");
+      expect(result).toContain("reread AGENTS.md before responding to the user");
+      expect(result).not.toContain("injected sections below instead of rereading AGENTS.md");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {

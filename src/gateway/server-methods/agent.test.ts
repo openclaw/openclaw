@@ -59,6 +59,8 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
+  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -817,6 +819,148 @@ describe("gateway agent handler", () => {
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
+  });
+
+  it("preserves spawned workspace inheritance across bare /reset", async () => {
+    mockSessionResetSuccess({ reason: "reset" });
+    let mainSessionLoadCount = 0;
+    mocks.loadSessionEntry.mockImplementation((key: string) => {
+      if (key === "agent:main:subagent:parent") {
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry: {
+            sessionId: "parent-session-id",
+            updatedAt: Date.now(),
+          },
+          canonicalKey: key,
+        };
+      }
+      if (key === "agent:main:main") {
+        mainSessionLoadCount += 1;
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry:
+            mainSessionLoadCount === 1
+              ? {
+                  sessionId: "existing-session-id",
+                  updatedAt: Date.now(),
+                  spawnedBy: "agent:main:subagent:parent",
+                  spawnedWorkspaceDir: "/tmp/inherited",
+                  spawnDepth: 1,
+                }
+              : {
+                  sessionId: "reset-session-id",
+                  updatedAt: Date.now(),
+                },
+          canonicalKey: key,
+        };
+      }
+      throw new Error(`unexpected session key: ${key}`);
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          sessionId: "reset-session-id",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-reset-inherited-workspace",
+      },
+      {
+        reqId: "4bare-reset",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    expect(call.workspaceDir).toBe("/tmp/inherited");
+  });
+
+  it("preserves stricter subagent role limits across bare /reset", async () => {
+    mockSessionResetSuccess({ reason: "reset" });
+    let mainSessionLoadCount = 0;
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.loadSessionEntry.mockImplementation((key: string) => {
+      if (key === "agent:main:subagent:parent") {
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry: {
+            sessionId: "parent-session-id",
+            updatedAt: Date.now(),
+          },
+          canonicalKey: key,
+        };
+      }
+      if (key === "agent:main:main") {
+        mainSessionLoadCount += 1;
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry:
+            mainSessionLoadCount === 1
+              ? {
+                  sessionId: "existing-session-id",
+                  updatedAt: Date.now(),
+                  spawnedBy: "agent:main:subagent:parent",
+                  spawnedWorkspaceDir: "/tmp/inherited",
+                  spawnDepth: 1,
+                  subagentRole: "leaf",
+                  subagentControlScope: "none",
+                }
+              : {
+                  sessionId: "reset-session-id",
+                  updatedAt: Date.now(),
+                },
+          canonicalKey: key,
+        };
+      }
+      throw new Error(`unexpected session key: ${key}`);
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          sessionId: "reset-session-id",
+        }),
+      };
+      const result = await updater(store);
+      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-reset-preserve-subagent-role",
+      },
+      {
+        reqId: "4bare-reset-subagent-role",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(capturedEntry?.subagentRole).toBe("leaf");
+    expect(capturedEntry?.subagentControlScope).toBe("none");
+    expect(capturedEntry?.spawnDepth).toBe(1);
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {

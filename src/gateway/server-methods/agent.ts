@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
+import { buildBareSessionResetPromptForRun } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -380,6 +384,17 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedSessionKey = requestedSessionKey;
     let isNewSession = false;
     let skipTimestampInjection = false;
+    let requestedSessionLoad: ReturnType<typeof loadSessionEntry> | undefined;
+    let preservedResetSpawnedMetadata:
+      | Pick<
+          SessionEntry,
+          | "spawnedBy"
+          | "spawnedWorkspaceDir"
+          | "spawnDepth"
+          | "subagentRole"
+          | "subagentControlScope"
+        >
+      | undefined;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -390,6 +405,16 @@ export const agentHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
         );
         return;
+      }
+      const preResetEntry = loadSessionEntry(requestedSessionKey)?.entry;
+      if (preResetEntry) {
+        preservedResetSpawnedMetadata = {
+          spawnedBy: preResetEntry.spawnedBy,
+          spawnedWorkspaceDir: preResetEntry.spawnedWorkspaceDir,
+          spawnDepth: preResetEntry.spawnDepth,
+          subagentRole: preResetEntry.subagentRole,
+          subagentControlScope: preResetEntry.subagentControlScope,
+        };
       }
       const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
@@ -410,7 +435,31 @@ export const agentHandlers: GatewayRequestHandlers = {
         // reset first, then run a fresh-session greeting prompt in-place.
         // Date is embedded in the prompt so agents read the correct daily
         // memory files; skip further timestamp injection to avoid duplication.
-        message = buildBareSessionResetPrompt(cfg);
+        requestedSessionLoad = loadSessionEntry(requestedSessionKey);
+        const {
+          cfg: resetCfg,
+          entry: resetEntry,
+          canonicalKey: resetSessionKey,
+        } = requestedSessionLoad;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: resetSessionKey,
+          config: resetCfg,
+        });
+        const resetSpawnedBy = resetEntry?.spawnedBy ?? preservedResetSpawnedMetadata?.spawnedBy;
+        const resetSpawnedWorkspaceDir =
+          resetEntry?.spawnedWorkspaceDir ?? preservedResetSpawnedMetadata?.spawnedWorkspaceDir;
+        const resetWorkspaceDir =
+          resolveIngressWorkspaceOverrideForSpawnedRun({
+            spawnedBy: resetSpawnedBy,
+            workspaceDir: resetSpawnedWorkspaceDir,
+          }) ?? resolveAgentWorkspaceDir(resetCfg, sessionAgentId);
+        message = await buildBareSessionResetPromptForRun({
+          workspaceDir: resetWorkspaceDir,
+          cfg: resetCfg,
+          sessionKey: resetSessionKey,
+          sessionId: resolvedSessionId,
+          agentId: sessionAgentId,
+        });
         skipTimestampInjection = true;
       }
     }
@@ -424,14 +473,23 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (requestedSessionKey) {
-      const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
+      const { cfg, storePath, entry, canonicalKey } =
+        requestedSessionLoad ?? loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       isNewSession = !entry;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-      spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
+      const effectiveSpawnedBy = entry?.spawnedBy ?? preservedResetSpawnedMetadata?.spawnedBy;
+      const effectiveSpawnedWorkspaceDir =
+        entry?.spawnedWorkspaceDir ?? preservedResetSpawnedMetadata?.spawnedWorkspaceDir;
+      const effectiveSpawnDepth = entry?.spawnDepth ?? preservedResetSpawnedMetadata?.spawnDepth;
+      const effectiveSubagentRole =
+        entry?.subagentRole ?? preservedResetSpawnedMetadata?.subagentRole;
+      const effectiveSubagentControlScope =
+        entry?.subagentControlScope ?? preservedResetSpawnedMetadata?.subagentControlScope;
+      spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, effectiveSpawnedBy);
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -469,8 +527,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
-        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
-        spawnDepth: entry?.spawnDepth,
+        spawnedWorkspaceDir: effectiveSpawnedWorkspaceDir,
+        spawnDepth: effectiveSpawnDepth,
+        subagentRole: effectiveSubagentRole,
+        subagentControlScope: effectiveSubagentControlScope,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
