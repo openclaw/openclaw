@@ -216,7 +216,7 @@ describe("scripts/docker/setup.sh", () => {
       "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.bind lan",
     );
     expect(log).toContain(
-      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://127.0.0.1:18789"] --strict-json',
+      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] --strict-json',
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
