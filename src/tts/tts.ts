@@ -119,6 +119,13 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  minimax: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voice: string;
+    speed: number;
+  };
   edge: {
     enabled: boolean;
     voice: string;
@@ -174,6 +181,11 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voice?: string;
+    model?: string;
+    speed?: number;
   };
   microsoft?: {
     voice?: string;
@@ -325,6 +337,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    minimax: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
+      baseUrl: (raw.minimax?.baseUrl?.trim() || "https://api.minimax.io").replace(/\/+$/, ""),
+      model: raw.minimax?.model ?? "speech-2.8-turbo",
+      voice: raw.minimax?.voice ?? "English_radiant_girl",
+      speed: raw.minimax?.speed ?? 1,
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,
@@ -478,6 +500,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "microsoft";
 }
 
@@ -546,10 +571,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;

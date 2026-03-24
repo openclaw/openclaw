@@ -17,12 +17,17 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import {
+  buildMinimaxImageGenerationProvider,
+  buildMinimaxPortalImageGenerationProvider,
+} from "./image-generation-provider.js";
+import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxSpeechProviderForApi } from "./speech-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -130,21 +135,9 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
-                [portalModelRef("MiniMax-M2")]: { alias: "minimax-m2" },
-                [portalModelRef("MiniMax-M2.1")]: { alias: "minimax-m2.1" },
-                [portalModelRef("MiniMax-M2.1-highspeed")]: {
-                  alias: "minimax-m2.1-highspeed",
-                },
                 [portalModelRef("MiniMax-M2.7")]: { alias: "minimax-m2.7" },
                 [portalModelRef("MiniMax-M2.7-highspeed")]: {
                   alias: "minimax-m2.7-highspeed",
-                },
-                [portalModelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
-                [portalModelRef("MiniMax-M2.5-highspeed")]: {
-                  alias: "minimax-m2.5-highspeed",
-                },
-                [portalModelRef("MiniMax-M2.5-Lightning")]: {
-                  alias: "minimax-m2.5-lightning",
                 },
               },
             },
@@ -287,5 +280,8 @@ export default definePluginEntry({
     });
     api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
+    api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProviderForApi());
   },
 });

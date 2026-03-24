@@ -44,23 +44,17 @@ function buildMinimaxTextModel(params: {
   return buildMinimaxModel({ ...params, input: ["text"] });
 }
 
+const MINIMAX_TUI_MODELS = new Set(["MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
+
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
-  return [
-    buildMinimaxModel({
-      id: MINIMAX_DEFAULT_VISION_MODEL_ID,
-      name: "MiniMax VL 01",
-      reasoning: false,
-      input: ["text", "image"],
-    }),
-    ...MINIMAX_TEXT_MODEL_ORDER.map((id) => {
-      const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-      return buildMinimaxTextModel({
-        id,
-        name: model.name,
-        reasoning: model.reasoning,
-      });
-    }),
-  ];
+  return MINIMAX_TEXT_MODEL_ORDER.filter((id) => MINIMAX_TUI_MODELS.has(id)).map((id) => {
+    const model = MINIMAX_TEXT_MODEL_CATALOG[id];
+    return buildMinimaxTextModel({
+      id,
+      name: model.name,
+      reasoning: model.reasoning,
+    });
+  });
 }
 
 export function buildMinimaxProvider(): ModelProviderConfig {
