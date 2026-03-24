@@ -37,6 +37,14 @@ apps/android/benchmark/results/
 **/__pycache__/
 *.pyc
 
+# npm lockfiles (repo uses pnpm)
+package-lock.json
+ui/package-lock.json
+
+# Generated gateway test helper ESM shims (produced locally during tests/build)
+src/gateway/test-helpers*.js
+src/gateway/test-helpers*.js.d.ts
+
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
