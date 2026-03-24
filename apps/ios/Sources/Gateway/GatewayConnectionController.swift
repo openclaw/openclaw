@@ -494,11 +494,13 @@ final class GatewayConnectionController {
             guard let self, let appModel else { return }
             let connectOptions = await self.makeConnectOptions(stableID: gatewayStableID)
 
-            guard generation == self.autoConnectGeneration,
-                  appModel.gatewayAutoReconnectEnabled,
-                  appModel.activeGatewayConnectConfig == nil
-            else { return }
+            guard generation == self.autoConnectGeneration else { return }
 
+            // `startAutoConnect` is also the entry point for explicit user-driven connect/switch
+            // actions. Those flows must be able to replace an existing config and must work even
+            // if a prior Disconnect temporarily set `gatewayAutoReconnectEnabled = false`.
+            // Generation matching is the stale-task guard; once a newer connect supersedes this
+            // attempt, older tasks are still discarded.
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }
@@ -1041,6 +1043,33 @@ extension GatewayConnectionController {
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
         self.resolveManualPort(host: host, port: port, useTLS: useTLS)
+    }
+
+    func _test_startAutoConnect(
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams? = nil,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil
+    ) async {
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: gatewayStableID,
+            tls: tls,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
+
+        for _ in 0..<100 {
+            if let cfg = self.appModel?.activeGatewayConnectConfig,
+               cfg.url == url,
+               cfg.effectiveStableID == gatewayStableID
+            {
+                return
+            }
+            await Task.yield()
+        }
     }
 }
 #endif
