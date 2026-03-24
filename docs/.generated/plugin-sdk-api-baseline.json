@@ -2620,7 +2620,7 @@
           "exportName": "resolveCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 303,
+            "line": 461,
             "path": "src/auto-reply/command-auth.ts"
           }
         },

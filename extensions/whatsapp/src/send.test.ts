@@ -4,16 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { setActiveWebListener } from "./active-listener.js";
 
 const loadWebMediaMock = vi.fn();
+let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
+let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let setActiveWebListener: typeof import("./active-listener.js").setActiveWebListener;
+let resetLogger: typeof import("../../../src/logging.js").resetLogger;
+let setLoggerOverride: typeof import("../../../src/logging.js").setLoggerOverride;
+
 vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
-
-import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./send.js";
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -21,8 +24,12 @@ describe("web outbound", () => {
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ setActiveWebListener } = await import("./active-listener.js"));
+    ({ resetLogger, setLoggerOverride } = await import("../../../src/logging.js"));
     setActiveWebListener({
       sendComposingTo,
       sendMessage,

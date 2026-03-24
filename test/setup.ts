@@ -10,6 +10,27 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
+vi.mock("@mariozechner/clipboard", () => ({
+  availableFormats: () => [],
+  getText: async () => "",
+  setText: async () => {},
+  hasText: () => false,
+  getImageBinary: async () => [],
+  getImageBase64: async () => "",
+  setImageBinary: async () => {},
+  setImageBase64: async () => {},
+  hasImage: () => false,
+  getHtml: async () => "",
+  setHtml: async () => {},
+  hasHtml: () => false,
+  getRtf: async () => "",
+  setRtf: async () => {},
+  hasRtf: () => false,
+  clear: async () => {},
+  watch: () => {},
+  callThreadsafeFunction: () => {},
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
@@ -32,6 +53,7 @@ import type {
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
@@ -334,6 +356,7 @@ beforeAll(() => {
 
 afterEach(() => {
   resetContextWindowCacheForTest();
+  resetFileLockStateForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
@@ -344,5 +367,6 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  resetFileLockStateForTest();
   resetSessionWriteLockStateForTest();
 });
