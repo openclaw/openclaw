@@ -801,6 +801,156 @@ describe("readLatestSessionUsageFromTranscript", () => {
   });
 });
 
+describe("readLatestSessionUsageFromTranscript cache", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-cache-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns cached result without re-reading file on second call", () => {
+    const sessionId = "usage-cache-hit";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 100, output: 50, cost: { total: 0.001 } },
+        },
+      },
+    ]);
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    const readsAfterFirst = readFileSpy.mock.calls.length;
+    expect(readsAfterFirst).toBeGreaterThan(0);
+    expect(first).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(second).toEqual(first);
+    expect(readFileSpy.mock.calls.length).toBe(readsAfterFirst);
+
+    readFileSpy.mockRestore();
+  });
+
+  test("invalidates cache when file mtime changes", () => {
+    const sessionId = "usage-cache-mtime";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 200, output: 100, cost: { total: 0.002 } },
+        },
+      },
+    ]);
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(first).toMatchObject({ modelProvider: "openai", model: "gpt-5.4" });
+
+    // Touch the file to change mtime without changing size
+    const futureTime = Date.now() + 10_000;
+    fs.utimesSync(transcriptPath, futureTime / 1000, futureTime / 1000);
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    // Should have re-read the file since mtime changed
+    expect(readFileSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(second).toEqual(first);
+
+    readFileSpy.mockRestore();
+  });
+
+  test("invalidates cache when file size changes", () => {
+    const sessionId = "usage-cache-size";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 300, output: 150, cost: { total: 0.003 } },
+        },
+      },
+    ]);
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(first).toMatchObject({ inputTokens: 300, outputTokens: 150 });
+
+    // Append to the file to change size
+    fs.appendFileSync(
+      transcriptPath,
+      `\n${JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 500, output: 200, cost: { total: 0.005 } },
+        },
+      })}`,
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    // Should have re-read the file since size changed
+    expect(readFileSpy.mock.calls.length).toBeGreaterThan(0);
+    // Aggregated usage should now include both entries
+    expect(second).toMatchObject({ inputTokens: 800, outputTokens: 350 });
+
+    readFileSpy.mockRestore();
+  });
+
+  test("does not cache null from transient I/O errors", () => {
+    const sessionId = "usage-cache-transient-error";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 100, output: 50 },
+        },
+      },
+    ]);
+
+    // Simulate a transient I/O error by making openSync fail once
+    const originalOpenSync = fs.openSync;
+    let openCallCount = 0;
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: unknown[]) => {
+      openCallCount++;
+      if (openCallCount === 1) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return originalOpenSync.apply(fs, args as Parameters<typeof fs.openSync>);
+    });
+
+    // First call — transient error, should return null but NOT cache it
+    const firstResult = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(firstResult).toBeNull();
+
+    // Second call — error resolved, should re-read and succeed (not serve cached null)
+    const secondResult = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(secondResult).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+
+    openSpy.mockRestore();
+  });
+});
+
 describe("resolveSessionTranscriptCandidates", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

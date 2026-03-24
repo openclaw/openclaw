@@ -47,10 +47,14 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
+  getSessionUsageCacheMaxEntries,
   readLatestSessionUsageFromTranscript,
+  readLatestSessionUsageFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
+  setSessionUsageCacheMaxEntries,
 } from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
@@ -1294,4 +1298,141 @@ export function listSessionsFromStore(params: {
     defaults: getSessionDefaults(cfg),
     sessions,
   };
+}
+
+function needsTranscriptUsageFallback(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}): boolean {
+  return (
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(params.entry)) === undefined ||
+    resolvePositiveNumber(params.entry?.contextTokens) === undefined ||
+    resolveEstimatedSessionCostUsd({
+      cfg: params.cfg,
+      provider: params.fallbackProvider,
+      model: params.fallbackModel,
+      entry: params.entry,
+    }) === undefined
+  );
+}
+
+const DEFAULT_PREWARM_CONCURRENCY = 16;
+
+/**
+ * Pre-warm the session transcript caches (usage and title) by reading
+ * transcript files at gateway startup. Runs in the background so gateway
+ * startup is not delayed. Uses async I/O with bounded concurrency.
+ */
+export async function prewarmSessionUsageCache(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
+}): Promise<void> {
+  const { cfg, log } = params;
+  // Apply cache limit immediately (before yielding) so early sessions.list
+  // requests see the configured capacity even while prewarm is deferred.
+  setSessionUsageCacheMaxEntries(cfg.gateway?.sessionsList?.usageCacheMaxEntries);
+
+  // Yield to the macrotask queue so the synchronous store scan below
+  // does not block early HTTP request handling. The HTTP server is
+  // already listening when startGatewaySidecars runs, so a microtask
+  // yield (Promise.resolve) is not sufficient.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  if (cfg.gateway?.sessionsList?.prewarmUsageCache !== true) {
+    return;
+  }
+
+  const concurrency = Math.max(
+    1,
+    Math.min(64, cfg.gateway?.sessionsList?.prewarmConcurrency ?? DEFAULT_PREWARM_CONCURRENCY),
+  );
+
+  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+  const resolvedStorePath = storePath === "(multiple)" ? undefined : storePath;
+  const entries = Object.entries(store);
+  const toWarm: Array<{
+    sessionId: string;
+    sessionFile?: string;
+    agentId: string;
+    needsUsage: boolean;
+  }> = [];
+
+  for (const [key, entry] of entries) {
+    if (isCronRunSessionKey(key) || !entry?.sessionId) {
+      continue;
+    }
+    const parsed = parseAgentSessionKey(key);
+    const agentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+    const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, agentId);
+    const needsUsage = needsTranscriptUsageFallback({
+      cfg,
+      entry,
+      fallbackProvider: resolvedModel.provider,
+      fallbackModel: resolvedModel.model,
+    });
+    // Always warm title cache; only warm usage cache when metadata is missing.
+    toWarm.push({
+      sessionId: entry.sessionId,
+      sessionFile: entry.sessionFile,
+      agentId,
+      needsUsage,
+    });
+  }
+
+  if (toWarm.length === 0) {
+    return;
+  }
+
+  const usageCount = toWarm.filter((t) => t.needsUsage).length;
+  const currentMax = getSessionUsageCacheMaxEntries();
+  if (usageCount > currentMax) {
+    log.warn(
+      `[sessions] prewarm: ${usageCount} sessions need usage warming but usageCacheMaxEntries is ${currentMax}. ` +
+        `Only the last ${currentMax} will remain cached. Consider increasing gateway.sessionsList.usageCacheMaxEntries.`,
+    );
+  }
+
+  log.info(
+    `[sessions] prewarm: warming ${toWarm.length} session(s) (${usageCount} usage + ${toWarm.length} title, concurrency=${concurrency})`,
+  );
+
+  let usageWarmed = 0;
+  let titleWarmed = 0;
+  let failed = 0;
+
+  const tasks = toWarm.map((item) => async () => {
+    // Warm usage cache (async I/O)
+    if (item.needsUsage) {
+      const result = await readLatestSessionUsageFromTranscriptAsync(
+        item.sessionId,
+        resolvedStorePath,
+        item.sessionFile,
+        item.agentId,
+      );
+      if (result !== null) {
+        usageWarmed++;
+      }
+    }
+    // Warm title cache (sync I/O, but lightweight — reads only head+tail)
+    readSessionTitleFieldsFromTranscript(
+      item.sessionId,
+      resolvedStorePath,
+      item.sessionFile,
+      item.agentId,
+    );
+    titleWarmed++;
+  });
+
+  await runTasksWithConcurrency({
+    tasks,
+    limit: concurrency,
+    errorMode: "continue",
+    onTaskError: () => {
+      failed++;
+    },
+  });
+
+  log.info(`[sessions] prewarm: done (usage=${usageWarmed} title=${titleWarmed} failed=${failed})`);
 }

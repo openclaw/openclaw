@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -24,6 +24,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
+  prewarmSessionUsageCache,
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
@@ -1534,5 +1535,182 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
+  });
+});
+
+describe("prewarmSessionUsageCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prewarm-"));
+  });
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function writeStore(storePath: string, store: Record<string, SessionEntry>) {
+    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+  }
+
+  function writeTranscript(dir: string, sessionId: string, totalTokens: number) {
+    fs.writeFileSync(
+      path.join(dir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: Math.floor(totalTokens / 2),
+              output: totalTokens - Math.floor(totalTokens / 2),
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+
+  test("does nothing when prewarmUsageCache is not enabled", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = { session: { store: path.join(tmpDir, "sessions.json") } } as OpenClawConfig;
+    writeStore(path.join(tmpDir, "sessions.json"), {});
+
+    await prewarmSessionUsageCache({ cfg, log });
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  test("warms usage and title caches for sessions", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "prewarm-sess-1",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      other: {
+        sessionId: "prewarm-sess-2",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "prewarm-sess-1", 200);
+    writeTranscript(tmpDir, "prewarm-sess-2", 400);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(infoMessages.some((m: string) => m.includes("warming 2 session"))).toBe(true);
+    expect(infoMessages.some((m: string) => m.includes("usage=2") && m.includes("title=2"))).toBe(
+      true,
+    );
+  });
+
+  test("skips usage warming for sessions that already have metadata", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const store: Record<string, SessionEntry> = {
+      "has-usage": {
+        sessionId: "prewarm-has-usage",
+        updatedAt: Date.now(),
+        totalTokens: 500,
+        totalTokensFresh: true,
+        contextTokens: 200000,
+        estimatedCostUsd: 0.01,
+      } as SessionEntry,
+      "no-usage": {
+        sessionId: "prewarm-no-usage",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "prewarm-no-usage", 300);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    // 1 usage (no-usage only) + 2 title (both sessions)
+    expect(infoMessages.some((m: string) => m.includes("1 usage"))).toBe(true);
+    expect(infoMessages.some((m: string) => m.includes("usage=1") && m.includes("title=2"))).toBe(
+      true,
+    );
+  });
+
+  test("applies usageCacheMaxEntries from config", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    writeStore(storePath, {});
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { usageCacheMaxEntries: 50000 } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+    // No error means usageCacheMaxEntries was accepted
+  });
+});
+
+describe("gateway.sessionsList config validation", () => {
+  test("zod schema accepts valid sessionsList config", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: 10000,
+          prewarmUsageCache: true,
+          prewarmConcurrency: 8,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(true);
+  });
+
+  test("zod schema rejects invalid sessionsList values", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: -1,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(false);
+  });
+
+  test("zod schema rejects unknown keys in sessionsList", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          unknownKey: true,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(false);
   });
 });
