@@ -431,17 +431,34 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure check base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect docs-only changes
+        id: docs_scope
+        uses: ./.github/actions/detect-docs-changes
+
       - name: Setup Node environment
+        if: steps.docs_scope.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
+        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pnpm check
 
       - name: Strict TS build smoke
+        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pnpm build:strict-smoke
+
+      - name: Skip docs-only change
+        if: steps.docs_scope.outputs.docs_only == 'true'
+        run: echo "Docs-only change detected; skipping check job payload."
 
   check-additional:
     name: "check-additional"
@@ -454,7 +471,18 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure check-additional base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect docs-only changes
+        id: docs_scope
+        uses: ./.github/actions/detect-docs-changes
+
       - name: Setup Node environment
+        if: steps.docs_scope.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
@@ -462,46 +490,54 @@ jobs:
 
       - name: Run plugin extension boundary guard
         id: plugin_extension_boundary
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:plugins:no-extension-imports
 
       - name: Run web search provider boundary guard
         id: web_search_provider_boundary
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:web-search-provider-boundaries
 
       - name: Run extension src boundary guard
         id: extension_src_outside_plugin_sdk_boundary
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:extensions:no-src-outside-plugin-sdk
 
       - name: Run extension plugin-sdk-internal guard
         id: extension_plugin_sdk_internal_boundary
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm run lint:extensions:no-plugin-sdk-internal
 
       - name: Enforce safe external URL opening policy
         id: no_raw_window_open
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Run gateway watch regression harness
         id: gateway_watch_regression
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm test:gateway:watch-regression
 
       - name: Check config docs drift statefile
         id: config_docs_drift
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm config:docs:check
 
       - name: Check plugin SDK API baseline drift
         id: plugin_sdk_api_drift
+        if: steps.docs_scope.outputs.docs_only != 'true'
         continue-on-error: true
         run: pnpm plugin-sdk:api:check
 
       - name: Upload gateway watch regression artifacts
-        if: always()
+        if: always() && steps.docs_scope.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: gateway-watch-regression
@@ -509,7 +545,7 @@ jobs:
           retention-days: 7
 
       - name: Fail if any additional check failed
-        if: always()
+        if: always() && steps.docs_scope.outputs.docs_only != 'true'
         env:
           PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
           WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
@@ -539,6 +575,10 @@ jobs:
           done
 
           exit "$failures"
+
+      - name: Skip docs-only change
+        if: steps.docs_scope.outputs.docs_only == 'true'
+        run: echo "Docs-only change detected; skipping check-additional job payload."
 
   build-smoke:
     name: "build-smoke"
