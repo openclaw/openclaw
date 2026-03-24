@@ -1099,6 +1099,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     let rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
 
+    // Save all messages BEFORE filtering to check for earlier messages
+    const allMessages = [...rawMessages] as Array<{ timestamp?: number | string }>;
+
     // Pagination: filter messages before the cursor
     if (before) {
       const beforeTs = parseInt(before, 10);
@@ -1160,10 +1163,28 @@ export const chatHandlers: GatewayRequestHandlers = {
     const cursorTimestamp = oldestInPage?.timestamp;
     const cursor =
       cursorTimestamp !== undefined && cursorTimestamp !== null
-        ? String(typeof cursorTimestamp === "number" ? cursorTimestamp : new Date(cursorTimestamp).getTime())
+        ? String(
+            typeof cursorTimestamp === "number"
+              ? cursorTimestamp
+              : new Date(cursorTimestamp).getTime(),
+          )
         : null;
-    // hasMore only if we have a usable cursor AND there are more messages
-    const hasMore = cursor !== null && rawMessages.length > sliced.length;
+
+    // hasMore: check if there are messages earlier than the current cursor in ALL messages
+    let hasMore = false;
+    if (cursor !== null && cursorTimestamp !== undefined) {
+      const cursorTs =
+        typeof cursorTimestamp === "number" ? cursorTimestamp : new Date(cursorTimestamp).getTime();
+      // Check if there are any messages in allMessages that are earlier than cursor
+      hasMore = allMessages.some((msg) => {
+        const ts = msg.timestamp;
+        if (ts === undefined || ts === null) {
+          return false; // Messages without timestamp don't count as "earlier"
+        }
+        const tsNum = typeof ts === "number" ? ts : new Date(ts).getTime();
+        return !isNaN(tsNum) && tsNum < cursorTs;
+      });
+    }
 
     // Debug logging for pagination
     context.logGateway.debug(
