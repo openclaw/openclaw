@@ -125,25 +125,35 @@ function collectImageModelKeys(
 /**
  * Check if a given provider/model combination is in the set of image models.
  * Checks:
- * 1. "provider/model" format (exact match)
- * 2. Raw model string (providerless IDs added by collectImageModelKeys)
- * 3. Any provider-qualified key in the set that matches the model name
- *    (for stored overrides where provider differs from imageModel config)
- * 4. Provider-qualified stored model against providerless imageModel entries
- *    (e.g., stored "openai/gpt-4.1" vs imageModel fallback "gpt-4.1")
+ * 1. "provider/model" format (exact match against provider-qualified keys)
+ * 2. Stored model string directly (matches raw IDs like "gpt-4.1" added by collectImageModelKeys)
+ * 3. Pure model name against raw entries (providerless IDs from imageModel fallbacks)
+ * 4. Pure model name against all entries' pure names (handles provider-qualified stored models
+ *    matching providerless imageModel entries, e.g., stored "openai/gpt-4.1" vs imageModel "gpt-4.1")
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
   const modelSlash = model.indexOf("/");
   const pureModel = modelSlash > 0 ? model.slice(modelSlash + 1) : model;
   const effectiveProvider = modelSlash > 0 ? model.slice(0, modelSlash) : provider;
 
+  // 1. Check exact provider/model key match
   const key = modelKey(effectiveProvider, pureModel);
   if (imageModelKeys.has(key)) {
     return true;
   }
+
+  // 2. Check stored model string directly against raw entries
+  // This handles providerless raw IDs added by collectImageModelKeys()
+  if (imageModelKeys.has(model)) {
+    return true;
+  }
+
+  // 3. Check pure model name against raw entries
   if (imageModelKeys.has(pureModel)) {
     return true;
   }
+
+  // 4. Compare stored model's pure name against all entries' pure names
   for (const entry of imageModelKeys) {
     const slash = entry.indexOf("/");
     const entryPureModel = slash > 0 ? entry.slice(slash + 1) : entry;
