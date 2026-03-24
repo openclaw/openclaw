@@ -465,6 +465,7 @@ public final class OpenClawChatViewModel {
     }
 
     private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+    private static let compactTriggers: Set<String> = ["/compact"]
 
     private func performSend() async {
         guard !self.isSending else { return }
@@ -474,6 +475,11 @@ public final class OpenClawChatViewModel {
         if Self.resetTriggers.contains(trimmed.lowercased()) {
             self.input = ""
             await self.performReset()
+            return
+        }
+        if Self.compactTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performCompact()
             return
         }
 
@@ -617,6 +623,22 @@ public final class OpenClawChatViewModel {
         } catch {
             self.errorText = error.localizedDescription
             chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        await self.bootstrap()
+    }
+
+    private func performCompact() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+
+        do {
+            try await self.transport.compactSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error("session compact failed \(error.localizedDescription, privacy: .public)")
             return
         }
 
