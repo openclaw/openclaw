@@ -1467,13 +1467,24 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       api.logger,
                     ),
                   );
-                case "create":
-                  return json(
-                    await createDoc(client, p.title, p.folder_token, {
-                      grantToRequester: p.grant_to_requester,
-                      requesterOpenId: trustedRequesterOpenId,
-                    }),
-                  );
+                case "create": {
+                  const created = await createDoc(client, p.title, p.folder_token, {
+                    grantToRequester: p.grant_to_requester,
+                    requesterOpenId: trustedRequesterOpenId,
+                  });
+                  if (p.content) {
+                    const writeResult = await writeDoc(
+                      client,
+                      created.document_id,
+                      p.content,
+                      getMediaMaxBytes(p, defaultAccountId),
+                      api.logger,
+                    );
+                    const { blocks_deleted: _, ...writeRest } = writeResult;
+                    return json({ ...created, ...writeRest });
+                  }
+                  return json(created);
+                }
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));
                 case "get_block":
