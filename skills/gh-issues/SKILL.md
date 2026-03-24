@@ -3,7 +3,23 @@ name: gh-issues
 description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]"
 user-invocable: true
 metadata:
-  { "openclaw": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["curl", "git", "gh"] },
+        "primaryEnv": "GH_TOKEN",
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "gh",
+              "bins": ["gh"],
+              "label": "Install GitHub CLI (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # gh-issues — Auto-fix GitHub Issues with Parallel Sub-agents
