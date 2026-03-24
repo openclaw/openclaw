@@ -46,7 +46,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseManifest(raw: string): MigrateManifest {
+/** @internal Exported for testing. */
+export function parseManifest(raw: string): MigrateManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -82,10 +83,15 @@ function parseManifest(raw: string): MigrateManifest {
     if (!isRecord(asset)) {
       throw new Error("Migration manifest contains a non-object asset.");
     }
+    const sourcePath = typeof asset.sourcePath === "string" ? asset.sourcePath.trim() : "";
+    const archivePath = typeof asset.archivePath === "string" ? asset.archivePath.trim() : "";
+    if (!sourcePath || !archivePath) {
+      throw new Error("Migration manifest asset is missing sourcePath or archivePath.");
+    }
     assets.push({
       kind: asset.kind as MigrateAssetKind,
-      sourcePath: typeof asset.sourcePath === "string" ? asset.sourcePath : "",
-      archivePath: typeof asset.archivePath === "string" ? asset.archivePath : "",
+      sourcePath,
+      archivePath,
       agentId: typeof asset.agentId === "string" ? asset.agentId : undefined,
     });
   }
@@ -259,7 +265,14 @@ function remapSourceToTarget(params: {
         return path.join(params.localStateDir, relative);
       }
     }
-    return path.join(params.localStateDir, "workspace");
+    // Derive a unique fallback name from the source path basename to avoid
+    // multiple external workspaces colliding on a single target.
+    const basename = path.basename(toPosixPath(sourcePath)) || "workspace";
+    const idx = params.sourceWorkspaceDirs.indexOf(sourcePath);
+    if (idx > 0) {
+      return path.join(params.localStateDir, `${basename}-${idx}`);
+    }
+    return path.join(params.localStateDir, basename);
   }
 
   // Fallback: place under local state dir using relative path from source state dir.
@@ -298,17 +311,23 @@ async function mergeConfigFiles(existingPath: string, importedPath: string): Pro
 }
 
 async function copyRecursive(src: string, dest: string): Promise<void> {
-  const stat = await fs.stat(src);
+  // Use lstat to avoid following symlinks from untrusted archives.
+  const stat = await fs.lstat(src);
+  if (stat.isSymbolicLink()) {
+    // Reject symlinks to prevent traversal outside the extracted tree.
+    return;
+  }
   if (stat.isDirectory()) {
     await fs.mkdir(dest, { recursive: true });
     const entries = await fs.readdir(src, { withFileTypes: true });
     for (const entry of entries) {
       await copyRecursive(path.join(src, entry.name), path.join(dest, entry.name));
     }
-  } else {
+  } else if (stat.isFile()) {
     await fs.mkdir(path.dirname(dest), { recursive: true });
     await fs.copyFile(src, dest);
   }
+  // Skip other special file types (sockets, FIFOs, etc.).
 }
 
 export function formatMigrateImportSummary(result: MigrateImportResult): string[] {

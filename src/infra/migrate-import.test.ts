@@ -3,6 +3,7 @@ import {
   crossPlatformRelative,
   formatMigrateImportSummary,
   type MigrateImportResult,
+  parseManifest,
   toPosixPath,
 } from "./migrate-import.js";
 
@@ -139,5 +140,75 @@ describe("crossPlatformRelative", () => {
 
   it("returns empty string when paths are equal", () => {
     expect(crossPlatformRelative("/home/user/.openclaw", "/home/user/.openclaw")).toBe("");
+  });
+});
+
+describe("parseManifest", () => {
+  function validManifestJson(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      schemaVersion: 1,
+      kind: "migrate",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      archiveRoot: "openclaw-migrate-2026-01-01",
+      runtimeVersion: "2026.1.1",
+      platform: "linux",
+      nodeVersion: "v22.0.0",
+      components: ["config"],
+      agents: [],
+      paths: {
+        stateDir: "/root/.openclaw",
+        configPath: "/root/.openclaw/openclaw.json",
+        oauthDir: "/root/.openclaw/credentials",
+        workspaceDirs: [],
+      },
+      assets: [
+        {
+          kind: "config",
+          sourcePath: "/root/.openclaw/openclaw.json",
+          archivePath: "openclaw-migrate-2026-01-01/payload/posix/root/.openclaw/openclaw.json",
+        },
+      ],
+      skipped: [],
+      ...overrides,
+    });
+  }
+
+  it("parses a valid manifest", () => {
+    const manifest = parseManifest(validManifestJson());
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.kind).toBe("migrate");
+    expect(manifest.assets).toHaveLength(1);
+    expect(manifest.assets[0].sourcePath).toBe("/root/.openclaw/openclaw.json");
+  });
+
+  it("rejects assets with empty sourcePath", () => {
+    const json = validManifestJson({
+      assets: [{ kind: "config", sourcePath: "", archivePath: "some/path" }],
+    });
+    expect(() => parseManifest(json)).toThrow("missing sourcePath or archivePath");
+  });
+
+  it("rejects assets with empty archivePath", () => {
+    const json = validManifestJson({
+      assets: [{ kind: "config", sourcePath: "/some/path", archivePath: "  " }],
+    });
+    expect(() => parseManifest(json)).toThrow("missing sourcePath or archivePath");
+  });
+
+  it("rejects assets with non-string sourcePath", () => {
+    const json = validManifestJson({
+      assets: [{ kind: "config", sourcePath: 123, archivePath: "some/path" }],
+    });
+    expect(() => parseManifest(json)).toThrow("missing sourcePath or archivePath");
+  });
+
+  it("rejects non-migrate kind", () => {
+    expect(() => parseManifest(validManifestJson({ kind: "backup" }))).toThrow(
+      "not a migration archive",
+    );
+  });
+
+  it("rejects invalid JSON", () => {
+    expect(() => parseManifest("not json")).toThrow("not valid JSON");
   });
 });
