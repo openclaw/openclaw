@@ -799,7 +799,7 @@ export async function sendControlledSubagentMessage(params: {
     };
   }
   const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+  if (!currentEntry || currentEntry.runId !== params.entry.runId) {
     return {
       status: "done" as const,
       runId: params.entry.runId,
