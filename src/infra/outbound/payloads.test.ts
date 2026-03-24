@@ -169,6 +169,17 @@ describe("normalizeOutboundPayloads", () => {
       ]),
     ).toEqual([{ text: "final answer", mediaUrls: [] }]);
   });
+
+  it("formats BTW replies prominently for external delivery", () => {
+    expect(
+      normalizeOutboundPayloads([
+        {
+          text: "323",
+          btw: { question: "what is 17 * 19?" },
+        },
+      ]),
+    ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {

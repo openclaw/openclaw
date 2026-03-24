@@ -3,35 +3,69 @@ import { createMatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixVerificationManager } from "./verification-manager.js";
 
+type MatrixCryptoFacadeDeps = Parameters<typeof createMatrixCryptoFacade>[0];
+
+function createVerificationManagerMock(
+  overrides: Partial<MatrixVerificationManager> = {},
+): MatrixVerificationManager {
+  return {
+    requestOwnUserVerification: vi.fn(async () => null),
+    listVerifications: vi.fn(async () => []),
+    ensureVerificationDmTracked: vi.fn(async () => null),
+    requestVerification: vi.fn(),
+    acceptVerification: vi.fn(),
+    cancelVerification: vi.fn(),
+    startVerification: vi.fn(),
+    generateVerificationQr: vi.fn(),
+    scanVerificationQr: vi.fn(),
+    confirmVerificationSas: vi.fn(),
+    mismatchVerificationSas: vi.fn(),
+    confirmVerificationReciprocateQr: vi.fn(),
+    getVerificationSas: vi.fn(),
+    ...overrides,
+  } as unknown as MatrixVerificationManager;
+}
+
+function createRecoveryKeyStoreMock(
+  summary: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]> = null,
+): MatrixRecoveryKeyStore {
+  return {
+    getRecoveryKeySummary: vi.fn(() => summary),
+  } as unknown as MatrixRecoveryKeyStore;
+}
+
+function createFacadeHarness(params?: {
+  client?: Partial<MatrixCryptoFacadeDeps["client"]>;
+  verificationManager?: Partial<MatrixVerificationManager>;
+  recoveryKeySummary?: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>;
+  getRoomStateEvent?: MatrixCryptoFacadeDeps["getRoomStateEvent"];
+  downloadContent?: MatrixCryptoFacadeDeps["downloadContent"];
+}) {
+  const getRoomStateEvent: MatrixCryptoFacadeDeps["getRoomStateEvent"] =
+    params?.getRoomStateEvent ?? (async () => ({}));
+  const downloadContent: MatrixCryptoFacadeDeps["downloadContent"] =
+    params?.downloadContent ?? (async () => Buffer.alloc(0));
+  const facade = createMatrixCryptoFacade({
+    client: {
+      getRoom: params?.client?.getRoom ?? (() => null),
+      getCrypto: params?.client?.getCrypto ?? (() => undefined),
+    },
+    verificationManager: createVerificationManagerMock(params?.verificationManager),
+    recoveryKeyStore: createRecoveryKeyStoreMock(params?.recoveryKeySummary ?? null),
+    getRoomStateEvent,
+    downloadContent,
+  });
+  return { facade, getRoomStateEvent, downloadContent };
+}
+
 describe("createMatrixCryptoFacade", () => {
   it("detects encrypted rooms from cached room state", async () => {
-    const facade = createMatrixCryptoFacade({
+    const { facade } = createFacadeHarness({
       client: {
         getRoom: () => ({
           hasEncryptionStateEvent: () => true,
         }),
-        getCrypto: () => undefined,
       },
-      verificationManager: {
-        requestOwnUserVerification: vi.fn(),
-        listVerifications: vi.fn(async () => []),
-        ensureVerificationDmTracked: vi.fn(async () => null),
-        requestVerification: vi.fn(),
-        acceptVerification: vi.fn(),
-        cancelVerification: vi.fn(),
-        startVerification: vi.fn(),
-        generateVerificationQr: vi.fn(),
-        scanVerificationQr: vi.fn(),
-        confirmVerificationSas: vi.fn(),
-        mismatchVerificationSas: vi.fn(),
-        confirmVerificationReciprocateQr: vi.fn(),
-        getVerificationSas: vi.fn(),
-      } as unknown as MatrixVerificationManager,
-      recoveryKeyStore: {
-        getRecoveryKeySummary: vi.fn(() => null),
-      } as unknown as MatrixRecoveryKeyStore,
-      getRoomStateEvent: vi.fn(async () => ({ algorithm: "m.megolm.v1.aes-sha2" })),
-      downloadContent: vi.fn(async () => Buffer.alloc(0)),
     });
 
     await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
@@ -41,33 +75,13 @@ describe("createMatrixCryptoFacade", () => {
     const getRoomStateEvent = vi.fn(async () => ({
       algorithm: "m.megolm.v1.aes-sha2",
     }));
-    const facade = createMatrixCryptoFacade({
+    const { facade } = createFacadeHarness({
       client: {
         getRoom: () => ({
           hasEncryptionStateEvent: () => false,
         }),
-        getCrypto: () => undefined,
       },
-      verificationManager: {
-        requestOwnUserVerification: vi.fn(),
-        listVerifications: vi.fn(async () => []),
-        ensureVerificationDmTracked: vi.fn(async () => null),
-        requestVerification: vi.fn(),
-        acceptVerification: vi.fn(),
-        cancelVerification: vi.fn(),
-        startVerification: vi.fn(),
-        generateVerificationQr: vi.fn(),
-        scanVerificationQr: vi.fn(),
-        confirmVerificationSas: vi.fn(),
-        mismatchVerificationSas: vi.fn(),
-        confirmVerificationReciprocateQr: vi.fn(),
-        getVerificationSas: vi.fn(),
-      } as unknown as MatrixVerificationManager,
-      recoveryKeyStore: {
-        getRecoveryKeySummary: vi.fn(() => null),
-      } as unknown as MatrixRecoveryKeyStore,
       getRoomStateEvent,
-      downloadContent: vi.fn(async () => Buffer.alloc(0)),
     });
 
     await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
@@ -92,31 +106,15 @@ describe("createMatrixCryptoFacade", () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }));
-    const facade = createMatrixCryptoFacade({
+    const { facade } = createFacadeHarness({
       client: {
         getRoom: () => null,
         getCrypto: () => crypto,
       },
       verificationManager: {
-        requestOwnUserVerification: vi.fn(async () => null),
-        listVerifications: vi.fn(async () => []),
-        ensureVerificationDmTracked: vi.fn(async () => null),
         requestVerification,
-        acceptVerification: vi.fn(),
-        cancelVerification: vi.fn(),
-        startVerification: vi.fn(),
-        generateVerificationQr: vi.fn(),
-        scanVerificationQr: vi.fn(),
-        confirmVerificationSas: vi.fn(),
-        mismatchVerificationSas: vi.fn(),
-        confirmVerificationReciprocateQr: vi.fn(),
-        getVerificationSas: vi.fn(),
-      } as unknown as MatrixVerificationManager,
-      recoveryKeyStore: {
-        getRecoveryKeySummary: vi.fn(() => ({ keyId: "KEY" })),
-      } as unknown as MatrixRecoveryKeyStore,
-      getRoomStateEvent: vi.fn(async () => ({})),
-      downloadContent: vi.fn(async () => Buffer.alloc(0)),
+      },
+      recoveryKeySummary: { keyId: "KEY" },
     });
 
     const result = await facade.requestVerification({
@@ -174,32 +172,14 @@ describe("createMatrixCryptoFacade", () => {
       requestOwnUserVerification: vi.fn(async () => null),
       findVerificationRequestDMInProgress: vi.fn(() => request),
     };
-    const facade = createMatrixCryptoFacade({
+    const { facade } = createFacadeHarness({
       client: {
         getRoom: () => null,
         getCrypto: () => crypto,
       },
       verificationManager: {
         trackVerificationRequest,
-        requestOwnUserVerification: vi.fn(async () => null),
-        listVerifications: vi.fn(async () => []),
-        ensureVerificationDmTracked: vi.fn(async () => null),
-        requestVerification: vi.fn(),
-        acceptVerification: vi.fn(),
-        cancelVerification: vi.fn(),
-        startVerification: vi.fn(),
-        generateVerificationQr: vi.fn(),
-        scanVerificationQr: vi.fn(),
-        confirmVerificationSas: vi.fn(),
-        mismatchVerificationSas: vi.fn(),
-        confirmVerificationReciprocateQr: vi.fn(),
-        getVerificationSas: vi.fn(),
-      } as unknown as MatrixVerificationManager,
-      recoveryKeyStore: {
-        getRecoveryKeySummary: vi.fn(() => null),
-      } as unknown as MatrixRecoveryKeyStore,
-      getRoomStateEvent: vi.fn(async () => ({})),
-      downloadContent: vi.fn(async () => Buffer.alloc(0)),
+      },
     });
 
     const summary = await facade.ensureVerificationDmTracked({

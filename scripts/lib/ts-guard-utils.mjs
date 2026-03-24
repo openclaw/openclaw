@@ -148,6 +148,21 @@ export function unwrapExpression(expression) {
   }
 }
 
+export function collectCallExpressionLines(ts, sourceFile, resolveLineNode) {
+  const lines = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const lineNode = resolveLineNode(node);
+      if (lineNode) {
+        lines.push(toLine(sourceFile, lineNode));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
 export function isDirectExecution(importMetaUrl) {
   const entry = process.argv[1];
   if (!entry) {
