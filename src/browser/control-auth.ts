@@ -80,7 +80,14 @@ export async function ensureBrowserControlAuth(params: {
   // tokens, so ensureGatewayStartupAuth will not generate a credential.
   // Generate a browser-specific loopback token directly so the browser
   // control server always starts with auth middleware installed.
+  // Skip generation if gateway.auth.token is a SecretRef (object) — the
+  // operator intentionally manages it externally and resolution may have
+  // failed temporarily; overwriting would cause config drift.
   if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
+    const existingTokenValue = latestCfg.gateway?.auth?.token;
+    if (existingTokenValue != null && typeof existingTokenValue !== "string") {
+      return { auth };
+    }
     const generatedToken = crypto.randomBytes(24).toString("hex");
     const nextCfg: OpenClawConfig = {
       ...latestCfg,

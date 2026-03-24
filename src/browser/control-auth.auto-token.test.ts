@@ -142,6 +142,32 @@ describe("ensureBrowserControlAuth", () => {
     expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
   });
 
+  it("preserves SecretRef token in trusted-proxy mode instead of overwriting", async () => {
+    const secretRef = { source: "env" as const, provider: "default", id: "BROWSER_TOKEN" };
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: secretRef,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+        trustedProxies: ["192.168.1.1"],
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    // SecretRef is preserved — no overwrite, no config write.
+    expect(result.generatedToken).toBeUndefined();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("does not regenerate token when trusted-proxy config already has one", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
