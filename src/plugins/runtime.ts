@@ -17,7 +17,7 @@ const state: RegistryState = (() => {
   };
   if (!globalState[REGISTRY_STATE]) {
     globalState[REGISTRY_STATE] = {
-      registry: createEmptyPluginRegistry(),
+      registry: null,
       httpRouteRegistry: null,
       httpRouteRegistryPinned: false,
       key: null,
@@ -100,9 +100,8 @@ export function getActivePluginRegistryVersion(): number {
 }
 
 export function resetPluginRuntimeStateForTest(): void {
-  const emptyRegistry = createEmptyPluginRegistry();
-  state.registry = emptyRegistry;
-  state.httpRouteRegistry = emptyRegistry;
+  state.registry = null;
+  state.httpRouteRegistry = null;
   state.httpRouteRegistryPinned = false;
   state.key = null;
   state.version += 1;
