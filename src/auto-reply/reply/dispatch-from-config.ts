@@ -498,14 +498,11 @@ export async function dispatchReplyFromConfig(params: {
         undefined,
       chatType: sessionStoreEntry.entry?.chatType,
     });
-    if (sendPolicy === "deny" && !bypassAcpForCommand) {
+    const suppressDelivery = sendPolicy === "deny" && !bypassAcpForCommand;
+    if (suppressDelivery) {
       logVerbose(
-        `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
+        `Send policy deny: delivery suppressed for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} (agent will still process inbound)`,
       );
-      const counts = dispatcher.getQueuedCounts();
-      recordProcessed("completed", { reason: "send_policy_deny" });
-      markIdle("message_completed");
-      return { queuedFinal: false, counts };
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
@@ -586,6 +583,9 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            if (suppressDelivery) {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
@@ -608,6 +608,9 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            if (suppressDelivery) {
+              return;
+            }
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -672,6 +675,15 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+
+    // When sendPolicy denies delivery, the agent has already processed the inbound
+    // message (context, memory, tool calls). Skip only the outbound delivery step.
+    if (suppressDelivery) {
+      const counts = dispatcher.getQueuedCounts();
+      recordProcessed("completed", { reason: "send_policy_deny" });
+      markIdle("message_completed");
+      return { queuedFinal: false, counts };
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;
