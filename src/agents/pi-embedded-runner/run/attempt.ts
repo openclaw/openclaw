@@ -59,7 +59,11 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { clampOllamaNumCtx, createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
+import {
+  clampOllamaNumCtx,
+  createConfiguredOllamaStreamFn,
+  resolveOllamaContextWindowTokens,
+} from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
@@ -2205,12 +2209,15 @@ export async function runEmbeddedAttempt(
       };
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
-        contextWindowTokens: Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-          ),
-        ),
+        contextWindowTokens:
+          params.model.api === "ollama"
+            ? resolveOllamaContextWindowTokens(params.model)
+            : Math.max(
+                1,
+                Math.floor(
+                  params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+                ),
+              ),
       });
       const cacheTrace = createCacheTrace({
         cfg: params.config,

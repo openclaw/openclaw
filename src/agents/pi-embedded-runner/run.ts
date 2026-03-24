@@ -45,6 +45,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveOllamaContextWindowTokens } from "../ollama-stream.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
@@ -392,7 +393,10 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         provider,
         modelId,
-        modelContextWindow: runtimeModel.contextWindow,
+        modelContextWindow:
+          runtimeModel.api === "ollama"
+            ? resolveOllamaContextWindowTokens(runtimeModel)
+            : runtimeModel.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       });
       // Apply contextTokens cap to model so pi-coding-agent's auto-compaction

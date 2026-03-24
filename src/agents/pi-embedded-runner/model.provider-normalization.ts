@@ -1,7 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { resolveOllamaContextWindowTokens } from "../ollama-stream.js";
 
 function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -30,24 +29,11 @@ function normalizeOpenAITransport(params: { provider: string; model: Model<Api> 
   } as Model<Api>;
 }
 
-function normalizeNativeOllamaContextWindow(params: { model: Model<Api> }): Model<Api> {
-  if (params.model.api !== "ollama") {
-    return params.model;
-  }
-
-  return {
-    ...params.model,
-    contextWindow: resolveOllamaContextWindowTokens(params.model),
-  } as Model<Api>;
-}
-
 export function applyBuiltInResolvedProviderTransportNormalization(params: {
   provider: string;
   model: Model<Api>;
 }): Model<Api> {
-  return normalizeNativeOllamaContextWindow({
-    model: normalizeOpenAITransport(params),
-  });
+  return normalizeOpenAITransport(params);
 }
 
 export function normalizeResolvedProviderModel(params: {

@@ -3,6 +3,7 @@ import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-a
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolveOllamaContextWindowTokens } from "../ollama-stream.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
@@ -22,7 +23,10 @@ function resolveContextWindowTokens(params: {
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
-    modelContextWindow: params.model?.contextWindow,
+    modelContextWindow:
+      params.model?.api === "ollama"
+        ? resolveOllamaContextWindowTokens(params.model)
+        : params.model?.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   }).tokens;
 }
@@ -72,16 +76,10 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const contextWindowInfo = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextWindow: params.model?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
+    const contextWindowTokens = resolveContextWindowTokens(params);
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       identifierInstructions: compactionCfg?.identifierInstructions,
       customInstructions: compactionCfg?.customInstructions,

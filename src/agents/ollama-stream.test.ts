@@ -5,6 +5,7 @@ import {
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
+  resolveOllamaContextWindowTokens,
   resolveOllamaBaseUrlForRun,
 } from "./ollama-stream.js";
 
@@ -566,6 +567,20 @@ describe("resolveOllamaBaseUrlForRun", () => {
 
   it("falls back to native default when neither baseUrl is configured", () => {
     expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
+  });
+});
+
+describe("resolveOllamaContextWindowTokens", () => {
+  it("uses configured num_ctx when contextWindow is absent", () => {
+    expect(resolveOllamaContextWindowTokens({ options: { num_ctx: 32768 } })).toBe(32768);
+  });
+
+  it("uses the native default when contextWindow and num_ctx are absent", () => {
+    expect(resolveOllamaContextWindowTokens({})).toBe(65536);
+  });
+
+  it("caps oversized contextWindow to the native request ceiling", () => {
+    expect(resolveOllamaContextWindowTokens({ contextWindow: 200000 })).toBe(131072);
   });
 });
 
