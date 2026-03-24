@@ -142,6 +142,8 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllTimers();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -815,6 +817,48 @@ describe("handleCommands owner gating for privileged show commands", () => {
       const result = await handleCommands(testCase.build());
       testCase.assert(result);
     }
+  });
+
+  it("returns an explicit unauthorized reply for native privileged commands", async () => {
+    const configParams = buildParams(
+      "/config show",
+      {
+        commands: { config: true, text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    configParams.command.senderIsOwner = false;
+
+    const configResult = await handleCommands(configParams);
+    expect(configResult).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+
+    const pluginParams = buildParams(
+      "/plugins list",
+      {
+        commands: { plugins: true, text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    pluginParams.command.senderIsOwner = false;
+
+    const pluginResult = await handleCommands(pluginParams);
+    expect(pluginResult).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
   });
 });
 

@@ -11,11 +11,34 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+
+type PiToolsModule = typeof import("../pi-tools.js");
+type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type MockOpenClawToolsOptions = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  modelHasVision?: boolean;
+};
+
+const piToolsHarness = vi.hoisted(() => ({
+  createStubTool(name: string) {
+    return {
+      name,
+      description: `${name} stub`,
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    };
+  },
+}));
 
 const imageProviderHarness = vi.hoisted(() => {
   let providers = new Map<string, MediaUnderstandingProvider>();
@@ -63,6 +86,50 @@ vi.mock("../../media-understanding/provider-registry.js", async (importOriginal)
   };
 });
 
+vi.mock("../bash-tools.js", () => ({
+  createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
+  createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+}));
+
+vi.mock("../channel-tools.js", () => ({
+  listChannelAgentTools: vi.fn(() => []),
+}));
+
+vi.mock("../apply-patch.js", () => ({
+  createApplyPatchTool: vi.fn(() => piToolsHarness.createStubTool("apply_patch")),
+}));
+
+vi.mock("../pi-tools.before-tool-call.js", () => ({
+  wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
+}));
+
+vi.mock("../pi-tools.abort.js", () => ({
+  wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+vi.mock("../openclaw-tools.js", async () => {
+  const { createImageTool } = await import("./image-tool.js");
+  return {
+    createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
+      const imageTool = createImageTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        workspaceDir: options?.workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? {
+                root: options.sandboxRoot,
+                bridge: options.sandboxFsBridge,
+              }
+            : undefined,
+        fsPolicy: options?.fsPolicy,
+        modelHasVision: options?.modelHasVision,
+      });
+      return imageTool ? [imageTool] : [];
+    }),
+  };
+});
+
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
@@ -70,6 +137,12 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
     `${JSON.stringify(profiles, null, 2)}\n`,
     "utf8",
   );
+}
+
+async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
+  vi.resetModules();
+  const { createOpenClawCodingTools } = await import("../pi-tools.js");
+  return createOpenClawCodingTools(options);
 }
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -88,8 +161,10 @@ const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
+  options?: { parentDir?: string },
 ) {
-  const workspaceParent = await fs.mkdtemp(path.join(process.cwd(), ".openclaw-workspace-image-"));
+  const parentDir = options?.parentDir ?? os.tmpdir();
+  const workspaceParent = await fs.mkdtemp(path.join(parentDir, "openclaw-workspace-image-"));
   try {
     const workspaceDir = path.join(workspaceParent, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -300,6 +375,14 @@ const moonshotProvider = {
 
 function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
   imageProviderHarness.setProviders(providers);
+  __testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  });
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -408,6 +491,7 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -715,13 +799,17 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
-    await withTempWorkspacePng(async ({ imagePath }) => {
+  it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
-        const tools = createOpenClawCodingTools({ config: cfg, agentDir });
+        const tools = await createOpenClawCodingToolsWithFreshModules({
+          config: cfg,
+          agentDir,
+          workspaceDir,
+        });
         const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
 
         await expectImageToolExecOk(tool, imagePath);
@@ -765,7 +853,7 @@ describe("image tool implicit imageModel config", () => {
         tools: { fs: { workspaceOnly: true } },
       };
 
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsWithFreshModules({
         config: cfg,
         agentDir,
         sandbox,
@@ -858,6 +946,7 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {

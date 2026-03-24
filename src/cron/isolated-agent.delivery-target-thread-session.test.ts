@@ -4,47 +4,41 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const mockStore: Record<string, Record<string, unknown>> = {};
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
-  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
-  resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
-}));
-
-vi.mock("../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: vi.fn(async () => ({ channel: "telegram" })),
-}));
-
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: vi.fn(() => ({
-    meta: { label: "Telegram" },
-    config: {},
-    messaging: {
-      parseExplicitTarget: ({ raw }: { raw: string }) => {
-        const target = parseTelegramTarget(raw);
-        return {
-          to: target.chatId,
-          threadId: target.messageThreadId,
-          chatType: target.chatType === "unknown" ? undefined : target.chatType,
-        };
+let resolveDeliveryTarget: typeof import("./isolated-agent/delivery-target.js").resolveDeliveryTarget;
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doMock("../config/sessions.js", () => ({
+    loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
+    resolveAgentMainSessionKey: vi.fn(
+      ({ agentId }: { agentId: string }) => `agent:${agentId}:main`,
+    ),
+    resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
+  }));
+  vi.doMock("../infra/outbound/channel-selection.js", () => ({
+    resolveMessageChannelSelection: vi.fn(async () => ({ channel: "telegram" })),
+  }));
+  vi.doMock("../channels/plugins/index.js", () => ({
+    getChannelPlugin: vi.fn(() => ({
+      meta: { label: "Telegram" },
+      config: {},
+      messaging: {
+        parseExplicitTarget: ({ raw }: { raw: string }) => {
+          const target = parseTelegramTarget(raw);
+          return {
+            to: target.chatId,
+            threadId: target.messageThreadId,
+            chatType: target.chatType === "unknown" ? undefined : target.chatType,
+          };
+        },
       },
-    },
-    outbound: {
-      resolveTarget: ({ to }: { to?: string }) =>
-        to ? { ok: true, to } : { ok: false, error: new Error("missing") },
-    },
-  })),
-  normalizeChannelId: vi.fn((id: string) => id),
-}));
-
-const mockedModuleIds = [
-  "../channels/plugins/index.js",
-  "../config/sessions.js",
-  "../infra/outbound/channel-selection.js",
-];
-
-const { resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js");
-
-beforeEach(() => {
+      outbound: {
+        resolveTarget: ({ to }: { to?: string }) =>
+          to ? { ok: true, to } : { ok: false, error: new Error("missing") },
+      },
+    })),
+    normalizeChannelId: vi.fn((id: string) => id),
+  }));
+  ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
   vi.clearAllMocks();
   for (const key of Object.keys(mockStore)) {
     delete mockStore[key];
@@ -53,9 +47,6 @@ beforeEach(() => {
 
 afterAll(() => {
   vi.restoreAllMocks();
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
   vi.resetModules();
 });
 

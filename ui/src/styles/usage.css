@@ -17,11 +17,8 @@
   animation: rise 0.25s var(--ease-out) backwards;
 }
 
-.usage-page .btn.btn-sm,
-.usage-page button.btn-sm {
+.usage-page .btn.btn--sm {
   min-height: 30px;
-  padding: 7px 11px;
-  font-size: 12px;
   line-height: 1.15;
 }
 
@@ -104,7 +101,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent-subtle);
   color: var(--accent);
   font-size: 12px;
@@ -120,7 +117,7 @@
   height: 12px;
   border: 2px solid currentcolor;
   border-right-color: transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   animation: usage-spin 0.8s linear infinite;
 }
 
@@ -155,7 +152,7 @@
 
 .usage-skeleton-block {
   min-height: 96px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: linear-gradient(90deg, var(--bg-muted) 20%, var(--bg-hover) 50%, var(--bg-muted) 80%);
   background-size: 200% 100%;
@@ -199,7 +196,7 @@
 .usage-filters-inline input[type="text"] {
   min-height: 36px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   font: inherit;
@@ -245,7 +242,7 @@
   gap: 6px;
   padding: 7px 11px;
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
   font-size: 12px;
   color: var(--text);
@@ -255,53 +252,8 @@
   color: var(--text-strong);
 }
 
-.usage-pin-btn,
-.usage-export-button,
-.usage-action-btn,
-.session-copy-btn,
-.context-expand-btn,
-.session-close-btn {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--secondary);
-  color: var(--secondary-foreground);
-  cursor: pointer;
-  transition:
-    transform 0.18s var(--ease-out),
-    border-color 0.18s var(--ease-out),
-    background 0.18s var(--ease-out),
-    color 0.18s var(--ease-out),
-    box-shadow 0.18s var(--ease-out);
-}
-
-.usage-pin-btn,
-.usage-export-button,
-.context-expand-btn,
-.session-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.usage-pin-btn:hover,
-.usage-export-button:hover,
-.usage-action-btn:hover,
-.session-copy-btn:hover,
-.context-expand-btn:hover,
-.session-close-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--secondary));
-  color: var(--text-strong);
-}
-
+/* Toggle-btn active state layers on .btn for segmented controls */
 .usage-pin-btn.active,
-.usage-action-btn.usage-primary-btn,
 .chart-toggle .toggle-btn.active {
   border-color: var(--accent);
   background: var(--accent);
@@ -309,17 +261,10 @@
   box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.usage-primary-btn:disabled,
-.usage-secondary-btn:disabled,
 .usage-export-item:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
-}
-
-.usage-secondary-btn {
-  background: var(--secondary);
-  color: var(--secondary-foreground);
 }
 
 .usage-query-section {
@@ -356,7 +301,7 @@ details.usage-filter-select,
 }
 
 details.usage-filter-select summary,
-.usage-export-button {
+.usage-export-menu summary {
   list-style: none;
 }
 
@@ -372,7 +317,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   min-height: 34px;
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   cursor: pointer;
@@ -396,7 +341,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent-subtle);
   color: var(--accent);
   font-size: 11px;
@@ -411,7 +356,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: min(320px, calc(100vw - 48px));
   padding: 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
@@ -434,7 +379,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-muted) 72%, transparent);
   font-size: 12px;
 }
@@ -448,7 +393,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   min-height: 36px;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   text-align: left;
@@ -483,7 +428,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
   color: var(--text);
@@ -551,7 +496,7 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-empty-block {
   padding: 20px 14px;
   border: 1px dashed var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-muted) 62%, transparent);
   text-align: center;
   color: var(--muted);
@@ -605,7 +550,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   grid-auto-rows: min-content;
   min-height: 132px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--card) 92%, var(--bg-elevated)) 0%,
@@ -698,7 +643,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: 18px;
   height: 18px;
   margin-left: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
   color: var(--muted);
@@ -720,7 +665,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   min-height: 168px;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 82%, var(--bg-muted));
 }
 
@@ -819,7 +764,7 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-daypart-cell,
 .usage-hour-cell {
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
@@ -948,7 +893,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: min(100%, var(--bar-max-width));
   min-height: 6px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
-  border-radius: 10px 10px 4px 4px;
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-sm) var(--radius-sm);
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--accent) 82%, white 6%),
@@ -990,7 +935,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   max-width: 220px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-md);
@@ -1013,7 +958,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: 100%;
   min-height: 16px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
   border: 1px solid var(--border);
 }
@@ -1049,7 +994,7 @@ details.usage-filter-select summary::-webkit-details-marker,
 .legend-dot {
   width: 10px;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 .cost-segment.output,
@@ -1118,7 +1063,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   min-height: 34px;
   padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
 }
@@ -1149,7 +1094,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 86%, var(--bg-muted));
   cursor: pointer;
   transition:
@@ -1192,10 +1137,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
-}
-
-.session-copy-btn {
-  min-width: 58px;
 }
 
 .session-bar-value {
@@ -1244,18 +1185,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-size: 13px;
 }
 
-.session-close-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 10px;
-  font-size: 18px;
-  line-height: 1;
-}
-
 .session-detail-content,
 .session-detail-row,
 .session-detail-bottom {
@@ -1280,7 +1209,7 @@ details.usage-filter-select summary::-webkit-details-marker,
 .session-logs-compact {
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 88%, var(--bg-muted));
 }
 
@@ -1351,7 +1280,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   display: flex;
   min-height: 18px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
 }
@@ -1367,7 +1296,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--bg);
 }
 
@@ -1422,7 +1351,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--bg);
 }
 
@@ -1476,7 +1405,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   display: inline-flex;
   align-items: center;
   padding: 6px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
   border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
   font-size: 11px;
@@ -1551,7 +1480,7 @@ details.usage-filter-select summary::-webkit-details-marker,
     align-items: flex-start;
     padding: 12px 14px;
     border: 1px solid color-mix(in srgb, var(--danger) 16%, var(--border));
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--danger) 5%, var(--bg-muted));
     flex-direction: column;
     gap: 4px;
