@@ -1,0 +1,39 @@
+[
+  {
+    "name": "registered fenced json tool call is promoted",
+    "content": "I can do that.\n```json\n{\"name\":\"bash\",\"arguments\":{\"command\":\"ls -la\"}}\n```",
+    "allowedTools": ["bash"],
+    "expectedToolCalls": [
+      {
+        "function": {
+          "name": "bash",
+          "arguments": {
+            "command": "ls -la"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "unregistered fenced json tool call is ignored",
+    "content": "```json\n{\"name\":\"dangerous_tool\",\"arguments\":{\"command\":\"rm -rf /\"}}\n```",
+    "allowedTools": ["bash"],
+    "expectedToolCalls": []
+  },
+  {
+    "name": "unsafe integer arguments are preserved as strings",
+    "content": "```json\n{\"name\":\"bash\",\"arguments\":{\"thread\":9223372036854775807,\"command\":\"ls\"}}\n```",
+    "allowedTools": ["bash"],
+    "expectedToolCalls": [
+      {
+        "function": {
+          "name": "bash",
+          "arguments": {
+            "thread": "9223372036854775807",
+            "command": "ls"
+          }
+        }
+      }
+    ]
+  }
+]
