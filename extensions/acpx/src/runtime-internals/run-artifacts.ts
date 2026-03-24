@@ -95,8 +95,12 @@ async function allocateRunId(rootDir: string, seed: string): Promise<string> {
     try {
       await mkdir(candidateDir, { recursive: false });
       return candidate;
-    } catch {
-      // try next suffix
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+      // directory already exists — try next suffix
     }
   }
   const timestampCandidate = `${normalized}--${Date.now()}`;
@@ -299,7 +303,11 @@ export async function finalizeRun(params: {
     error_ref: finalState === "completed" ? null : terminalRef,
   });
 
-  await updateRoute(params.artifacts, {
-    state: finalState,
-  });
+  try {
+    await updateRoute(params.artifacts, {
+      state: finalState,
+    });
+  } catch {
+    // Preserve terminal.json as strongest terminal truth; route.json is a best-effort mirror.
+  }
 }
