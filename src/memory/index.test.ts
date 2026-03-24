@@ -990,6 +990,42 @@ describe("memory index", () => {
     await manager.close?.();
   });
 
+  it("reuses prepared sqlite statements during builtin memory sync", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "beta line\n");
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-prepare-reuse-${randomUUID()}.sqlite`),
+      onSearch: false,
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let selectFileHashPrepareCalls = 0;
+    db.prepare = ((sql: string) => {
+      if (sql === `SELECT hash FROM files WHERE path = ? AND source = ?`) {
+        selectFileHashPrepareCalls += 1;
+      }
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+
+    try {
+      await manager.sync({ reason: "test" });
+    } finally {
+      db.prepare = originalPrepare;
+    }
+
+    expect(selectFileHashPrepareCalls).toBe(1);
+  });
+
   it("reindexes when Gemini outputDimensionality changes", async () => {
     const base = createCfg({
       storePath: indexModelPath,
