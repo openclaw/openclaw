@@ -22,7 +22,9 @@ beforeEach(async () => {
     await import("./server-context.remote-tab-ops.harness.js"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
+  await closePlaywrightBrowserConnection().catch(() => {});
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
