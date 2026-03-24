@@ -54,6 +54,10 @@ import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-pl
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+} from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -1184,6 +1188,7 @@ export async function startGatewayServer(
         logTailscale,
       });
 
+  let pinnedChannelRegistry = false;
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
     if (deferredConfiguredChannelPluginIds.length > 0) {
@@ -1196,17 +1201,25 @@ export async function startGatewayServer(
         logDiagnostics: false,
       }));
     }
-    ({ browserControl, pluginServices } = await startGatewaySidecars({
-      cfg: cfgAtStart,
-      pluginRegistry,
-      defaultWorkspaceDir,
-      deps,
-      startChannels,
-      log,
-      logHooks,
-      logChannels,
-      logBrowser,
-    }));
+    pinActivePluginChannelRegistry(pluginRegistry);
+    pinnedChannelRegistry = true;
+    try {
+      ({ browserControl, pluginServices } = await startGatewaySidecars({
+        cfg: cfgAtStart,
+        pluginRegistry,
+        defaultWorkspaceDir,
+        deps,
+        startChannels,
+        log,
+        logHooks,
+        logChannels,
+        logBrowser,
+      }));
+    } catch (err) {
+      releasePinnedPluginChannelRegistry(pluginRegistry);
+      pinnedChannelRegistry = false;
+      throw err;
+    }
   }
 
   // Run gateway_start plugin hook (fire-and-forget)
@@ -1300,6 +1313,14 @@ export async function startGatewayServer(
         });
       })();
 
+  const releasePinnedChannelRegistry = () => {
+    if (!pinnedChannelRegistry) {
+      return;
+    }
+    releasePinnedPluginChannelRegistry(pluginRegistry);
+    pinnedChannelRegistry = false;
+  };
+
   const close = createGatewayCloseHandler({
     bonjourStop,
     tailscaleCleanup,
@@ -1351,6 +1372,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      releasePinnedChannelRegistry();
       await close(opts);
     },
   };
