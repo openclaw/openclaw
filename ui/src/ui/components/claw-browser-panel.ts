@@ -214,161 +214,34 @@ export class ClawBrowserPanel extends LitElement {
       position: relative;
     }
 
-    .browser-controls {
+    .browser-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 72px;
+      cursor: grab;
+      z-index: 20;
+      pointer-events: auto;
       background: var(--card);
-      border-bottom: 1px solid var(--border);
-      padding: 8px 12px;
+      border-radius: 6px 6px 0 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      z-index: 101;
+      border-bottom: 1px solid var(--border);
     }
-    .control-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .control-row label {
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-    }
-    .control-row input {
-      padding: 4px 8px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--bg-accent);
-      color: var(--text);
-      font-size: 12px;
-      outline: none;
-    }
-    .port-input {
-      width: 60px;
-    }
-    .url-input {
-      flex: 1;
-    }
-    .control-row button {
-      padding: 4px 12px;
-      border: none;
-      border-radius: 4px;
-      background: var(--accent);
-      color: white;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .control-row button:hover {
-      opacity: 0.9;
-    }
-    .control-row button:disabled {
-      background: var(--muted);
-      cursor: not-allowed;
-    }
-    .status-text {
-      font-size: 11px;
-      color: var(--muted);
-      margin-left: 4px;
+    .browser-header:active {
+      cursor: grabbing;
     }
 
-    .tabs-bar {
-      display: flex;
-      gap: 4px;
-      overflow-x: auto;
-      padding: 2px 0;
-    }
-    .tab-item {
+    .header-row-tabs {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      background: var(--bg-accent);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      font-size: 11px;
-      cursor: pointer;
-      max-width: 150px;
-      white-space: nowrap;
-      color: var(--muted);
-    }
-    .tab-item.active {
-      background: var(--accent);
-      color: white;
-      border-color: var(--accent);
-    }
-    .tab-title {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .tab-close {
-      opacity: 0.6;
-      font-size: 14px;
-      line-height: 1;
-    }
-    .tab-close:hover {
-      opacity: 1;
-      color: #ff5f56;
+      height: 36px;
+      padding: 0 10.8px;
+      gap: 12px;
     }
 
-    .screen-container {
-      flex: 1;
-      width: 100%;
-      height: 100%;
-      background: var(--bg-accent);
-      overflow: hidden;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding-top: 50px;
-      box-sizing: border-box;
-    }
-    .screen {
-      width: auto;
-      height: auto;
-      max-width: 100%;
-      max-height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 5.4px;
-      padding-top: 32.4px;
-      background: var(--vnc-window-bg);
-      border-radius: 6px;
-      box-shadow:
-        0 0 0 1px var(--vnc-border-color, var(--border)),
-        0 20px 50px rgba(0, 0, 0, 0.4);
-      box-sizing: border-box;
-      position: relative;
-      pointer-events: none;
-    }
-    .screen > *:not(.drag-handle):not(.window-controls):not(.resize-handle) {
-      pointer-events: auto;
-    }
-    .screen.dragging > *:not(.drag-handle):not(.window-controls):not(.resize-handle) {
-      pointer-events: none !important;
-    }
-    .screen.dragging canvas {
-      pointer-events: none !important;
-    }
-    .screen canvas {
-      max-width: 100% !important;
-      max-height: 100% !important;
-      width: auto !important;
-      height: auto !important;
-      outline: none;
-      display: block;
-      margin: auto !important;
-      background: #000;
-      border-radius: 0;
-      box-shadow: none;
-      pointer-events: auto !important;
-      cursor: crosshair;
-      z-index: 10;
-    }
     .window-controls {
-      position: absolute;
-      top: 10.8px;
-      left: 10.8px;
       display: flex;
       gap: 7.2px;
       z-index: 25;
@@ -394,6 +267,185 @@ export class ClawBrowserPanel extends LitElement {
     }
     .window-control.minimize {
       background-color: #ffbd2e;
+    }
+
+    .tabs-bar {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      flex: 1;
+      height: 100%;
+      align-items: flex-end;
+      padding-top: 4px;
+      /* hide scrollbar */
+      scrollbar-width: none;
+    }
+    .tabs-bar::-webkit-scrollbar {
+      display: none;
+    }
+    .tab-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--bg-accent);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      font-size: 11px;
+      cursor: pointer;
+      min-width: 80px;
+      max-width: 150px;
+      white-space: nowrap;
+      color: var(--muted);
+      position: relative;
+      flex: 1 1 0;
+    }
+    .tab-item.active {
+      background: var(--vnc-window-bg);
+      color: var(--text);
+      z-index: 2;
+    }
+    .tab-item.active::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--vnc-window-bg);
+    }
+    .tab-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    .tab-close {
+      opacity: 0.6;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .tab-close:hover {
+      opacity: 1;
+      color: #ff5f56;
+    }
+
+    .new-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 8px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      margin-bottom: 2px;
+      opacity: 0.7;
+    }
+    .new-tab-btn:hover {
+      background: var(--bg-hover);
+      opacity: 1;
+    }
+    .new-tab-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.3;
+    }
+
+    .header-row-nav {
+      display: flex;
+      align-items: center;
+      height: 36px;
+      padding: 0 10.8px;
+      gap: 8px;
+      background: var(--vnc-window-bg);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .url-input {
+      flex: 1;
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-accent);
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+    .nav-btn {
+      padding: 4px 12px;
+      border: none;
+      border-radius: 4px;
+      background: var(--accent);
+      color: white;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .nav-btn:hover {
+      opacity: 0.9;
+    }
+    .nav-btn:disabled {
+      background: var(--muted);
+      cursor: not-allowed;
+    }
+
+    .screen-container {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      background: var(--bg-accent);
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: 50px;
+      box-sizing: border-box;
+    }
+    .screen {
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5.4px;
+      padding-top: 72px; /* Increased to accommodate the new 2-row header */
+      background: var(--vnc-window-bg);
+      border-radius: 6px;
+      box-shadow:
+        0 0 0 1px var(--vnc-border-color, var(--border)),
+        0 20px 50px rgba(0, 0, 0, 0.4);
+      box-sizing: border-box;
+      position: relative;
+      pointer-events: none;
+    }
+    .screen > *:not(.browser-header):not(.resize-handle) {
+      pointer-events: auto;
+    }
+    .screen.dragging > *:not(.browser-header):not(.resize-handle) {
+      pointer-events: none !important;
+    }
+    .screen.dragging canvas {
+      pointer-events: none !important;
+    }
+    .screen canvas {
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+      outline: none;
+      display: block;
+      margin: auto !important;
+      background: #000;
+      border-radius: 0;
+      box-shadow: none;
+      pointer-events: auto !important;
+      cursor: crosshair;
+      z-index: 10;
     }
     .screen.floating {
       position: fixed;
@@ -449,20 +501,6 @@ export class ClawBrowserPanel extends LitElement {
       stroke-linecap: round;
       stroke-linejoin: round;
     }
-    .drag-handle {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 32.4px;
-      cursor: grab;
-      z-index: 20;
-      pointer-events: auto;
-      background: transparent;
-    }
-    .drag-handle:active {
-      cursor: grabbing;
-    }
     .resize-handle {
       position: absolute;
       background: transparent;
@@ -487,44 +525,6 @@ export class ClawBrowserPanel extends LitElement {
 
     return html`
       <div class="container" tabindex="0">
-        <div class="browser-controls">
-          <div class="control-row">
-            <button @click=${() => void this.connect()} ?disabled=${this.wsConnected}>连接</button>
-            <button @click=${() => this.disconnect()} ?disabled=${!this.wsConnected}>断开</button>
-            <span class="status-text">${this.status} (端口: ${this.browserPort})</span>
-          </div>
-          <div class="control-row">
-            <input 
-              class="url-input" 
-              .value=${this.currentUrl} 
-              @input=${(e: Event) => {
-                this.currentUrl = (e.target as HTMLInputElement).value;
-              }}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") {
-                  void this.handleNavigate();
-                }
-              }}
-              placeholder="输入网址跳转"
-            />
-            <button @click=${() => void this.handleNavigate()} ?disabled=${!this.wsConnected}>跳转</button>
-            <button @click=${() => void this.handleNewTab()} ?disabled=${!this.wsConnected}>新标签页</button>
-          </div>
-          <div class="tabs-bar">
-            ${this.tabs.map(
-              (tab) => html`
-              <div 
-                class="tab-item ${tab.sessionId === this.currentSessionId ? "active" : ""}" 
-                @click=${() => void this.switchTab(tab)}
-              >
-                <span class="tab-title" title=${tab.url}>${tab.title || tab.url || "New Tab"}</span>
-                <span class="tab-close" @click=${(e: Event) => void this.handleCloseTab(e, tab)}>×</span>
-              </div>
-            `,
-            )}
-          </div>
-        </div>
-
         <div class="screen-container">
           ${
             !displayFloating
@@ -557,6 +557,63 @@ export class ClawBrowserPanel extends LitElement {
             style="${screenStyle}"
             tabindex="0"
           >
+            <div class="browser-header" @mousedown=${this.handleDragStart}>
+              <div class="header-row-tabs">
+                <div class="window-controls" @mousedown=${(e: Event) => e.stopPropagation()}>
+                  <div class="window-control close" @click=${() => this.dispatchEvent(new CustomEvent("close"))}></div>
+                  <div class="window-control minimize"></div>
+                  <div class="window-control maximize" @click=${() => {
+                    void (
+                      this.shadowRoot?.querySelector(".screen-container") as HTMLElement
+                    )?.requestFullscreen();
+                  }}></div>
+                </div>
+                <div class="tabs-bar">
+                  ${this.tabs.map(
+                    (tab) => html`
+                    <div 
+                      class="tab-item ${tab.sessionId === this.currentSessionId ? "active" : ""}" 
+                      @click=${() => void this.switchTab(tab)}
+                      @mousedown=${(e: Event) => e.stopPropagation()}
+                    >
+                      <span class="tab-title" title=${tab.url}>${tab.title || tab.url || "New Tab"}</span>
+                      <span class="tab-close" @click=${(e: Event) => void this.handleCloseTab(e, tab)}>×</span>
+                    </div>
+                  `,
+                  )}
+                  <button 
+                    class="new-tab-btn" 
+                    @click=${() => void this.handleNewTab()} 
+                    @mousedown=${(e: Event) => e.stopPropagation()}
+                    ?disabled=${!this.wsConnected}
+                  >+</button>
+                </div>
+              </div>
+              <div class="header-row-nav">
+                <input 
+                  class="url-input" 
+                  .value=${this.wsConnected ? this.currentUrl : ""} 
+                  @input=${(e: Event) => {
+                    this.currentUrl = (e.target as HTMLInputElement).value;
+                  }}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === "Enter") {
+                      void this.handleNavigate();
+                    }
+                  }}
+                  @mousedown=${(e: Event) => e.stopPropagation()}
+                  placeholder=${this.wsConnected ? "输入网址跳转" : this.status}
+                  ?disabled=${!this.wsConnected}
+                />
+                <button 
+                  class="nav-btn" 
+                  @click=${() => void this.handleNavigate()} 
+                  @mousedown=${(e: Event) => e.stopPropagation()}
+                  ?disabled=${!this.wsConnected}
+                >跳转</button>
+              </div>
+            </div>
+
             <canvas
               ${ref(this.canvasRef)}
               width=${this.pageMeta.width}
@@ -578,16 +635,6 @@ export class ClawBrowserPanel extends LitElement {
               @keydown=${this.handleImeKeyDown}
               @keyup=${this.handleImeKeyUp}
             ></textarea>
-            <div class="drag-handle" @mousedown=${this.handleDragStart}></div>
-            <div class="window-controls">
-              <div class="window-control close" @click=${() => this.dispatchEvent(new CustomEvent("close"))}></div>
-              <div class="window-control minimize"></div>
-              <div class="window-control maximize" @click=${() => {
-                void (
-                  this.shadowRoot?.querySelector(".screen-container") as HTMLElement
-                )?.requestFullscreen();
-              }}></div>
-            </div>
             ${displayFloating ? html`<div class="resize-handle bottom-right" @mousedown=${(e: MouseEvent) => this.handleResizeStart(e, "bottom-right")}></div>` : null}
           </div>
         </div>
