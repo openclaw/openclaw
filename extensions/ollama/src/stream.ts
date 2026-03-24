@@ -689,10 +689,35 @@ export function createOllamaStreamFn(
         let accumulatedContent = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
+        const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+        let streamStarted = false;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
+            const delta = chunk.message.content;
+
+            if (!streamStarted) {
+              streamStarted = true;
+              // Emit start/text_start with an empty partial before accumulating
+              // the first delta, matching the Anthropic/OpenAI provider contract.
+              const emptyPartial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: [],
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({ type: "start", partial: emptyPartial });
+              stream.push({ type: "text_start", contentIndex: 0, partial: emptyPartial });
+            }
+
+            accumulatedContent += delta;
+            const partial = buildStreamAssistantMessage({
+              model: modelInfo,
+              content: [{ type: "text", text: accumulatedContent }],
+              stopReason: "stop",
+              usage: buildUsageWithNoCost({}),
+            });
+            stream.push({ type: "text_delta", contentIndex: 0, delta, partial });
           }
           if (chunk.message?.tool_calls) {
             accumulatedToolCalls.push(...chunk.message.tool_calls);
@@ -712,11 +737,18 @@ export function createOllamaStreamFn(
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        });
+        const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
+
+        // Close the text block if we emitted any text_delta events.
+        if (streamStarted) {
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: accumulatedContent,
+            partial: assistantMessage,
+          });
+        }
+
         stream.push({
           type: "done",
           reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",

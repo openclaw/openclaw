@@ -365,6 +365,139 @@ async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
   return events;
 }
 
+describe("createOllamaStreamFn streaming events", () => {
+  it("emits start, text_start, text_delta, text_end, done for text responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" world"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        expect(types).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
+
+        // text_delta events carry incremental deltas
+        const deltas = events.filter((e) => e.type === "text_delta");
+        expect(deltas[0]).toMatchObject({ contentIndex: 0, delta: "Hello" });
+        expect(deltas[1]).toMatchObject({ contentIndex: 0, delta: " world" });
+
+        // text_end carries the full accumulated content
+        const textEnd = events.find((e) => e.type === "text_end");
+        expect(textEnd).toMatchObject({ contentIndex: 0, content: "Hello world" });
+
+        // start/text_start carry empty partials (before any content accumulates)
+        const startEvent = events.find((e) => e.type === "start");
+        expect(startEvent?.partial.content).toEqual([]);
+        const textStartEvent = events.find((e) => e.type === "text_start");
+        expect(textStartEvent?.partial.content).toEqual([]);
+
+        // text_delta partials accumulate content progressively
+        expect(deltas[0].partial.content).toEqual([{ type: "text", text: "Hello" }]);
+        expect(deltas[1].partial.content).toEqual([{ type: "text", text: "Hello world" }]);
+
+        // done event contains the final message
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([{ type: "text", text: "Hello world" }]);
+        }
+      },
+    );
+  });
+
+  it("emits only done for tool-call-only responses (no text content)", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // No text content means no start/text_start/text_delta/text_end events
+        const types = events.map((e) => e.type);
+        expect(types).toEqual(["done"]);
+        const doneEvent = events[0];
+        if (doneEvent.type === "done") {
+          expect(doneEvent.reason).toBe("toolUse");
+        }
+      },
+    );
+  });
+
+  it("emits text streaming events before done for mixed text + tool responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+        const doneEvent = events.at(-1);
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.reason).toBe("toolUse");
+        }
+      },
+    );
+  });
+
+  it("emits error without text_end when stream fails mid-response", async () => {
+    // Simulate a stream that sends one content chunk then ends without done:true.
+    // The stream function throws "Ollama API stream ended without a final response".
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"partial"},"done":false}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        // Should have streaming events for the partial content, then error (no text_end).
+        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
+        const errorEvent = events.at(-1);
+        expect(errorEvent?.type).toBe("error");
+      },
+    );
+  });
+
+  it("emits a single text_delta for single-chunk responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one shot"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+
+        const delta = events.find((e) => e.type === "text_delta");
+        expect(delta).toMatchObject({ delta: "one shot" });
+      },
+    );
+  });
+});
+
 describe("createOllamaStreamFn", () => {
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     await withMockNdjsonFetch(
