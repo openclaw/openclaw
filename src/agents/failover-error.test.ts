@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FailoverError,
   coerceToFailoverError,
   describeFailoverError,
   isTimeoutError,
@@ -466,5 +467,45 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  describe("sanitizeToolNames", () => {
+    it("strips non-alphanumeric/dash/underscore characters", () => {
+      expect(FailoverError.sanitizeToolNames(["send_message", "read<file>"])).toEqual([
+        "send_message",
+        "readfile",
+      ]);
+    });
+
+    it("truncates names to 100 characters", () => {
+      const longName = "a".repeat(150);
+      expect(FailoverError.sanitizeToolNames([longName])[0]).toHaveLength(100);
+    });
+
+    it("limits to 20 tool names", () => {
+      const names = Array.from({ length: 25 }, (_, i) => `tool_${i}`);
+      expect(FailoverError.sanitizeToolNames(names)).toHaveLength(20);
+    });
+
+    it("filters out names that become empty after sanitization", () => {
+      expect(FailoverError.sanitizeToolNames(["valid", "!!!"])).toEqual(["valid"]);
+    });
+  });
+
+  it("constructs FailoverError with partialExecution from toolMetas", () => {
+    const toolMetas = [{ toolName: "send_message", meta: "telegram" }, { toolName: "read_file" }];
+    const sanitized = FailoverError.sanitizeToolNames(toolMetas.map((t) => t.toolName));
+    expect(sanitized).toEqual(["send_message", "read_file"]);
+
+    const error = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        hadToolExecution: true,
+        toolNames: sanitized,
+        didSendViaMessagingTool: true,
+      },
+    });
+    expect(error.partialExecution?.toolNames).toEqual(["send_message", "read_file"]);
+    expect(error.partialExecution?.didSendViaMessagingTool).toBe(true);
   });
 });

@@ -8,6 +8,12 @@ import {
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
+export type PartialExecution = {
+  hadToolExecution: true;
+  toolNames: string[];
+  didSendViaMessagingTool: boolean;
+};
+
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
   readonly provider?: string;
@@ -15,6 +21,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly partialExecution?: PartialExecution;
 
   constructor(
     message: string,
@@ -26,6 +33,7 @@ export class FailoverError extends Error {
       status?: number;
       code?: string;
       cause?: unknown;
+      partialExecution?: PartialExecution;
     },
   ) {
     super(message, { cause: params.cause });
@@ -36,6 +44,14 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.partialExecution = params.partialExecution;
+  }
+
+  static sanitizeToolNames(names: string[]): string[] {
+    return names
+      .slice(0, 20)
+      .map((n) => n.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100))
+      .filter(Boolean);
   }
 }
 
@@ -280,6 +296,7 @@ export function describeFailoverError(err: unknown): {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  partialExecution?: PartialExecution;
 } {
   if (isFailoverError(err)) {
     return {
@@ -287,6 +304,7 @@ export function describeFailoverError(err: unknown): {
       reason: err.reason,
       status: err.status,
       code: err.code,
+      partialExecution: err.partialExecution,
     };
   }
   const message = getErrorMessage(err) || String(err);

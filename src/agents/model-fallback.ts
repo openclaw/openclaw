@@ -18,6 +18,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isTimeoutError,
+  type PartialExecution,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -41,6 +42,8 @@ const log = createSubsystemLogger("model-fallback");
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  previousFailureReason?: FailoverReason;
+  previousPartialExecution?: PartialExecution;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -535,6 +538,8 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let previousFailureReason: FailoverReason | undefined;
+  let lastPartialExecution: PartialExecution | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
@@ -655,11 +660,19 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
+    const effectiveOptions: ModelFallbackRunOptions | undefined =
+      previousFailureReason || lastPartialExecution || runOptions
+        ? {
+            ...runOptions,
+            ...(previousFailureReason && { previousFailureReason }),
+            ...(lastPartialExecution && { previousPartialExecution: lastPartialExecution }),
+          }
+        : undefined;
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: effectiveOptions,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -718,6 +731,8 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
+      previousFailureReason = described.reason ?? "unknown";
+      lastPartialExecution = described.partialExecution ?? lastPartialExecution;
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
