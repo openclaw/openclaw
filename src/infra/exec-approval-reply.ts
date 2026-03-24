@@ -37,6 +37,15 @@ export function getExecApprovalApproverDmNoticeText(): string {
   return "Approval required. I sent the allowed approvers DMs.";
 }
 
+function appendExecApprovalRecoveryHints(lines: string[]): void {
+  lines.push("Try one of these:");
+  lines.push("- Open the Control UI: run `openclaw dashboard --no-open` to get a tokenized URL.");
+  lines.push("- Inspect pending approvals from the CLI: `openclaw approvals get`.");
+  lines.push(
+    "- Enable a chat approval client if needed: `channels.discord.execApprovals.enabled: true` or `channels.telegram.execApprovals.enabled: true`.",
+  );
+}
+
 function buildFence(text: string, language?: string): string {
   let fence = "```";
   while (text.includes(fence)) {
@@ -147,23 +156,17 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(
       `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
     );
-    lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
-    );
+    appendExecApprovalRecoveryHints(lines);
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
-    lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
-    );
+    appendExecApprovalRecoveryHints(lines);
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
-    lines.push(
-      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command.",
-    );
+    appendExecApprovalRecoveryHints(lines);
   }
 
   return {

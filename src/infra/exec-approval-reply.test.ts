@@ -132,12 +132,16 @@ describe("exec approval reply helpers", () => {
     ];
 
     for (const testCase of cases) {
-      expect(
-        buildExecApprovalUnavailableReplyPayload({
-          reason: testCase.reason,
-          channelLabel: testCase.channelLabel,
-        }).text,
-      ).toContain(testCase.expected);
+      const text = buildExecApprovalUnavailableReplyPayload({
+        reason: testCase.reason,
+        channelLabel: testCase.channelLabel,
+      }).text;
+      expect(text).toContain(testCase.expected);
+      expect(text).toContain("Try one of these:");
+      expect(text).toContain("`openclaw dashboard --no-open`");
+      expect(text).toContain("`openclaw approvals get`");
+      expect(text).toContain("`channels.discord.execApprovals.enabled: true`");
+      expect(text).toContain("`channels.telegram.execApprovals.enabled: true`");
     }
   });
 });
