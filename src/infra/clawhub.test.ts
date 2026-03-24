@@ -77,6 +77,8 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("1.1.9", ">=1.2.0")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
   });
 
