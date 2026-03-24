@@ -321,11 +321,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
+    channelName: channelInfo?.name,
+    channelDescription: channelInfo?.topic,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
     agentId: route.agentId,
     channel: route.channel,
+    cfg,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;

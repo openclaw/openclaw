@@ -10383,6 +10383,20 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -13309,6 +13323,20 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
