@@ -11496,6 +11496,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.voice.autoJoin.*.sessionChannelId",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.voice.daveEncryption",
       "kind": "channel",
       "type": "boolean",
@@ -14553,6 +14563,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.autoJoin.*.sessionChannelId",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
