@@ -308,7 +308,7 @@ export async function runSubagentAnnounceFlow(params: {
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
-}): Promise<boolean> {
+}): Promise<boolean | -1> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
@@ -375,7 +375,10 @@ export async function runSubagentAnnounceFlow(params: {
       );
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
-        return false;
+        // Signal that the flow was blocked by pending descendants, not a
+        // delivery failure. The caller uses this to defer without consuming
+        // the announce retry budget.
+        return -1;
       }
 
       if (typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function") {

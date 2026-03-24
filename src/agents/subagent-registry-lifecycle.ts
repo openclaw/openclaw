@@ -257,10 +257,34 @@ export function createSubagentRegistryLifecycleController(params: {
     runId: string,
     cleanup: "delete" | "keep",
     didAnnounce: boolean,
+    failReason?: "pending-descendants",
   ) => {
     const entry = params.runs.get(runId);
     if (!entry) {
       return;
+    }
+    // When the announce flow was blocked by pending descendant cleanup (not a
+    // real delivery failure), defer without consuming the retry budget. This
+    // prevents the race condition where descendants clear between the inner
+    // check in runSubagentAnnounceFlow and the outer check in
+    // resolveDeferredCleanupDecision.
+    if (failReason === "pending-descendants") {
+      const endedAgo = typeof entry.endedAt === "number" ? Date.now() - entry.endedAt : 0;
+      // Hard-expiry backstop: if descendants are permanently stuck, bail out
+      // so completionMessage runs don't loop indefinitely.
+      if (endedAgo <= ANNOUNCE_EXPIRY_MS) {
+        entry.lastAnnounceRetryAt = Date.now();
+        entry.wakeOnDescendantSettle = true;
+        entry.cleanupHandled = false;
+        params.resumedRuns.delete(runId);
+        params.persist();
+        setTimeout(() => {
+          params.resumeSubagentRun(runId);
+        }, MIN_ANNOUNCE_RETRY_DELAY_MS).unref?.();
+        return;
+      }
+      // Fall through to the normal cleanup path which will give-up via
+      // resolveDeferredCleanupDecision's expiry check.
     }
     if (didAnnounce) {
       entry.wakeOnDescendantSettle = undefined;
@@ -383,6 +407,16 @@ export function createSubagentRegistryLifecycleController(params: {
       wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
     })
       .then((didAnnounce) => {
+        // A return value of -1 signals the flow was blocked by pending
+        // descendant cleanup, not a real delivery failure. Defer without
+        // consuming the retry budget so the announce queue can handle it
+        // once descendants settle.
+        if (didAnnounce === -1) {
+          void finalizeSubagentCleanup(runId, entry.cleanup, false, "pending-descendants").catch(
+            () => {},
+          );
+          return;
+        }
         finalizeAnnounceCleanup(didAnnounce);
       })
       .catch((error) => {

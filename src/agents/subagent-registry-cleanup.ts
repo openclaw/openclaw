@@ -44,8 +44,15 @@ export function resolveDeferredCleanupDecision(params: {
   const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
   const completionHardExpiryExceeded =
     isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
-  if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
-    if (completionHardExpiryExceeded) {
+  // Defer for ANY run with active descendants, not just completionMessage flows.
+  // Without this, the retry budget gets consumed while descendant cleanup is
+  // still in progress, causing premature "give-up (retry-limit)" for
+  // orchestrator agents that spawn sub-agents (T2→T3 hierarchies).
+  if (params.activeDescendantRuns > 0) {
+    const hardExpiryExceeded = isCompletionMessageFlow
+      ? completionHardExpiryExceeded
+      : endedAgo > params.announceExpiryMs;
+    if (hardExpiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
     }
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };

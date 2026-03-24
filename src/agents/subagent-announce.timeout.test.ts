@@ -169,7 +169,7 @@ function setConfiguredAnnounceTimeout(timeoutMs: number): void {
 async function runAnnounceFlowForTest(
   childRunId: string,
   overrides: Partial<AnnounceFlowParams> = {},
-): Promise<boolean> {
+): Promise<boolean | -1> {
   return await runSubagentAnnounceFlow({
     ...baseAnnounceFlowParams,
     childRunId,
@@ -294,7 +294,7 @@ describe("subagent announce timeout config", () => {
       requesterDisplayKey: "agent:main:subagent:parent",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe(-1);
     expect(
       findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
     ).toBeUndefined();
