@@ -76,6 +76,13 @@ export type PluginLoadOptions = {
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
+  /**
+   * When true, downgrade "full" registration to "provider-only" so plugins
+   * skip expensive tool, hook, command, and channel registration. Only
+   * provider registration methods remain active. Use this for provider
+   * resolution paths that don't need full plugin capabilities.
+   */
+  providerOnly?: boolean;
   throwOnLoadError?: boolean;
 };
 
@@ -185,6 +192,7 @@ function buildCacheKey(params: {
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  providerOnly?: boolean;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -215,7 +223,7 @@ function buildCacheKey(params: {
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.providerOnly ? "provider-only" : "full"}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -700,6 +708,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         : options.runtimeOptions?.subagent
           ? "explicit"
           : "default",
+    providerOnly: options.providerOnly === true,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -952,7 +961,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     };
 
-    const registrationMode = enableState.enabled
+    const baseRegistrationMode = enableState.enabled
       ? !validateOnly &&
         shouldLoadChannelPluginInSetupRuntime({
           manifestChannels: manifestRecord.channels,
@@ -968,6 +977,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
+
+    // When providerOnly is set, downgrade "full" to "provider-only" so plugins
+    // skip expensive tool, hook, command, and channel registration. This is
+    // used by resolvePluginProviders which only needs provider metadata.
+    // Note: !shouldActivate alone is NOT sufficient — channel setup snapshot
+    // loads also use activate:false but need registerChannel to work.
+    // Note: "setup-runtime" is intentionally not downgraded here; channel
+    // plugins in setup-runtime mode do not register providers regardless, so
+    // this is a pre-existing limitation rather than a regression.
+    const registrationMode =
+      options.providerOnly && baseRegistrationMode === "full"
+        ? "provider-only"
+        : baseRegistrationMode;
 
     if (!registrationMode) {
       record.status = "disabled";
@@ -1044,7 +1066,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
     // This avoids opening/importing heavy memory plugin modules that will never register.
     if (
-      registrationMode === "full" &&
+      (registrationMode === "full" || registrationMode === "provider-only") &&
       candidate.origin === "bundled" &&
       manifestRecord.kind === "memory"
     ) {
@@ -1162,7 +1184,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       memorySlotMatched = true;
     }
 
-    if (registrationMode === "full") {
+    if (registrationMode === "full" || registrationMode === "provider-only") {
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,
