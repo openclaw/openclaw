@@ -933,6 +933,8 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         allow: z.array(z.string()).optional(),
         deny: z.array(z.string()).optional(),
+        /** Allow plugins to call api.runtime.acp.spawn(). Opt-in; false by default. */
+        allowAcpSpawn: z.boolean().optional(),
         load: z
           .object({
             paths: z.array(z.string()).optional(),

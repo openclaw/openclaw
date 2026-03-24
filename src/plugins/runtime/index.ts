@@ -1,4 +1,8 @@
+import crypto from "node:crypto";
+import { spawnAcpDirect } from "../../agents/acp-spawn.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { callGateway } from "../../gateway/call.js";
 import {
   generateImage as generateRuntimeImage,
   listRuntimeImageGenerationProviders,
@@ -228,6 +232,50 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
+    acp: {
+      spawn: (...args: Parameters<typeof spawnAcpDirect>) => {
+        const cfg = loadConfig();
+        if (!cfg.plugins?.allowAcpSpawn) {
+          throw new Error(
+            "api.runtime.acp.spawn() requires plugins.allowAcpSpawn: true in openclaw.json",
+          );
+        }
+        return spawnAcpDirect(...args);
+      },
+      prompt: async (params: {
+        sessionKey: string;
+        text: string;
+        channel?: string;
+        accountId?: string;
+        threadId?: string;
+      }) => {
+        const cfg = loadConfig();
+        if (!cfg.plugins?.allowAcpSpawn) {
+          throw new Error(
+            "api.runtime.acp.prompt() requires plugins.allowAcpSpawn: true in openclaw.json",
+          );
+        }
+        const deliver = Boolean(params.channel && params.threadId);
+        const to = params.threadId ? `channel:${params.threadId}` : undefined;
+        const idem = crypto.randomUUID();
+        const response = await callGateway<{ runId?: string }>({
+          method: "agent",
+          params: {
+            message: params.text,
+            sessionKey: params.sessionKey,
+            channel: deliver ? params.channel : undefined,
+            to: deliver ? to : undefined,
+            accountId: deliver ? params.accountId : undefined,
+            threadId: deliver ? params.threadId : undefined,
+            deliver,
+            idempotencyKey: idem,
+          },
+          timeoutMs: 10_000,
+        });
+        const runId = typeof response?.runId === "string" ? response.runId.trim() : idem;
+        return { runId };
+      },
+    },
     state: { resolveStateDir },
     tasks,
     taskFlow,

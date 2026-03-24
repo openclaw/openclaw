@@ -22207,6 +22207,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
           },
+          allowAcpSpawn: {
+            type: "boolean",
+          },
           load: {
             type: "object",
             properties: {
