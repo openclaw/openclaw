@@ -2,7 +2,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import {
+  listBundledPluginBuildEntries,
+  listBundledPluginPackArtifacts,
+} from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   collectAppcastSparkleVersionErrors,
@@ -25,6 +28,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
+const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -276,6 +280,24 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("collectMissingPackPaths", () => {
+  it("adds implicit runtime API build entries and pack artifacts for bundled channel plugins", () => {
+    expect(bundledPluginBuildEntries).toMatchObject({
+      "extensions/discord/runtime-api": "extensions/discord/runtime-api.ts",
+      "extensions/telegram/runtime-api": "extensions/telegram/runtime-api.ts",
+      "extensions/whatsapp/light-runtime-api": "extensions/whatsapp/light-runtime-api.ts",
+      "extensions/whatsapp/runtime-api": "extensions/whatsapp/runtime-api.ts",
+    });
+
+    expect(requiredBundledPluginPackPaths).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/discord/runtime-api.js",
+        "dist/extensions/telegram/runtime-api.js",
+        "dist/extensions/whatsapp/light-runtime-api.js",
+        "dist/extensions/whatsapp/runtime-api.js",
+      ]),
+    );
+  });
+
   it("requires the shipped channel catalog, control ui, and optional bundled metadata", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
@@ -325,7 +347,6 @@ describe("collectMissingPackPaths", () => {
       ]),
     ).toEqual([]);
   });
-
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
