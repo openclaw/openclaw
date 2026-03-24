@@ -585,7 +585,7 @@ export function addGatewayWatchdogCommand(gatewayCommand: Command): Command {
       if (opts.token) {
         args.push("--token", opts.token);
       }
-      if (opts.noNotify) {
+      if (!opts.notify) {
         args.push("--no-notify");
       }
 

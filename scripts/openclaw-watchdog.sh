@@ -58,16 +58,17 @@ restart_gateway() {
   fi
 }
 
+LAST_STATUS_CODE=""
+
 check_gateway() {
   local health_url="${GATEWAY_URL}/health"
-  local status_code
 
-  status_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  LAST_STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     --max-time 10 \
     -H "Authorization: Bearer ${TOKEN}" \
     "$health_url" 2>/dev/null || echo "000")
 
-  case "$status_code" in
+  case "$LAST_STATUS_CODE" in
     200|429)  # 429 = rate limited but gateway is alive
       return 0
       ;;
@@ -100,7 +101,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       echo "Usage: $0 [options]"
-      echo "  --interval-minutes N   Seconds between health checks (default: 5)"
+      echo "  --interval-minutes N   Minutes between health checks (default: 5)"
       echo "  --gateway-url URL      Gateway health endpoint URL (default: http://localhost:18789)"
       echo "  --token TOKEN          Optional auth token for the gateway"
       echo "  --max-attempts N       Max restart attempts before giving up (default: 3)"
@@ -142,7 +143,7 @@ while true; do
     fi
     log "Gateway is healthy (HTTP OK)."
   else
-    log "Gateway is DOWN (HTTP $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$GATEWAY_URL/health" 2>/dev/null || echo 'N/A'))."
+    log "Gateway is DOWN (HTTP ${LAST_STATUS_CODE})."
 
     if [[ $restart_attempts -lt $MAX_RESTART_ATTEMPTS ]]; then
       ((restart_attempts++))
