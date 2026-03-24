@@ -17,7 +17,7 @@ import {
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { getApiKeyForModel, normalizeSecretInput } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
@@ -264,7 +264,16 @@ export async function runBtwSideQuestion(
     profileId: authProfileId,
     agentDir: params.agentDir,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let apiKey: string | undefined;
+  if (!apiKeyInfo.apiKey) {
+    if (apiKeyInfo.mode !== "aws-sdk") {
+      throw new Error(
+        `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
+      );
+    }
+  } else {
+    apiKey = normalizeSecretInput(apiKeyInfo.apiKey);
+  }
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
