@@ -1,5 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
+import {
+  collectAllowedSensitiveKeysFromSkillEntries,
+  collectAllowedSensitiveKeysFromSkillSnapshot,
+  filterWorkspaceSkillEntries,
+  loadWorkspaceSkillEntries,
+  type SkillEntry,
+  type SkillSnapshot,
+} from "../skills.js";
 import { isAlwaysBlockedSkillEnvKey } from "../skills/env-overrides.js";
 import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 
@@ -24,6 +31,21 @@ export function resolveEmbeddedRunSkillEntries(params: {
       ? loadWorkspaceSkillEntries(params.workspaceDir, { config })
       : [],
   };
+}
+
+export function resolveEmbeddedRunAllowedSensitiveKeys(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  skillsSnapshot?: SkillSnapshot;
+}): ReadonlySet<string> | undefined {
+  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries(params);
+  if (!shouldLoadSkillEntries) {
+    return collectAllowedSensitiveKeysFromSkillSnapshot(params.skillsSnapshot);
+  }
+
+  const config = resolveSkillRuntimeConfig(params.config);
+  const eligibleSkillEntries = filterWorkspaceSkillEntries(skillEntries, config);
+  return collectAllowedSensitiveKeysFromSkillEntries(eligibleSkillEntries);
 }
 
 export function syncCurrentSkillEnvToSandbox(params: {

@@ -79,8 +79,6 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import {
   applySkillEnvOverridesFromSnapshotWithResult,
   applySkillEnvOverridesWithResult,
-  collectAllowedSensitiveKeysFromSkillEntries,
-  collectAllowedSensitiveKeysFromSkillSnapshot,
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
@@ -104,7 +102,11 @@ import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
-import { resolveEmbeddedRunSkillEntries, syncCurrentSkillEnvToSandbox } from "./skills-runtime.js";
+import {
+  resolveEmbeddedRunAllowedSensitiveKeys,
+  resolveEmbeddedRunSkillEntries,
+  syncCurrentSkillEnvToSandbox,
+} from "./skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -725,14 +727,11 @@ export async function compactEmbeddedPiSessionDirect(
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-  const allowedSensitiveKeys = params.skillsSnapshot
-    ? collectAllowedSensitiveKeysFromSkillSnapshot(params.skillsSnapshot)
-    : collectAllowedSensitiveKeysFromSkillEntries(
-        resolveEmbeddedRunSkillEntries({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-        }).skillEntries,
-      );
+  const allowedSensitiveKeys = resolveEmbeddedRunAllowedSensitiveKeys({
+    workspaceDir: resolvedWorkspace,
+    config: params.config,
+    skillsSnapshot: params.skillsSnapshot,
+  });
 
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({

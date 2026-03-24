@@ -5,17 +5,23 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import * as skillsModule from "../skills.js";
-import type { SkillSnapshot } from "../skills.js";
-const { resolveEmbeddedRunSkillEntries, syncCurrentSkillEnvToSandbox } =
-  await import("./skills-runtime.js");
+import type { SkillEntry, SkillSnapshot } from "../skills.js";
+const {
+  resolveEmbeddedRunAllowedSensitiveKeys,
+  resolveEmbeddedRunSkillEntries,
+  syncCurrentSkillEnvToSandbox,
+} = await import("./skills-runtime.js");
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const loadWorkspaceSkillEntriesSpy = vi.spyOn(skillsModule, "loadWorkspaceSkillEntries");
+  const filterWorkspaceSkillEntriesSpy = vi.spyOn(skillsModule, "filterWorkspaceSkillEntries");
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
     loadWorkspaceSkillEntriesSpy.mockReset();
     loadWorkspaceSkillEntriesSpy.mockReturnValue([]);
+    filterWorkspaceSkillEntriesSpy.mockReset();
+    filterWorkspaceSkillEntriesSpy.mockImplementation((entries) => entries);
   });
 
   it("loads skill entries with config when no resolved snapshot skills exist", () => {
@@ -98,6 +104,51 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillEntries: [],
     });
     expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+  });
+
+  it("derives allowed sensitive keys from eligible workspace skills on the fallback path", () => {
+    const rawEntries = [
+      {
+        skill: { name: "active", source: "workspace", baseDir: "/skills/active", filePath: "" },
+        metadata: { primaryEnv: "OPENAI_API_KEY" },
+      },
+      {
+        skill: { name: "disabled", source: "workspace", baseDir: "/skills/disabled", filePath: "" },
+        metadata: { primaryEnv: "GITHUB_TOKEN" },
+      },
+    ] as SkillEntry[];
+    loadWorkspaceSkillEntriesSpy.mockReturnValue(rawEntries);
+    filterWorkspaceSkillEntriesSpy.mockReturnValue([rawEntries[0]]);
+
+    const allowedSensitiveKeys = resolveEmbeddedRunAllowedSensitiveKeys({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [{ name: "snapshot-only", primaryEnv: "SHOULD_NOT_BE_USED" }],
+      },
+    });
+
+    expect(filterWorkspaceSkillEntriesSpy).toHaveBeenCalledWith(rawEntries, {});
+    expect(allowedSensitiveKeys).toEqual(new Set(["OPENAI_API_KEY"]));
+  });
+
+  it("uses the snapshot allowlist when resolved snapshot skills are present", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "snapshot-skill", primaryEnv: "OPENAI_API_KEY" }],
+      resolvedSkills: [],
+    };
+
+    const allowedSensitiveKeys = resolveEmbeddedRunAllowedSensitiveKeys({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      skillsSnapshot: snapshot,
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+    expect(filterWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+    expect(allowedSensitiveKeys).toEqual(new Set(["OPENAI_API_KEY"]));
   });
 
   it("syncs current skill env values into sandbox exec env", () => {

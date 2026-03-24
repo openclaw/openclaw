@@ -91,8 +91,6 @@ import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverridesFromSnapshotWithResult,
   applySkillEnvOverridesWithResult,
-  collectAllowedSensitiveKeysFromSkillEntries,
-  collectAllowedSensitiveKeysFromSkillSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
@@ -129,7 +127,11 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries, syncCurrentSkillEnvToSandbox } from "../skills-runtime.js";
+import {
+  resolveEmbeddedRunAllowedSensitiveKeys,
+  resolveEmbeddedRunSkillEntries,
+  syncCurrentSkillEnvToSandbox,
+} from "../skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -1678,17 +1680,13 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
   // Collect skill-declared env var names before sandbox creation so they can
-  // bypass the default block list during container creation.  For the snapshot
-  // path we read metadata directly; for the non-snapshot fallback we resolve
-  // skill entries early from the host workspace (lightweight sync call).
-  const allowedSensitiveKeys = params.skillsSnapshot
-    ? collectAllowedSensitiveKeysFromSkillSnapshot(params.skillsSnapshot)
-    : collectAllowedSensitiveKeysFromSkillEntries(
-        resolveEmbeddedRunSkillEntries({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-        }).skillEntries,
-      );
+  // bypass the default block list during container creation. On the non-snapshot
+  // path, only eligible skills should widen the sandbox allowlist.
+  const allowedSensitiveKeys = resolveEmbeddedRunAllowedSensitiveKeys({
+    workspaceDir: resolvedWorkspace,
+    config: params.config,
+    skillsSnapshot: params.skillsSnapshot,
+  });
 
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
