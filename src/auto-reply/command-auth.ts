@@ -56,7 +56,6 @@ function resolveProviderFromContext(
       return { providerId: normalized, hadResolutionError: false };
     }
   }
-  let hadResolutionError = false;
   const configured = listChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = resolveProviderAllowFrom({
@@ -64,9 +63,6 @@ function resolveProviderFromContext(
         cfg,
         accountId: ctx.AccountId,
       });
-      if (resolvedAllowFrom.hadResolutionError) {
-        hadResolutionError = true;
-      }
       const allowFrom = formatAllowFromList({
         plugin,
         cfg,
@@ -76,13 +72,26 @@ function resolveProviderFromContext(
       if (allowFrom.length === 0) {
         return null;
       }
-      return plugin.id;
+      return {
+        providerId: plugin.id,
+        hadResolutionError: resolvedAllowFrom.hadResolutionError,
+      };
     })
-    .filter((value): value is ChannelId => Boolean(value));
+    .filter(
+      (
+        value,
+      ): value is {
+        providerId: ChannelId;
+        hadResolutionError: boolean;
+      } => Boolean(value),
+    );
   if (configured.length === 1) {
-    return { providerId: configured[0], hadResolutionError };
+    return configured[0];
   }
-  return { providerId: undefined, hadResolutionError };
+  return {
+    providerId: undefined,
+    hadResolutionError: configured.some((entry) => entry.hadResolutionError),
+  };
 }
 
 function formatAllowFromList(params: {
@@ -135,6 +144,12 @@ function resolveProviderAllowFrom(params: {
 
   try {
     const allowFrom = plugin.config.resolveAllowFrom({ cfg, accountId });
+    if (allowFrom == null) {
+      return {
+        allowFrom: [],
+        hadResolutionError: false,
+      };
+    }
     if (!Array.isArray(allowFrom)) {
       console.warn(
         `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
@@ -345,13 +360,73 @@ function resolveFallbackAllowFrom(params: {
       >
     | undefined;
   const channelCfg = channels?.[providerId];
-  const accountCfg = params.accountId ? channelCfg?.accounts?.[params.accountId] : undefined;
+  const accountCfg =
+    resolveFallbackAccountConfig(channelCfg?.accounts, params.accountId) ??
+    resolveFallbackDefaultAccountConfig(channelCfg);
   const allowFrom =
     accountCfg?.allowFrom ??
     accountCfg?.dm?.allowFrom ??
     channelCfg?.allowFrom ??
     channelCfg?.dm?.allowFrom;
   return Array.isArray(allowFrom) ? allowFrom : [];
+}
+
+function resolveFallbackAccountConfig(
+  accounts:
+    | Record<
+        string,
+        | {
+            allowFrom?: Array<string | number>;
+            dm?: { allowFrom?: Array<string | number> };
+          }
+        | undefined
+      >
+    | undefined,
+  accountId?: string | null,
+) {
+  const normalizedAccountId = accountId?.trim().toLowerCase();
+  if (!accounts || !normalizedAccountId) {
+    return undefined;
+  }
+  const direct = accounts[normalizedAccountId];
+  if (direct) {
+    return direct;
+  }
+  const matchKey = Object.keys(accounts).find(
+    (key) => key.trim().toLowerCase() === normalizedAccountId,
+  );
+  return matchKey ? accounts[matchKey] : undefined;
+}
+
+function resolveFallbackDefaultAccountConfig(
+  channelCfg:
+    | {
+        allowFrom?: Array<string | number>;
+        dm?: { allowFrom?: Array<string | number> };
+        defaultAccount?: string;
+        accounts?: Record<
+          string,
+          | {
+              allowFrom?: Array<string | number>;
+              dm?: { allowFrom?: Array<string | number> };
+            }
+          | undefined
+        >;
+      }
+    | undefined,
+) {
+  const accounts = channelCfg?.accounts;
+  if (!accounts) {
+    return undefined;
+  }
+  const preferred =
+    resolveFallbackAccountConfig(accounts, channelCfg?.defaultAccount) ??
+    resolveFallbackAccountConfig(accounts, "default");
+  if (preferred) {
+    return preferred;
+  }
+  const definedAccounts = Object.values(accounts).filter(Boolean);
+  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
 }
 
 function resolveFallbackCommandOptions(providerId?: ChannelId): {
