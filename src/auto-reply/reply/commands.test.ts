@@ -441,7 +441,7 @@ describe("/approve command", () => {
         },
         setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
         expectedText: "unknown or expired approval id",
-        expectGatewayCalls: 1,
+        expectGatewayCalls: 2,
       },
       {
         name: "telegram approvals disabled",
@@ -493,12 +493,12 @@ describe("/approve command", () => {
       },
       {
         scopes: ["operator.approvals"],
-        expectedText: "Exec approval allow-once submitted",
+        expectedText: "Approval allow-once submitted",
         expectedGatewayCalls: 1,
       },
       {
         scopes: ["operator.admin"],
-        expectedText: "Exec approval allow-once submitted",
+        expectedText: "Approval allow-once submitted",
         expectedGatewayCalls: 1,
       },
     ] as const;
