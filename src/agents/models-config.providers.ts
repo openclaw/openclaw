@@ -71,8 +71,6 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
 ]);
 const log = createSubsystemLogger("agents/model-providers");
 
-const log = createSubsystemLogger("agents/model-providers");
-
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
