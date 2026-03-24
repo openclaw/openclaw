@@ -1,5 +1,5 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { MatrixClient } from "../sdk.js";
 import { listMatrixReactions, removeMatrixReactions } from "./reactions.js";
 
 function createReactionsClient(params: {
@@ -105,5 +105,31 @@ describe("matrix reaction actions", () => {
 
     expect(result).toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty list when the relations response is malformed", async () => {
+    const doRequest = vi.fn(async () => ({ chunk: null }));
+    const client = {
+      doRequest,
+      getUserId: vi.fn(async () => "@me:example.org"),
+      redactEvent: vi.fn(async () => undefined),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await listMatrixReactions("!room:example.org", "$msg", { client });
+
+    expect(result).toEqual([]);
+  });
+
+  it("rejects blank message ids before querying Matrix relations", async () => {
+    const { client, doRequest } = createReactionsClient({
+      chunk: [],
+      userId: "@me:example.org",
+    });
+
+    await expect(listMatrixReactions("!room:example.org", "   ", { client })).rejects.toThrow(
+      "messageId",
+    );
+    expect(doRequest).not.toHaveBeenCalled();
   });
 });

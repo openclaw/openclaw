@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  "src/cli/memory-cli.ts",
+  "src/cli/memory-cli.runtime.ts",
   "src/cli/qr-cli.ts",
   "src/commands/agent.ts",
   "src/commands/channels/resolve.ts",
@@ -25,8 +24,7 @@ describe("command secret resolution coverage", () => {
   it.each(SECRET_TARGET_CALLSITES)(
     "routes target-id command path through shared gateway resolver: %s",
     async (relativePath) => {
-      const absolutePath = path.join(process.cwd(), relativePath);
-      const source = await fs.readFile(absolutePath, "utf8");
+      const source = await readCommandSource(relativePath);
       expect(source).toContain("resolveCommandSecretRefsViaGateway");
       expect(hasSupportedTargetIdsWiring(source)).toBe(true);
       expect(source).toContain("resolveCommandSecretRefsViaGateway({");

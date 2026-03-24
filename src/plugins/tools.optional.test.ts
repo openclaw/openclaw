@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePluginTools } from "./tools.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -13,6 +12,8 @@ const loadOpenClawPluginsMock = vi.fn();
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
+
+let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 
 function makeTool(name: string) {
   return {
@@ -90,8 +91,10 @@ function resolveOptionalDemoTools(toolAllowlist?: string[]) {
 }
 
 describe("resolvePluginTools optional tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
+    ({ resolvePluginTools } = await import("./tools.js"));
   });
 
   it("skips optional tools without explicit allowlist", () => {

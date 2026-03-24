@@ -1,9 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ buildTelegramMessageContextForTest } = await import("./bot-message-context.test-harness.js"));
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+    await import("../../../src/config/config.js"));
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  recordInboundSessionMock.mockClear();
+});
 
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
@@ -33,6 +48,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
+    expect(recordInboundSessionMock).toHaveBeenCalled();
   });
 
   it("keeps legacy dm session key when no thread id", async () => {
@@ -119,11 +135,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 });
 
 describe("buildTelegramMessageContext direct peer routing", () => {
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    recordInboundSessionMock.mockClear();
-  });
-
   it("isolates dm sessions by sender id when chat id differs", async () => {
     const runtimeCfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },

@@ -1,48 +1,31 @@
 import fs from "node:fs/promises";
-import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
+import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { handleAcpCommand } from "./commands-acp.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
-import { handleAllowlistCommand } from "./commands-allowlist.js";
-import { handleApproveCommand } from "./commands-approve.js";
-import { handleBashCommand } from "./commands-bash.js";
-import { handleBtwCommand } from "./commands-btw.js";
-import { handleCompactCommand } from "./commands-compact.js";
-import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import {
-  handleCommandsListCommand,
-  handleContextCommand,
-  handleExportSessionCommand,
-  handleHelpCommand,
-  handleStatusCommand,
-  handleWhoamiCommand,
-} from "./commands-info.js";
-import { handleMcpCommand } from "./commands-mcp.js";
-import { handleModelsCommand } from "./commands-models.js";
-import { handlePluginCommand } from "./commands-plugin.js";
-import {
-  handleAbortTrigger,
-  handleActivationCommand,
-  handleFastCommand,
-  handleRestartCommand,
-  handleSessionCommand,
-  handleSendPolicyCommand,
-  handleStopCommand,
-  handleUsageCommand,
-} from "./commands-session.js";
-import { handleSubagentsCommand } from "./commands-subagents.js";
-import { handleTtsCommands } from "./commands-tts.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-import { routeReply } from "./route-reply.js";
+
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let commandHandlersRuntimePromise: Promise<typeof import("./commands-handlers.runtime.js")> | null =
+  null;
+
+function loadRouteReplyRuntime() {
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
+}
+
+function loadCommandHandlersRuntime() {
+  commandHandlersRuntimePromise ??= import("./commands-handlers.runtime.js");
+  return commandHandlersRuntimePromise;
+}
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -81,6 +64,7 @@ export async function emitResetCommandHooks(params: {
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
     if (channel && to) {
+      const { routeReply } = await loadRouteReplyRuntime();
       const hookReply = { text: hookEvent.messages.join("\n\n") };
       await routeReply({
         payload: hookReply,
@@ -173,36 +157,7 @@ function resolveSessionEntryForHookSessionKey(
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
   if (HANDLERS === null) {
-    HANDLERS = [
-      // Plugin commands are processed first, before built-in commands
-      handlePluginCommand,
-      handleBtwCommand,
-      handleBashCommand,
-      handleActivationCommand,
-      handleSendPolicyCommand,
-      handleFastCommand,
-      handleUsageCommand,
-      handleSessionCommand,
-      handleRestartCommand,
-      handleTtsCommands,
-      handleHelpCommand,
-      handleCommandsListCommand,
-      handleStatusCommand,
-      handleAllowlistCommand,
-      handleApproveCommand,
-      handleContextCommand,
-      handleExportSessionCommand,
-      handleWhoamiCommand,
-      handleSubagentsCommand,
-      handleAcpCommand,
-      handleMcpCommand,
-      handleConfigCommand,
-      handleDebugCommand,
-      handleModelsCommand,
-      handleStopCommand,
-      handleCompactCommand,
-      handleAbortTrigger,
-    ];
+    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
   const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
   const resetRequested = Boolean(resetMatch);
@@ -226,7 +181,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         ? boundAcpSessionKey.trim()
         : undefined;
     if (boundAcpKey) {
-      const resetResult = await resetAcpSessionInPlace({
+      const resetResult = await resetConfiguredBindingTargetInPlace({
         cfg: params.cfg,
         sessionKey: boundAcpKey,
         reason: commandAction,

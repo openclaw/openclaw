@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "./model-compat.js";
 import { __testing } from "./pi-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -15,8 +19,7 @@ function toolNames(tools: AnyAgentTool[]): string[] {
 describe("applyModelProviderToolPolicy", () => {
   it("keeps web_search for non-xAI models", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
-      modelProvider: "openai",
-      modelId: "gpt-4o-mini",
+      modelCompat: {},
     });
 
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
@@ -24,17 +27,22 @@ describe("applyModelProviderToolPolicy", () => {
 
   it("removes web_search for OpenRouter xAI model ids", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
-      modelProvider: "openrouter",
-      modelId: "x-ai/grok-4.1-fast",
+      modelCompat: {
+        toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+        nativeWebSearchTool: true,
+        toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+      },
     });
 
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
-  it("removes web_search for direct xAI providers", () => {
+  it("removes web_search for direct xai-capable models too", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
-      modelProvider: "x-ai",
-      modelId: "grok-4.1",
+      modelCompat: {
+        toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+        nativeWebSearchTool: true,
+      },
     });
 
     expect(toolNames(filtered)).toEqual(["read", "exec"]);

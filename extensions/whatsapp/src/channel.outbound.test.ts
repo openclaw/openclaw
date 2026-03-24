@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWhatsAppPollFixture,
   expectWhatsAppPollSent,
@@ -21,9 +21,14 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { whatsappPlugin } from "./channel.js";
+let whatsappPlugin: typeof import("./channel.js").whatsappPlugin;
 
 describe("whatsappPlugin outbound sendPoll", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ whatsappPlugin } = await import("./channel.js"));
+  });
+
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
     const { cfg, poll, to, accountId } = createWhatsAppPollFixture();
 
@@ -35,6 +40,10 @@ describe("whatsappPlugin outbound sendPoll", () => {
     });
 
     expectWhatsAppPollSent(hoisted.sendPollWhatsApp, { cfg, poll, to, accountId });
-    expect(result).toEqual({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" });
+    expect(result).toEqual({
+      channel: "whatsapp",
+      messageId: "wa-poll-1",
+      toJid: "1555@s.whatsapp.net",
+    });
   });
 });

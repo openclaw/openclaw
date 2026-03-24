@@ -1,7 +1,9 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const defaultGatewayMock = async (
   method: string,
@@ -26,13 +28,7 @@ vi.mock("./gateway-rpc.js", async () => {
 });
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
-    },
-  },
+  defaultRuntime,
 }));
 
 const { registerCronCli } = await import("./cron-cli.js");
@@ -76,6 +72,7 @@ function buildProgram() {
 function resetGatewayMock() {
   callGatewayFromCli.mockClear();
   callGatewayFromCli.mockImplementation(defaultGatewayMock);
+  resetRuntimeCapture();
 }
 
 async function runCronCommand(args: string[]): Promise<void> {
@@ -617,6 +614,105 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --tz with --every on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid",
+      "--every",
+      "10m",
+      "--tz",
+      "UTC",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
+  });
+
+  it("applies --tz to --at for offset-less datetimes on cron add", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-test",
+      "--at",
+      "2026-03-23T23:00:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // 2026-03-23 is CET (+01:00), so 23:00 Oslo = 22:00 UTC
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
+  });
+
+  it("does not apply --tz when --at already has an offset", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-offset-test",
+      "--at",
+      "2026-03-23T23:00:00+02:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // Explicit +02:00 should be honored, not overridden by --tz
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T21:00:00.000Z");
+  });
+
+  it("applies --tz to --at correctly across DST boundaries on cron add", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-dst-test",
+      "--at",
+      "2026-03-29T01:30:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-29T00:30:00.000Z");
+  });
+
+  it("rejects nonexistent DST gap wall-clock times on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-gap-test",
+      "--at",
+      "2026-03-29T02:30:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+  });
+
   it("sets explicit stagger for cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
@@ -642,6 +738,24 @@ describe("cron cli", () => {
 
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
+  });
+
+  it("applies --tz to --at for offset-less datetimes on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--at",
+      "2026-03-23T23:00:00",
+      "--tz",
+      "Europe/Oslo",
+    ]);
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-03-23T22:00:00.000Z",
+    });
+  });
+
+  it("rejects --tz with --every on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--every", "10m", "--tz", "UTC"]);
   });
 
   it("patches failure alert settings on cron edit", async () => {

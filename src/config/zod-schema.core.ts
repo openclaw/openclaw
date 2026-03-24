@@ -6,6 +6,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -191,15 +192,36 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    thinkingFormat: z
+      .union([
+        z.literal("openai"),
+        z.literal("openrouter"),
+        z.literal("zai"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
+      ])
+      .optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    toolSchemaProfile: z.literal("xai").optional(),
+    nativeWebSearchTool: z.boolean().optional(),
+    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
+
+type AssertAssignable<_T extends U, U> = true;
+type _ModelCompatSchemaAssignableToType = AssertAssignable<
+  z.infer<typeof ModelCompatSchema>,
+  ModelCompatConfig | undefined
+>;
+type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+  ModelCompatConfig | undefined,
+  z.infer<typeof ModelCompatSchema>
+>;
 
 export const ModelDefinitionSchema = z
   .object({

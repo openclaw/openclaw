@@ -1,5 +1,9 @@
 ---
-title: Deploy on Render
+summary: "Deploy OpenClaw on Render with Infrastructure-as-Code"
+read_when:
+  - Deploying OpenClaw to Render
+  - You want a declarative cloud deploy with Render Blueprints
+title: "Render"
 ---
 
 Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
@@ -16,8 +20,7 @@ Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yam
 Clicking this link will:
 
 1. Create a new Render service from the `render.yaml` Blueprint at the root of this repo.
-2. Prompt you to set `SETUP_PASSWORD`
-3. Build the Docker image and deploy
+2. Build the Docker image and deploy
 
 Once deployed, your service URL follows the pattern `https://<service-name>.onrender.com`.
 
@@ -34,10 +37,8 @@ services:
     plan: starter
     healthCheckPath: /health
     envVars:
-      - key: PORT
+      - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
-      - key: SETUP_PASSWORD
-        sync: false # prompts during deploy
       - key: OPENCLAW_STATE_DIR
         value: /data/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
@@ -56,7 +57,6 @@ Key Blueprint features used:
 | --------------------- | ---------------------------------------------------------- |
 | `runtime: docker`     | Builds from the repo's Dockerfile                          |
 | `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
-| `sync: false`         | Prompts for value during deploy (secrets)                  |
 | `generateValue: true` | Auto-generates a cryptographically secure value            |
 | `disk`                | Persistent storage that survives redeploys                 |
 
@@ -73,17 +73,11 @@ The Blueprint defaults to `starter`. To use free tier, change `plan: free` in yo
 
 ## After deployment
 
-### Complete web setup
-
-1. Navigate to `https://<your-service>.onrender.com/setup`
-2. Enter your `SETUP_PASSWORD`
-3. Select a model provider and paste your API key
-4. Optionally configure messaging channels (Telegram, Discord, Slack)
-5. Click **Run setup**
-
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/openclaw`.
+The web dashboard is available at `https://<your-service>.onrender.com/`.
+
+Connect using the `OPENCLAW_GATEWAY_TOKEN` value that was auto-generated during deploy (find it in **Dashboard → your service → Environment**).
 
 ## Render Dashboard features
 
@@ -125,22 +119,22 @@ For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling require
 
 ## Backups and migration
 
-Export your configuration and workspace at any time:
+Export your configuration and workspace at any time using the shell access in the Render Dashboard:
 
-```
-https://<your-service>.onrender.com/setup/export
+```bash
+openclaw backup create
 ```
 
-This downloads a portable backup you can restore on any OpenClaw host.
+This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
 
-### Service won't start
+### Service will not start
 
 Check the deploy logs in the Render Dashboard. Common issues:
 
-- Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- Missing `OPENCLAW_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
+- Port mismatch — ensure `OPENCLAW_GATEWAY_PORT=8080` is set so the gateway binds to the port Render expects
 
 ### Slow cold starts (free tier)
 
@@ -149,7 +143,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export your config via `/setup/export`.
+regularly export your config via `openclaw backup create` in the Render shell.
 
 ### Health check failures
 
@@ -157,3 +151,9 @@ Render expects a 200 response from `/health` within 30 seconds. If builds succee
 
 - Build logs for errors
 - Whether the container runs locally with `docker build && docker run`
+
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)

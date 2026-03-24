@@ -154,6 +154,90 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
+  it("replaces dead named sessions returned by sessions ensure", async () => {
+    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
+    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:dead-session";
+
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+      const newIndex = logs.findIndex((entry) => entry.kind === "new");
+      expect(ensureIndex).toBeGreaterThanOrEqual(0);
+      expect(statusIndex).toBeGreaterThan(ensureIndex);
+      expect(newIndex).toBeGreaterThan(statusIndex);
+    } finally {
+      delete process.env.MOCK_ACPX_STATUS_STATUS;
+      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+    }
+  });
+
+  it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
+    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
+    process.env.MOCK_ACPX_STATUS_STATUS = "alive";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:ensure-fallback-alive";
+
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+      const newIndex = logs.findIndex((entry) => entry.kind === "new");
+      expect(ensureIndex).toBeGreaterThanOrEqual(0);
+      expect(statusIndex).toBeGreaterThan(ensureIndex);
+      expect(newIndex).toBe(-1);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+      delete process.env.MOCK_ACPX_STATUS_STATUS;
+    }
+  });
+
+  it("creates a fresh named session when sessions ensure exits and status is dead", async () => {
+    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
+    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
+    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:ensure-fallback-dead";
+
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+      const newIndex = logs.findIndex((entry) => entry.kind === "new");
+      expect(ensureIndex).toBeGreaterThanOrEqual(0);
+      expect(statusIndex).toBeGreaterThan(ensureIndex);
+      expect(newIndex).toBeGreaterThan(statusIndex);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+      delete process.env.MOCK_ACPX_STATUS_STATUS;
+      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+    }
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 
@@ -398,7 +482,7 @@ describe("AcpxRuntime", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai-codex/gpt-5.3-codex",
+      value: "openai-codex/gpt-5.4",
     });
     const status = await runtime.getStatus({ handle });
     const ensuredSessionName = "agent:codex:acp:controls";

@@ -8,12 +8,13 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { handleSlackHttpRequest } from "../plugin-sdk/slack.js";
+import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
@@ -71,6 +72,8 @@ import {
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleSessionKillHttpRequest } from "./session-kill-http.js";
+import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -82,6 +85,19 @@ type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
+
+function resolveMappedHookExternalContentSource(params: {
+  subPath: string;
+  payload: Record<string, unknown>;
+  sessionKey: string;
+}) {
+  const payloadSource =
+    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
+  if (params.subPath === "gmail" || payloadSource === "gmail") {
+    return "gmail" as const;
+  }
+  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
+}
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -600,6 +616,7 @@ export function createHooksRequestHandler(
         idempotencyKey,
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
+        externalContentSource: "webhook",
       });
       rememberHookRunId(replayKey, runId, now);
       sendJson(res, 200, { ok: true, runId });
@@ -693,6 +710,11 @@ export function createHooksRequestHandler(
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+            externalContentSource: resolveMappedHookExternalContentSource({
+              subPath,
+              payload: payload as Record<string, unknown>,
+              sessionKey: sessionKey.value,
+            }),
           });
           rememberHookRunId(replayKey, runId, now);
           sendJson(res, 200, { ok: true, runId });
@@ -794,6 +816,26 @@ export function createGatewayHttpServer(opts: {
           name: "tools-invoke",
           run: () =>
             handleToolsInvokeHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "sessions-kill",
+          run: () =>
+            handleSessionKillHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "sessions-history",
+          run: () =>
+            handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,

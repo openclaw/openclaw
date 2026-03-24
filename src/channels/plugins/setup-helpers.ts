@@ -5,6 +5,7 @@ import type { ChannelSetupInput } from "./types.core.js";
 
 type ChannelSectionBase = {
   name?: string;
+  defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
 };
 
@@ -204,6 +205,35 @@ export function createPatchedAccountSetupAdapter(params: {
   };
 }
 
+export function createEnvPatchedAccountSetupAdapter(params: {
+  channelKey: string;
+  alwaysUseAccounts?: boolean;
+  ensureChannelEnabled?: boolean;
+  ensureAccountEnabled?: boolean;
+  defaultAccountOnlyEnvError: string;
+  missingCredentialError: string;
+  hasCredentials: (input: ChannelSetupInput) => boolean;
+  validateInput?: ChannelSetupAdapter["validateInput"];
+  buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
+}): ChannelSetupAdapter {
+  return createPatchedAccountSetupAdapter({
+    channelKey: params.channelKey,
+    alwaysUseAccounts: params.alwaysUseAccounts,
+    ensureChannelEnabled: params.ensureChannelEnabled,
+    ensureAccountEnabled: params.ensureAccountEnabled,
+    validateInput: (inputParams) => {
+      if (inputParams.input.useEnv && inputParams.accountId !== DEFAULT_ACCOUNT_ID) {
+        return params.defaultAccountOnlyEnvError;
+      }
+      if (!inputParams.input.useEnv && !params.hasCredentials(inputParams.input)) {
+        return params.missingCredentialError;
+      }
+      return params.validateInput?.(inputParams) ?? null;
+    },
+    buildPatch: params.buildPatch,
+  });
+}
+
 export function patchScopedAccountConfig(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -306,8 +336,73 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
 ]);
 
 const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<string, ReadonlySet<string>> = {
+  matrix: new Set([
+    "deviceId",
+    "avatarUrl",
+    "initialSyncLimit",
+    "encryption",
+    "allowlistOnly",
+    "allowBots",
+    "replyToMode",
+    "threadReplies",
+    "textChunkLimit",
+    "chunkMode",
+    "responsePrefix",
+    "ackReaction",
+    "ackReactionScope",
+    "reactionNotifications",
+    "threadBindings",
+    "startupVerification",
+    "startupVerificationCooldownHours",
+    "mediaMaxMb",
+    "autoJoin",
+    "autoJoinAllowlist",
+    "dm",
+    "groups",
+    "rooms",
+    "actions",
+  ]),
   telegram: new Set(["streaming"]),
 };
+
+const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
+  "name",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceId",
+  "deviceName",
+  "avatarUrl",
+  "initialSyncLimit",
+  "encryption",
+]);
+
+export const MATRIX_SHARED_MULTI_ACCOUNT_DEFAULT_KEYS = new Set([
+  "dmPolicy",
+  "allowFrom",
+  "groupPolicy",
+  "groupAllowFrom",
+  "allowlistOnly",
+  "replyToMode",
+  "threadReplies",
+  "textChunkLimit",
+  "chunkMode",
+  "responsePrefix",
+  "ackReaction",
+  "ackReactionScope",
+  "reactionNotifications",
+  "threadBindings",
+  "startupVerification",
+  "startupVerificationCooldownHours",
+  "mediaMaxMb",
+  "autoJoin",
+  "autoJoinAllowlist",
+  "dm",
+  "groups",
+  "rooms",
+  "actions",
+]);
 
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
@@ -317,6 +412,76 @@ export function shouldMoveSingleAccountChannelKey(params: {
     return true;
   }
   return SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL[params.channelKey]?.has(params.key) ?? false;
+}
+
+export function resolveSingleAccountKeysToMove(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+}): string[] {
+  const hasNamedAccounts =
+    Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
+    0;
+  return Object.entries(params.channel)
+    .filter(([key, value]) => {
+      if (key === "accounts" || key === "enabled" || value === undefined) {
+        return false;
+      }
+      if (!shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key })) {
+        return false;
+      }
+      if (
+        params.channelKey === "matrix" &&
+        hasNamedAccounts &&
+        !MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS.has(key)
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .map(([key]) => key);
+}
+
+export function resolveSingleAccountPromotionTarget(params: {
+  channelKey: string;
+  channel: ChannelSectionBase;
+}): string {
+  if (params.channelKey !== "matrix") {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount =
+    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
+      ? normalizeAccountId(params.channel.defaultAccount)
+      : undefined;
+  if (normalizedDefaultAccount) {
+    if (normalizedDefaultAccount !== DEFAULT_ACCOUNT_ID) {
+      const matchedAccountId = Object.entries(accounts).find(
+        ([accountId, value]) =>
+          accountId &&
+          value &&
+          typeof value === "object" &&
+          normalizeAccountId(accountId) === normalizedDefaultAccount,
+      )?.[0];
+      if (matchedAccountId) {
+        return matchedAccountId;
+      }
+    }
+    return DEFAULT_ACCOUNT_ID;
+  }
+  const namedAccounts = Object.entries(accounts).filter(
+    ([accountId, value]) => accountId && typeof value === "object" && value,
+  );
+  if (namedAccounts.length === 1) {
+    return namedAccounts[0][0];
+  }
+  if (
+    namedAccounts.length > 1 &&
+    accounts[DEFAULT_ACCOUNT_ID] &&
+    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
+  ) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return DEFAULT_ACCOUNT_ID;
 }
 
 function cloneIfObject<T>(value: T): T {
@@ -343,18 +508,50 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
 
   const accounts = base.accounts ?? {};
   if (Object.keys(accounts).length > 0) {
-    return params.cfg;
-  }
+    if (params.channelKey !== "matrix") {
+      return params.cfg;
+    }
+    const keysToMove = resolveSingleAccountKeysToMove({
+      channelKey: params.channelKey,
+      channel: base,
+    });
+    if (keysToMove.length === 0) {
+      return params.cfg;
+    }
 
-  const keysToMove = Object.entries(base)
-    .filter(
-      ([key, value]) =>
-        key !== "accounts" &&
-        key !== "enabled" &&
-        value !== undefined &&
-        shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key }),
-    )
-    .map(([key]) => key);
+    const targetAccountId = resolveSingleAccountPromotionTarget({
+      channelKey: params.channelKey,
+      channel: base,
+    });
+    const defaultAccount: Record<string, unknown> = {
+      ...accounts[targetAccountId],
+    };
+    for (const key of keysToMove) {
+      const value = base[key];
+      defaultAccount[key] = cloneIfObject(value);
+    }
+    const nextChannel: ChannelSectionRecord = { ...base };
+    for (const key of keysToMove) {
+      delete nextChannel[key];
+    }
+    return {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        [params.channelKey]: {
+          ...nextChannel,
+          accounts: {
+            ...accounts,
+            [targetAccountId]: defaultAccount,
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+  const keysToMove = resolveSingleAccountKeysToMove({
+    channelKey: params.channelKey,
+    channel: base,
+  });
   const defaultAccount: Record<string, unknown> = {};
   for (const key of keysToMove) {
     const value = base[key];

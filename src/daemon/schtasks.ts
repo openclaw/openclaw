@@ -549,14 +549,16 @@ async function restartStartupEntry(
   return { outcome: "completed" };
 }
 
-export async function installScheduledTask({
+async function writeScheduledTaskScript({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+  scriptPath: string;
+  taskDescription: string;
+}> {
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -568,9 +570,30 @@ export async function installScheduledTask({
     environment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
+  return { scriptPath, taskDescription };
+}
 
-  const taskName = resolveTaskName(env);
-  const quotedScript = quoteSchtasksArg(scriptPath);
+export async function stageScheduledTask({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
+  const { scriptPath } = await writeScheduledTaskScript(args);
+  writeFormattedLines(stdout, [{ label: "Staged task script", value: scriptPath }], {
+    leadingBlankLine: true,
+  });
+  return { scriptPath };
+}
+
+async function activateScheduledTask(params: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  scriptPath: string;
+  description?: string;
+}) {
+  const taskDescription = params.description ?? "OpenClaw Gateway";
+
+  const taskName = resolveTaskName(params.env);
+  const quotedScript = quoteSchtasksArg(params.scriptPath);
   const baseArgs = [
     "/Create",
     "/F",
@@ -583,7 +606,7 @@ export async function installScheduledTask({
     "/TR",
     quotedScript,
   ];
-  const taskUser = resolveTaskUser(env);
+  const taskUser = resolveTaskUser(params.env);
   let create = await execSchtasks(
     taskUser ? [...baseArgs, "/RU", taskUser, "/NP", "/IT"] : baseArgs,
   );
@@ -593,20 +616,23 @@ export async function installScheduledTask({
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
-      const startupEntryPath = resolveStartupEntryPath(env);
+      const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = buildStartupLauncherScript({ description: taskDescription, scriptPath });
+      const launcher = buildStartupLauncherScript({
+        description: taskDescription,
+        scriptPath: params.scriptPath,
+      });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
-      launchFallbackTaskScript(scriptPath);
+      launchFallbackTaskScript(params.scriptPath);
       writeFormattedLines(
-        stdout,
+        params.stdout,
         [
           { label: "Installed Windows login item", value: startupEntryPath },
-          { label: "Task script", value: scriptPath },
+          { label: "Task script", value: params.scriptPath },
         ],
         { leadingBlankLine: true },
       );
-      return { scriptPath };
+      return;
     }
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
@@ -614,14 +640,26 @@ export async function installScheduledTask({
   await execSchtasks(["/Run", "/TN", taskName]);
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
-    stdout,
+    params.stdout,
     [
       { label: "Installed Scheduled Task", value: taskName },
-      { label: "Task script", value: scriptPath },
+      { label: "Task script", value: params.scriptPath },
     ],
     { leadingBlankLine: true },
   );
-  return { scriptPath };
+}
+
+export async function installScheduledTask(
+  args: GatewayServiceInstallArgs,
+): Promise<{ scriptPath: string }> {
+  const staged = await writeScheduledTaskScript(args);
+  await activateScheduledTask({
+    env: args.env,
+    stdout: args.stdout,
+    scriptPath: staged.scriptPath,
+    description: staged.taskDescription,
+  });
+  return { scriptPath: staged.scriptPath };
 }
 
 export async function uninstallScheduledTask({

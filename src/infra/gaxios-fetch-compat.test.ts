@@ -1,12 +1,21 @@
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { ProxyAgent } from "undici";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_GAXIOS_CONSTRUCTOR_OVERRIDE = "__OPENCLAW_TEST_GAXIOS_CONSTRUCTOR__";
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+let ProxyAgent: typeof import("undici").ProxyAgent;
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
+  vi.resetModules();
+  const require = createRequire(import.meta.url);
+  ({ ProxyAgent } = require("undici") as typeof import("undici"));
+});
 
 describe("gaxios fetch compat", () => {
   afterEach(() => {
+    vi.doUnmock("undici");
     Reflect.deleteProperty(globalThis as object, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE);
     vi.resetModules();
     vi.restoreAllMocks();
@@ -82,7 +91,7 @@ describe("gaxios fetch compat", () => {
     }
   });
 
-  it("translates proxy agents into undici dispatchers for native fetch", async () => {
+  it("translates proxy-agent-like inputs into undici dispatchers for native fetch", async () => {
     const fetchMock = vi.fn<FetchLike>(async () => {
       return new Response("ok", {
         headers: { "content-type": "text/plain" },
@@ -93,7 +102,7 @@ describe("gaxios fetch compat", () => {
 
     const compatFetch = createGaxiosCompatFetch(fetchMock);
     await compatFetch("https://example.com", {
-      agent: new HttpsProxyAgent("http://proxy.example:8080"),
+      agent: { proxy: new URL("http://proxy.example:8080") },
     } as RequestInit);
 
     expect(fetchMock).toHaveBeenCalledOnce();

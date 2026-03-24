@@ -49,6 +49,10 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+If the browser retries pairing with changed auth details (role/scopes/public
+key), the previous pending request is superseded and a new `requestId` is
+created. Re-run `openclaw devices list` before approval.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
@@ -242,7 +246,7 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-toke
 Notes:
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-- `token` is imported from the URL fragment, stored in sessionStorage for the current browser tab session and selected gateway URL, and stripped from the URL; it is not stored in localStorage.
+- `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
 - `password` is kept in memory only.
 - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
@@ -250,6 +254,9 @@ Notes:
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
 - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
   explicitly (full origins). This includes remote dev setups.
+- Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
+  local testing. It means allow any browser origin, not “match whatever host I am
+  using.”
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
   Host-header origin fallback mode, but it is a dangerous security mode.
 

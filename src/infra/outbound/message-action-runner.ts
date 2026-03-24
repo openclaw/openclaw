@@ -7,16 +7,16 @@ import {
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasInteractiveReplyBlocks, hasReplyContent } from "../../interactive/payload.js";
+import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
+import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -40,6 +40,10 @@ import {
   readBooleanParam,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
+import {
+  prepareOutboundMirrorRoute,
+  resolveAndApplyOutboundThreadId,
+} from "./message-action-threading.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -62,40 +66,13 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
-function resolveAndApplyOutboundThreadId(
-  params: Record<string, unknown>,
-  ctx: {
-    cfg: OpenClawConfig;
-    channel: ChannelId;
-    to: string;
-    accountId?: string | null;
-    toolContext?: ChannelThreadingToolContext;
-  },
-): string | undefined {
-  const threadId = readStringParam(params, "threadId");
-  const resolved =
-    threadId ??
-    getChannelPlugin(ctx.channel)?.threading?.resolveAutoThreadId?.({
-      cfg: ctx.cfg,
-      accountId: ctx.accountId,
-      to: ctx.to,
-      toolContext: ctx.toolContext,
-      replyToId: readStringParam(params, "replyTo"),
-    });
-  // Write auto-resolved threadId back into params so downstream dispatch
-  // (plugin `readStringParam(params, "threadId")`) picks it up.
-  if (resolved && !params.threadId) {
-    params.threadId = resolved;
-  }
-  return resolved ?? undefined;
-}
-
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
   requesterSenderId?: string | null;
+  sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
@@ -317,14 +294,16 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readStringParam(params, "channel");
-  const configured = await listConfiguredMessageChannels(input.cfg);
-  if (configured.length === 0) {
-    throw new Error("Broadcast requires at least one configured channel.");
-  }
   const targetChannels =
     channelHint && channelHint.trim().toLowerCase() !== "all"
       ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
-      : configured;
+      : await (async () => {
+          const configured = await listConfiguredMessageChannels(input.cfg);
+          if (configured.length === 0) {
+            throw new Error("Broadcast requires at least one configured channel.");
+          }
+          return configured;
+        })();
   const results: Array<{
     channel: ChannelId;
     to: string;
@@ -476,65 +455,43 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  if (channel === "whatsapp") {
-    message = message.replace(/^(?:[ \t]*\r?\n)+/, "");
-    if (!message.trim()) {
-      message = "";
-    }
-  }
   if (
-    !hasReplyContent({
-      text: message,
-      mediaUrl,
-      mediaUrls: mergedMediaUrls,
-      interactive: params.interactive,
-      extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
-    })
+    !hasReplyPayloadContent(
+      {
+        text: message,
+        mediaUrl,
+        mediaUrls: mergedMediaUrls,
+        interactive: params.interactive,
+      },
+      {
+        extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
+      },
+    )
   ) {
     throw new Error("send requires text or media");
   }
   params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
-  const forceDocument = readBooleanParam(params, "forceDocument") ?? false;
+  const forceDocument =
+    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
   const replyToId = readStringParam(params, "replyTo");
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
     channel,
     to,
+    actionParams: params,
     accountId,
     toolContext: input.toolContext,
+    agentId,
+    dryRun,
+    resolvedTarget,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveOutboundSessionRoute,
+    ensureOutboundSessionEntry,
   });
-  const outboundRoute =
-    agentId && !dryRun
-      ? await resolveOutboundSessionRoute({
-          cfg,
-          channel,
-          agentId,
-          accountId,
-          target: to,
-          resolvedTarget,
-          replyToId,
-          threadId: resolvedThreadId,
-        })
-      : null;
-  if (outboundRoute && agentId && !dryRun) {
-    await ensureOutboundSessionEntry({
-      cfg,
-      agentId,
-      channel,
-      accountId,
-      route: outboundRoute,
-    });
-  }
-  if (outboundRoute && !dryRun) {
-    params.__sessionKey = outboundRoute.sessionKey;
-  }
-  if (agentId) {
-    params.__agentId = agentId;
-  }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   throwIfAborted(abortSignal);
@@ -590,41 +547,14 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
-  const question = readStringParam(params, "pollQuestion", {
-    required: true,
-  });
-  const options = readStringArrayParam(params, "pollOption", { required: true });
-  if (options.length < 2) {
-    throw new Error("pollOption requires at least two values");
-  }
   const silent = readBooleanParam(params, "silent");
-  const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-  const pollAnonymous = readBooleanParam(params, "pollAnonymous");
-  const pollPublic = readBooleanParam(params, "pollPublic");
-  const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
-  const durationHours = readNumberParam(params, "pollDurationHours", {
-    integer: true,
-    strict: true,
-  });
-  const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-    integer: true,
-    strict: true,
-  });
-  const maxSelections = resolvePollMaxSelections(options.length, allowMultiselect);
-
-  if (durationSeconds !== undefined && channel !== "telegram") {
-    throw new Error("pollDurationSeconds is only supported for Telegram polls");
-  }
-  if (isAnonymous !== undefined && channel !== "telegram") {
-    throw new Error("pollAnonymous/pollPublic are only supported for Telegram polls");
-  }
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
-    channel,
     to,
     accountId,
     toolContext: input.toolContext,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
   });
 
   const base = typeof params.message === "string" ? params.message : "";
@@ -651,14 +581,29 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
       silent: silent ?? undefined,
     },
-    to,
-    question,
-    options,
-    maxSelections,
-    durationSeconds: durationSeconds ?? undefined,
-    durationHours: durationHours ?? undefined,
-    threadId: resolvedThreadId ?? undefined,
-    isAnonymous,
+    resolveCorePoll: () => {
+      const question = readStringParam(params, "pollQuestion", {
+        required: true,
+      });
+      const options = readStringArrayParam(params, "pollOption", { required: true });
+      if (options.length < 2) {
+        throw new Error("pollOption requires at least two values");
+      }
+      const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+      const durationHours = readNumberParam(params, "pollDurationHours", {
+        integer: true,
+        strict: true,
+      });
+
+      return {
+        to,
+        question,
+        options,
+        maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
+        durationHours: durationHours ?? undefined,
+        threadId: resolvedThreadId ?? undefined,
+      };
+    },
   });
 
   return {
@@ -675,7 +620,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal, agentId } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
@@ -701,6 +646,9 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     params,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    agentId,
     gateway,
     toolContext: input.toolContext,
     dryRun,
@@ -836,6 +784,7 @@ export async function runMessageAction(
     dryRun,
     gateway,
     input,
+    agentId: resolvedAgentId,
     abortSignal: input.abortSignal,
   });
 }

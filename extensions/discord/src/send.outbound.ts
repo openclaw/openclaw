@@ -14,7 +14,7 @@ import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMediaRaw } from "../../whatsapp/src/media.js";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
@@ -48,6 +48,7 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  filename?: string;
   mediaLocalRoots?: readonly string[];
   verbose?: boolean;
   rest?: RequestClient;
@@ -214,6 +215,7 @@ export async function sendMessageDiscord(
           threadId,
           mediaCaption ?? "",
           opts.mediaUrl,
+          opts.filename,
           opts.mediaLocalRoots,
           mediaMaxBytes,
           undefined,
@@ -275,6 +277,7 @@ export async function sendMessageDiscord(
         channelId,
         textWithMentions,
         opts.mediaUrl,
+        opts.filename,
         opts.mediaLocalRoots,
         mediaMaxBytes,
         opts.replyTo,

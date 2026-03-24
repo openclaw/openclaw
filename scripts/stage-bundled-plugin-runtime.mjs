@@ -12,8 +12,30 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
   return relativeTarget || ".";
 }
 
+function ensureSymlink(targetValue, targetPath, type) {
+  try {
+    fs.symlinkSync(targetValue, targetPath, type);
+    return;
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+  }
+
+  try {
+    if (fs.lstatSync(targetPath).isSymbolicLink() && fs.readlinkSync(targetPath) === targetValue) {
+      return;
+    }
+  } catch {
+    // Fall through and recreate the target when inspection fails.
+  }
+
+  removePathIfExists(targetPath);
+  fs.symlinkSync(targetValue, targetPath, type);
+}
+
 function symlinkPath(sourcePath, targetPath, type) {
-  fs.symlinkSync(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -63,7 +85,7 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     }
 
     if (dirent.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
+      ensureSymlink(fs.readlinkSync(sourcePath), targetPath);
       continue;
     }
 
@@ -91,14 +113,13 @@ function linkPluginNodeModules(params) {
   if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
-  fs.symlinkSync(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
+  ensureSymlink(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
 }
 
 export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
-  const sourceExtensionsRoot = path.join(repoRoot, "extensions");
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 
@@ -116,12 +137,12 @@ export function stageBundledPluginRuntime(params = {}) {
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
-    const sourcePluginNodeModulesDir = path.join(sourceExtensionsRoot, dirent.name, "node_modules");
+    const distPluginNodeModulesDir = path.join(distPluginDir, "node_modules");
 
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
       runtimePluginDir,
-      sourcePluginNodeModulesDir,
+      sourcePluginNodeModulesDir: distPluginNodeModulesDir,
     });
   }
 }

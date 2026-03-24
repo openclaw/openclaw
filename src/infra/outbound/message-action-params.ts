@@ -1,13 +1,12 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
+import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { extensionForMime } from "../../media/mime.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -47,27 +46,9 @@ function inferAttachmentFilename(params: {
 }): string | undefined {
   const mediaHint = params.mediaHint?.trim();
   if (mediaHint) {
-    try {
-      if (mediaHint.startsWith("file://")) {
-        const filePath = fileURLToPath(mediaHint);
-        const base = path.basename(filePath);
-        if (base) {
-          return base;
-        }
-      } else if (/^https?:\/\//i.test(mediaHint)) {
-        const url = new URL(mediaHint);
-        const base = path.basename(url.pathname);
-        if (base) {
-          return base;
-        }
-      } else {
-        const base = path.basename(mediaHint);
-        if (base) {
-          return base;
-        }
-      }
-    } catch {
-      // fall through to content-type based default
+    const base = basenameFromMediaSource(mediaHint);
+    if (base) {
+      return base;
     }
   }
   const ext = params.contentType ? extensionForMime(params.contentType) : undefined;

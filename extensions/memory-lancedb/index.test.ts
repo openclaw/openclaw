@@ -18,6 +18,18 @@ const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
+type MemoryPluginTestConfig = {
+  embedding?: {
+    apiKey?: string;
+    model?: string;
+    dimensions?: number;
+  };
+  dbPath?: string;
+  captureMaxChars?: number;
+  autoCapture?: boolean;
+  autoRecall?: boolean;
+};
+
 function installTmpDirHarness(params: { prefix: string }) {
   let tmpDir = "";
   let dbPath = "";
@@ -51,19 +63,15 @@ describe("memory plugin e2e", () => {
       },
       dbPath: getDbPath(),
       ...overrides,
-    });
+    }) as MemoryPluginTestConfig | undefined;
   }
 
-  test("memory plugin registers and initializes correctly", async () => {
-    // Dynamic import to avoid loading LanceDB when not testing
+  test("memory plugin exports stable metadata", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     expect(memoryPlugin.id).toBe("memory-lancedb");
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
-    expect(memoryPlugin.configSchema).toBeDefined();
-    // oxlint-disable-next-line typescript/unbound-method
-    expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
   test("config schema parses valid config", async () => {
@@ -72,7 +80,6 @@ describe("memory plugin e2e", () => {
       autoRecall: true,
     });
 
-    expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
@@ -89,7 +96,7 @@ describe("memory plugin e2e", () => {
         apiKey: "${TEST_MEMORY_API_KEY}",
       },
       dbPath: getDbPath(),
-    });
+    }) as MemoryPluginTestConfig | undefined;
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
 
@@ -141,14 +148,7 @@ describe("memory plugin e2e", () => {
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => ({ limit }));
-
-    vi.resetModules();
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
-      },
-    }));
-    vi.doMock("@lancedb/lancedb", () => ({
+    const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
@@ -158,6 +158,16 @@ describe("memory plugin e2e", () => {
           delete: vi.fn(async () => undefined),
         })),
       })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
     }));
 
     try {
@@ -202,9 +212,12 @@ describe("memory plugin e2e", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-      expect(recallTool).toBeDefined();
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
+      expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
@@ -212,7 +225,7 @@ describe("memory plugin e2e", () => {
       });
     } finally {
       vi.doUnmock("openai");
-      vi.doUnmock("@lancedb/lancedb");
+      vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
   });
@@ -363,8 +376,8 @@ describeLive("memory plugin live tests", () => {
     });
 
     expect(storeResult.details?.action).toBe("created");
-    expect(storeResult.details?.id).toBeDefined();
     const storedId = storeResult.details?.id;
+    expect(storedId).toMatch(/.+/);
 
     // Test recall
     const recallResult = await recallTool.execute("test-call-2", {

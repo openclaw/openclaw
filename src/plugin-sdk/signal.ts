@@ -1,7 +1,10 @@
+// Private helper surface for the bundled signal plugin.
+// Keep this list additive and scoped to symbols used under extensions/signal.
+
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
-export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts.js";
+export type { ResolvedSignalAccount } from "../../extensions/signal/api.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -21,11 +24,15 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatCliCommand } from "../cli/command-format.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
 } from "../channels/plugins/normalize/signal.js";
+export { detectBinary } from "../plugins/setup-binary.js";
+export { installSignalCli } from "../plugins/signal-cli-install.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -47,10 +54,10 @@ export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
-} from "../../extensions/signal/src/accounts.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/src/reaction-level.js";
-export {
-  removeReactionSignal,
-  sendReactionSignal,
-} from "../../extensions/signal/src/send-reactions.js";
-export { sendMessageSignal } from "../../extensions/signal/src/send.js";
+} from "../../extensions/signal/api.js";
+export { monitorSignalProvider } from "../../extensions/signal/api.js";
+export { probeSignal } from "../../extensions/signal/api.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
+export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
+export { sendMessageSignal } from "../../extensions/signal/api.js";
+export { signalMessageActions } from "../../extensions/signal/api.js";
