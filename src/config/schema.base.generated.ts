@@ -5742,6 +5742,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                         ],
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },

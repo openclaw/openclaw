@@ -1,15 +1,12 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.3.22",
+  "version": "2026.3.23",
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
     "@microsoft/agents-hosting": "^1.4.1",
     "express": "^5.2.1",
     "uuid": "^13.0.0"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"

@@ -318,6 +318,21 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
+    searxng: z
+      .object({
+        baseUrl: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        allowPrivateNetwork: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    allowPrivateNetwork: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -332,6 +347,7 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    allowPrivateNetwork: z.boolean().optional(),
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),
