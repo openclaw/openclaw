@@ -4,7 +4,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { reportUsageToWebhookIfConfigured } from "../../gateway/usage-webhook.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -522,6 +523,17 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
+
+    // Report usage to external webhook (for billing/dashboard integration)
+    if (usage && hasNonzeroUsage(usage)) {
+      void reportUsageToWebhookIfConfigured({
+        cfg,
+        usage: usage as NormalizedUsage,
+        model: modelUsed,
+        channel: sessionCtx.OriginatingChannel,
+        sessionKey,
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

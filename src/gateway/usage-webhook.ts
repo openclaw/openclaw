@@ -6,7 +6,7 @@
  */
 
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 
 export interface UsageWebhookPayload {
   /** Workspace identifier (derived from session key). */
@@ -74,12 +74,14 @@ export async function reportUsageToWebhookIfConfigured(params: {
 
   try {
     const tokenHeader = webhookConfig.tokenHeader ?? "X-Gateway-Token";
-    const tokenRef = webhookConfig.token 
-      ? resolveSecretInputRef({ value: webhookConfig.token }).ref
-      : params.cfg.gateway?.auth?.token 
-        ? resolveSecretInputRef({ value: params.cfg.gateway.auth.token }).ref
-        : undefined;
-    const token = tokenRef?.resolvedValue;
+    const tokenValue = webhookConfig.token ?? params.cfg.gateway?.auth?.token;
+    const token = tokenValue 
+      ? await resolveSecretInputString({
+          config: params.cfg,
+          value: tokenValue,
+          env: process.env,
+        })
+      : undefined;
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
