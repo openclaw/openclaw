@@ -138,13 +138,26 @@ function createConsentInvokeHarness(params: {
     contentType: "text/plain",
     conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
   });
-  const handler = registerMSTeamsHandlers(createActivityHandler(), createDeps());
+  const handler = registerMSTeamsHandlers(
+    createActivityHandler(),
+    createDeps(),
+  ) as MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
   const { context, sendActivity } = createInvokeContext({
     conversationId: params.invokeConversationId,
     uploadId,
     action: params.action,
   });
   return { uploadId, handler, context, sendActivity };
+}
+
+function requirePendingUpload(uploadId: string) {
+  const upload = getPendingUpload(uploadId);
+  if (!upload) {
+    throw new Error(`expected pending upload ${uploadId}`);
+  }
+  return upload;
 }
 
 describe("msteams file consent invoke authz", () => {
@@ -161,7 +174,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -186,7 +199,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -200,7 +213,11 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
@@ -209,7 +226,7 @@ describe("msteams file consent invoke authz", () => {
       action: "decline",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -219,7 +236,11 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
     expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });

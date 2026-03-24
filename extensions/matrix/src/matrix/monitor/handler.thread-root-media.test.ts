@@ -1,29 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
-import { setMatrixRuntime } from "../../runtime.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler thread root media", () => {
   it("keeps image-only thread roots visible via attachment markers", async () => {
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
 
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
     const formatAgentEnvelope = vi
@@ -44,6 +28,9 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
             sessionKey: "agent:main:matrix:channel:!room:example.org",
             mainSessionKey: "agent:main:main",
           }),
+        },
+        mentions: {
+          buildMentionRegexes: vi.fn().mockReturnValue([]),
         },
         session: {
           resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),

@@ -9,6 +9,7 @@ import {
   resolveAllowlistCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolvePolicyAllowlistCandidatePath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -144,6 +145,65 @@ describe("exec-command-resolution", () => {
     ]);
     expect(niceResolution?.rawExecutable).toBe("bash");
     expect(niceResolution?.executableName.toLowerCase()).toContain("bash");
+
+    const timeResolution = resolveCommandResolutionFromArgv(
+      ["/usr/bin/time", "-p", "rg", "-n", "needle"],
+      undefined,
+      makePathEnv(fixture.binDir),
+    );
+    expect(timeResolution?.resolvedPath).toBe(fixture.exePath);
+    expect(timeResolution?.executableName).toBe(fixture.exeName);
+  });
+
+  it("keeps shell multiplexer wrappers as a separate policy target", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = path.join(dir, "busybox");
+    fs.writeFileSync(busybox, "");
+    fs.chmodSync(busybox, 0o755);
+
+    const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    expect(resolution?.rawExecutable).toBe("sh");
+    expect(resolution?.effectiveArgv).toEqual(["sh", "-lc", "echo hi"]);
+    expect(resolution?.wrapperChain).toEqual(["busybox"]);
+    expect(resolution?.policyResolution?.rawExecutable).toBe(busybox);
+    expect(resolution?.policyResolution?.resolvedPath).toBe(busybox);
+    expect(resolvePolicyAllowlistCandidatePath(resolution ?? null, dir)).toBe(busybox);
+    expect(resolution?.executableName.toLowerCase()).toContain("sh");
+  });
+
+  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = path.join(dir, "busybox");
+    fs.writeFileSync(busybox, "");
+    fs.chmodSync(busybox, 0o755);
+
+    const shellResolution = resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
+    expect(shellResolution?.resolvedPath).toBeTruthy();
+
+    const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    const evalResult = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: `${busybox} sh -lc echo hi`,
+            argv: [busybox, "sh", "-lc", "echo hi"],
+            resolution: wrappedResolution,
+          },
+        ],
+      },
+      allowlist: [{ pattern: shellResolution?.resolvedPath ?? "" }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+    });
+
+    expect(evalResult.allowlistSatisfied).toBe(false);
   });
 
   it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {

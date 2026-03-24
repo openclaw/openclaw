@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -24,6 +27,7 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -129,11 +133,7 @@ vi.mock("./daemon-cli.js", () => ({
 
 // Mock the runtime
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: runtimeCapture,
 }));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
@@ -146,6 +146,7 @@ const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
+const { resolveGitInstallDir } = await import("./update-cli/shared.js");
 
 describe("update-cli", () => {
   const fixtureRoot = "/tmp/openclaw-update-tests";
@@ -288,6 +289,8 @@ describe("update-cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -447,6 +450,24 @@ describe("update-cli", () => {
       await updateStatusCommand(testCase.options);
       testCase.assert();
     }
+  });
+
+  it("parses update status --json as the subcommand option", async () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+    let seenJson = false;
+    const update = program.command("update").option("--json", "", false);
+    update
+      .command("status")
+      .option("--json", "", false)
+      .action((opts) => {
+        seenJson = Boolean(opts.json);
+      });
+
+    await program.parseAsync(["node", "openclaw", "update", "status", "--json"]);
+
+    expect(seenJson).toBe(true);
   });
 
   it.each([
@@ -693,6 +714,92 @@ describe("update-cli", () => {
       await testCase.run();
       testCase.assert();
     }
+  });
+
+  it("persists the requested channel only after a successful package update", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    const installCallIndex = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.findIndex(
+        (call) =>
+          Array.isArray(call[0]) &&
+          call[0][0] === "npm" &&
+          call[0][1] === "i" &&
+          call[0][2] === "-g",
+      );
+    expect(installCallIndex).toBeGreaterThanOrEqual(0);
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      update: {
+        channel: "beta",
+      },
+    });
+    expect(
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[installCallIndex] ?? 0,
+    ).toBeLessThan(
+      vi.mocked(writeConfigFile).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it("does not persist the requested channel when the package update fails", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        return {
+          stdout: "",
+          stderr: "install failed",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the requested channel when plugin sync writes config after update", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: true,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    const lastWrite = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[0] as
+      | { update?: { channel?: string } }
+      | undefined;
+    expect(lastWrite?.update?.channel).toBe("beta");
   });
 
   it("updateCommand handles service env refresh and restart behavior", async () => {
@@ -1020,5 +1127,13 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     });
+  });
+
+  it("uses ~/openclaw as the default dev checkout directory", async () => {
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/tmp/oc-home");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: undefined }, async () => {
+      expect(resolveGitInstallDir()).toBe(path.posix.join("/tmp/oc-home", "openclaw"));
+    });
+    homedirSpy.mockRestore();
   });
 });

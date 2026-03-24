@@ -333,34 +333,51 @@ guest_run_openclaw() {
   local env_value="${2:-}"
   shift 2
 
-  local args_literal stdout_name stderr_name env_name_q env_value_q
+  local args_literal env_name_q env_value_q
   args_literal="$(ps_array_literal "$@")"
-  stdout_name="openclaw-stdout-$RANDOM-$RANDOM.log"
-  stderr_name="openclaw-stderr-$RANDOM-$RANDOM.log"
   env_name_q="$(ps_single_quote "$env_name")"
   env_value_q="$(ps_single_quote "$env_value")"
 
   guest_powershell "$(cat <<EOF
-\$stdout = Join-Path \$env:TEMP '$stdout_name'
-\$stderr = Join-Path \$env:TEMP '$stderr_name'
-try {
-  if ('${env_name_q}' -ne '') {
-    Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
-  }
-  \$proc = Start-Process -FilePath (Join-Path \$env:APPDATA 'npm\openclaw.cmd') -ArgumentList $args_literal -NoNewWindow -PassThru -RedirectStandardOutput \$stdout -RedirectStandardError \$stderr
-  \$proc.WaitForExit()
-  if (Test-Path \$stdout) {
-    Get-Content \$stdout
-  }
-  if (Test-Path \$stderr) {
-    Get-Content \$stderr
-  }
-  exit \$proc.ExitCode
-} finally {
-  Remove-Item \$stdout, \$stderr -Force -ErrorAction SilentlyContinue
+\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+\$args = $args_literal
+if ('${env_name_q}' -ne '') {
+  Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
 }
+# openclaw.cmd preserves multi-word --message args reliably here; Start-Process
+# against the shim can re-split argv and make Commander reject the turn.
+\$output = & \$openclaw @args 2>&1
+if (\$null -ne \$output) {
+  \$output | ForEach-Object { \$_ }
+}
+exit \$LASTEXITCODE
 EOF
 )"
+}
+
+run_windows_retry() {
+  local label="$1"
+  local max_attempts="$2"
+  shift 2
+
+  local attempt rc
+  rc=0
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    printf '%s attempt %d/%d\n' "$label" "$attempt" "$max_attempts"
+    set +e
+    "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    warn "$label attempt $attempt failed (rc=$rc)"
+    if (( attempt < max_attempts )); then
+      wait_for_guest_ready >/dev/null 2>&1 || true
+      sleep 5
+    fi
+  done
+  return "$rc"
 }
 
 restore_snapshot() {
@@ -721,13 +738,15 @@ install_latest_release() {
   if [[ -n "$INSTALL_VERSION" ]]; then
     version_flag_q="-Tag '$(ps_single_quote "$INSTALL_VERSION")' "
   fi
-  guest_powershell "$(cat <<EOF
+  local install_script
+  install_script="$(cat <<EOF
 \$ProgressPreference = 'SilentlyContinue'
 \$script = Invoke-RestMethod -Uri '$install_url_q'
 & ([scriptblock]::Create(\$script)) ${version_flag_q}-NoOnboard
 & (Join-Path \$env:APPDATA 'npm\openclaw.cmd') --version
 EOF
 )"
+  run_windows_retry "latest release installer" 2 guest_powershell "$install_script"
 }
 
 install_main_tgz() {
@@ -735,7 +754,11 @@ install_main_tgz() {
   local temp_name="$2"
   local tgz_url
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
-  guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
+  # Global npm installs on the Windows guest can stay silent for long stretches.
+  # Treat the phase log plus retry wrapper as the primary signal before assuming
+  # the guest hung.
+  run_windows_retry "main tgz install" 2 \
+    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
 }
 
 verify_version_contains() {

@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
-import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
@@ -17,6 +17,7 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/secur
 import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   applyAppendOnlyStreamUpdate,
@@ -375,7 +376,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     target: prepared.replyTarget,
     token: ctx.botToken,
     accountId: account.accountId,
-    maxChars: Math.min(ctx.textLimit, 4000),
+    maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
     resolveThreadTs: () => {
       const ts = replyPlan.nextThreadTs();
       if (ts) {
