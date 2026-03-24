@@ -6,15 +6,19 @@ import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export type CommandResolution = {
+export type ExecutableResolution = {
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
   executableName: string;
+};
+
+export type CommandResolution = ExecutableResolution & {
   effectiveArgv?: string[];
   wrapperChain?: string[];
   policyBlocked?: boolean;
   blockedWrapper?: string;
+  policyResolution?: ExecutableResolution;
 };
 
 function parseFirstToken(command: string): string | null {
@@ -45,8 +49,30 @@ function tryResolveRealpath(filePath: string | undefined): string | undefined {
   }
 }
 
+function buildExecutableResolution(
+  rawExecutable: string,
+  params: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): ExecutableResolution {
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  return {
+    rawExecutable,
+    resolvedPath,
+    resolvedRealPath,
+    executableName,
+  };
+}
+
 function buildCommandResolution(params: {
   rawExecutable: string;
+  policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   effectiveArgv: string[];
@@ -54,21 +80,18 @@ function buildCommandResolution(params: {
   policyBlocked: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const resolvedPath = resolveExecutableCandidatePath(params.rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-  });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : params.rawExecutable;
+  const resolution = buildExecutableResolution(params.rawExecutable, params);
+  const policyResolution =
+    params.policyRawExecutable && params.policyRawExecutable !== params.rawExecutable
+      ? buildExecutableResolution(params.policyRawExecutable, params)
+      : undefined;
   return {
-    rawExecutable: params.rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
+    ...resolution,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
+    policyResolution,
   };
 }
 
@@ -104,6 +127,7 @@ export function resolveCommandResolutionFromArgv(
   }
   return buildCommandResolution({
     rawExecutable,
+    policyRawExecutable: plan.policyArgv[0]?.trim(),
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
@@ -115,6 +139,13 @@ export function resolveCommandResolutionFromArgv(
 
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(resolution, cwd);
+}
+
+function resolveExecutableCandidatePathFromResolution(
+  resolution: ExecutableResolution | null | undefined,
   cwd?: string,
 ): string | undefined {
   if (!resolution) {
@@ -138,9 +169,19 @@ export function resolveAllowlistCandidatePath(
   return path.resolve(base, expanded);
 }
 
+export function resolvePolicyAllowlistCandidatePath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    resolution?.policyResolution ?? resolution,
+    cwd,
+  );
+}
+
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
-  resolution: CommandResolution | null,
+  resolution: ExecutableResolution | null,
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
