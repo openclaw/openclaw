@@ -521,7 +521,11 @@ export function renderAgentSkills(params: {
             .value=${params.filter}
             @input=${(e: Event) => params.onFilterChange((e.target as HTMLInputElement).value)}
             placeholder="Search skills"
+            type="search"
             autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
             name="agent-skills-filter"
           />
         </label>

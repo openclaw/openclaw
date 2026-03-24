@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderAgentTools } from "./agents-panels-tools-skills.ts";
+import { renderAgentSkills, renderAgentTools } from "./agents-panels-tools-skills.ts";
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
@@ -141,5 +141,66 @@ describe("agents tools panel (browser)", () => {
     expect(text).toContain("Available Right Now");
     expect(text).toContain("Message Actions");
     expect(text).toContain("Channel: discord");
+  });
+
+  it("renders the skill filter as a search input with autofill-resistant attributes", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        activeAgentId: "main",
+        report: {
+          workspaceDir: "/tmp/openclaw-workspace",
+          managedSkillsDir: "/tmp/openclaw-workspace/skills",
+          skills: [
+            {
+              skillKey: "github",
+              name: "GitHub",
+              description: "GitHub operations",
+              source: "workspace",
+              filePath: "/tmp/openclaw-workspace/skills/github/SKILL.md",
+              baseDir: "/tmp/openclaw-workspace/skills/github",
+              disabled: false,
+              eligible: true,
+              bundled: false,
+              always: false,
+              blockedByAllowlist: false,
+              requirements: { bins: [], env: [], config: [], os: [] },
+              configChecks: [],
+              install: [],
+              missing: { bins: [], env: [], config: [], os: [] },
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+        configForm: {
+          agents: {
+            list: [{ id: "main", skills: ["GitHub"] }],
+          },
+        } as Record<string, unknown>,
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const input = container.querySelector<HTMLInputElement>('input[name="agent-skills-filter"]');
+    expect(input).not.toBeNull();
+    expect(input?.getAttribute("type")).toBe("search");
+    expect(input?.getAttribute("autocomplete")).toBe("off");
+    expect(input?.getAttribute("autocapitalize")).toBe("off");
+    expect(input?.getAttribute("autocorrect")).toBe("off");
+    expect(input?.getAttribute("spellcheck")).toBe("false");
   });
 });
