@@ -12,6 +12,7 @@ const mockState = vi.hoisted(() => ({
   fetchGraphJson: vi.fn(),
   postGraphJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
+  findByUserId: vi.fn(),
 }));
 
 vi.mock("./graph.js", () => ({
@@ -19,6 +20,12 @@ vi.mock("./graph.js", () => ({
   fetchGraphJson: mockState.fetchGraphJson,
   postGraphJson: mockState.postGraphJson,
   deleteGraphRequest: mockState.deleteGraphRequest,
+}));
+
+vi.mock("./conversation-store-fs.js", () => ({
+  createMSTeamsConversationStoreFs: () => ({
+    findByUserId: mockState.findByUserId,
+  }),
 }));
 
 const TOKEN = "test-graph-token";
@@ -29,6 +36,42 @@ describe("getMessageMSTeams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  });
+
+  it("resolves user: target to conversation ID via store", async () => {
+    mockState.findByUserId.mockResolvedValue({
+      conversationId: "19:resolved-chat@thread.tacv2",
+      reference: {},
+    });
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "From user DM" },
+      createdDateTime: "2026-03-23T12:00:00Z",
+    });
+
+    await getMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "user:aad-object-id-123",
+      messageId: "msg-1",
+    });
+
+    expect(mockState.findByUserId).toHaveBeenCalledWith("aad-object-id-123");
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent("19:resolved-chat@thread.tacv2")}/messages/msg-1`,
+    });
+  });
+
+  it("throws when user: target has no stored conversation", async () => {
+    mockState.findByUserId.mockResolvedValue(null);
+
+    await expect(
+      getMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "user:unknown-user",
+        messageId: "msg-1",
+      }),
+    ).rejects.toThrow("No conversation found for user:unknown-user");
   });
 
   it("strips conversation: prefix from target", async () => {
