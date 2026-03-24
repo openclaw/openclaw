@@ -17,16 +17,21 @@ describe("line runtime api", () => {
       "line-runtime",
     ];
     const script = `
+import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
 
 const root = ${JSON.stringify(root)};
 const runtimeApiPath = ${JSON.stringify(runtimeApiPath)};
 const alias = Object.fromEntries(
-  ${JSON.stringify(pluginSdkSubpaths)}.map((name) => [
-    "openclaw/plugin-sdk/" + name,
-    path.join(root, "dist", "plugin-sdk", name + ".js"),
-  ]),
+  ${JSON.stringify(pluginSdkSubpaths)}.map((name) => {
+    const distPath = path.join(root, "dist", "plugin-sdk", name + ".js");
+    const srcPath = path.join(root, "src", "plugin-sdk", name + ".ts");
+    return [
+      "openclaw/plugin-sdk/" + name,
+      fs.existsSync(distPath) ? distPath : srcPath,
+    ];
+  }),
 );
 const jiti = createJiti(path.join(root, "openclaw.mjs"), {
   interopDefault: true,
