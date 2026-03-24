@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { startTelegramWebhook } from "./webhook.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -40,10 +39,53 @@ function collectResponseBody(
   });
 }
 
+function createSingleSettlement<T>(params: {
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+  clear: () => void;
+}) {
+  let settled = false;
+  return {
+    isSettled() {
+      return settled;
+    },
+    resolve(value: T) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      params.clear();
+      params.resolve(value);
+    },
+    reject(error: unknown) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      params.clear();
+      params.reject(error);
+    },
+  };
+}
+
 vi.mock("grammy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("grammy")>();
   return {
     ...actual,
+    API_CONSTANTS: actual.API_CONSTANTS ?? {
+      DEFAULT_UPDATE_TYPES: ["message"],
+      ALL_UPDATE_TYPES: ["message"],
+    },
+    InputFile:
+      actual.InputFile ??
+      class InputFile {
+        constructor(public readonly path: string) {}
+      },
+    GrammyError:
+      actual.GrammyError ??
+      class GrammyError extends Error {
+        description = "";
+      },
     webhookCallback: webhookCallbackSpy,
   };
 });
@@ -51,6 +93,13 @@ vi.mock("grammy", async (importOriginal) => {
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
+
+let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ startTelegramWebhook } = await import("./webhook.js"));
+});
 
 async function fetchWithTimeout(
   input: string,
@@ -96,23 +145,11 @@ async function postWebhookHeadersOnly(params: {
   timeoutMs?: number;
 }): Promise<{ statusCode: number; body: string }> {
   return await new Promise((resolve, reject) => {
-    let settled = false;
-    const finishResolve = (value: { statusCode: number; body: string }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve(value);
-    };
-    const finishReject = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      reject(error);
-    };
+    const settle = createSingleSettlement({
+      resolve,
+      reject,
+      clear: () => clearTimeout(timeout),
+    });
 
     const req = request(
       {
@@ -128,7 +165,7 @@ async function postWebhookHeadersOnly(params: {
       },
       (res) => {
         collectResponseBody(res, (payload) => {
-          finishResolve(payload);
+          settle.resolve(payload);
           req.destroy();
         });
       },
@@ -138,14 +175,14 @@ async function postWebhookHeadersOnly(params: {
       req.destroy(
         new Error(`webhook header-only post timed out after ${params.timeoutMs ?? 5_000}ms`),
       );
-      finishReject(new Error("timed out waiting for webhook response"));
+      settle.reject(new Error("timed out waiting for webhook response"));
     }, params.timeoutMs ?? 5_000);
 
     req.on("error", (error) => {
-      if (settled && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
+      if (settle.isSettled() && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
         return;
       }
-      finishReject(error);
+      settle.reject(error);
     });
 
     req.flushHeaders();
@@ -173,23 +210,11 @@ async function postWebhookPayloadWithChunkPlan(params: {
     let bytesQueued = 0;
     let chunksQueued = 0;
     let phase: "writing" | "awaiting-response" = "writing";
-    let settled = false;
-    const finishResolve = (value: { statusCode: number; body: string }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve(value);
-    };
-    const finishReject = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      reject(error);
-    };
+    const settle = createSingleSettlement({
+      resolve,
+      reject,
+      clear: () => clearTimeout(timeout),
+    });
 
     const req = request(
       {
@@ -204,12 +229,12 @@ async function postWebhookPayloadWithChunkPlan(params: {
         },
       },
       (res) => {
-        collectResponseBody(res, finishResolve);
+        collectResponseBody(res, settle.resolve);
       },
     );
 
     const timeout = setTimeout(() => {
-      finishReject(
+      settle.reject(
         new Error(
           `webhook post timed out after ${params.timeoutMs ?? 15_000}ms (phase=${phase}, bytesQueued=${bytesQueued}, chunksQueued=${chunksQueued}, totalBytes=${payloadBuffer.length})`,
         ),
@@ -218,7 +243,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
     }, params.timeoutMs ?? 15_000);
 
     req.on("error", (error) => {
-      finishReject(error);
+      settle.reject(error);
     });
 
     const writeAll = async () => {
@@ -251,7 +276,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
     };
 
     void writeAll().catch((error) => {
-      finishReject(error);
+      settle.reject(error);
     });
   });
 }
@@ -431,6 +456,7 @@ describe("startTelegramWebhook", () => {
           expect.objectContaining({
             certificate: expect.objectContaining({
               fileData: "/path/to/cert.pem",
+              filename: "cert.pem",
             }),
           }),
         );

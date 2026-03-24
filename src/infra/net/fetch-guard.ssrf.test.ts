@@ -1,4 +1,3 @@
-import { EnvHttpProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
 
@@ -11,6 +10,14 @@ function redirectResponse(location: string): Response {
 
 function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
+}
+
+function getDispatcherClassName(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const ctor = (value as { constructor?: unknown }).constructor;
+  return typeof ctor === "function" && ctor.name ? ctor.name : null;
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
@@ -70,10 +77,10 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (params.expectEnvProxy) {
-        expect(requestInit.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+        expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
       } else {
         expect(requestInit.dispatcher).toBeDefined();
-        expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+        expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       }
       return okResponse();
     });
@@ -131,6 +138,21 @@ describe("fetchWithSsrFGuard hardening", () => {
       policy: { allowRfc2544BenchmarkRange: true },
     });
     expect(result.response.status).toBe(200);
+  });
+
+  it("fails closed for plain HTTP targets when explicit proxy mode requires pinned DNS", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://public.example/resource",
+        fetchImpl,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://127.0.0.1:7890",
+        },
+      }),
+    ).rejects.toThrow(/explicit proxy ssrf pinning requires https targets/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("blocks redirect chains that hop to private hosts", async () => {
@@ -276,6 +298,40 @@ describe("fetchWithSsrFGuard hardening", () => {
       lookupFn: createPublicLookup(),
       maxRedirects,
     });
+  });
+
+  it("blocks URLs that use credentials to obscure a private host", async () => {
+    const fetchImpl = vi.fn();
+    // http://attacker.com@127.0.0.1:8080/ — URL parser extracts hostname as 127.0.0.1
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://attacker.com@127.0.0.1:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks private IPv6 addresses embedded in URLs with credentials", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://user:pass@[::1]:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks redirect to a URL using credentials to obscure a private host", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [redirectResponse("http://public@127.0.0.1:6379/")],
+      expectedError: /private|internal|blocked/i,
+      lookupFn,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {

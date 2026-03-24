@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -16,6 +17,7 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
@@ -25,9 +27,7 @@ import {
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
-  sanitizeHostBaseEnv,
   execSchema,
-  validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
 import type {
   ExecElevatedDefaults,
@@ -44,6 +44,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -51,6 +52,30 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+function buildExecForegroundResult(params: {
+  outcome: ExecProcessOutcome;
+  cwd?: string;
+  warningText?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  if (params.outcome.status === "failed") {
+    return failedTextResult(`${warningText}${params.outcome.reason}`, {
+      status: "failed",
+      exitCode: params.outcome.exitCode ?? null,
+      durationMs: params.outcome.durationMs,
+      aggregated: params.outcome.aggregated,
+      cwd: params.cwd,
+    });
+  }
+  return textResult(`${warningText}${params.outcome.aggregated || "(no output)"}`, {
+    status: "completed",
+    exitCode: params.outcome.exitCode,
+    durationMs: params.outcome.durationMs,
+    aggregated: params.outcome.aggregated,
+    cwd: params.cwd,
+  });
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -362,24 +387,58 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
-
-      // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
-      // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
-      if (host !== "sandbox" && params.env) {
-        validateHostEnv(params.env);
+      const hostEnvResult =
+        host === "sandbox"
+          ? null
+          : sanitizeHostExecEnvWithDiagnostics({
+              baseEnv: inheritedBaseEnv,
+              overrides: params.env,
+              blockPathOverrides: true,
+            });
+      if (
+        hostEnvResult &&
+        params.env &&
+        (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
+          hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
+      ) {
+        const blockedKeys = hostEnvResult.rejectedOverrideBlockedKeys;
+        const invalidKeys = hostEnvResult.rejectedOverrideInvalidKeys;
+        const pathBlocked = blockedKeys.includes("PATH");
+        if (pathBlocked && blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
+          );
+        }
+        if (blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            `Security Violation: Environment variable '${blockedKeys[0]}' is forbidden during host execution.`,
+          );
+        }
+        const details: string[] = [];
+        if (blockedKeys.length > 0) {
+          details.push(`blocked override keys: ${blockedKeys.join(", ")}`);
+        }
+        if (invalidKeys.length > 0) {
+          details.push(`invalid non-portable override keys: ${invalidKeys.join(", ")}`);
+        }
+        const suffix = details.join("; ");
+        if (pathBlocked) {
+          throw new Error(
+            `Security Violation: Custom 'PATH' variable is forbidden during host execution (${suffix}).`,
+          );
+        }
+        throw new Error(`Security Violation: ${suffix}.`);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
-
-      const env = sandbox
-        ? buildSandboxEnv({
-            defaultPath: DEFAULT_PATH,
-            paramsEnv: params.env,
-            sandboxEnv: sandbox.env,
-            containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
-          })
-        : mergedEnv;
+      const env =
+        sandbox && host === "sandbox"
+          ? buildSandboxEnv({
+              defaultPath: DEFAULT_PATH,
+              paramsEnv: params.env,
+              sandboxEnv: sandbox.env,
+              containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            })
+          : (hostEnvResult?.env ?? inheritedBaseEnv);
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
@@ -415,6 +474,7 @@ export function createExecTool(
           agentId,
           security,
           ask,
+          strictInlineEval: defaults?.strictInlineEval,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           approvalRunningNoticeMs,
@@ -429,6 +489,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
+          requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
@@ -436,6 +497,7 @@ export function createExecTool(
           ask,
           safeBins,
           safeBinProfiles,
+          strictInlineEval: defaults?.strictInlineEval,
           agentId,
           sessionKey: defaults?.sessionKey,
           turnSourceChannel: defaults?.messageProvider,
@@ -561,25 +623,13 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
-              return;
-            }
-            resolve({
-              content: [
-                {
-                  type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
-                },
-              ],
-              details: {
-                status: "completed",
-                exitCode: outcome.exitCode ?? 0,
-                durationMs: outcome.durationMs,
-                aggregated: outcome.aggregated,
+            resolve(
+              buildExecForegroundResult({
+                outcome,
                 cwd: run.session.cwd,
-              },
-            });
+                warningText: getWarningText(),
+              }),
+            );
           })
           .catch((err) => {
             if (yieldTimer) {

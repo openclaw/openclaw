@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../../extensions/discord/src/channel.js";
-import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -103,7 +104,7 @@ const ttsMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./route-reply.js", () => ({
+vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
       channel &&
@@ -121,7 +122,15 @@ vi.mock("./route-reply.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./abort.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    routeReply: mocks.routeReply,
+  };
+});
+
+vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -137,13 +146,19 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+vi.mock("../../config/sessions/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
   return {
     ...actual,
     loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
     resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  };
+});
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: sessionStoreMocks.resolveStorePath,
   };
 });
 
@@ -191,15 +206,24 @@ vi.mock("../../tts/tts.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
-
-const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
-const { resetInboundDedupe } = await import("./inbound-dedupe.js");
-const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js");
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+vi.mock("../../tts/tts-config.js", () => ({
+  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+}));
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
-type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
+let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+let acpManagerTesting: typeof import("../../acp/control-plane/manager.js").__testing;
+let pluginBindingTesting: typeof import("../../plugins/conversation-binding.js").__testing;
+let AcpRuntimeErrorClass: typeof import("../../acp/runtime/errors.js").AcpRuntimeError;
+type DispatchReplyArgs = Parameters<
+  typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
+>[0];
 
 function createDispatcher(): ReplyDispatcher {
   return {
@@ -254,9 +278,39 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 }
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+    ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+    ({ __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js"));
+    ({ __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js"));
+    ({ AcpRuntimeError: AcpRuntimeErrorClass } = await import("../../acp/runtime/errors.js"));
+    const discordTestPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        capabilities: {
+          chatTypes: ["direct"],
+          nativeCommands: true,
+        },
+      }),
+      execApprovals: {
+        shouldSuppressLocalPrompt: ({ payload }: { payload: ReplyPayload }) =>
+          Boolean(
+            payload.channelData &&
+            typeof payload.channelData === "object" &&
+            !Array.isArray(payload.channelData) &&
+            payload.channelData.execApproval,
+          ),
+      },
+    };
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: discordTestPlugin,
+        },
+      ]),
     );
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetInboundDedupe();
@@ -945,6 +999,92 @@ describe("dispatchReplyFromConfig", () => {
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
+    setNoAbort();
+    let releaseTurn: (() => void) | undefined;
+    const releasePromise = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const runtime = {
+      ensureSession: vi.fn(
+        async (input: { sessionKey: string; mode: string; agent: string }) =>
+          ({
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}`,
+          }) as { sessionKey: string; backend: string; runtimeSessionName: string },
+      ),
+      runTurn: vi.fn(async function* (params: { signal?: AbortSignal }) {
+        await new Promise<void>((resolve) => {
+          if (params.signal?.aborted) {
+            resolve();
+            return;
+          }
+          const onAbort = () => resolve();
+          params.signal?.addEventListener("abort", onAbort, { once: true });
+          void releasePromise.then(resolve);
+        });
+        yield { type: "done" };
+      }),
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const abortController = new AbortController();
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+    });
+    await vi.waitFor(() => {
+      expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    const outcome = await Promise.race([
+      dispatchPromise.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    releaseTurn?.();
+    await dispatchPromise;
+
+    expect(outcome).toBe("settled");
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
@@ -1733,7 +1873,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockImplementation(() => {
-      throw new AcpRuntimeError(
+      throw new AcpRuntimeErrorClass(
         "ACP_BACKEND_MISSING",
         "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
       );

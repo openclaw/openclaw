@@ -1,2 +1,7 @@
-export { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
-export { buildChannelsTable } from "./status-all/channels.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
+import { buildChannelsTable } from "./status-all/channels.js";
+
+export const statusScanRuntime = {
+  collectChannelStatusIssues,
+  buildChannelsTable,
+};

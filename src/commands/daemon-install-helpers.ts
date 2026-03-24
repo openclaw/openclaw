@@ -3,7 +3,7 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigServiceEnvVars } from "../config/env-vars.js";
+import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -11,6 +11,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -50,6 +51,26 @@ function collectAuthProfileServiceEnvVars(params: {
   return entries;
 }
 
+function buildGatewayInstallEnvironment(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+  serviceEnvironment: Record<string, string | undefined>;
+}): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {
+    ...collectDurableServiceEnvVars({
+      env: params.env,
+      config: params.config,
+    }),
+    ...collectAuthProfileServiceEnvVars({
+      env: params.env,
+      authStore: params.authStore,
+    }),
+  };
+  Object.assign(environment, params.serviceEnvironment);
+  return environment;
+}
+
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -87,20 +108,26 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    // Keep npm/pnpm available to the service when the selected daemon node comes from
+    // a version-manager bin directory that isn't covered by static PATH guesses.
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge config env vars into the service environment (vars + inline env keys).
-  // Config env vars are added first so service-specific vars take precedence.
-  const environment: Record<string, string | undefined> = {
-    ...collectConfigServiceEnvVars(params.config),
-    ...collectAuthProfileServiceEnvVars({
+  // Merge env sources into the service environment in ascending priority:
+  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
+  //   2. Config env vars              (openclaw.json env.vars + inline keys)
+  //   3. Auth-profile env refs        (credential store → env var lookups)
+  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  return {
+    programArguments,
+    workingDirectory,
+    environment: buildGatewayInstallEnvironment({
       env: params.env,
+      config: params.config,
       authStore: params.authStore,
+      serviceEnvironment,
     }),
   };
-  Object.assign(environment, serviceEnvironment);
-
-  return { programArguments, workingDirectory, environment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {

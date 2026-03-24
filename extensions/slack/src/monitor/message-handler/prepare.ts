@@ -1,35 +1,35 @@
-import { resolveAckReaction } from "../../../../../src/agents/identity.js";
-import { hasControlCommand } from "../../../../../src/auto-reply/command-detection.js";
-import { shouldHandleTextCommands } from "../../../../../src/auto-reply/commands-registry.js";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../../../../src/auto-reply/envelope.js";
-import {
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-} from "../../../../../src/auto-reply/reply/history.js";
-import { finalizeInboundContext } from "../../../../../src/auto-reply/reply/inbound-context.js";
-import {
-  buildMentionRegexes,
-  matchesMentionWithExplicit,
-} from "../../../../../src/auto-reply/reply/mentions.js";
-import type { FinalizedMsgContext } from "../../../../../src/auto-reply/templating.js";
+import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
-} from "../../../../../src/channels/ack-reactions.js";
-import { resolveControlCommandGate } from "../../../../../src/channels/command-gating.js";
-import { resolveConversationLabel } from "../../../../../src/channels/conversation-label.js";
-import { logInboundDrop } from "../../../../../src/channels/logging.js";
-import { resolveMentionGatingWithBypass } from "../../../../../src/channels/mention-gating.js";
-import { recordInboundSession } from "../../../../../src/channels/session.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../../../src/config/sessions.js";
-import { logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
-import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../../../src/routing/session-key.js";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/channel-feedback";
+import {
+  buildMentionRegexes,
+  formatInboundEnvelope,
+  logInboundDrop,
+  matchesMentionWithExplicit,
+  resolveEnvelopeFormatOptions,
+  resolveMentionGatingWithBypass,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import {
+  recordInboundSession,
+  resolveConversationLabel,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildPendingHistoryContextFromMap,
+  recordPendingHistoryEntryIfEnabled,
+} from "openclaw/plugin-sdk/reply-history";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";

@@ -1,28 +1,28 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "../../../src/auto-reply/chunk.js";
-import { isSilentReplyText } from "../../../src/auto-reply/tokens.js";
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { logVerbose } from "../../../src/globals.js";
-import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "../../../src/infra/net/fetch-guard.js";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
-
-const SLACK_TEXT_LIMIT = 4000;
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
@@ -295,7 +295,9 @@ export async function sendMessageSlack(
       channelId,
     };
   }
-  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
+    fallbackLimit: SLACK_TEXT_LIMIT,
+  });
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -310,9 +312,7 @@ export async function sendMessageSlack(
   const chunks = markdownChunks.flatMap((markdown) =>
     markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
   );
-  if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
-  }
+  const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -320,7 +320,7 @@ export async function sendMessageSlack(
 
   let lastMessageId = "";
   if (opts.mediaUrl) {
-    const [firstChunk, ...rest] = chunks;
+    const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
       channelId,
@@ -341,7 +341,7 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of chunks.length ? chunks : [""]) {
+    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
       const response = await postSlackMessageBestEffort({
         client,
         channelId,

@@ -28,20 +28,22 @@ which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
 ```json5
 {
-  plugins: {
-    entries: {
-      firecrawl: {
-        enabled: true,
-      },
-    },
-  },
   tools: {
     web: {
       search: {
         provider: "firecrawl",
-        firecrawl: {
-          apiKey: "FIRECRAWL_API_KEY_HERE",
-          baseUrl: "https://api.firecrawl.dev",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+        config: {
+          webSearch: {
+            apiKey: "FIRECRAWL_API_KEY_HERE",
+            baseUrl: "https://api.firecrawl.dev",
+          },
         },
       },
     },
@@ -135,4 +137,8 @@ than basic-only scraping.
 2. Firecrawl (if configured)
 3. Basic HTML cleanup (last fallback)
 
-See [Web tools](/tools/web) for the full web tool setup.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Web Fetch](/tools/web-fetch) -- web_fetch tool with Firecrawl fallback
+- [Tavily](/tools/tavily) -- search + extract tools

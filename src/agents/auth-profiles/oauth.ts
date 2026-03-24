@@ -7,6 +7,10 @@ import {
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import {
+  formatProviderAuthProfileApiKeyWithPlugin,
+  refreshProviderOAuthCredentialWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
@@ -17,16 +21,27 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
-
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
+function listOAuthProviderIds(): string[] {
+  if (typeof getOAuthProviders !== "function") {
+    return [];
+  }
+  const providers = getOAuthProviders();
+  if (!Array.isArray(providers)) {
+    return [];
+  }
+  return providers
+    .map((provider) =>
+      provider &&
+      typeof provider === "object" &&
+      "id" in provider &&
+      typeof provider.id === "string"
+        ? provider.id
+        : undefined,
+    )
+    .filter((providerId): providerId is string => typeof providerId === "string");
 }
+
+const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -66,8 +81,7 @@ function isProfileConfigCompatible(params: {
 }
 
 async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
-  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntime();
-  const formatted = formatProviderAuthProfileApiKeyWithPlugin({
+  const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     context: credentials,
   });
@@ -165,7 +179,6 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
       provider: cred.provider,
       context: cred,
@@ -189,6 +202,9 @@ async function refreshOAuthTokenWithLock(params: {
         : await (async () => {
             const oauthProvider = resolveOAuthProvider(cred.provider);
             if (!oauthProvider) {
+              return null;
+            }
+            if (typeof getOAuthApiKey !== "function") {
               return null;
             }
             return await getOAuthApiKey(oauthProvider, oauthCreds);
