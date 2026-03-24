@@ -226,6 +226,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     isGuild: isGuildMessage,
     channelTopic: channelInfo?.topic,
+    messageBody: text,
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
