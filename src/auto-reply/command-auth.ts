@@ -20,6 +20,16 @@ export type CommandAuthorization = {
   to?: string;
 };
 
+type InferredProviderCandidate = {
+  providerId: ChannelId;
+  hadResolutionError: boolean;
+};
+
+type InferredProviderProbe = {
+  candidates: InferredProviderCandidate[];
+  droppedResolutionError: boolean;
+};
+
 function resolveProviderFromContext(
   ctx: MsgContext,
   cfg: OpenClawConfig,
@@ -56,7 +66,25 @@ function resolveProviderFromContext(
       return { providerId: normalized, hadResolutionError: false };
     }
   }
-  const configured = listChannelPlugins()
+  const inferredProviders = probeInferredProviders(ctx, cfg);
+  const inferred = inferredProviders.candidates;
+  if (inferred.length === 1) {
+    return {
+      providerId: inferred[0].providerId,
+      hadResolutionError: inferred[0].hadResolutionError,
+    };
+  }
+  return {
+    providerId: undefined,
+    hadResolutionError:
+      inferredProviders.droppedResolutionError ||
+      inferred.some((entry) => entry.hadResolutionError),
+  };
+}
+
+function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
+  let droppedResolutionError = false;
+  const candidates = listChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = resolveProviderAllowFrom({
         plugin,
@@ -69,31 +97,21 @@ function resolveProviderFromContext(
         accountId: ctx.AccountId,
         allowFrom: resolvedAllowFrom.allowFrom,
       });
+      if (allowFrom.length === 0) {
+        if (resolvedAllowFrom.hadResolutionError) {
+          droppedResolutionError = true;
+        }
+        return null;
+      }
       return {
         providerId: plugin.id,
-        allowFrom,
         hadResolutionError: resolvedAllowFrom.hadResolutionError,
       };
     })
-    .filter(
-      (
-        value,
-      ): value is {
-        providerId: ChannelId;
-        allowFrom: string[];
-        hadResolutionError: boolean;
-      } => Boolean(value),
-    );
-  const inferred = configured.filter((entry) => entry.allowFrom.length > 0);
-  if (inferred.length === 1) {
-    return {
-      providerId: inferred[0].providerId,
-      hadResolutionError: inferred[0].hadResolutionError,
-    };
-  }
+    .filter((value): value is InferredProviderCandidate => Boolean(value));
   return {
-    providerId: undefined,
-    hadResolutionError: configured.some((entry) => entry.hadResolutionError),
+    candidates,
+    droppedResolutionError,
   };
 }
 

@@ -46,45 +46,74 @@ describe("audit-seams cron seam classification", () => {
 
     expect(describeSeamKinds("src/cron/service/ops.ts", source)).toContain("cron-scheduler-state");
   });
+});
 
-  it("detects heartbeat, media, and followup handoff seams", () => {
+describe("audit-seams subagent seam classification", () => {
+  it("detects subagent spawn and cleanup handoff boundaries", () => {
     const source = `
-      import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
-      import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-      import { callGateway } from "../../gateway/call.js";
-      import { waitForDescendantSubagentSummary } from "./subagent-followup.js";
+      import { callGateway } from "../gateway/call.js";
+      import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+      import { registerSubagentRun } from "./subagent-registry.js";
 
-      export async function dispatchCronDelivery(payloads) {
-        const heartbeat = stripHeartbeatToken(payloads[0]?.text ?? "", { mode: "heartbeat" });
-        await waitForDescendantSubagentSummary({ sessionKey: "agent:main:cron:job-1", timeoutMs: 1 });
-        await callGateway({ method: "agent.wait", params: { runId: "run-1" } });
-        return { heartbeat, mediaUrl: payloads[0]?.mediaUrl, sent: deliverOutboundPayloads };
+      export async function spawnSubagentDirect() {
+        const response = await callGateway({ method: "agent.run", params: { task: "do it" } });
+        registerSubagentRun({ childSessionKey: "agent:main:subagent:child" });
+        await callGateway({ method: "sessions.delete", params: { key: "agent:main:subagent:child" } });
+        emitSessionLifecycleEvent({ sessionKey: "agent:main:subagent:child", type: "spawned" });
+        return response;
       }
     `;
 
-    expect(describeSeamKinds("src/cron/isolated-agent/delivery-dispatch.ts", source)).toEqual([
-      "cron-followup-handoff",
-      "cron-heartbeat-handoff",
-      "cron-media-delivery",
-      "cron-outbound-delivery",
+    expect(describeSeamKinds("src/agents/subagent-spawn.ts", source)).toEqual([
+      "subagent-lifecycle-registry",
+      "subagent-session-cleanup",
+      "subagent-session-spawn",
     ]);
   });
 
-  it("ignores pure cron helpers without subsystem crossings", () => {
+  it("detects subagent lifecycle registry and announce delivery seams", () => {
     const source = `
-      import { truncateUtf16Safe } from "../../utils.js";
+      import { resolveContextEngine } from "../context-engine/registry.js";
+      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "./subagent-announce.js";
+      import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
+      import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
 
-      export function normalizeOptionalText(raw) {
-        if (typeof raw !== "string") return undefined;
-        return truncateUtf16Safe(raw.trim(), 40);
+      export async function completeRun(entry) {
+        await resolveContextEngine({});
+        await captureSubagentCompletionReply(entry.childSessionKey);
+        await emitSubagentEndedHookOnce({ runId: entry.runId });
+        persistSubagentRunsToDisk(new Map());
+        return runSubagentAnnounceFlow({ childSessionKey: entry.childSessionKey });
       }
     `;
 
-    expect(describeSeamKinds("src/cron/service/normalize.ts", source)).toEqual([]);
+    expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
+      "subagent-announce-delivery",
+      "subagent-lifecycle-registry",
+    ]);
+  });
+
+  it("detects parent-stream seams for ACP spawn relays", () => {
+    const source = `
+      import { onAgentEvent } from "../infra/agent-events.js";
+      import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+      import { enqueueSystemEvent } from "../infra/system-events.js";
+
+      export function startAcpSpawnParentStreamRelay() {
+        onAgentEvent("agent-output", () => {});
+        requestHeartbeatNow({ sessionKey: "agent:main" });
+        enqueueSystemEvent("progress", { sessionKey: "agent:main", contextKey: "stream" });
+        return { streamTo: "parent" };
+      }
+    `;
+
+    expect(describeSeamKinds("src/agents/acp-spawn-parent-stream.ts", source)).toEqual([
+      "subagent-parent-stream",
+    ]);
   });
 });
 
-describe("audit-seams cron status/help", () => {
+describe("audit-seams status/help", () => {
   it("keeps cron seam statuses conservative when nearby tests exist", () => {
     expect(
       determineSeamTestStatus(
@@ -98,9 +127,23 @@ describe("audit-seams cron status/help", () => {
     });
   });
 
-  it("documents cron seam coverage in help text", () => {
+  it("keeps subagent seam statuses conservative when nearby tests exist", () => {
+    expect(
+      determineSeamTestStatus(
+        ["subagent-session-spawn"],
+        [{ file: "src/agents/subagent-spawn.workspace.test.ts", matchQuality: "direct-import" }],
+      ),
+    ).toEqual({
+      status: "partial",
+      reason:
+        "Nearby tests exist (best match: direct-import), but this inventory does not prove cross-layer seam coverage end to end.",
+    });
+  });
+
+  it("documents cron and subagent seam coverage in help text", () => {
     expect(HELP_TEXT).toContain("cron orchestration seams");
-    expect(HELP_TEXT).toContain("agent handoff");
-    expect(HELP_TEXT).toContain("heartbeat/followup handoff");
+    expect(HELP_TEXT).toContain("subagent seams");
+    expect(HELP_TEXT).toContain("announce delivery");
+    expect(HELP_TEXT).toContain("parent streaming");
   });
 });

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
+
 /**
  * Compute SHA-256 CSP hashes for inline `<script>` blocks in an HTML string.
  * Only scripts without a `src` attribute are considered inline.
@@ -10,7 +12,7 @@ export function computeInlineScriptHashes(html: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     const openTag = match[0].slice(0, match[0].indexOf(">") + 1);
-    if (/\bsrc\s*=/i.test(openTag)) {
+    if (hasScriptSrcAttribute(openTag)) {
       continue;
     }
     const content = match[1];
@@ -21,6 +23,12 @@ export function computeInlineScriptHashes(html: string): string[] {
     hashes.push(`sha256-${hash}`);
   }
   return hashes;
+}
+
+function hasScriptSrcAttribute(openTag: string): boolean {
+  return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
+    (match) => (match[1] ?? "").toLowerCase() === "src",
+  );
 }
 
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
