@@ -526,8 +526,105 @@ describe("executeSlashCommand directives", () => {
   });
 });
 
-describe("executeSlashCommand /steer", () => {
-  it("steers the current session when no subagent target matches", async () => {
+describe("executeSlashCommand /steer (soft inject)", () => {
+  it("injects into the current session via chat.send with deliver: false", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main")] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-1", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try a different approach",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "try a different approach",
+        deliver: false,
+      }),
+    );
+  });
+
+  it("injects into a matching subagent when the first word resolves to one", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:einstein", { spawnedBy: "agent:main:main" }),
+          ],
+        };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-2", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "einstein try a different approach",
+    );
+
+    expect(result.content).toBe("Steered `einstein`.");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:einstein",
+        message: "try a different approach",
+        deliver: false,
+      }),
+    );
+  });
+
+  it("returns usage when no message is provided", async () => {
+    const request = vi.fn();
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "",
+    );
+
+    expect(result.content).toBe("Usage: `/steer [id] <message>`");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("returns error message on RPC failure", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main")] };
+      }
+      throw new Error("connection lost");
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try again",
+    );
+
+    expect(result.content).toBe("Failed to steer: Error: connection lost");
+  });
+});
+
+describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
+  it("calls sessions.steer to abort and restart the current session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main")] };
@@ -541,18 +638,18 @@ describe("executeSlashCommand /steer", () => {
     const result = await executeSlashCommand(
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
-      "steer",
-      "try a different approach",
+      "redirect",
+      "start over with a new plan",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe("Redirected.");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:main",
-      message: "try a different approach",
+      message: "start over with a new plan",
     });
   });
 
-  it("steers a matching subagent when the first word resolves to one", async () => {
+  it("redirects a matching subagent when the first word resolves to one", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -571,14 +668,14 @@ describe("executeSlashCommand /steer", () => {
     const result = await executeSlashCommand(
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
-      "steer",
-      "einstein try a different approach",
+      "redirect",
+      "einstein start over completely",
     );
 
-    expect(result.content).toBe("Steered `einstein`.");
+    expect(result.content).toBe("Redirected `einstein`.");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:subagent:einstein",
-      message: "try a different approach",
+      message: "start over completely",
     });
   });
 
@@ -588,26 +685,29 @@ describe("executeSlashCommand /steer", () => {
     const result = await executeSlashCommand(
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
-      "steer",
+      "redirect",
       "",
     );
 
-    expect(result.content).toBe("Usage: `/steer [id] <message>`");
+    expect(result.content).toBe("Usage: `/redirect [id] <message>`");
     expect(request).not.toHaveBeenCalled();
   });
 
   it("returns error message on RPC failure", async () => {
-    const request = vi.fn(async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main")] };
+      }
       throw new Error("connection lost");
     });
 
     const result = await executeSlashCommand(
       { request } as unknown as GatewayBrowserClient,
       "agent:main:main",
-      "steer",
+      "redirect",
       "try again",
     );
 
-    expect(result.content).toBe("Failed to steer: Error: connection lost");
+    expect(result.content).toBe("Failed to redirect: Error: connection lost");
   });
 });
