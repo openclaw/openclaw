@@ -68,7 +68,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(details?.text).toContain("server-rendered markdown");
   });
 
-  it("falls back to readability for text/html responses", async () => {
+  it("falls back to defuddle/readability for text/html responses", async () => {
     const html =
       "<html><body><article><h1>HTML Page</h1><p>Content here.</p></article></body></html>";
     const fetchSpy = vi.fn().mockResolvedValue(htmlResponse(html));
@@ -78,7 +78,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     const result = await tool?.execute?.("call", { url: "https://example.com/html" });
     const details = result?.details as { extractor?: string; contentType?: string } | undefined;
-    expect(details?.extractor).toBe("readability");
+    expect(["defuddle", "readability"]).toContain(details?.extractor);
     expect(details?.contentType).toBe("text/html");
   });
 

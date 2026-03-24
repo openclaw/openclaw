@@ -12965,8 +12965,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["tools"],
     },
     "tools.web.fetch.readability": {
-      label: "Web Fetch Readability Extraction",
-      help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+      label: "Web Fetch Content Extraction",
+      help: "Use Defuddle (with Readability fallback) to extract main content from HTML.",
       tags: ["tools"],
     },
     "tools.web.fetch.firecrawl.enabled": {

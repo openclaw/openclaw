@@ -100,7 +100,7 @@ See [Web tools](/tools/web).
 
 - `FIRECRAWL_API_KEY` or `tools.web.fetch.firecrawl.apiKey`
 
-If Firecrawl isn’t configured, the tool falls back to direct fetch + readability (no paid API).
+If Firecrawl isn’t configured, the tool falls back to direct fetch + Defuddle/Readability extraction (no paid API).
 
 See [Web tools](/tools/web).
 

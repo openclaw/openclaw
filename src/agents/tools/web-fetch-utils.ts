@@ -2,8 +2,30 @@ import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
 export type ExtractMode = "markdown" | "text";
 
-const READABILITY_MAX_HTML_CHARS = 1_000_000;
-const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+const EXTRACTION_MAX_HTML_CHARS = 1_000_000;
+const EXTRACTION_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+
+let defuddleDepsPromise:
+  | Promise<{
+      Defuddle: typeof import("defuddle/node").Defuddle;
+    }>
+  | undefined;
+
+async function loadDefuddleDeps(): Promise<{
+  Defuddle: typeof import("defuddle/node").Defuddle;
+}> {
+  if (!defuddleDepsPromise) {
+    defuddleDepsPromise = import("defuddle/node").then((mod) => ({
+      Defuddle: mod.Defuddle,
+    }));
+  }
+  try {
+    return await defuddleDepsPromise;
+  } catch (error) {
+    defuddleDepsPromise = undefined;
+    throw error;
+  }
+}
 
 let readabilityDepsPromise:
   | Promise<{
@@ -113,7 +135,7 @@ export function truncateText(
 }
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
-  // Cheap heuristic to skip Readability+DOM parsing on pathological HTML (deep nesting => stack/memory blowups).
+  // Cheap heuristic to skip extraction+DOM parsing on pathological HTML (deep nesting => stack/memory blowups).
   // Not an HTML parser; tuned to catch attacker-controlled "<div><div>..." cases.
   const voidTags = new Set([
     "area",
@@ -222,21 +244,37 @@ export async function extractBasicHtmlContent(params: {
   return text ? { text, title: rendered.title } : null;
 }
 
-export async function extractReadableContent(params: {
+async function extractWithDefuddle(params: {
   html: string;
   url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
-  const cleanHtml = await sanitizeHtml(params.html);
-  if (
-    cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
-    exceedsEstimatedHtmlNestingDepth(cleanHtml, READABILITY_MAX_ESTIMATED_NESTING_DEPTH)
-  ) {
+  try {
+    const { Defuddle } = await loadDefuddleDeps();
+    const parsed = await Defuddle(params.html, params.url, { markdown: true });
+    if (!parsed?.content) {
+      return null;
+    }
+    const title = parsed.title || undefined;
+    if (params.extractMode === "text") {
+      const text = stripInvisibleUnicode(markdownToText(parsed.content));
+      return text ? { text, title } : null;
+    }
+    const text = stripInvisibleUnicode(parsed.content);
+    return text ? { text, title } : null;
+  } catch {
     return null;
   }
+}
+
+async function extractWithReadability(params: {
+  cleanHtml: string;
+  url: string;
+  extractMode: ExtractMode;
+}): Promise<{ text: string; title?: string } | null> {
   try {
     const { Readability, parseHTML } = await loadReadabilityDeps();
-    const { document } = parseHTML(cleanHtml);
+    const { document } = parseHTML(params.cleanHtml);
     try {
       (document as { baseURI?: string }).baseURI = params.url;
     } catch {
@@ -258,4 +296,40 @@ export async function extractReadableContent(params: {
   } catch {
     return null;
   }
+}
+
+export async function extractReadableContent(params: {
+  html: string;
+  url: string;
+  extractMode: ExtractMode;
+}): Promise<{ text: string; title?: string; extractor?: string } | null> {
+  const cleanHtml = await sanitizeHtml(params.html);
+  if (
+    cleanHtml.length > EXTRACTION_MAX_HTML_CHARS ||
+    exceedsEstimatedHtmlNestingDepth(cleanHtml, EXTRACTION_MAX_ESTIMATED_NESTING_DEPTH)
+  ) {
+    return null;
+  }
+
+  // Try Defuddle first (sanitized HTML — it handles its own DOM parsing)
+  const defuddleResult = await extractWithDefuddle({
+    html: cleanHtml,
+    url: params.url,
+    extractMode: params.extractMode,
+  });
+  if (defuddleResult?.text) {
+    return { ...defuddleResult, extractor: "defuddle" };
+  }
+
+  // Fall back to Readability
+  const readabilityResult = await extractWithReadability({
+    cleanHtml,
+    url: params.url,
+    extractMode: params.extractMode,
+  });
+  if (readabilityResult?.text) {
+    return { ...readabilityResult, extractor: "readability" };
+  }
+
+  return null;
 }

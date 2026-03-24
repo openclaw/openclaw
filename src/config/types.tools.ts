@@ -508,7 +508,7 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
-      /** Use Readability to extract main content (default: true). */
+      /** Use Defuddle (with Readability fallback) to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */

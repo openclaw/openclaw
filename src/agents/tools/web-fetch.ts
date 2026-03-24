@@ -627,7 +627,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         if (readable?.text) {
           text = readable.text;
           title = readable.title;
-          extractor = "readability";
+          extractor = readable.extractor ?? "defuddle";
         } else {
           const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
           if (firecrawl) {
@@ -645,14 +645,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
               extractor = "raw-html";
             } else {
               throw new Error(
-                "Web fetch extraction failed: Readability, Firecrawl, and basic HTML cleanup returned no content.",
+                "Web fetch extraction failed: Defuddle, Readability, Firecrawl, and basic HTML cleanup returned no content.",
               );
             }
           }
         }
       } else {
         throw new Error(
-          "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
+          "Web fetch extraction failed: content extraction disabled and Firecrawl unavailable.",
         );
       }
     } else if (contentType.includes("application/json")) {
