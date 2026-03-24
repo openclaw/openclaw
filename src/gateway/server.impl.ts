@@ -176,6 +176,17 @@ const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
+function warnLegacyClawdbotEnvVars(): void {
+  const legacyKeys = Object.keys(process.env).filter((k) => k.startsWith("CLAWDBOT_"));
+  if (legacyKeys.length === 0) {
+    return;
+  }
+  log.warn(
+    `Legacy CLAWDBOT_* environment variables detected and will be ignored: ${legacyKeys.join(", ")}. ` +
+      `Rename them to use the OPENCLAW_ prefix or run \`openclaw onboard\` to migrate.`,
+  );
+}
+
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
 
 function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
@@ -405,6 +416,8 @@ export async function startGatewayServer(
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
+
+  warnLegacyClawdbotEnvVars();
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
