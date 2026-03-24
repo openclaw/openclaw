@@ -587,25 +587,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // and proactive sends within the same session.
     // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
     const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
-    const effectiveCfg =
+    const configOverride =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
-            ...cfg,
             agents: {
-              ...cfg.agents,
               defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
             },
           }
-        : cfg;
+        : undefined;
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg: effectiveCfg,
+        cfg,
         ctxPayload,
         dispatcher,
         onSettled: () => markDispatchIdle(),
         replyOptions,
+        configOverride,
       });
 
       log.info("dispatch complete", { queuedFinal, counts });
