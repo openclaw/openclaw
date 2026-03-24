@@ -3,7 +3,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import { createMessageToolButtonsSchema } from "../../plugin-sdk/channel-actions.js";
+import {
+  createMessageToolButtonsSchema,
+  createMessageToolCardSchema,
+} from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
@@ -416,6 +419,38 @@ describe("message tool schema scoping", () => {
     const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("poll");
+  });
+
+  it("keeps provider card schema optional after merging into the message tool schema", () => {
+    const feishuPlugin = createChannelPlugin({
+      id: "feishu",
+      label: "Feishu",
+      docsPath: "/channels/feishu",
+      blurb: "Feishu test plugin.",
+      actions: ["send"],
+      capabilities: ["cards"],
+      toolSchema: () => ({
+        properties: {
+          card: createMessageToolCardSchema(),
+        },
+      }),
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "feishu",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.card).toBeDefined();
+    expect(schema.required ?? []).not.toContain("card");
   });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
