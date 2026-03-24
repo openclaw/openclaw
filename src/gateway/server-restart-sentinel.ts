@@ -112,7 +112,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    enqueueRestartSentinelWake(message, mainSessionKey, wakeDeliveryContext);
+    enqueueSystemEvent(message, { sessionKey: mainSessionKey });
     return;
   }
 

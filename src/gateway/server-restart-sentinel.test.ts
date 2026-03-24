@@ -189,4 +189,20 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
   });
+
+  it("does not wake the main session when the sentinel has no sessionKey", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        message: "restart message",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
 });
