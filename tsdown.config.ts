@@ -85,6 +85,7 @@ const pluginSdkEntrypoints = [
   "zalouser",
   "account-id",
   "keyed-async-queue",
+  "jarvis",
 ] as const;
 
 export default defineConfig([
