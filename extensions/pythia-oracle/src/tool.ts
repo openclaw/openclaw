@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
-import { wrapFetchWithPayment, x402Client, decodePaymentResponseHeader } from "@x402/fetch";
+import {
+  wrapFetchWithPayment,
+  x402Client,
+  x402HTTPClient,
+  decodePaymentResponseHeader,
+} from "@x402/fetch";
 import { privateKeyToAccount } from "viem/accounts";
 import { jsonResult, readStringParam, ToolInputError } from "../../../src/agents/tools/common.js";
 import { resolveStorePath } from "../../../src/config/sessions/paths.js";
@@ -48,10 +53,22 @@ type PythiaPaymentState = {
 };
 
 type PaymentRequirementLike = {
+  scheme?: string;
   network: string;
   asset: string;
   amount: string;
   payTo: string;
+};
+
+type X402PaymentRequired = {
+  x402Version: number;
+  accepts: PaymentRequirementLike[];
+  error?: string;
+  resource?: {
+    url?: string;
+    description?: string;
+    mimeType?: string;
+  };
 };
 
 type MpcInitializeResponse = {
@@ -543,6 +560,50 @@ function extractOraclePayload(response: ToolCallResponse): unknown {
   }
 }
 
+function extractToolErrorText(response: ToolCallResponse): string | undefined {
+  if (!response.result?.isError) {
+    return undefined;
+  }
+  const errorText = response.result.content
+    ?.map((item) => item.text)
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return errorText || undefined;
+}
+
+function parseX402PaymentRequired(text: string | undefined): X402PaymentRequired | undefined {
+  if (!text) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<X402PaymentRequired>;
+    if (typeof parsed.x402Version !== "number" || !Array.isArray(parsed.accepts)) {
+      return undefined;
+    }
+    const accepts = parsed.accepts.filter(
+      (entry): entry is PaymentRequirementLike =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof entry.network === "string" &&
+        typeof entry.asset === "string" &&
+        typeof entry.amount === "string" &&
+        typeof entry.payTo === "string",
+    );
+    if (accepts.length === 0) {
+      return undefined;
+    }
+    return {
+      x402Version: parsed.x402Version,
+      accepts,
+      error: typeof parsed.error === "string" ? parsed.error : undefined,
+      resource: parsed.resource,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function callOracleTool(params: {
   fetchImpl: typeof fetch;
   url: string;
@@ -550,6 +611,7 @@ async function callOracleTool(params: {
   query: string;
   context?: string;
   agentId: string;
+  extraHeaders?: Record<string, string>;
 }): Promise<Response> {
   return await params.fetchImpl(params.url, {
     method: "POST",
@@ -557,6 +619,7 @@ async function callOracleTool(params: {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       "Mcp-Session-Id": params.sessionId,
+      ...(params.extraHeaders ?? {}),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -675,36 +738,39 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
       });
 
       const paymentReq: PaymentRequirementLike = {
+        scheme: "exact",
         network: "eip155:8453",
         asset: "USDC",
         amount: "unknown",
         payTo: "unknown",
       };
 
-      const fetchImpl =
+      const paymentClient =
         walletPrivateKey === undefined
-          ? fetch
-          : wrapFetchWithPayment(
-              fetch,
-              new x402Client()
-                .register(
-                  "eip155:*",
-                  new ExactEvmScheme(toClientEvmSigner(privateKeyToAccount(walletPrivateKey))),
-                )
-                .onBeforePaymentCreation(async ({ selectedRequirements }) => {
-                  paymentReq.network = selectedRequirements.network;
-                  paymentReq.asset = selectedRequirements.asset;
-                  paymentReq.amount = selectedRequirements.amount;
-                  paymentReq.payTo = selectedRequirements.payTo;
-                  const approval = await approvalGate({
-                    network: selectedRequirements.network,
-                    asset: selectedRequirements.asset,
-                    amount: selectedRequirements.amount,
-                    payTo: selectedRequirements.payTo,
-                  });
-                  return approval;
-                }),
-            );
+          ? undefined
+          : new x402Client()
+              .register(
+                "eip155:*",
+                new ExactEvmScheme(toClientEvmSigner(privateKeyToAccount(walletPrivateKey))),
+              )
+              .onBeforePaymentCreation(async ({ selectedRequirements }) => {
+                paymentReq.scheme = selectedRequirements.scheme;
+                paymentReq.network = selectedRequirements.network;
+                paymentReq.asset = selectedRequirements.asset;
+                paymentReq.amount = selectedRequirements.amount;
+                paymentReq.payTo = selectedRequirements.payTo;
+                const approval = await approvalGate({
+                  scheme: selectedRequirements.scheme,
+                  network: selectedRequirements.network,
+                  asset: selectedRequirements.asset,
+                  amount: selectedRequirements.amount,
+                  payTo: selectedRequirements.payTo,
+                });
+                return approval;
+              });
+      const fetchImpl =
+        paymentClient === undefined ? fetch : wrapFetchWithPayment(fetch, paymentClient);
+      const paymentHttpClient = paymentClient ? new x402HTTPClient(paymentClient) : undefined;
 
       const sessionId = await openMcpSession({
         fetchImpl,
@@ -737,7 +803,46 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
         response: toolResponse,
       });
 
-      const responseBody = await readMcpJsonResponse<ToolCallResponse>(toolResponse);
+      let responseBody = await readMcpJsonResponse<ToolCallResponse>(toolResponse);
+      const paymentRequired = parseX402PaymentRequired(extractToolErrorText(responseBody));
+      if (paymentRequired) {
+        if (!paymentClient || !paymentHttpClient) {
+          throw new Error(
+            `${config.serviceName} requires x402 payment, but ${config.walletPrivateKeyEnvVar} is not configured.`,
+          );
+        }
+        const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
+        const paymentHeaders = paymentHttpClient.encodePaymentSignatureHeader(paymentPayload);
+        const paidToolResponse = await callOracleTool({
+          fetchImpl: fetch,
+          url: config.url,
+          sessionId,
+          query,
+          context,
+          agentId,
+          extraHeaders: paymentHeaders,
+        });
+        if (!paidToolResponse.ok) {
+          parseToolCallHttpError({
+            response: paidToolResponse,
+            walletEnvVar: config.walletPrivateKeyEnvVar,
+            serviceName: config.serviceName,
+          });
+        }
+        await maybeRecordPaidResponse({
+          statePath,
+          req: {
+            scheme: paymentRequired.accepts[0]?.scheme,
+            network: paymentRequired.accepts[0]?.network ?? paymentReq.network,
+            asset: paymentRequired.accepts[0]?.asset ?? paymentReq.asset,
+            amount: paymentRequired.accepts[0]?.amount ?? paymentReq.amount,
+            payTo: paymentRequired.accepts[0]?.payTo ?? paymentReq.payTo,
+          },
+          expectedPriceUsd: config.expectedPriceUsd,
+          response: paidToolResponse,
+        });
+        responseBody = await readMcpJsonResponse<ToolCallResponse>(paidToolResponse);
+      }
       return jsonResult(extractOraclePayload(responseBody));
     },
   };
@@ -753,5 +858,7 @@ export const __testing = {
   savePaymentState,
   maybeRecordPaidResponse,
   extractOraclePayload,
+  parseX402PaymentRequired,
+  extractToolErrorText,
   readMcpJsonResponse,
 };

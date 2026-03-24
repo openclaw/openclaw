@@ -91,6 +91,47 @@ describe("pythia-oracle helpers", () => {
     ).toEqual({ response: "You are optimizing the wrong thing." });
   });
 
+  it("detects x402 payment challenges embedded in MCP tool errors", () => {
+    const response = {
+      result: {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              x402Version: 2,
+              accepts: [
+                {
+                  scheme: "exact",
+                  network: "eip155:8453",
+                  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  amount: "25000",
+                  payTo: "0xabc",
+                },
+              ],
+              error: "Payment required",
+            }),
+          },
+        ],
+      },
+    };
+
+    expect(__testing.parseX402PaymentRequired(__testing.extractToolErrorText(response))).toEqual({
+      x402Version: 2,
+      accepts: [
+        {
+          scheme: "exact",
+          network: "eip155:8453",
+          asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          amount: "25000",
+          payTo: "0xabc",
+        },
+      ],
+      error: "Payment required",
+      resource: undefined,
+    });
+  });
+
   it("parses MCP event-stream responses", async () => {
     const encoder = new TextEncoder();
     const response = new Response(
