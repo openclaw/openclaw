@@ -716,7 +716,9 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              if (!context?.abortSignal?.aborted) {
+                dispatcher.sendBlockReply(ttsPayload);
+              }
             }
           };
           return run();
