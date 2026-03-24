@@ -6,6 +6,7 @@ import type {
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
+import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
@@ -17,7 +18,8 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { formatExecCommand, resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -31,6 +33,162 @@ const MUTABLE_ARGV1_INTERPRETER_PATTERNS = [
   /^python(?:\d+(?:\.\d+)*)?$/,
   /^ruby$/,
 ] as const;
+
+const GENERIC_MUTABLE_SCRIPT_RUNNERS = new Set([
+  "esno",
+  "jiti",
+  "ts-node",
+  "ts-node-esm",
+  "tsx",
+  "vite-node",
+]);
+
+const BUN_SUBCOMMANDS = new Set([
+  "add",
+  "audit",
+  "completions",
+  "create",
+  "exec",
+  "help",
+  "init",
+  "install",
+  "link",
+  "outdated",
+  "patch",
+  "pm",
+  "publish",
+  "remove",
+  "repl",
+  "run",
+  "test",
+  "unlink",
+  "update",
+  "upgrade",
+  "x",
+]);
+
+const BUN_OPTIONS_WITH_VALUE = new Set([
+  "--backend",
+  "--bunfig",
+  "--conditions",
+  "--config",
+  "--console-depth",
+  "--cwd",
+  "--define",
+  "--elide-lines",
+  "--env-file",
+  "--extension-order",
+  "--filter",
+  "--hot",
+  "--inspect",
+  "--inspect-brk",
+  "--inspect-wait",
+  "--install",
+  "--jsx-factory",
+  "--jsx-fragment",
+  "--jsx-import-source",
+  "--loader",
+  "--origin",
+  "--port",
+  "--preload",
+  "--smol",
+  "--tsconfig-override",
+  "-c",
+  "-e",
+  "-p",
+  "-r",
+]);
+
+const DENO_RUN_OPTIONS_WITH_VALUE = new Set([
+  "--cached-only",
+  "--cert",
+  "--config",
+  "--env-file",
+  "--ext",
+  "--harmony-import-attributes",
+  "--import-map",
+  "--inspect",
+  "--inspect-brk",
+  "--inspect-wait",
+  "--location",
+  "--log-level",
+  "--lock",
+  "--node-modules-dir",
+  "--no-check",
+  "--preload",
+  "--reload",
+  "--seed",
+  "--strace-ops",
+  "--unstable-bare-node-builtins",
+  "--v8-flags",
+  "--watch",
+  "--watch-exclude",
+  "-L",
+]);
+
+const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
+  "-r",
+  "--experimental-loader",
+  "--import",
+  "--loader",
+  "--require",
+]);
+
+const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
+const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
+
+const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
+  "--init-file",
+  "--rcfile",
+  "--startup-script",
+  "-o",
+]);
+
+const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
+  "--cache",
+  "--package",
+  "--prefix",
+  "--script-shell",
+  "--userconfig",
+  "--workspace",
+  "-p",
+  "-w",
+]);
+
+const NPM_EXEC_FLAG_OPTIONS = new Set([
+  "--no",
+  "--quiet",
+  "--ws",
+  "--workspaces",
+  "--yes",
+  "-q",
+  "-y",
+]);
+
+const PNPM_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--dir",
+  "--filter",
+  "--reporter",
+  "--stream",
+  "--test-pattern",
+  "--workspace-concurrency",
+  "-C",
+]);
+
+const PNPM_FLAG_OPTIONS = new Set([
+  "--aggregate-output",
+  "--color",
+  "--recursive",
+  "--silent",
+  "--workspace-root",
+  "-r",
+]);
+
+type FileOperandCollection = {
+  hits: number[];
+  sawOptionValueFile: boolean;
+};
 
 function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -94,6 +252,28 @@ function hashFileContentsSync(filePath: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function looksLikePathToken(token: string): boolean {
+  return (
+    token.startsWith(".") ||
+    token.startsWith("/") ||
+    token.startsWith("\\") ||
+    token.includes("/") ||
+    token.includes("\\") ||
+    path.extname(token).length > 0
+  );
+}
+
+function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined): boolean {
+  if (!rawOperand) {
+    return false;
+  }
+  try {
+    return fs.statSync(path.resolve(cwd ?? process.cwd(), rawOperand)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseIndex: number } {
   let current = argv;
   let baseIndex = 0;
@@ -110,8 +290,142 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
       current = shellMultiplexerUnwrap.argv;
       continue;
     }
+    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
+    if (packageManagerUnwrap) {
+      baseIndex += current.length - packageManagerUnwrap.length;
+      current = packageManagerUnwrap;
+      continue;
+    }
     return { argv: current, baseIndex };
   }
+}
+
+function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | null {
+  const executable = normalizePackageManagerExecToken(argv[0] ?? "");
+  switch (executable) {
+    case "npm":
+      return unwrapNpmExecInvocation(argv);
+    case "npx":
+    case "bunx":
+      return unwrapDirectPackageExecInvocation(argv);
+    case "pnpm":
+      return unwrapPnpmExecInvocation(argv);
+    default:
+      return null;
+  }
+}
+
+function normalizePackageManagerExecToken(token: string): string {
+  const normalized = normalizeExecutableToken(token);
+  if (!normalized) {
+    return normalized;
+  }
+  // Approval binding only promises best-effort recovery of the effective runtime
+  // command for common package-manager shims; it is not full package-manager semantics.
+  return normalized.replace(/\.(?:c|m)?js$/i, "");
+}
+
+function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token === "exec") {
+        if (idx + 1 >= argv.length) {
+          return null;
+        }
+        const tail = argv.slice(idx + 1);
+        return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
+      }
+      if (token === "node") {
+        const tail = argv.slice(idx + 1);
+        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
+        return ["node", ...normalizedTail];
+      }
+      return null;
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapDirectPackageExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      return argv.slice(idx);
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (flag === "-c" || flag === "--call") {
+      return null;
+    }
+    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapNpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token !== "exec") {
+        return null;
+      }
+      idx += 1;
+      break;
+    }
+    if (
+      (token === "-C" || token === "--prefix" || token === "--userconfig") &&
+      !token.includes("=")
+    ) {
+      idx += 2;
+      continue;
+    }
+    idx += 1;
+  }
+  if (idx >= argv.length) {
+    return null;
+  }
+  const tail = argv.slice(idx);
+  if (tail[0] === "--") {
+    return tail.length > 1 ? tail.slice(1) : null;
+  }
+  return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
 function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
@@ -139,6 +453,13 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
       return null;
     }
     if (!afterDoubleDash && token.startsWith("-")) {
+      const [flag] = token.toLowerCase().split("=", 2);
+      if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!token.includes("=")) {
+          i += 1;
+        }
+        continue;
+      }
       continue;
     }
     return i;
@@ -146,7 +467,240 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
   return null;
 }
 
-function resolveMutableFileOperandIndex(argv: string[]): number | null {
+function resolveOptionFilteredFileOperandIndex(params: {
+  argv: string[];
+  startIndex: number;
+  cwd: string | undefined;
+  optionsWithValue?: ReadonlySet<string>;
+}): number | null {
+  let afterDoubleDash = false;
+  for (let i = params.startIndex; i < params.argv.length; i += 1) {
+    const token = params.argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      return resolvesToExistingFileSync(token, params.cwd) ? i : null;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-") {
+      return null;
+    }
+    if (token.startsWith("-")) {
+      if (!token.includes("=") && params.optionsWithValue?.has(token)) {
+        i += 1;
+      }
+      continue;
+    }
+    return resolvesToExistingFileSync(token, params.cwd) ? i : null;
+  }
+  return null;
+}
+
+function resolveOptionFilteredPositionalIndex(params: {
+  argv: string[];
+  startIndex: number;
+  optionsWithValue?: ReadonlySet<string>;
+}): number | null {
+  let afterDoubleDash = false;
+  for (let i = params.startIndex; i < params.argv.length; i += 1) {
+    const token = params.argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      return i;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-") {
+      return null;
+    }
+    if (token.startsWith("-")) {
+      if (!token.includes("=") && params.optionsWithValue?.has(token)) {
+        i += 1;
+      }
+      continue;
+    }
+    return i;
+  }
+  return null;
+}
+
+function collectExistingFileOperandIndexes(params: {
+  argv: string[];
+  startIndex: number;
+  cwd: string | undefined;
+  optionsWithFileValue?: ReadonlySet<string>;
+}): FileOperandCollection {
+  let afterDoubleDash = false;
+  const hits: number[] = [];
+  for (let i = params.startIndex; i < params.argv.length; i += 1) {
+    const token = params.argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      if (resolvesToExistingFileSync(token, params.cwd)) {
+        hits.push(i);
+      }
+      continue;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-") {
+      return { hits: [], sawOptionValueFile: false };
+    }
+    if (token.startsWith("-")) {
+      const [flag, inlineValue] = token.split("=", 2);
+      if (params.optionsWithFileValue?.has(flag.toLowerCase())) {
+        if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
+          hits.push(i);
+          return { hits, sawOptionValueFile: true };
+        }
+        const nextToken = params.argv[i + 1]?.trim() ?? "";
+        if (!inlineValue && nextToken && resolvesToExistingFileSync(nextToken, params.cwd)) {
+          hits.push(i + 1);
+          return { hits, sawOptionValueFile: true };
+        }
+      }
+      continue;
+    }
+    if (resolvesToExistingFileSync(token, params.cwd)) {
+      hits.push(i);
+    }
+  }
+  return { hits, sawOptionValueFile: false };
+}
+
+function resolveGenericInterpreterScriptOperandIndex(params: {
+  argv: string[];
+  cwd: string | undefined;
+  optionsWithFileValue?: ReadonlySet<string>;
+}): number | null {
+  const collection = collectExistingFileOperandIndexes({
+    argv: params.argv,
+    startIndex: 1,
+    cwd: params.cwd,
+    optionsWithFileValue: params.optionsWithFileValue,
+  });
+  if (collection.sawOptionValueFile) {
+    return null;
+  }
+  return collection.hits.length === 1 ? collection.hits[0] : null;
+}
+
+function resolveBunScriptOperandIndex(params: {
+  argv: string[];
+  cwd: string | undefined;
+}): number | null {
+  const directIndex = resolveOptionFilteredPositionalIndex({
+    argv: params.argv,
+    startIndex: 1,
+    optionsWithValue: BUN_OPTIONS_WITH_VALUE,
+  });
+  if (directIndex === null) {
+    return null;
+  }
+  const directToken = params.argv[directIndex]?.trim() ?? "";
+  if (directToken === "run") {
+    return resolveOptionFilteredFileOperandIndex({
+      argv: params.argv,
+      startIndex: directIndex + 1,
+      cwd: params.cwd,
+      optionsWithValue: BUN_OPTIONS_WITH_VALUE,
+    });
+  }
+  if (BUN_SUBCOMMANDS.has(directToken)) {
+    return null;
+  }
+  if (!looksLikePathToken(directToken)) {
+    return null;
+  }
+  return directIndex;
+}
+
+function resolveDenoRunScriptOperandIndex(params: {
+  argv: string[];
+  cwd: string | undefined;
+}): number | null {
+  if ((params.argv[1]?.trim() ?? "") !== "run") {
+    return null;
+  }
+  return resolveOptionFilteredFileOperandIndex({
+    argv: params.argv,
+    startIndex: 2,
+    cwd: params.cwd,
+    optionsWithValue: DENO_RUN_OPTIONS_WITH_VALUE,
+  });
+}
+
+function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
+  let afterDoubleDash = false;
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      return false;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-I" || token === "-r") {
+      return true;
+    }
+    if (token.startsWith("-I") || token.startsWith("-r")) {
+      return true;
+    }
+    if (RUBY_UNSAFE_APPROVAL_FLAGS.has(token.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
+  let afterDoubleDash = false;
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      return false;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-I" || token === "-M" || token === "-m") {
+      return true;
+    }
+    if (token.startsWith("-I") || token.startsWith("-M") || token.startsWith("-m")) {
+      return true;
+    }
+    if (PERL_UNSAFE_APPROVAL_FLAGS.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMutableScriptRunner(executable: string): boolean {
+  return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
+}
+
+function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined): number | null {
   const unwrapped = unwrapArgvForMutableOperand(argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
@@ -156,22 +710,106 @@ function resolveMutableFileOperandIndex(argv: string[]): number | null {
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }
-  if (!MUTABLE_ARGV1_INTERPRETER_PATTERNS.some((pattern) => pattern.test(executable))) {
+  if (MUTABLE_ARGV1_INTERPRETER_PATTERNS.some((pattern) => pattern.test(executable))) {
+    const operand = unwrapped.argv[1]?.trim() ?? "";
+    if (operand && operand !== "-" && !operand.startsWith("-")) {
+      return unwrapped.baseIndex + 1;
+    }
+  }
+  if (executable === "bun") {
+    const bunIndex = resolveBunScriptOperandIndex({
+      argv: unwrapped.argv,
+      cwd,
+    });
+    if (bunIndex !== null) {
+      return unwrapped.baseIndex + bunIndex;
+    }
+  }
+  if (executable === "deno") {
+    const denoIndex = resolveDenoRunScriptOperandIndex({
+      argv: unwrapped.argv,
+      cwd,
+    });
+    if (denoIndex !== null) {
+      return unwrapped.baseIndex + denoIndex;
+    }
+  }
+  if (executable === "ruby" && hasRubyUnsafeApprovalFlag(unwrapped.argv)) {
     return null;
   }
-  const operand = unwrapped.argv[1]?.trim() ?? "";
-  if (!operand || operand === "-" || operand.startsWith("-")) {
+  if (executable === "perl" && hasPerlUnsafeApprovalFlag(unwrapped.argv)) {
     return null;
   }
-  return unwrapped.baseIndex + 1;
+  if (!isMutableScriptRunner(executable)) {
+    return null;
+  }
+  const genericIndex = resolveGenericInterpreterScriptOperandIndex({
+    argv: unwrapped.argv,
+    cwd,
+    optionsWithFileValue:
+      executable === "node" || executable === "nodejs" ? NODE_OPTIONS_WITH_FILE_VALUE : undefined,
+  });
+  return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
 }
 
-function resolveMutableFileOperandSnapshotSync(params: {
+function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
+  const argv = splitShellArgs(shellCommand);
+  if (!argv || argv.length === 0) {
+    return false;
+  }
+  const snapshot = resolveMutableFileOperandSnapshotSync({
+    argv,
+    cwd,
+    shellCommand: null,
+  });
+  if (!snapshot.ok) {
+    return true;
+  }
+  if (snapshot.snapshot) {
+    return true;
+  }
+  const firstToken = argv[0]?.trim() ?? "";
+  return resolvesToExistingFileSync(firstToken, cwd);
+}
+
+function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
+  argv: string[];
+  shellCommand: string | null;
+  cwd: string | undefined;
+}): boolean {
+  if (params.shellCommand !== null) {
+    return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
+  }
+  const unwrapped = unwrapArgvForMutableOperand(params.argv);
+  const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
+  if (!executable) {
+    return false;
+  }
+  if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+    return false;
+  }
+  return isMutableScriptRunner(executable);
+}
+
+export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
+  shellCommand: string | null;
 }): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string } {
-  const argvIndex = resolveMutableFileOperandIndex(params.argv);
+  const argvIndex = resolveMutableFileOperandIndex(params.argv, params.cwd);
   if (argvIndex === null) {
+    if (
+      requiresStableInterpreterApprovalBindingWithShellCommand({
+        argv: params.argv,
+        shellCommand: params.shellCommand,
+        cwd: params.cwd,
+      })
+    ) {
+      return {
+        ok: false,
+        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+      };
+    }
     return { ok: true, snapshot: null };
   }
   const rawOperand = params.argv[argvIndex]?.trim();
@@ -366,7 +1004,8 @@ export function hardenApprovedExecutionPaths(params: {
     };
   }
 
-  const pinnedExecutable = resolution?.resolvedRealPath ?? resolution?.resolvedPath;
+  const pinnedExecutable =
+    resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
   if (!pinnedExecutable) {
     return {
       ok: false,
@@ -401,8 +1040,8 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan; cmdText: string } | { ok: false; message: string } {
-  const command = resolveSystemRunCommand({
+}): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+  const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
   });
@@ -415,18 +1054,21 @@ export function buildSystemRunApprovalPlan(params: {
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
-    shellCommand: command.shellCommand,
+    shellCommand: command.shellPayload,
     cwd: normalizeString(params.cwd) ?? undefined,
   });
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
-  const rawCommand = hardening.argvChanged
-    ? formatExecCommand(hardening.argv) || null
-    : command.cmdText.trim() || null;
+  const commandText = formatExecCommand(hardening.argv);
+  const commandPreview =
+    command.previewText?.trim() && command.previewText.trim() !== commandText
+      ? command.previewText.trim()
+      : null;
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
     argv: hardening.argv,
     cwd: hardening.cwd,
+    shellCommand: command.shellPayload,
   });
   if (!mutableFileOperand.ok) {
     return { ok: false, message: mutableFileOperand.message };
@@ -436,11 +1078,11 @@ export function buildSystemRunApprovalPlan(params: {
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand,
+      commandText,
+      commandPreview,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
-    cmdText: rawCommand ?? formatExecCommand(hardening.argv),
   };
 }

@@ -4,6 +4,7 @@ import {
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
+  stageLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
@@ -13,6 +14,7 @@ import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   restartScheduledTask,
+  stageScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
@@ -24,6 +26,8 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceRestartResult,
+  GatewayServiceStageArgs,
 } from "./service-types.js";
 import {
   installSystemdService,
@@ -31,6 +35,7 @@ import {
   readSystemdServiceExecStart,
   readSystemdServiceRuntime,
   restartSystemdService,
+  stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
@@ -41,13 +46,15 @@ export type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceRestartResult,
+  GatewayServiceStageArgs,
 } from "./service-types.js";
 
-function ignoreInstallResult(
-  install: (args: GatewayServiceInstallArgs) => Promise<unknown>,
-): (args: GatewayServiceInstallArgs) => Promise<void> {
-  return async (args) => {
-    await install(args);
+function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
+  write: (args: TArgs) => Promise<unknown>,
+): (args: TArgs) => Promise<void> {
+  return async (args: TArgs) => {
+    await write(args);
   };
 }
 
@@ -55,14 +62,40 @@ export type GatewayService = {
   label: string;
   loadedText: string;
   notLoadedText: string;
+  stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
-  restart: (args: GatewayServiceControlArgs) => Promise<void>;
+  restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
+
+export function describeGatewayServiceRestart(
+  serviceNoun: string,
+  result: GatewayServiceRestartResult,
+): {
+  scheduled: boolean;
+  daemonActionResult: "restarted" | "scheduled";
+  message: string;
+  progressMessage: string;
+} {
+  if (result.outcome === "scheduled") {
+    return {
+      scheduled: true,
+      daemonActionResult: "scheduled",
+      message: `restart scheduled, ${serviceNoun.toLowerCase()} will restart momentarily`,
+      progressMessage: `${serviceNoun} service restart scheduled.`,
+    };
+  }
+  return {
+    scheduled: false,
+    daemonActionResult: "restarted",
+    message: `${serviceNoun} service restarted.`,
+    progressMessage: `${serviceNoun} service restarted.`,
+  };
+}
 
 type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
 
@@ -71,7 +104,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
-    install: ignoreInstallResult(installLaunchAgent),
+    stage: ignoreServiceWriteResult(stageLaunchAgent),
+    install: ignoreServiceWriteResult(installLaunchAgent),
     uninstall: uninstallLaunchAgent,
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
@@ -83,7 +117,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     label: "systemd",
     loadedText: "enabled",
     notLoadedText: "disabled",
-    install: ignoreInstallResult(installSystemdService),
+    stage: ignoreServiceWriteResult(stageSystemdService),
+    install: ignoreServiceWriteResult(installSystemdService),
     uninstall: uninstallSystemdService,
     stop: stopSystemdService,
     restart: restartSystemdService,
@@ -95,7 +130,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     label: "Scheduled Task",
     loadedText: "registered",
     notLoadedText: "missing",
-    install: ignoreInstallResult(installScheduledTask),
+    stage: ignoreServiceWriteResult(stageScheduledTask),
+    install: ignoreServiceWriteResult(installScheduledTask),
     uninstall: uninstallScheduledTask,
     stop: stopScheduledTask,
     restart: restartScheduledTask,

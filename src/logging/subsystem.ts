@@ -1,7 +1,7 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
@@ -250,6 +250,38 @@ function writeConsoleLine(level: LogLevel, line: string) {
   }
 }
 
+function shouldSuppressProbeConsoleLine(params: {
+  level: LogLevel;
+  subsystem: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}): boolean {
+  if (isVerbose()) {
+    return false;
+  }
+  if (params.level === "error" || params.level === "fatal") {
+    return false;
+  }
+  const isProbeSuppressedSubsystem =
+    params.subsystem === "agent/embedded" ||
+    params.subsystem.startsWith("agent/embedded/") ||
+    params.subsystem === "model-fallback" ||
+    params.subsystem.startsWith("model-fallback/");
+  if (!isProbeSuppressedSubsystem) {
+    return false;
+  }
+  const runLikeId =
+    typeof params.meta?.runId === "string"
+      ? params.meta.runId
+      : typeof params.meta?.sessionId === "string"
+        ? params.meta.sessionId
+        : undefined;
+  if (runLikeId?.startsWith("probe-")) {
+    return true;
+  }
+  return /(sessionId|runId)=probe-/.test(params.message);
+}
+
 function logToFile(
   fileLogger: TsLogger<LogObj>,
   level: LogLevel,
@@ -309,9 +341,12 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     }
     const consoleMessage = consoleMessageOverride ?? message;
     if (
-      !isVerbose() &&
-      subsystem === "agent/embedded" &&
-      /(sessionId|runId)=probe-/.test(consoleMessage)
+      shouldSuppressProbeConsoleLine({
+        level,
+        subsystem,
+        message: consoleMessage,
+        meta: fileMeta,
+      })
     ) {
       return;
     }
@@ -355,11 +390,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (isConsoleEnabled("info")) {
-        if (
-          !isVerbose() &&
-          subsystem === "agent/embedded" &&
-          /(sessionId|runId)=probe-/.test(message)
-        ) {
+        if (shouldSuppressProbeConsoleLine({ level: "info", subsystem, message })) {
           return;
         }
         writeConsoleLine("info", message);
@@ -373,7 +404,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 export function runtimeForLogger(
   logger: SubsystemLogger,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   const formatArgs = (...args: unknown[]) =>
     args
       .map((arg) => formatRuntimeArg(arg))
@@ -382,6 +413,10 @@ export function runtimeForLogger(
   return {
     log: (...args: unknown[]) => logger.info(formatArgs(...args)),
     error: (...args: unknown[]) => logger.error(formatArgs(...args)),
+    writeStdout: (value: string) => logger.info(value),
+    writeJson: (value: unknown, space = 2) => {
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit,
   };
 }
@@ -389,6 +424,6 @@ export function runtimeForLogger(
 export function createSubsystemRuntime(
   subsystem: string,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatRelativeTimestamp } from "../format.ts";
+import { icons } from "../icons.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -15,9 +18,14 @@ import type {
   CronStatus,
 } from "../types.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import type { AgentsPanel } from "./agents.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
 
-function renderAgentContextCard(context: AgentContext, subtitle: string) {
+function renderAgentContextCard(
+  context: AgentContext,
+  subtitle: string,
+  onSelectPanel: (panel: AgentsPanel) => void,
+) {
   return html`
     <section class="card">
       <div class="card-title">Agent Context</div>
@@ -25,7 +33,14 @@ function renderAgentContextCard(context: AgentContext, subtitle: string) {
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
-          <div class="mono">${context.workspace}</div>
+          <div>
+            <button
+              type="button"
+              class="workspace-link mono"
+              @click=${() => onSelectPanel("files")}
+              title="Open Files tab"
+            >${context.workspace}</button>
+          </div>
         </div>
         <div class="agent-kv">
           <div class="label">Primary Model</div>
@@ -36,8 +51,8 @@ function renderAgentContextCard(context: AgentContext, subtitle: string) {
           <div>${context.identityName}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Identity Emoji</div>
-          <div>${context.identityEmoji}</div>
+          <div class="label">Identity Avatar</div>
+          <div>${context.identityAvatar}</div>
         </div>
         <div class="agent-kv">
           <div class="label">Skills Filter</div>
@@ -137,6 +152,7 @@ export function renderAgentChannels(params: {
   error: string | null;
   lastSuccess: number | null;
   onRefresh: () => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const entries = resolveChannelEntries(params.snapshot);
   const lastSuccessLabel = params.lastSuccess
@@ -144,7 +160,7 @@ export function renderAgentChannels(params: {
     : "never";
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.")}
+      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.", params.onSelectPanel)}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -182,7 +198,7 @@ export function renderAgentChannels(params: {
                     const status = summary.total
                       ? `${summary.connected}/${summary.total} connected`
                       : "no accounts";
-                    const config = summary.configured
+                    const configLabel = summary.configured
                       ? `${summary.configured} configured`
                       : "not configured";
                     const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
@@ -199,8 +215,23 @@ export function renderAgentChannels(params: {
                         </div>
                         <div class="list-meta">
                           <div>${status}</div>
-                          <div>${config}</div>
+                          <div>${configLabel}</div>
                           <div>${enabled}</div>
+                          ${
+                            summary.configured === 0
+                              ? html`
+                                  <div>
+                                    <a
+                                      href="https://docs.openclaw.ai/channels"
+                                      target="_blank"
+                                      rel="noopener"
+                                      style="color: var(--accent); font-size: 12px"
+                                      >Setup guide</a
+                                    >
+                                  </div>
+                                `
+                              : nothing
+                          }
                           ${
                             extras.length > 0
                               ? extras.map(
@@ -228,11 +259,13 @@ export function renderAgentCron(params: {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onRunNow: (jobId: string) => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.")}
+      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.", params.onSelectPanel)}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -297,6 +330,12 @@ export function renderAgentCron(params: {
                       <div class="list-meta">
                         <div class="mono">${formatCronState(job)}</div>
                         <div class="muted">${formatCronPayload(job)}</div>
+                        <button
+                          class="btn btn--sm"
+                          style="margin-top: 6px;"
+                          ?disabled=${!job.enabled}
+                          @click=${() => params.onRunNow(job.id)}
+                        >Run Now</button>
                       </div>
                     </div>
                   `,
@@ -391,6 +430,21 @@ export function renderAgentFiles(params: {
                             <div class="agent-file-actions">
                               <button
                                 class="btn btn--sm"
+                                title="Preview rendered markdown"
+                                @click=${(e: Event) => {
+                                  const btn = e.currentTarget as HTMLElement;
+                                  const dialog = btn
+                                    .closest(".agent-files-editor")
+                                    ?.querySelector("dialog");
+                                  if (dialog) {
+                                    dialog.showModal();
+                                  }
+                                }}
+                              >
+                                ${icons.eye} Preview
+                              </button>
+                              <button
+                                class="btn btn--sm"
                                 ?disabled=${!isDirty}
                                 @click=${() => params.onFileReset(activeEntry.name)}
                               >
@@ -414,9 +468,10 @@ export function renderAgentFiles(params: {
                                 `
                               : nothing
                           }
-                          <label class="field" style="margin-top: 12px;">
+                          <label class="field agent-file-field" style="margin-top: 12px;">
                             <span>Content</span>
                             <textarea
+                              class="agent-file-textarea"
                               .value=${draft}
                               @input=${(e: Event) =>
                                 params.onFileDraftChange(
@@ -425,6 +480,30 @@ export function renderAgentFiles(params: {
                                 )}
                             ></textarea>
                           </label>
+                          <dialog
+                            class="md-preview-dialog"
+                            @click=${(e: Event) => {
+                              const dialog = e.currentTarget as HTMLDialogElement;
+                              if (e.target === dialog) {
+                                dialog.close();
+                              }
+                            }}
+                          >
+                            <div class="md-preview-dialog__panel">
+                              <div class="md-preview-dialog__header">
+                                <div class="md-preview-dialog__title mono">${activeEntry.name}</div>
+                                <button
+                                  class="btn btn--sm"
+                                  @click=${(e: Event) => {
+                                    (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                  }}
+                                >${icons.x} Close</button>
+                              </div>
+                              <div class="md-preview-dialog__body sidebar-markdown">
+                                ${unsafeHTML(toSanitizedMarkdownHtml(draft))}
+                              </div>
+                            </div>
+                          </dialog>
                         `
                   }
                 </div>

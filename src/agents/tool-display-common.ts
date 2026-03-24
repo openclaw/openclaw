@@ -1081,9 +1081,10 @@ export function resolveExecDetail(args: unknown): string | undefined {
 
   const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
 
-  // Append the raw command when the summary differs meaningfully from the command itself.
+  // Keep the raw command inline so chat surfaces do not break "Exec:" onto a
+  // separate paragraph/code block.
   if (compact && compact !== displaySummary && compact !== summary) {
-    return `${displaySummary}\n\n\`${compact}\``;
+    return `${displaySummary} · \`${compact}\``;
   }
 
   return displaySummary;

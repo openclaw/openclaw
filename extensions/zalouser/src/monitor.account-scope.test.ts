@@ -1,9 +1,11 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
+import "./zalo-js.test-mocks.js";
 import { __testing } from "./monitor.js";
 import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 describe("zalouser monitor pairing account scoping", () => {
@@ -80,19 +82,11 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: ((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }) as RuntimeEnv["exit"],
-    };
-
     await __testing.processMessage({
       message,
       account,
       config,
-      runtime,
+      runtime: createZalouserRuntimeEnv(),
     });
 
     expect(readAllowFromStore).toHaveBeenCalledWith(

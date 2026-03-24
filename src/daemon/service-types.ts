@@ -9,6 +9,8 @@ export type GatewayServiceInstallArgs = {
   description?: string;
 };
 
+export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
+
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
@@ -18,6 +20,8 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
 };
+
+export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
 
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;

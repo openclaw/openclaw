@@ -10,7 +10,7 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
@@ -135,7 +135,7 @@ async function saveSnapshotTargeted(params: {
       ? saveSnapshotLocal(params.file)
       : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   if (params.opts.json) {
-    defaultRuntime.log(JSON.stringify(next));
+    defaultRuntime.writeJson(next, 0);
     return;
   }
   defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
@@ -151,7 +151,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
 
   const file = snapshot.file ?? { version: 1 };
   const defaults = file.defaults ?? {};
@@ -365,7 +365,7 @@ export function registerExecApprovalsCli(program: Command) {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(snapshot));
+          defaultRuntime.writeJson(snapshot, 0);
           return;
         }
 
