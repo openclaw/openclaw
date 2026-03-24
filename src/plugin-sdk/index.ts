@@ -75,6 +75,9 @@ export type {
   TranscriptRewriteResult,
 } from "../context-engine/types.js";
 
+export { normalizeAccountId } from "./account-id.js";
+export { resolvePreferredOpenClawTmpDir } from "./infra-runtime.js";
+
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
