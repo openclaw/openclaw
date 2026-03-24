@@ -856,4 +856,89 @@ describe("steerControlledSubagentRun", () => {
       text: "stale task is already finished.",
     });
   });
+
+  it("steers an ended current run that is still waiting on active descendants even when stale older rows exist", async () => {
+    const childSessionKey = "agent:main:subagent:stale-steer-worker";
+    addSubagentRunForTests({
+      runId: "run-stale-active-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale active steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 9_000,
+      startedAt: Date.now() - 8_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-current-ended-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current ended steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-descendant-active-steer",
+      childSessionKey: `${childSessionKey}:subagent:leaf`,
+      controllerSessionKey: childSessionKey,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "leaf task",
+      cleanup: "keep",
+      createdAt: Date.now() - 500,
+      startedAt: Date.now() - 500,
+    });
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-followup-steer" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-current-ended-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "current ended steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      message: "updated direction",
+    });
+
+    expect(result).toEqual({
+      status: "accepted",
+      runId: "run-followup-steer",
+      sessionKey: childSessionKey,
+      sessionId: undefined,
+      mode: "restart",
+      label: "current ended steer task",
+      text: "steered current ended steer task.",
+    });
+  });
 });
