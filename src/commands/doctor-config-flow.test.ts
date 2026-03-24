@@ -35,20 +35,35 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   }
 }
 
-async function loadFreshDoctorFlowDeps() {
-  vi.resetModules();
-  const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
-  const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
-  const freshCommandSecretGatewayModule = await import("../cli/command-secret-gateway.js");
-  const freshNoteModule = await import("../terminal/note.js");
-  const doctorFlowModule = await import("./doctor-config-flow.js");
-  return {
-    telegramFetchModule,
-    telegramProxyModule,
-    commandSecretGatewayModule: freshCommandSecretGatewayModule,
-    noteModule: freshNoteModule,
-    loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
-  };
+type DoctorFlowDeps = {
+  telegramFetchModule: typeof import("../../extensions/telegram/src/fetch.js");
+  telegramProxyModule: typeof import("../../extensions/telegram/src/proxy.js");
+  commandSecretGatewayModule: typeof import("../cli/command-secret-gateway.js");
+  noteModule: typeof import("../terminal/note.js");
+  loadAndMaybeMigrateDoctorConfig: typeof import("./doctor-config-flow.js").loadAndMaybeMigrateDoctorConfig;
+};
+
+let cachedDoctorFlowDeps: Promise<DoctorFlowDeps> | undefined;
+
+async function loadFreshDoctorFlowDeps(): Promise<DoctorFlowDeps> {
+  if (!cachedDoctorFlowDeps) {
+    vi.resetModules();
+    cachedDoctorFlowDeps = (async () => {
+      const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+      const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
+      const freshCommandSecretGatewayModule = await import("../cli/command-secret-gateway.js");
+      const freshNoteModule = await import("../terminal/note.js");
+      const doctorFlowModule = await import("./doctor-config-flow.js");
+      return {
+        telegramFetchModule,
+        telegramProxyModule,
+        commandSecretGatewayModule: freshCommandSecretGatewayModule,
+        noteModule: freshNoteModule,
+        loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
+      };
+    })();
+  }
+  return await cachedDoctorFlowDeps;
 }
 
 type DiscordGuildRule = {
