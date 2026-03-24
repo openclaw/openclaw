@@ -285,7 +285,9 @@ describe("executeSlashCommand directives", () => {
       "main",
       "model",
       "gpt-5-mini",
-      [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+      {
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+      },
     );
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
@@ -317,7 +319,9 @@ describe("executeSlashCommand directives", () => {
       "main",
       "model",
       "gpt-5-mini",
-      [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+      {
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+      },
     );
 
     expect(result.sessionPatch?.modelOverride).toEqual({
