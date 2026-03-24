@@ -59,6 +59,19 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### MAX Messenger
+
+MAX Messenger channel plugin for OpenClaw Gateway. Supports long polling,
+streaming responses, file attachments, typing indicators, and flexible access
+control (open/pairing/closed/allowlist/disabled).
+
+- **npm:** `@biguxuzz/max`
+- **repo:** [github.com/biguxuzz/openclaw-max-plugin](https://github.com/biguxuzz/openclaw-max-plugin)
+
+```bash
+openclaw plugins install @biguxuzz/max
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
