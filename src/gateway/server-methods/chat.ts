@@ -1482,9 +1482,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             : userRawModel;
 
           // Check if user's stored model is an image model AND in allowlist
-          // Check both full key (provider/model) and raw string for providerless configs
-          const storedModelIsImageModel =
-            imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride);
+          // Use only provider-qualified key to avoid cross-provider mismatches
+          const storedModelIsImageModel = imageModelKeys.has(userModelKey);
 
           // Check if stored model is in agent's allowlist
           const { allowAny, allowedKeys } = buildAllowedModelSet({
