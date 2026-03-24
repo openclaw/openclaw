@@ -148,7 +148,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+
+      // LLM slug generation is opt-in to keep this hook fast/offline by default
+      // and to avoid tests depending on network/provider credentials.
+      const llmSlugEnabled =
+        process.env.OPENCLAW_SESSION_MEMORY_LLM_SLUG === "1" ||
+        hookConfig?.slug === "llm" ||
+        hookConfig?.llmSlug === true;
+
+      const allowLlmSlug = !isTestEnv && llmSlugEnabled;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
