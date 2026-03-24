@@ -1582,6 +1582,26 @@ describe("applyExtraParamsToAgent", () => {
     ).toBeUndefined();
   });
 
+  it("strips prototype pollution keys from extra params overrides", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      extraParamsOverride: {
+        __proto__: { polluted: true },
+        constructor: "blocked",
+        prototype: "blocked",
+        temperature: 0.2,
+      },
+    });
+
+    expect(effectiveExtraParams.temperature).toBe(0.2);
+    expect(Object.hasOwn(effectiveExtraParams, "__proto__")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "constructor")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "prototype")).toBe(false);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 

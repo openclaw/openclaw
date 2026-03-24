@@ -79,6 +79,24 @@ describe("slack preview streaming eligibility", () => {
       }),
     ).toBe(true);
   });
+
+  it("keeps top-level DMs off even when replyToMode would create a reply thread", () => {
+    const streamThreadHint = resolveSlackStreamingThreadHint({
+      replyToMode: "all",
+      incomingThreadTs: undefined,
+      messageTs: "1000.4",
+      isThreadReply: false,
+    });
+
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "partial",
+        isDirectMessage: true,
+        threadTs: undefined,
+      }),
+    ).toBe(false);
+    expect(streamThreadHint).toBe("1000.4");
+  });
 });
 
 describe("slack draft stream initialization", () => {

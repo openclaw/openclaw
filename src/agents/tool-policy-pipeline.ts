@@ -9,7 +9,22 @@ import {
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
+const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
+
+function rememberToolPolicyWarning(warning: string): boolean {
+  if (seenToolPolicyWarnings.has(warning)) {
+    return false;
+  }
+  if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
+    const oldest = seenToolPolicyWarnings.values().next().value;
+    if (oldest) {
+      seenToolPolicyWarnings.delete(oldest);
+    }
+  }
+  seenToolPolicyWarnings.add(warning);
+  return true;
+}
 
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
@@ -104,8 +119,7 @@ export function applyToolPolicyPipeline(params: {
           hasOtherEntries: otherEntries.length > 0,
         });
         const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
-        if (!seenToolPolicyWarnings.has(warning)) {
-          seenToolPolicyWarnings.add(warning);
+        if (rememberToolPolicyWarning(warning)) {
           params.warn(warning);
         }
       }

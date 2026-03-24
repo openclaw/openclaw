@@ -243,7 +243,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const previewStreamingEnabled = shouldEnableSlackPreviewStreaming({
     mode: slackStreaming.mode,
     isDirectMessage: prepared.isDirectMessage,
-    threadTs: streamThreadHint ?? statusThreadTs,
+    threadTs: streamThreadHint,
   });
   const streamingEnabled = isSlackStreamingEnabled({
     mode: slackStreaming.mode,

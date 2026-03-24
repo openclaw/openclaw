@@ -304,26 +304,29 @@ export async function resolveRuntimeWebTools(params: {
     diagnostics: [],
   };
 
-  const searchEnabled = search?.enabled !== false;
+  const searchConfigured = Boolean(search);
+  const searchEnabled = searchConfigured && search?.enabled !== false;
   const providers = sortWebSearchProvidersForAutoDetect(
-    configuredBundledPluginId
-      ? resolveBundledPluginWebSearchProviders({
-          config: params.sourceConfig,
-          env: { ...process.env, ...params.context.env },
-          bundledAllowlistCompat: true,
-          onlyPluginIds: [configuredBundledPluginId],
-        })
-      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+    searchConfigured
+      ? configuredBundledPluginId
         ? resolveBundledPluginWebSearchProviders({
             config: params.sourceConfig,
             env: { ...process.env, ...params.context.env },
             bundledAllowlistCompat: true,
+            onlyPluginIds: [configuredBundledPluginId],
           })
-        : resolvePluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          }),
+        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+          ? resolveBundledPluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+          : resolvePluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+      : [],
   );
   const configuredProvider = normalizeProvider(rawProvider, providers);
 

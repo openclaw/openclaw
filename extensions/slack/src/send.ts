@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveGlobalMap } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -28,8 +27,8 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
-const SLACK_DM_CHANNEL_CACHE_KEY = Symbol.for("openclaw.slackDmChannels");
-const slackDmChannelCache = resolveGlobalMap<string, string>(SLACK_DM_CHANNEL_CACHE_KEY);
+const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const slackDmChannelCache = new Map<string, string>();
 
 type SlackRecipient =
   | {
@@ -178,6 +177,18 @@ function createSlackDmCacheKey(params: {
   return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
 }
 
+function setSlackDmChannelCache(key: string, channelId: string): void {
+  if (slackDmChannelCache.has(key)) {
+    slackDmChannelCache.delete(key);
+  } else if (slackDmChannelCache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
+    const oldest = slackDmChannelCache.keys().next().value;
+    if (oldest) {
+      slackDmChannelCache.delete(oldest);
+    }
+  }
+  slackDmChannelCache.set(key, channelId);
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
@@ -207,7 +218,7 @@ async function resolveChannelId(
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  slackDmChannelCache.set(cacheKey, channelId);
+  setSlackDmChannelCache(cacheKey, channelId);
   return { channelId, isDm: true, cacheHit: false };
 }
 

@@ -135,11 +135,16 @@ export function resolvePreparedExtraParams(params: {
     });
   const override =
     params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? Object.fromEntries(
-          Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+      ? sanitizeExtraParamsRecord(
+          Object.fromEntries(
+            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+          ),
         )
       : undefined;
-  const merged = Object.assign({}, resolvedExtraParams, override);
+  const merged = {
+    ...sanitizeExtraParamsRecord(resolvedExtraParams),
+    ...(override ?? {}),
+  };
   return (
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -152,6 +157,19 @@ export function resolvePreparedExtraParams(params: {
         thinkingLevel: params.thinkingLevel,
       },
     }) ?? merged
+  );
+}
+
+function sanitizeExtraParamsRecord(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
+    ),
   );
 }
 

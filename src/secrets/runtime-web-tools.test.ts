@@ -225,7 +225,7 @@ describe("runtime web tools resolution", () => {
     }
   });
 
-  it("auto-selects a default web search provider when search config is absent", async () => {
+  it("keeps web search disabled when search config is absent", async () => {
     const bundledProviderSpy = vi.mocked(
       bundledWebSearchProviders.resolveBundledPluginWebSearchProviders,
     );
@@ -248,10 +248,10 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(bundledProviderSpy).toHaveBeenCalledOnce();
+    expect(bundledProviderSpy).not.toHaveBeenCalled();
     expect(runtimeProviderSpy).not.toHaveBeenCalled();
-    expect(metadata.search.selectedProvider).toBe("duckduckgo");
-    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.firecrawl.active).toBe(true);
     expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
   });
@@ -722,6 +722,15 @@ describe("runtime web tools resolution", () => {
         }),
       ]),
     );
+  });
+
+  it("does not auto-enable search when tools.web.search is absent", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({}),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.selectedProvider).toBeUndefined();
   });
 
   it("uses env fallback for unresolved Firecrawl SecretRef when active", async () => {
