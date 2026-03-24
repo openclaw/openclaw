@@ -87,7 +87,7 @@ describe("createChildAdapter", () => {
     adapter.kill();
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
-    expect(killMock).not.toHaveBeenCalled();
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("uses direct child.kill for non-SIGKILL signals", async () => {
