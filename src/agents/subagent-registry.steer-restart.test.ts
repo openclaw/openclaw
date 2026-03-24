@@ -75,6 +75,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
     hasHooks: (hookName: string) => hookName === "subagent_ended",
     runSubagentEnded: runSubagentEndedHookMock,
   })),
+  getGlobalPluginRegistry: vi.fn(() => null),
+  hasGlobalHooks: vi.fn((hookName: string) => hookName === "subagent_ended"),
+  initializeGlobalHookRunner: vi.fn(),
+  resetGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
