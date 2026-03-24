@@ -19,7 +19,8 @@ describe("browser chrome launch args", () => {
         color: "#FF4500",
         headless: false,
         noSandbox: false,
-        attachOnly: false,
+        executablePath: undefined,
+      attachOnly: false,
         ssrfPolicy: { allowPrivateNetwork: true },
         defaultProfile: "openclaw",
         profiles: {
@@ -34,7 +35,8 @@ describe("browser chrome launch args", () => {
         cdpIsLoopback: true,
         color: "#FF4500",
         driver: "openclaw",
-        attachOnly: false,
+        executablePath: undefined,
+      attachOnly: false,
       },
       userDataDir: "/tmp/openclaw-test-user-data",
     });

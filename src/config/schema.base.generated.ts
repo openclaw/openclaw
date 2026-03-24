@@ -492,6 +492,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   pattern: "^#?[0-9a-fA-F]{6}$",
                 },
+                executablePath: {
+                  type: "string",
+                },
               },
               required: ["color"],
               additionalProperties: false,
