@@ -1,7 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock getProcessStartTime so PID-recycling detection works on non-Linux
 // (macOS, CI runners). isPidAlive is left unmocked.
@@ -18,6 +19,7 @@ import {
   __testing,
   acquireSessionWriteLock,
   cleanStaleLockFiles,
+  resetSessionWriteLockStateForTest,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
@@ -95,6 +97,11 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 }
 
 describe("acquireSessionWriteLock", () => {
+  afterEach(() => {
+    resetSessionWriteLockStateForTest();
+    vi.restoreAllMocks();
+  });
+
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
       return;
@@ -221,6 +228,20 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("closes file descriptors synchronously during process-exit cleanup", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const closeSyncSpy = vi.spyOn(fsSync, "closeSync");
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      __testing.releaseAllLocksSync();
+
+      expect(closeSyncSpy).toHaveBeenCalledTimes(1);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      await lock.release();
+      closeSyncSpy.mockRestore();
+    });
+  });
+
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
@@ -324,6 +345,9 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("reclaims lock files with recycled PIDs", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       // Write a lock with a live PID (current process) but a wrong starttime,
       // simulating PID recycling: the PID is alive but belongs to a different
