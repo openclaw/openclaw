@@ -477,6 +477,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("forwards configured preview throttle and minInitialChars overrides", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: {
+        streamThrottleMs: 500,
+        minInitialChars: 12,
+      },
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        throttleMs: 500,
+        minInitialChars: 12,
+      }),
+    );
+  });
+
   it("keeps block streaming enabled when account config enables it", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });

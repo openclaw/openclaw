@@ -680,6 +680,55 @@ describe("draft stream initial message debounce", () => {
     });
   });
 
+  describe("throttle behavior", () => {
+    it("uses the 250ms default throttle when no throttleMs is provided", async () => {
+      const api = createMockApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      stream.update("Hello again");
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() =>
+        expect(api.editMessageText).toHaveBeenCalledWith(123, 42, "Hello again"),
+      );
+    });
+
+    it("respects explicit throttleMs overrides", async () => {
+      const api = createMockApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        throttleMs: 1000,
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      stream.update("Hello again");
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() =>
+        expect(api.editMessageText).toHaveBeenCalledWith(123, 42, "Hello again"),
+      );
+    });
+  });
+
   describe("default behavior without debounce params", () => {
     it("sends immediately without minInitialChars set (backward compatible)", async () => {
       const api = createMockApi();
