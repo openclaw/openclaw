@@ -2866,7 +2866,6 @@ td.data-table-key-col {
   overflow-x: auto;
   overflow-y: auto;
   overflow-wrap: anywhere;
-  word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
