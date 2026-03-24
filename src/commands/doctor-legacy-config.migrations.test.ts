@@ -140,7 +140,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       id: "GEMINI_API_KEY",
     });
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
+      "https://generativelanguage.googleapis.com",
     );
     expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
@@ -167,7 +167,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
+      "https://generativelanguage.googleapis.com",
     );
     expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.changes).toContain(

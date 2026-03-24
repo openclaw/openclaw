@@ -2,7 +2,6 @@ import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -263,11 +262,19 @@ export function normalizeLegacyNanoBananaSkill(
   const rawGoogle = (
     isRecord(rawProviders.google) ? { ...rawProviders.google } : {}
   ) as ModelProviderEntry;
+  const GOOGLE_PROVIDER_BASE_URL = "https://generativelanguage.googleapis.com";
   const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
+  let googleChanged = false;
   if (!hasGoogleApiKey && legacyApiKey) {
     rawGoogle.apiKey = legacyApiKey;
-    if (!rawGoogle.baseUrl) {
-      rawGoogle.baseUrl = DEFAULT_GOOGLE_API_BASE_URL;
+    googleChanged = true;
+    changes.push(
+      `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
+    );
+  }
+  if (googleChanged) {
+    if (typeof rawGoogle.baseUrl !== "string" || rawGoogle.baseUrl.trim().length === 0) {
+      rawGoogle.baseUrl = GOOGLE_PROVIDER_BASE_URL;
     }
     if (!Array.isArray(rawGoogle.models)) {
       rawGoogle.models = [];
@@ -278,9 +285,6 @@ export function normalizeLegacyNanoBananaSkill(
       ...next,
       models: rawModels as OpenClawConfig["models"],
     };
-    changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
-    );
   }
 
   const entries = { ...rawEntries };
