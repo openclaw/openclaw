@@ -1,5 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import { stripAnsi } from "../terminal/ansi.js";
+import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -71,7 +71,7 @@ function sanitizeJsonValue(value: unknown): unknown {
 }
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
-  return `${emoji} ${theme.command(skill.name)}`;
+  return `${emoji} ${theme.command(sanitizeForLog(skill.name))}`;
 }
 
 function formatSkillMissingSummary(skill: SkillStatusEntry): string {
@@ -194,16 +194,20 @@ export function formatSkillInfo(
         ? theme.warn("🚫 Blocked by allowlist")
         : theme.warn("△ Needs setup");
 
-  lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
+  const safeName = sanitizeForLog(skill.name);
+  const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
+  const safeSkillKey = sanitizeForLog(skill.skillKey);
+
+  lines.push(`${emoji} ${theme.heading(safeName)} ${status}`);
   lines.push("");
-  lines.push(skill.description);
+  lines.push(sanitizeForLog(skill.description));
   lines.push("");
 
   lines.push(theme.heading("Details:"));
-  lines.push(`${theme.muted("  Source:")} ${skill.source}`);
+  lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
-  if (skill.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${skill.homepage}`);
+  if (safeHomepage) {
+    lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
   }
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
@@ -268,17 +272,17 @@ export function formatSkillInfo(
   if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
     lines.push("");
     lines.push(theme.heading("API key setup:"));
-    if (skill.homepage) {
-      lines.push(`  Get your key: ${skill.homepage}`);
+    if (safeHomepage) {
+      lines.push(`  Get your key: ${safeHomepage}`);
     }
     lines.push(
-      `  Save via UI: ${theme.muted("Control UI → Skills → ")}${skill.name}${theme.muted(" → Save key")}`,
+      `  Save via UI: ${theme.muted("Control UI → Skills → ")}${safeName}${theme.muted(" → Save key")}`,
     );
     lines.push(
-      `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${skill.skillKey}.apiKey YOUR_KEY`)}`,
+      `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${safeSkillKey}.apiKey YOUR_KEY`)}`,
     );
     lines.push(
-      `  Stored in: ${theme.muted("~/.openclaw/openclaw.json")} ${theme.muted(`(skills.entries.${skill.skillKey}.apiKey)`)}`,
+      `  Stored in: ${theme.muted("~/.openclaw/openclaw.json")} ${theme.muted(`(skills.entries.${safeSkillKey}.apiKey)`)}`,
     );
   }
 
@@ -331,7 +335,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push(theme.heading("Ready to use:"));
     for (const skill of eligible) {
       const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(`  ${emoji} ${skill.name}`);
+      lines.push(`  ${emoji} ${sanitizeForLog(skill.name)}`);
     }
   }
 
@@ -341,7 +345,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     for (const skill of missingReqs) {
       const emoji = normalizeSkillEmoji(skill.emoji);
       const missing = formatSkillMissingSummary(skill);
-      lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing})`)}`);
+      lines.push(`  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`);
     }
   }
 

@@ -99,6 +99,20 @@ function installHooks() {
     if (!href) {
       return;
     }
+
+    // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
+    try {
+      const url = new URL(href, window.location.href);
+      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
+        node.removeAttribute("href");
+        return;
+      }
+    } catch {
+      // Relative URLs are fine; malformed absolute URLs with dangerous schemes
+      // will fail to parse and keep their href — but DOMPurify already strips
+      // javascript: by default. This is defense-in-depth.
+    }
+
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
     if (href.toLowerCase().includes("tail")) {
