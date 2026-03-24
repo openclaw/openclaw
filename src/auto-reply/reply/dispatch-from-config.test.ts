@@ -231,7 +231,7 @@ function createDispatcher(): ReplyDispatcher {
     sendBlockReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, status: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -2079,7 +2079,10 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, status: 0, final: 0 },
+    });
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2247,7 +2250,10 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, status: 0, final: 0 },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
@@ -2319,7 +2325,10 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, status: 0, final: 0 },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-dm-1");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",

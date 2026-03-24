@@ -86,7 +86,7 @@ export function createNativeCommandTestParams(
     ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
   > = {
     queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
+    counts: { block: 0, final: 0, status: 0, tool: 0 },
   };
   const telegramDeps: TelegramBotDeps = {
     loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],

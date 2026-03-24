@@ -25,6 +25,7 @@ type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispa
 const EMPTY_REPLY_COUNTS: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
   block: 0,
   final: 0,
+  status: 0,
   tool: 0,
 };
 
@@ -167,6 +168,7 @@ async function dispatchHarnessReplies(
     counts: {
       block: 0,
       final: finalCount,
+      status: 0,
       tool: 0,
     },
   };

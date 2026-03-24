@@ -640,7 +640,7 @@ describe("createTelegramBot", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }) => {
         await dispatcherOptions.typingCallbacks?.onReplyStart?.();
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        return { queuedFinal: false, counts: { block: 0, final: 0, status: 0, tool: 0 } };
       },
     );
     createTelegramBot({ token: "tok" });
@@ -1827,7 +1827,7 @@ describe("createTelegramBot", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         dispatchCall = params as typeof dispatchCall;
         await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        return { queuedFinal: false, counts: { block: 0, final: 0, status: 0, tool: 0 } };
       });
       loadConfig.mockReturnValue({
         channels: {
@@ -2161,7 +2161,7 @@ describe("createTelegramBot", () => {
       | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
       dispatchCall = params as typeof dispatchCall;
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return { queuedFinal: false, counts: { block: 0, final: 0, status: 0, tool: 0 } };
     });
     loadConfig.mockReturnValue({
       channels: {
