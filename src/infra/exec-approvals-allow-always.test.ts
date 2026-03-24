@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+  makePathEnv,
+  makeTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlist,
   requiresExecApproval,
@@ -122,7 +127,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: exe,
           argv: [exe],
-          resolution: { rawExecutable: exe, resolvedPath: exe, executableName: "openclaw-tool" },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: exe,
+              resolvedPath: exe,
+              executableName: "openclaw-tool",
+            }),
+          }),
         },
       ],
     });
@@ -140,11 +151,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/bin/zsh -lc 'whoami'",
           argv: ["/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -167,11 +180,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/bin/zsh -lc 'whoami && ls && whoami'",
           argv: ["/bin/zsh", "-lc", "whoami && ls && whoami"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -400,11 +415,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: "/bin/zsh -s",
           argv: ["/bin/zsh", "-s"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       platform: process.platform,
@@ -423,11 +440,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: "/usr/local/bin/zsh -lc whoami",
           argv: ["/usr/local/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/usr/local/bin/zsh",
-            resolvedPath: undefined,
-            executableName: "/usr/local/bin/zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/local/bin/zsh",
+              resolvedPath: undefined,
+              executableName: "/usr/local/bin/zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -448,11 +467,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: "/usr/bin/nice /bin/zsh -lc whoami",
           argv: ["/usr/bin/nice", "/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/usr/bin/nice",
-            resolvedPath: "/usr/bin/nice",
-            executableName: "nice",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/bin/nice",
+              resolvedPath: "/usr/bin/nice",
+              executableName: "nice",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -474,11 +495,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: "/usr/bin/time -p /bin/zsh -lc whoami",
           argv: ["/usr/bin/time", "-p", "/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/usr/bin/time",
-            resolvedPath: "/usr/bin/time",
-            executableName: "time",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/bin/time",
+              resolvedPath: "/usr/bin/time",
+              executableName: "time",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -503,11 +526,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: `${busybox} sh -lc whoami`,
           argv: [busybox, "sh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: busybox,
-            resolvedPath: busybox,
-            executableName: "busybox",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: busybox,
+              resolvedPath: busybox,
+              executableName: "busybox",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -529,11 +554,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: `${busybox} sed -n 1p`,
           argv: [busybox, "sed", "-n", "1p"],
-          resolution: {
-            rawExecutable: busybox,
-            resolvedPath: busybox,
-            executableName: "busybox",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: busybox,
+              resolvedPath: busybox,
+              executableName: "busybox",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -549,11 +576,13 @@ $0 \\"$1\\"" touch ${marker}`,
         {
           raw: "sudo /bin/zsh -lc whoami",
           argv: ["sudo", "/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "sudo",
-            resolvedPath: "/usr/bin/sudo",
-            executableName: "sudo",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "sudo",
+              resolvedPath: "/usr/bin/sudo",
+              executableName: "sudo",
+            }),
+          }),
         },
       ],
       platform: process.platform,
