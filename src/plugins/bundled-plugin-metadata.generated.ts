@@ -1600,7 +1600,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/mattermost",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.23",
     packageDescription: "OpenClaw Mattermost channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1618,6 +1618,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/mattermost",
         localPath: "extensions/mattermost",
         defaultChoice: "npm",
+        minHostVersion: ">=2026.3.23",
       },
     },
     manifest: {
