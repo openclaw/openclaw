@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 import {
   enrichOllamaModelsWithContext,
+  isReasoningModelHeuristic,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./ollama-models.js";
@@ -37,5 +38,16 @@ describe("ollama-models", () => {
       { name: "llama3:8b", contextWindow: 65536 },
       { name: "deepseek-r1:14b", contextWindow: undefined },
     ]);
+  });
+
+  it("marks newer reasoning model families as reasoning-capable", () => {
+    expect(isReasoningModelHeuristic("deepseek-r1:14b")).toBe(true);
+    expect(isReasoningModelHeuristic("qwen3:32b")).toBe(true);
+    expect(isReasoningModelHeuristic("qwq:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("glm-5:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("kimi-k2:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("skywork-o1:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("marco-o1:latest")).toBe(true);
+    expect(isReasoningModelHeuristic("llama3.3:70b")).toBe(false);
   });
 });
