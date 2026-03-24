@@ -32,15 +32,9 @@ type EmbeddingsRequest = {
 };
 
 const DEFAULT_EMBEDDINGS_BODY_BYTES = 5 * 1024 * 1024;
-const SUPPORTED_EMBEDDING_PROVIDERS = new Set<EmbeddingProviderRequest>([
-  "openai",
-  "local",
-  "gemini",
-  "voyage",
-  "mistral",
-  "ollama",
-  "auto",
-]);
+const MAX_EMBEDDING_INPUTS = 128;
+const MAX_EMBEDDING_INPUT_CHARS = 8_192;
+const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
   return value && typeof value === "object" ? (value as EmbeddingsRequest) : {};
@@ -64,26 +58,21 @@ function encodeEmbeddingBase64(embedding: number[]): string {
   return Buffer.from(float32.buffer).toString("base64");
 }
 
-function inferProviderAndModel(params: {
-  requestModel: string;
-  defaultProvider: EmbeddingProviderRequest;
-}): { provider: EmbeddingProviderRequest; model: string } | null {
-  const model = params.requestModel.trim();
-  if (!model) {
-    return null;
+function validateInputTexts(texts: string[]): string | undefined {
+  if (texts.length > MAX_EMBEDDING_INPUTS) {
+    return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
   }
-
-  const slash = model.indexOf("/");
-  if (slash === -1) {
-    return { provider: params.defaultProvider, model };
+  let totalChars = 0;
+  for (const text of texts) {
+    if (text.length > MAX_EMBEDDING_INPUT_CHARS) {
+      return `Input too long (max ${MAX_EMBEDDING_INPUT_CHARS} chars).`;
+    }
+    totalChars += text.length;
+    if (totalChars > MAX_EMBEDDING_TOTAL_CHARS) {
+      return `Total input too large (max ${MAX_EMBEDDING_TOTAL_CHARS} chars).`;
+    }
   }
-
-  const provider = model.slice(0, slash).trim().toLowerCase() as EmbeddingProviderRequest;
-  const providerModel = model.slice(slash + 1).trim();
-  if (!providerModel || !SUPPORTED_EMBEDDING_PROVIDERS.has(provider)) {
-    return null;
-  }
-  return { provider, model: providerModel };
+  return undefined;
 }
 
 export async function handleOpenAiEmbeddingsHttpRequest(
@@ -125,27 +114,34 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     });
     return true;
   }
+  const inputError = validateInputTexts(texts);
+  if (inputError) {
+    sendJson(res, 400, {
+      error: { message: inputError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   const cfg = loadConfig();
   const agentId = resolveAgentIdFromHeader(req) ?? "main";
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
-  const inferred = inferProviderAndModel({
-    requestModel,
-    defaultProvider: (memorySearch?.provider ?? "openai") as EmbeddingProviderRequest,
-  });
-  if (!inferred) {
+  if (requestModel.includes("/")) {
     sendJson(res, 400, {
-      error: { message: "Unsupported embedding model reference.", type: "invalid_request_error" },
+      error: {
+        message: "Provider prefixes are not allowed on `/v1/embeddings`.",
+        type: "invalid_request_error",
+      },
     });
     return true;
   }
+  const provider = (memorySearch?.provider ?? "openai") as EmbeddingProviderRequest;
 
   const options: EmbeddingProviderOptions = {
     config: cfg,
     agentDir,
-    provider: inferred.provider,
-    model: inferred.model,
+    provider,
+    model: requestModel,
     // Public HTTP embeddings should fail closed rather than silently mixing
     // vector spaces across fallback providers/models.
     fallback: "none",

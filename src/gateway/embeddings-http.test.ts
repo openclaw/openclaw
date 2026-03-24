@@ -62,7 +62,7 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("embeds string and array inputs", async () => {
     const single = await postEmbeddings({
-      model: "openai/text-embedding-3-small",
+      model: "text-embedding-3-small",
       input: "hello",
     });
     expect(single.status).toBe(200);
@@ -75,7 +75,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(singleJson.data?.[0]?.embedding).toEqual([0.1, 0.2]);
 
     const batch = await postEmbeddings({
-      model: "openai/text-embedding-3-small",
+      model: "text-embedding-3-small",
       input: ["a", "b"],
     });
     expect(batch.status).toBe(200);
@@ -111,7 +111,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("rejects invalid input shapes", async () => {
     const res = await postEmbeddings({
-      model: "openai/text-embedding-3-small",
+      model: "text-embedding-3-small",
       input: [{ nope: true }],
     });
     expect(res.status).toBe(400);
@@ -119,10 +119,36 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(json.error?.type).toBe("invalid_request_error");
   });
 
+  it("rejects provider-prefixed model overrides", async () => {
+    const res = await postEmbeddings({
+      model: "openai/text-embedding-3-small",
+      input: "hello",
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error).toEqual({
+      type: "invalid_request_error",
+      message: "Provider prefixes are not allowed on `/v1/embeddings`.",
+    });
+  });
+
+  it("rejects oversized batches", async () => {
+    const res = await postEmbeddings({
+      model: "text-embedding-3-small",
+      input: Array.from({ length: 129 }, () => "x"),
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error).toEqual({
+      type: "invalid_request_error",
+      message: "Too many inputs (max 128).",
+    });
+  });
+
   it("sanitizes provider failures", async () => {
     createEmbeddingProviderMock.mockRejectedValueOnce(new Error("secret upstream failure"));
     const res = await postEmbeddings({
-      model: "openai/text-embedding-3-small",
+      model: "text-embedding-3-small",
       input: "hello",
     });
     expect(res.status).toBe(500);
