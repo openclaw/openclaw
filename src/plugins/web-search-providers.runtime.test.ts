@@ -93,7 +93,6 @@ describe("resolvePluginWebSearchProviders", () => {
     loadPluginManifestRegistryMock = vi
       .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
       .mockReturnValue({
-        diagnostics: [],
         plugins: [
           {
             id: "brave",
