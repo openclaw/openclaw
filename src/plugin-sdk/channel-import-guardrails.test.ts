@@ -11,6 +11,7 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "allow-from.js",
   "api.js",
   "auth-presence.js",
+  "helper-api.js",
   "index.js",
   "light-runtime-api.js",
   "login-qr-api.js",
@@ -22,6 +23,7 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "setup-api.js",
   "setup-entry.js",
   "timeouts.js",
+  "thread-bindings-runtime.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
