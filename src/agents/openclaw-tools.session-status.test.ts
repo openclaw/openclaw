@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -98,8 +98,83 @@ vi.mock("../infra/provider-usage.js", () => ({
   formatUsageSummaryLine: () => null,
 }));
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+
+async function loadFreshOpenClawToolsForSessionStatusTest() {
+  vi.resetModules();
+  vi.doMock("../config/sessions.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/sessions.js")>();
+    return {
+      ...actual,
+      loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+      updateSessionStore: async (
+        storePath: string,
+        mutator: (store: Record<string, unknown>) => Promise<void> | void,
+      ) => {
+        const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
+        await mutator(store);
+        updateSessionStoreMock(storePath, store);
+        return store;
+      },
+      resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
+        opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
+    };
+  });
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../gateway/session-utils.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+    return {
+      ...actual,
+      loadCombinedSessionStoreForGateway: (cfg: unknown) =>
+        loadCombinedSessionStoreForGatewayMock(cfg),
+    };
+  });
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => mockConfig,
+    };
+  });
+  vi.doMock("../agents/model-catalog.js", () => ({
+    loadModelCatalog: async () => [
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        contextWindow: 200000,
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        contextWindow: 400000,
+      },
+    ],
+  }));
+  vi.doMock("../agents/auth-profiles.js", () => ({
+    ensureAuthProfileStore: () => ({ profiles: {} }),
+    resolveAuthProfileDisplayLabel: () => undefined,
+    resolveAuthProfileOrder: () => [],
+  }));
+  vi.doMock("../agents/model-auth.js", () => ({
+    resolveEnvApiKey: () => null,
+    resolveUsableCustomProviderApiKey: () => null,
+    resolveModelAuthMode: () => "api-key",
+  }));
+  vi.doMock("../infra/provider-usage.js", () => ({
+    resolveUsageProviderId: () => undefined,
+    loadProviderUsageSummary: async () => ({
+      updatedAt: Date.now(),
+      providers: [],
+    }),
+    formatUsageSummaryLine: () => null,
+  }));
+  await import("./test-helpers/fast-core-tools.js");
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}
 
 function resetSessionStore(store: Record<string, unknown>) {
   loadSessionStoreMock.mockClear();
@@ -172,6 +247,10 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 }
 
 describe("session_status tool", () => {
+  beforeEach(async () => {
+    await loadFreshOpenClawToolsForSessionStatusTest();
+  });
+
   it("returns a status card for the current session", async () => {
     resetSessionStore({
       main: {
