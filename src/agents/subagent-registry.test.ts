@@ -464,4 +464,46 @@ describe("subagent registry seam flow", () => {
       await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
+
+  it("removes attachments for released delete-mode runs", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-release-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
+
+    mod.addSubagentRunForTests({
+      runId: "run-release-delete",
+      childSessionKey: "agent:main:subagent:release-delete",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "main",
+      task: "release attachments",
+      cleanup: "delete",
+      expectsCompletionMessage: undefined,
+      spawnMode: "run",
+      attachmentsDir,
+      attachmentsRootDir,
+      createdAt: 1,
+      startedAt: 1,
+      sessionStartedAt: 1,
+      accumulatedRuntimeMs: 0,
+      cleanupHandled: false,
+    });
+
+    mod.releaseSubagentRun("run-release-delete");
+
+    await vi.waitFor(async () => {
+      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:release-delete",
+        reason: "released",
+        workspaceDir: undefined,
+      });
+    });
+  });
 });

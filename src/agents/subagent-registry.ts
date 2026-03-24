@@ -1545,6 +1545,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
