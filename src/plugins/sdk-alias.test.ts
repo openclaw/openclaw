@@ -255,7 +255,12 @@ describe("plugin sdk alias helpers", () => {
     },
     {
       name: "resolves plugin-sdk alias from package root when loader runs from transpiler cache path",
-      buildFixture: () => createPluginSdkAliasFixture(),
+      buildFixture: () =>
+        createPluginSdkAliasFixture({
+          packageExports: {
+            "./plugin-sdk/index": { default: "./dist/plugin-sdk/index.js" },
+          },
+        }),
       modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
       argv1: (root: string) => path.join(root, "openclaw.mjs"),
       srcFile: "index.ts",
@@ -486,9 +491,9 @@ describe("plugin sdk alias helpers", () => {
     mkdirSafe(externalPluginRoot);
     fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
 
-    const aliases = withArgv1(path.join(fixture.root, "openclaw.mjs"), () =>
-      withCwd(externalPluginRoot, () =>
-        withEnv({ NODE_ENV: undefined }, () => buildPluginLoaderAliasMap(externalPluginEntry)),
+    const aliases = withCwd(externalPluginRoot, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(externalPluginEntry, path.join(fixture.root, "openclaw.mjs")),
       ),
     );
 
