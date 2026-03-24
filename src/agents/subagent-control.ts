@@ -794,6 +794,14 @@ export async function sendControlledSubagentMessage(params: {
       error: "Leaf subagents cannot control other sessions.",
     };
   }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done" as const,
+      runId: params.entry.runId,
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
+    };
+  }
 
   const targetSessionKey = params.entry.childSessionKey;
   const parsed = parseAgentSessionKey(targetSessionKey);
