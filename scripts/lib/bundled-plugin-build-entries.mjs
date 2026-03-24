@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
+const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+
 function readBundledPluginPackageJson(packageJsonPath) {
   if (!fs.existsSync(packageJsonPath)) {
     return null;
@@ -28,6 +30,39 @@ function collectPluginSourceEntries(packageJson) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+}
+
+function collectTopLevelPublicSurfaceEntries(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(pluginDir, { withFileTypes: true })
+    .flatMap((dirent) => {
+      if (!dirent.isFile()) {
+        return [];
+      }
+
+      const ext = path.extname(dirent.name);
+      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
+        return [];
+      }
+
+      const normalizedName = dirent.name.toLowerCase();
+      if (
+        normalizedName.endsWith(".d.ts") ||
+        normalizedName.includes(".test.") ||
+        normalizedName.includes(".spec.") ||
+        normalizedName.includes(".fixture.") ||
+        normalizedName.includes(".snap")
+      ) {
+        return [];
+      }
+
+      return [`./${dirent.name}`];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function collectBundledPluginBuildEntries(params = {}) {
@@ -57,7 +92,12 @@ export function collectBundledPluginBuildEntries(params = {}) {
       id: dirent.name,
       hasPackageJson: packageJson !== null,
       packageJson,
-      sourceEntries: collectPluginSourceEntries(packageJson),
+      sourceEntries: Array.from(
+        new Set([
+          ...collectPluginSourceEntries(packageJson),
+          ...collectTopLevelPublicSurfaceEntries(pluginDir),
+        ]),
+      ),
     });
   }
 

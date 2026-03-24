@@ -110,7 +110,7 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
-      'package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "latest".',
+      'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
     ]);
   });
