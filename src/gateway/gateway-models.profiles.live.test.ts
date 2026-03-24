@@ -18,7 +18,7 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
-import { isModernModelRef } from "../agents/live-model-filter.js";
+import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
@@ -1503,7 +1503,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const maxModels = GATEWAY_LIVE_MAX_MODELS;
       const wanted = filter
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
-        : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
+        : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
 
       const candidates: Array<Model<Api>> = [];
       const skipped: Array<{ model: string; error: string }> = [];
@@ -1544,7 +1544,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (model) => model.provider,
       );
-      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
