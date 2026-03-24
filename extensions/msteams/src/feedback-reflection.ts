@@ -10,8 +10,10 @@
  * 6. Optionally sends a proactive follow-up to the user
  */
 
-import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/msteams";
-import type { OpenClawConfig } from "../runtime-api.js";
+import {
+  dispatchReplyFromConfigWithSettledDispatcher,
+  type OpenClawConfig,
+} from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
