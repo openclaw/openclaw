@@ -148,6 +148,11 @@ describe("resolveProviderCapabilities", () => {
     expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
   });
 
+  it("keeps the normalized kimi fallback aligned when plugin capabilities are unavailable", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => undefined);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
+  });
+
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {
     expect(
       shouldSanitizeGeminiThoughtSignaturesForModel({
