@@ -88,6 +88,8 @@ export async function executeSlashCommand(
       return await executeAgents(client);
     case "kill":
       return await executeKill(client, sessionKey, args);
+    case "steer":
+      return await executeSteer(client, sessionKey, args);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -602,6 +604,41 @@ function resolveCurrentThinkingLevel(
 
 function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
   return session?.fastMode === true ? "on" : "off";
+}
+
+async function executeSteer(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return { content: "Usage: `/steer [id] <message>`" };
+  }
+  try {
+    // Try to resolve the first word as a subagent target.
+    const spaceIdx = trimmed.indexOf(" ");
+    if (spaceIdx > 0) {
+      const maybeTarget = trimmed.slice(0, spaceIdx);
+      const rest = trimmed.slice(spaceIdx + 1).trim();
+      if (rest) {
+        const sessions = await client.request<SessionsListResult>("sessions.list", {});
+        const matched = resolveKillTargets(sessions?.sessions ?? [], sessionKey, maybeTarget);
+        if (matched.length === 1) {
+          await client.request("sessions.steer", { key: matched[0], message: rest });
+          return { content: `Steered \`${maybeTarget}\`.` };
+        }
+        if (matched.length > 1) {
+          return { content: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
+        }
+        // No match — treat the entire input as the message for the current session.
+      }
+    }
+    await client.request("sessions.steer", { key: sessionKey, message: trimmed });
+    return { content: "Steered." };
+  } catch (err) {
+    return { content: `Failed to steer: ${String(err)}` };
+  }
 }
 
 function fmtTokens(n: number): string {

@@ -152,10 +152,11 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     name: "steer",
-    description: "Steer a sub-agent",
-    args: "<id> <msg>",
+    description: "Redirect a session",
+    args: "[id] <message>",
     icon: "send",
     category: "agents",
+    executeLocal: true,
   },
 ];
 
