@@ -12,6 +12,7 @@ const GENERIC_WEB_SEARCH_KEYS = new Set([
 ]);
 
 const LEGACY_PROVIDER_MAP = {
+  bocha: "bocha",
   brave: "brave",
   firecrawl: "firecrawl",
   gemini: "google",
