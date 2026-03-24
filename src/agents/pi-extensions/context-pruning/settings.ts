@@ -10,6 +10,8 @@ export type ContextPruningConfig = {
   mode?: ContextPruningMode;
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
+  /** When true, pruned media (images, audio, etc.) is cached to disk instead of being permanently removed. */
+  cacheMedia?: boolean;
   keepLastAssistants?: number;
   softTrimRatio?: number;
   hardClearRatio?: number;
@@ -29,6 +31,7 @@ export type ContextPruningConfig = {
 export type EffectiveContextPruningSettings = {
   mode: Exclude<ContextPruningMode, "off">;
   ttlMs: number;
+  cacheMedia: boolean;
   keepLastAssistants: number;
   softTrimRatio: number;
   hardClearRatio: number;
@@ -48,6 +51,7 @@ export type EffectiveContextPruningSettings = {
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
   mode: "cache-ttl",
   ttlMs: 5 * 60 * 1000,
+  cacheMedia: false,
   keepLastAssistants: 3,
   softTrimRatio: 0.3,
   hardClearRatio: 0.5,
@@ -95,6 +99,9 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
   }
   if (typeof cfg.minPrunableToolChars === "number" && Number.isFinite(cfg.minPrunableToolChars)) {
     s.minPrunableToolChars = Math.max(0, Math.floor(cfg.minPrunableToolChars));
+  }
+  if (typeof cfg.cacheMedia === "boolean") {
+    s.cacheMedia = cfg.cacheMedia;
   }
   if (cfg.tools) {
     s.tools = cfg.tools;

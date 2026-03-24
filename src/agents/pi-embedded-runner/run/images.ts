@@ -118,6 +118,18 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
+  // Pattern for [media cached: path (mime) kind=<kind>] markers from context pruning.
+  // Only inject images (kind=image); other kinds stay as text references for the agent.
+  const mediaCachedPattern = /\[media cached:\s*(\S+)\s*\(([^)]+)\)\s*kind=(\w+)\]/gi;
+  let cachedMatch: RegExpExecArray | null;
+  while ((cachedMatch = mediaCachedPattern.exec(prompt)) !== null) {
+    const cachedPath = cachedMatch[1]?.trim();
+    const kind = cachedMatch[3]?.trim();
+    if (cachedPath && kind === "image") {
+      addPathRef(cachedPath);
+    }
+  }
+
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
