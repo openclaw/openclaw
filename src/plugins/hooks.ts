@@ -616,7 +616,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     const blockingHooks = hooks.filter((h) => h.messageReceivedMode === "blocking");
 
     if (observerHooks.length > 0) {
-      void runVoidHooksList(observerHooks, "message_received", event, ctx);
+      runVoidHooksList(observerHooks, "message_received", event, ctx).catch(() => {});
     }
 
     if (blockingHooks.length === 0) {

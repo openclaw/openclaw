@@ -821,9 +821,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       priority: opts?.priority,
       source: record.source,
       messageReceivedMode:
-        hookName === "message_received" && opts && "mode" in opts
-          ? (opts.mode ?? undefined)
-          : undefined,
+        hookName === "message_received" && opts && "mode" in opts ? opts.mode : undefined,
     } as TypedPluginHookRegistration);
   };
 
