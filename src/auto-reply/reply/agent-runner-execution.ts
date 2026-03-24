@@ -17,6 +17,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
+  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -607,7 +608,12 @@ export async function runAgentTurnWithFallback(params: {
         try {
           // Delete transcript file if it exists
           if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+            const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+            const transcriptPath = resolveSessionTranscriptPath(
+              corruptedSessionId,
+              agentId,
+              params.sessionCtx.MessageThreadId,
+            );
             try {
               fs.unlinkSync(transcriptPath);
             } catch {
