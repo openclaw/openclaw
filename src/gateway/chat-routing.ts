@@ -77,50 +77,50 @@ export function resolveConfiguredRoutingAliases(cfg: OpenClawConfig): RoutingAli
   const configuredIds = listConfiguredAgentIds(cfg);
   const configured = cfg.agents?.orchestration?.routingAliases ?? [];
   if (configured.length > 0) {
-    return configured
-      .map((entry) => {
-        const agentId = normalizeAgentId(entry.agentId);
-        if (!agentId || !configuredIds.has(agentId)) {
-          return null;
-        }
-        const aliases = Array.from(
-          new Set(
-            [agentId, ...(entry.aliases ?? [])]
-              .flatMap((value) => slugifyWords(value))
-              .filter(Boolean),
-          ),
-        );
-        return {
-          agentId,
-          aliases,
-          description: entry.description?.trim() || undefined,
-          routingHints: (entry.routingHints ?? []).flatMap((value) => slugifyWords(value)),
-        };
-      })
-      .filter((entry): entry is RoutingAliasEntry => Boolean(entry));
-  }
-
-  return (cfg.agents?.list ?? [])
-    .map((entry) => {
-      const agentId = normalizeAgentId(entry?.id);
-      if (!agentId) {
-        return null;
+    const resolved: RoutingAliasEntry[] = [];
+    for (const entry of configured) {
+      const agentId = normalizeAgentId(entry.agentId);
+      if (!agentId || !configuredIds.has(agentId)) {
+        continue;
       }
       const aliases = Array.from(
-        new Set([
-          agentId,
-          ...slugifyWords(entry?.name ?? ""),
-          ...(LEGACY_AGENT_ALIAS_PRESETS[agentId] ?? []),
-        ]),
+        new Set(
+          [agentId, ...(entry.aliases ?? [])]
+            .flatMap((value) => slugifyWords(value))
+            .filter(Boolean),
+        ),
       );
-      return {
+      resolved.push({
         agentId,
         aliases,
-        description: typeof entry?.name === "string" ? entry.name.trim() || undefined : undefined,
-        routingHints: [],
-      };
-    })
-    .filter((entry): entry is RoutingAliasEntry => Boolean(entry));
+        description: entry.description?.trim() || undefined,
+        routingHints: (entry.routingHints ?? []).flatMap((value) => slugifyWords(value)),
+      });
+    }
+    return resolved;
+  }
+
+  const fallback: RoutingAliasEntry[] = [];
+  for (const entry of cfg.agents?.list ?? []) {
+    const agentId = normalizeAgentId(entry?.id);
+    if (!agentId) {
+      continue;
+    }
+    const aliases = Array.from(
+      new Set([
+        agentId,
+        ...slugifyWords(entry?.name ?? ""),
+        ...(LEGACY_AGENT_ALIAS_PRESETS[agentId] ?? []),
+      ]),
+    );
+    fallback.push({
+      agentId,
+      aliases,
+      description: typeof entry?.name === "string" ? entry.name.trim() || undefined : undefined,
+      routingHints: [],
+    });
+  }
+  return fallback;
 }
 
 export function resolveAgentAlias(cfg: OpenClawConfig, alias: string): RoutingAliasEntry | null {

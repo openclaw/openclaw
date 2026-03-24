@@ -22,6 +22,30 @@ const AgentOrchestrationPolicySchema = z
   })
   .strict();
 
+const AgentOrchestrationCommunicationSchema = z
+  .object({
+    allowDirectSpecialistToSpecialist: z.boolean().optional(),
+    requireStructuredHandoff: z.boolean().optional(),
+    requireStructuredReturn: z.boolean().optional(),
+    allowParallelDelegation: z.boolean().optional(),
+  })
+  .strict();
+
+const AgentOrchestrationLimitsSchema = z
+  .object({
+    maxDelegationDepth: z.number().int().positive().optional(),
+    maxAgentsPerRequest: z.number().int().positive().optional(),
+    dedupeRepeatedHandoffs: z.boolean().optional(),
+    stopWhenNoNewInformation: z.boolean().optional(),
+  })
+  .strict();
+
+const AgentOrchestrationEnvelopeSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
@@ -30,6 +54,10 @@ export const AgentsSchema = z
       .object({
         routingAliases: z.array(AgentRoutingAliasSchema).optional(),
         policy: AgentOrchestrationPolicySchema.optional(),
+        communication: AgentOrchestrationCommunicationSchema.optional(),
+        limits: AgentOrchestrationLimitsSchema.optional(),
+        handoffEnvelope: AgentOrchestrationEnvelopeSchema.optional(),
+        responseEnvelope: AgentOrchestrationEnvelopeSchema.optional(),
       })
       .strict()
       .optional(),

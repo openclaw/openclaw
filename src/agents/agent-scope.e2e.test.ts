@@ -47,6 +47,7 @@ describe("resolveAgentConfig", () => {
     const result = resolveAgentConfig(cfg, "main");
     expect(result).toEqual({
       name: "Main Agent",
+      systemPrompt: undefined,
       workspace: "~/openclaw",
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-opus-4",
@@ -56,6 +57,26 @@ describe("resolveAgentConfig", () => {
       sandbox: undefined,
       tools: undefined,
     });
+  });
+
+  it("reads agent systemPrompt and legacy params.system", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            systemPrompt: "Act as orchestrator.",
+          },
+          {
+            id: "legal",
+            params: { system: "Legal specialist only." },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.systemPrompt).toBe("Act as orchestrator.");
+    expect(resolveAgentConfig(cfg, "legal")?.systemPrompt).toBe("Legal specialist only.");
   });
 
   it("supports per-agent model primary+fallbacks", () => {

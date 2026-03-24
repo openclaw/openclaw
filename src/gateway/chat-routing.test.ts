@@ -1,98 +1,112 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   buildDirectedAgentBodyForAgent,
-  parseDirectedAgentPrefix,
-  resolveAgentAliasToCanonicalId,
+  resolveAgentAlias,
+  resolveAgentOrchestrationPolicy,
+  resolveConfiguredRoutingAliases,
   resolveDirectedAgentRequest,
-  resolveGatewayChatOrchestrationPolicy,
 } from "./chat-routing.js";
 
-describe("gateway chat routing", () => {
-  it("parses @agent prefixes", () => {
-    expect(parseDirectedAgentPrefix("@legal review this contract")).toEqual({
-      alias: "legal",
-      strippedMessage: "review this contract",
-      originalMessage: "@legal review this contract",
-    });
-  });
-
-  it("resolves aliases from config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        orchestration: {
-          routingAliases: [{ agentId: "rail-business", aliases: ["rail", "wagon", "wagons"] }],
+function makeCfg(): OpenClawConfig {
+  return {
+    agents: {
+      list: [
+        { id: "main", default: true, name: "Main" },
+        { id: "legal", name: "Legal" },
+        { id: "design", name: "Design" },
+        { id: "trk", name: "Rail Business" },
+        { id: "auto", name: "Automation" },
+      ],
+      orchestration: {
+        routingAliases: [
+          { agentId: "legal", aliases: ["legal", "law"] },
+          { agentId: "design", aliases: ["design", "brand"] },
+          { agentId: "trk", aliases: ["rail", "wagon"] },
+          { agentId: "auto", aliases: ["automation", "workflow"] },
+          { agentId: "main", aliases: ["main"] },
+        ],
+        policy: {
+          defaultBehavior: "orchestrate",
+          fallbackBehavior: "self-answer",
+          directRoutingMode: "hint",
+          allowMultiAgentDelegation: true,
+          preserveUserVisibleSingleChat: true,
         },
       },
-    };
-    expect(resolveAgentAliasToCanonicalId("wagon", cfg)).toBe("rail-business");
-    expect(resolveAgentAliasToCanonicalId("rail-business", cfg)).toBe("rail-business");
+    },
+  };
+}
+
+describe("chat routing helpers", () => {
+  it("resolves aliases from config", () => {
+    const cfg = makeCfg();
+    expect(resolveAgentAlias(cfg, "law")?.agentId).toBe("legal");
+    expect(resolveAgentAlias(cfg, "rail")?.agentId).toBe("trk");
+  });
+
+  it("parses @agent prefixes only for the default agent path", () => {
+    const cfg = makeCfg();
+    expect(
+      resolveDirectedAgentRequest({
+        cfg,
+        message: "@legal review the claim",
+        currentAgentId: "main",
+        defaultAgentId: "main",
+      }),
+    ).toMatchObject({ targetAgentId: "legal", strippedMessage: "review the claim" });
+
+    expect(
+      resolveDirectedAgentRequest({
+        cfg,
+        message: "@legal review the claim",
+        currentAgentId: "legal",
+        defaultAgentId: "main",
+      }),
+    ).toBeNull();
   });
 
   it("falls back safely when alias is unknown", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg = makeCfg();
     expect(
       resolveDirectedAgentRequest({
-        message: "@unknown please help",
+        cfg,
+        message: "@unknown do something",
         currentAgentId: "main",
         defaultAgentId: "main",
-        cfg,
       }),
     ).toBeNull();
   });
 
-  it("uses backward-compatible defaults when config is absent", () => {
-    const cfg: OpenClawConfig = {};
-    expect(resolveAgentAliasToCanonicalId("rail", cfg)).toBe("trk");
-    expect(resolveAgentAliasToCanonicalId("automation", cfg)).toBe("auto");
-    expect(resolveGatewayChatOrchestrationPolicy(cfg)).toMatchObject({
+  it("keeps backward-compatible defaults when orchestration config is missing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, name: "Main" },
+          { id: "trk", name: "Rail Business" },
+        ],
+      },
+    };
+    expect(resolveAgentOrchestrationPolicy(cfg)).toMatchObject({
       defaultBehavior: "orchestrate",
       fallbackBehavior: "self-answer",
       directRoutingMode: "hint",
-      allowMultiAgentDelegation: true,
-      preserveUserVisibleSingleChat: true,
     });
+    expect(
+      resolveConfiguredRoutingAliases(cfg).find((entry) => entry.agentId === "trk")?.aliases,
+    ).toContain("rail");
   });
 
-  it("resolves directed routing only on the main orchestrator path", () => {
-    const cfg: OpenClawConfig = {};
-    expect(
-      resolveDirectedAgentRequest({
-        message: "@legal review this",
-        currentAgentId: "main",
-        defaultAgentId: "main",
-        cfg,
-      }),
-    ).toEqual({ targetAgentId: "legal", strippedMessage: "review this" });
-
-    expect(
-      resolveDirectedAgentRequest({
-        message: "@legal review this",
-        currentAgentId: "legal",
-        defaultAgentId: "main",
-        cfg,
-      }),
-    ).toBeNull();
-  });
-
-  it("uses policy to build a force-routing directive", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        orchestration: {
-          policy: {
-            directRoutingMode: "force",
-            allowMultiAgentDelegation: false,
-          },
-        },
-      },
-    };
-    const body = buildDirectedAgentBodyForAgent({
-      targetAgentId: "legal",
-      strippedMessage: "review this",
-      originalMessage: "@legal review this",
-      cfg,
+  it("builds a direct routing body without changing single-chat semantics", () => {
+    const text = buildDirectedAgentBodyForAgent({
+      targetAgentId: "design",
+      strippedMessage: "make packaging direction",
+      originalMessage: "@design make packaging direction",
+      alias: "design",
+      mode: "hint",
     });
-    expect(body).toContain("Treat this as an explicit routing directive");
-    expect(body).toContain("avoid unnecessary multi-agent fan-out");
+    expect(text).toContain("[Direct routing request]");
+    expect(text).toContain("Target specialist: design");
+    expect(text).toContain("[Original user message]");
   });
 });

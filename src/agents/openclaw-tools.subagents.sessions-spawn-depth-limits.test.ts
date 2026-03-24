@@ -61,6 +61,41 @@ describe("sessions_spawn depth + child limits", () => {
     });
   });
 
+  it("rejects direct specialist-to-specialist delegation when Main routing is required", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        store: storeTemplatePath,
+      },
+      agents: {
+        orchestration: {
+          communication: {
+            allowDirectSpecialistToSpecialist: false,
+          },
+        },
+        list: [
+          {
+            id: "legal",
+            subagents: { allowAgents: ["design"] },
+          },
+        ],
+      },
+    };
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:legal:subagent:parent" });
+    const result = await tool.execute("call-specialist-block", {
+      task: "need a design review",
+      agentId: "design",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error:
+        "direct specialist-to-specialist delegation is disabled; route follow-up work back through Main",
+    });
+  });
+
   it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
     const result = await tool.execute("call-depth-reject", { task: "hello" });

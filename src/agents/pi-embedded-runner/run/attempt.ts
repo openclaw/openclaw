@@ -26,7 +26,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -45,6 +45,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { composeAgentRolePrompt } from "../../orchestration.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -440,6 +441,12 @@ export async function runEmbeddedAttempt(
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
+      agentRolePrompt: composeAgentRolePrompt({
+        cfg: params.config ?? {},
+        agentId: sessionAgentId,
+        baseRolePrompt: resolveAgentConfig(params.config ?? {}, sessionAgentId)?.systemPrompt,
+        mainAgentId: params.config?.agents?.list?.find((entry) => entry?.default)?.id ?? "main",
+      }),
       ownerNumbers: params.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
@@ -527,6 +534,11 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
+      // Disable pi-coding-agent's internal auto-compaction.
+      // OpenClaw already manages compaction and context trimming explicitly, and
+      // the upstream internal compaction path can crash on some Codex OAuth runs
+      // when usage metadata is absent on early turns.
+      settingsManager.setCompactionEnabled(false);
       ensurePiCompactionReserveTokens({
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),

@@ -10,12 +10,45 @@ import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath }
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
+function credentialFreshnessScore(cred: AuthProfileCredential | undefined): number {
+  if (!cred) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  if (cred.type === "api_key") {
+    return cred.key?.trim() ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+  }
+  if (cred.type === "token") {
+    return typeof cred.expires === "number" && Number.isFinite(cred.expires) ? cred.expires : 0;
+  }
+  return typeof cred.expires === "number" && Number.isFinite(cred.expires) ? cred.expires : 0;
+}
+
+function preferFresherCredential(
+  base: AuthProfileCredential | undefined,
+  override: AuthProfileCredential | undefined,
+): AuthProfileCredential | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  if (base.provider !== override.provider || base.type !== override.type) {
+    return override;
+  }
+  return credentialFreshnessScore(base) > credentialFreshnessScore(override) ? base : override;
+}
+
 function _syncAuthProfileStore(target: AuthProfileStore, source: AuthProfileStore): void {
   target.version = source.version;
   target.profiles = source.profiles;
   target.order = source.order;
   target.lastGood = source.lastGood;
   target.usageStats = source.usageStats;
+}
+
+function authStoresEqual(a: AuthProfileStore, b: AuthProfileStore): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export async function updateAuthProfileStoreWithLock(params: {
@@ -149,9 +182,13 @@ function mergeAuthProfileStores(
   ) {
     return base;
   }
+  const profiles: AuthProfileStore["profiles"] = { ...base.profiles };
+  for (const [profileId, cred] of Object.entries(override.profiles)) {
+    profiles[profileId] = preferFresherCredential(base.profiles[profileId], cred) ?? cred;
+  }
   return {
     version: Math.max(base.version, override.version ?? base.version),
-    profiles: { ...base.profiles, ...override.profiles },
+    profiles,
     order: mergeRecord(base.order, override.order),
     lastGood: mergeRecord(base.lastGood, override.lastGood),
     usageStats: mergeRecord(base.usageStats, override.usageStats),
@@ -171,6 +208,19 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
       continue;
     }
     const profileId = `${provider}:default`;
+    const existing = store.profiles[profileId];
+    if (existing?.type === "oauth") {
+      const nextCred = {
+        type: "oauth",
+        provider,
+        ...creds,
+      } satisfies AuthProfileCredential;
+      if (credentialFreshnessScore(nextCred) > credentialFreshnessScore(existing)) {
+        store.profiles[profileId] = nextCred;
+        mutated = true;
+      }
+      continue;
+    }
     if (store.profiles[profileId]) {
       continue;
     }
@@ -225,9 +275,10 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) {
+    const mergedOAuth = mergeOAuthFileIntoStore(asStore);
     // Sync from external CLI tools on every load
     const synced = syncExternalCliCredentials(asStore);
-    if (synced) {
+    if (mergedOAuth || synced) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
@@ -329,6 +380,15 @@ export function ensureAuthProfileStore(
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   const merged = mergeAuthProfileStores(mainStore, store);
+  if (agentDir && !authStoresEqual(merged, store)) {
+    saveJsonFile(authPath, {
+      version: merged.version,
+      profiles: merged.profiles,
+      order: merged.order,
+      lastGood: merged.lastGood,
+      usageStats: merged.usageStats,
+    });
+  }
 
   return merged;
 }

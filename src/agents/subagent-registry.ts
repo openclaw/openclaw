@@ -17,6 +17,8 @@ export type SubagentRunRecord = {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
+  targetAgentId?: string;
+  handoffFingerprint?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -408,6 +410,8 @@ export function registerSubagentRun(params: {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
+  targetAgentId?: string;
+  handoffFingerprint?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -427,6 +431,8 @@ export function registerSubagentRun(params: {
     requesterOrigin,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
+    targetAgentId: params.targetAgentId,
+    handoffFingerprint: params.handoffFingerprint,
     cleanup: params.cleanup,
     label: params.label,
     model: params.model,
@@ -674,6 +680,29 @@ export function countActiveRunsForSession(requesterSessionKey: string): number {
     count += 1;
   }
   return count;
+}
+
+export function hasActiveEquivalentHandoff(params: {
+  requesterSessionKey: string;
+  handoffFingerprint?: string;
+}): boolean {
+  const key = params.requesterSessionKey.trim();
+  const fingerprint = params.handoffFingerprint?.trim();
+  if (!key || !fingerprint) {
+    return false;
+  }
+  for (const entry of getRunsSnapshotForRead().values()) {
+    if (entry.requesterSessionKey !== key) {
+      continue;
+    }
+    if (typeof entry.endedAt === "number") {
+      continue;
+    }
+    if (entry.handoffFingerprint === fingerprint) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function countActiveDescendantRuns(rootSessionKey: string): number {

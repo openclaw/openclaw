@@ -464,6 +464,8 @@ export const AgentEntrySchema = z
     id: z.string(),
     default: z.boolean().optional(),
     name: z.string().optional(),
+    systemPrompt: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),

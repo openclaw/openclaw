@@ -15,6 +15,17 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes a dedicated agent role section when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      agentRolePrompt:
+        "You are Main, the orchestrator. Delegate specialist work instead of solving it deeply yourself.",
+    });
+
+    expect(prompt).toContain("## Agent Role");
+    expect(prompt).toContain("You are Main, the orchestrator.");
+  });
+
   it("omits owner section when numbers are missing", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -122,6 +133,21 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+  });
+
+  it("teaches subagents to preserve objective constraints and artifacts in handoff", () => {
+    const prompt = buildSubagentSystemPrompt({
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:legal:chat:test",
+      task: "Review contract risks",
+    });
+
+    expect(prompt).toContain("status: success | partial | blocked");
+    expect(prompt).toContain("followUpNeeded: bullet list");
+    expect(prompt).toContain("Communication must stay disciplined");
+    expect(prompt).toContain("Preserve exact technical identifiers");
+    expect(prompt).toContain("Do not add optional extras");
+    expect(prompt).toContain("return status: partial and ask one short necessary question only");
   });
 
   it("lists available tools when provided", () => {

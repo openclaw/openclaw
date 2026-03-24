@@ -17,6 +17,10 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import {
+  formatSpecialistResponseForParent,
+  parseSpecialistResponseEnvelope,
+} from "./orchestration.js";
+import {
   isEmbeddedPiRunActive,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
@@ -282,10 +286,29 @@ export function buildSubagentSystemPrompt(params: {
     "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
     "",
     "## Output Format",
-    "When complete, your final response should include:",
-    `- What you accomplished or found`,
-    `- Any relevant details the ${parentLabel} should know`,
+    "When complete, return a structured specialist response for the parent orchestrator using these exact fields:",
+    "- agentId: your agent id",
+    "- status: success | partial | blocked",
+    "- summary: one short summary line",
+    "- keyFindings: bullet list",
+    "- assumptions: bullet list",
+    "- risks: bullet list",
+    "- output: the substantive specialist result",
+    "- followUpNeeded: bullet list",
+    "- suggestedNextAgent: optional agent id or 'none'",
     "- Keep it concise but informative",
+    "",
+    "## Handoff Discipline",
+    "- Communication must stay disciplined: user -> main -> specialist -> main -> user",
+    "- Never initiate direct specialist-to-specialist chat; route follow-up needs back through the main agent",
+    "- Treat the task text as the source of truth; do not reconstruct missing context from old transcript noise",
+    "- Ignore synthetic summaries unless the task explicitly references them",
+    "- Preserve exact technical identifiers, file paths, env names, IDs, and error snippets when relevant",
+    "- Do not broaden scope beyond the assigned specialist task",
+    "- Do not add optional extras, unsolicited alternatives, or 'if you want, I can...' suggestions",
+    "- If the task is doable, complete it without asking extra questions",
+    "- If a critical detail is missing, return status: partial and ask one short necessary question only",
+    "- Keep the response brief, direct, and free of marketing or conversational filler",
     "",
     "## What You DON'T Do",
     `- NO user conversations (that's ${parentLabel}'s job)`,
@@ -485,7 +508,13 @@ export async function runSubagentAnnounceFlow(params: {
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = reply || "(no output)";
+    const parsedResponse = parseSpecialistResponseEnvelope({
+      text: reply,
+      fallbackAgentId: resolveAgentIdFromSessionKey(params.childSessionKey) ?? "specialist",
+    });
+    const findings = parsedResponse
+      ? formatSpecialistResponseForParent(parsedResponse)
+      : reply || "(no output)";
     let triggerMessage = "";
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);

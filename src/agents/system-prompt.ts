@@ -220,6 +220,7 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  agentRolePrompt?: string;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -340,6 +341,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const agentRolePrompt = params.agentRolePrompt?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
@@ -524,6 +526,7 @@ export function buildAgentSystemPrompt(params: {
           .join("\n")
       : "",
     params.sandboxInfo?.enabled ? "" : "",
+    ...(agentRolePrompt ? ["## Agent Role", agentRolePrompt, ""] : []),
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
@@ -542,6 +545,18 @@ export function buildAgentSystemPrompt(params: {
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
+
+  if (availableTools.has("sessions_spawn")) {
+    lines.push(
+      "## Multi-Agent Orchestration",
+      "Use disciplined orchestration: user -> main -> specialist -> main -> user.",
+      "Do not let specialist agents talk directly to the user or to each other unless the task explicitly requires an external recipient.",
+      "For multi-part tasks: identify intent, identify domains, choose a plan (direct / one agent / multiple agents), delegate only the minimal subtask, collect results, then synthesize one clean final answer.",
+      "Prefer sequential delegation when later work depends on earlier findings; use parallel delegation only for independent work.",
+      "Stop delegation when no new information is being added or when repeated handoffs would just repackage the same context.",
+      "",
+    );
+  }
 
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"

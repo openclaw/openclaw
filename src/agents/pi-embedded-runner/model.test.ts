@@ -150,6 +150,78 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai forward-compat fallback for gpt-5.4", () => {
+    const templateModel = {
+      id: "gpt-5.2",
+      name: "GPT-5.2",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 32768,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai" && modelId === "gpt-5.2") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+    });
+    expect(result.warning).toContain("forward-compat model fallback for openai/gpt-5.4");
+  });
+
+  it("builds an openai forward-compat fallback for future gpt-5.x ids", () => {
+    const templateModel = {
+      id: "gpt-5.2",
+      name: "GPT-5.2",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 32768,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai" && modelId === "gpt-5.2") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai", "gpt-5.7-preview", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.7-preview",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+    });
+    expect(result.warning).toContain("forward-compat model fallback for openai/gpt-5.7-preview");
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     const templateModel = {
       id: "claude-opus-4-5",

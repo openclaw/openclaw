@@ -48,6 +48,7 @@ export function resolveModel(
 ): {
   model?: Model<Api>;
   error?: string;
+  warning?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
@@ -74,7 +75,12 @@ export function resolveModel(
     // Otherwise, configured providers can default to a generic API and break specific transports.
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
+      return {
+        model: forwardCompat,
+        warning: `Using forward-compat model fallback for ${provider}/${modelId}`,
+        authStorage,
+        modelRegistry,
+      };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {

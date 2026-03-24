@@ -704,7 +704,10 @@ export const chatHandlers: GatewayRequestHandlers = {
               targetAgentId: directedAgentRequest.targetAgentId,
               strippedMessage: directedAgentRequest.strippedMessage,
               originalMessage: preservedUserInput.parsedMessage,
-              cfg,
+              alias: directedAgentRequest.alias,
+              mode: directedAgentRequest.mode,
+              description: directedAgentRequest.description,
+              routingHints: directedAgentRequest.routingHints,
             })
           : effectiveParsedMessage,
         timestampOptsFromConfig(cfg),

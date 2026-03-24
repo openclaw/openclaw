@@ -205,7 +205,7 @@ export async function runEmbeddedPiAgent(
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
 
-      const { model, error, authStorage, modelRegistry } = resolveModel(
+      const { model, error, warning, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
         agentDir,
@@ -213,6 +213,11 @@ export async function runEmbeddedPiAgent(
       );
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+      }
+      if (warning) {
+        log.warn(
+          `[model-forward-compat] run=${params.runId} session=${redactedSessionId} ${warning}`,
+        );
       }
 
       const ctxInfo = resolveContextWindowInfo({

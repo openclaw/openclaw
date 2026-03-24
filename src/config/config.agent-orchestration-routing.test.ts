@@ -21,6 +21,20 @@ describe("config agents.orchestration", () => {
             allowMultiAgentDelegation: true,
             preserveUserVisibleSingleChat: true,
           },
+          communication: {
+            allowDirectSpecialistToSpecialist: false,
+            requireStructuredHandoff: true,
+            requireStructuredReturn: true,
+            allowParallelDelegation: true,
+          },
+          limits: {
+            maxDelegationDepth: 2,
+            maxAgentsPerRequest: 3,
+            dedupeRepeatedHandoffs: true,
+            stopWhenNoNewInformation: true,
+          },
+          handoffEnvelope: { enabled: true },
+          responseEnvelope: { enabled: true },
         },
       },
     });

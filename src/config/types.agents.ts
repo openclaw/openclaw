@@ -88,12 +88,34 @@ export type AgentOrchestrationPolicyConfig = {
   preserveUserVisibleSingleChat?: boolean;
 };
 
+export type AgentOrchestrationCommunicationConfig = {
+  allowDirectSpecialistToSpecialist?: boolean;
+  requireStructuredHandoff?: boolean;
+  requireStructuredReturn?: boolean;
+  allowParallelDelegation?: boolean;
+};
+
+export type AgentOrchestrationLimitsConfig = {
+  maxDelegationDepth?: number;
+  maxAgentsPerRequest?: number;
+  dedupeRepeatedHandoffs?: boolean;
+  stopWhenNoNewInformation?: boolean;
+};
+
+export type AgentOrchestrationEnvelopeConfig = {
+  enabled?: boolean;
+};
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
   orchestration?: {
     routingAliases?: AgentRoutingAliasConfig[];
     policy?: AgentOrchestrationPolicyConfig;
+    communication?: AgentOrchestrationCommunicationConfig;
+    limits?: AgentOrchestrationLimitsConfig;
+    handoffEnvelope?: AgentOrchestrationEnvelopeConfig;
+    responseEnvelope?: AgentOrchestrationEnvelopeConfig;
   };
 };
 
