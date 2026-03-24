@@ -438,10 +438,11 @@ describe("update-cli", () => {
         name: "json output",
         options: { json: true },
         assert: () => {
-          const last = vi.mocked(defaultRuntime.log).mock.calls.at(-1)?.[0];
-          expect(typeof last).toBe("string");
-          const parsed = JSON.parse(String(last));
-          expect(parsed.channel.value).toBe("stable");
+          const last = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
+          expect(last).toBeDefined();
+          const parsed = last as Record<string, unknown>;
+          const channel = parsed.channel as { value?: unknown };
+          expect(channel.value).toBe("stable");
         },
       },
     ] as const;
@@ -727,19 +728,11 @@ describe("update-cli", () => {
         name: "outputs JSON when --json is set",
         run: async () => {
           vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-          vi.mocked(defaultRuntime.log).mockClear();
+          vi.mocked(defaultRuntime.writeJson).mockClear();
           await updateCommand({ json: true });
         },
         assert: () => {
-          const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
-          const jsonOutput = logCalls.find((call) => {
-            try {
-              JSON.parse(call[0] as string);
-              return true;
-            } catch {
-              return false;
-            }
-          });
+          const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
           expect(jsonOutput).toBeDefined();
         },
       },

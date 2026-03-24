@@ -12,6 +12,7 @@ import {
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
+import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { loadCliDotEnv } from "./dotenv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
@@ -80,15 +81,42 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
-  let normalizedArgv = normalizeWindowsArgv(argv);
-  const parsedProfile = parseCliProfileArgs(normalizedArgv);
+  const originalArgv = normalizeWindowsArgv(argv);
+  const parsedContainer = parseCliContainerArgs(originalArgv);
+  if (!parsedContainer.ok) {
+    throw new Error(parsedContainer.error);
+  }
+  const parsedProfile = parseCliProfileArgs(parsedContainer.argv);
   if (!parsedProfile.ok) {
     throw new Error(parsedProfile.error);
   }
   if (parsedProfile.profile) {
     applyCliProfileEnv({ profile: parsedProfile.profile });
   }
-  normalizedArgv = parsedProfile.argv;
+  const containerTargetName =
+    parsedContainer.container ?? process.env.OPENCLAW_CONTAINER?.trim() ?? null;
+  if (
+    containerTargetName &&
+    (parsedProfile.profile ||
+      process.env.OPENCLAW_PROFILE?.trim() ||
+      process.env.OPENCLAW_GATEWAY_PORT?.trim() ||
+      process.env.OPENCLAW_GATEWAY_URL?.trim() ||
+      process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+      process.env.OPENCLAW_GATEWAY_PASSWORD?.trim())
+  ) {
+    throw new Error(
+      "--container cannot be combined with --profile/--dev or gateway override env vars",
+    );
+  }
+
+  const containerTarget = maybeRunCliInContainer(originalArgv);
+  if (containerTarget.handled) {
+    if (containerTarget.exitCode !== 0) {
+      process.exitCode = containerTarget.exitCode;
+    }
+    return;
+  }
+  let normalizedArgv = parsedProfile.argv;
 
   loadCliDotEnv({ quiet: true });
   normalizeEnv();
