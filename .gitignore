@@ -134,3 +134,4 @@ ui/.vitest-attachments
 docs/superpowers
 
 deploy/
+openclaw-deploy/

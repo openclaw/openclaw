@@ -20,7 +20,7 @@ const config = {
   ENTRY_FILE: './openclaw.mjs',     // 主入口文件
   PACKAGE_JSON: './package.json',   // 依赖描述文件
   PM2_CONFIG: './ecosystem.config.js', // 本地pm2配置文件
-  DEPLOY_JS: './deploy.js',         // 根目录下的deploy.js文件路径
+  DEPLOY_JS: './deploy.mjs',         // 根目录下的deploy.js文件路径
   MIN_NODE_VERSION: '24.0.0'        // 最低Node.js版本要求
 };
 
