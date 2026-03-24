@@ -209,15 +209,35 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
+    // Service was stopped (e.g. `gateway stop` booted out the LaunchAgent).
+    // Attempt a restart, which handles re-bootstrapping the service. Without
+    // this, `start` after `stop` just prints hints and does nothing (#53878).
+    try {
+      const restartResult = await params.service.restart({ env: process.env, stdout });
+      const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+      emit({
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, true),
+      });
+      if (!json) {
+        defaultRuntime.log(restartStatus.message);
+      }
+      return;
+    } catch {
+      // Bootstrap failed (e.g. plist was deleted, not just booted out).
+      // Fall through to the not-loaded hints.
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
   }
   // Pre-flight config validation (#35862)
   {
