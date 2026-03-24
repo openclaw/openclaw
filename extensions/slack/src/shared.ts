@@ -192,6 +192,7 @@ export function createSlackPluginBase(params: {
       messageToolHints: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
+              "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
               "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
             ]

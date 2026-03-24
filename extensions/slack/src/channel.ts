@@ -48,6 +48,7 @@ import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
+import { slackOutbound } from "./outbound-adapter.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
@@ -604,6 +605,30 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       deliveryMode: "direct",
       chunker: null,
       textChunkLimit: SLACK_TEXT_LIMIT,
+      sendPayload: async (ctx) => {
+        const { send, tokenOverride } = resolveSlackSendContext({
+          cfg: ctx.cfg,
+          accountId: ctx.accountId ?? undefined,
+          deps: ctx.deps,
+          replyToId: ctx.replyToId,
+          threadId: ctx.threadId,
+        });
+        return await slackOutbound.sendPayload!({
+          ...ctx,
+          deps: {
+            ...(ctx.deps ?? {}),
+            slack: async (
+              to: Parameters<SlackSendFn>[0],
+              text: Parameters<SlackSendFn>[1],
+              opts: Parameters<SlackSendFn>[2],
+            ) =>
+              await send(to, text, {
+                ...opts,
+                ...(tokenOverride ? { token: tokenOverride } : {}),
+              }),
+          },
+        });
+      },
     },
     attachedResults: {
       channel: "slack",
