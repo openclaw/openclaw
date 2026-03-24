@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
+import {
+  applyStatusScanDefaults,
+  createStatusMemorySearchConfig,
+  createStatusMemorySearchManager,
+  createStatusScanConfig,
+  createStatusSummary,
+  withTemporaryEnv,
+} from "./status.scan.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-scan-missing-${process.pid}.json`),
@@ -25,7 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalForceStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
-  mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+  configureScanStatus();
 });
 
 afterEach(() => {
@@ -116,58 +124,52 @@ vi.mock("../plugins/status.js", () => ({
 
 import { scanStatus } from "./status.scan.js";
 
+function configureScanStatus(
+  options: {
+    hasConfiguredChannels?: boolean;
+    sourceConfig?: ReturnType<typeof createStatusScanConfig>;
+    resolvedConfig?: ReturnType<typeof createStatusScanConfig>;
+    summary?: ReturnType<typeof createStatusSummary>;
+    update?: false;
+    gatewayProbe?: false;
+    memoryConfigured?: boolean;
+  } = {},
+) {
+  const sourceConfig = options.memoryConfigured
+    ? createStatusMemorySearchConfig()
+    : (options.sourceConfig ?? createStatusScanConfig());
+  const resolvedConfig = options.memoryConfigured
+    ? createStatusMemorySearchConfig()
+    : (options.resolvedConfig ?? sourceConfig);
+
+  applyStatusScanDefaults(mocks, {
+    hasConfiguredChannels: options.hasConfiguredChannels,
+    sourceConfig,
+    resolvedConfig,
+    summary: options.summary,
+    update: options.update,
+    gatewayProbe: options.gatewayProbe,
+    ...(options.memoryConfigured ? { memoryManager: createStatusMemorySearchManager() } : {}),
+  });
+  mocks.buildChannelsTable.mockResolvedValue({
+    rows: [],
+    details: [],
+  });
+  mocks.callGateway.mockResolvedValue(null);
+}
+
 describe("scanStatus", () => {
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      marker: "source",
-      session: {},
-      plugins: { enabled: false },
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        marker: "resolved",
-        session: {},
+    configureScanStatus({
+      sourceConfig: createStatusScanConfig({
+        marker: "source",
         plugins: { enabled: false },
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: { linked: false },
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-    mocks.buildChannelsTable.mockResolvedValue({
-      rows: [],
-      details: [],
+      }),
+      resolvedConfig: createStatusScanConfig({
+        marker: "resolved",
+        plugins: { enabled: false },
+      }),
+      summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
     await scanStatus({ json: false }, {} as never);
@@ -181,50 +183,13 @@ describe("scanStatus", () => {
   });
 
   it("skips channel plugin preload for status --json with no channel config", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      plugins: { enabled: false },
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
+    configureScanStatus({
+      sourceConfig: createStatusScanConfig({
         plugins: { enabled: false },
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        plugins: { enabled: false },
+      }),
     });
 
     await scanStatus({ json: true }, {} as never);
@@ -233,50 +198,13 @@ describe("scanStatus", () => {
   });
 
   it("skips plugin compatibility loading for status --json when the config file is missing", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      plugins: { enabled: true },
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
+    configureScanStatus({
+      sourceConfig: createStatusScanConfig({
         plugins: { enabled: true },
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        plugins: { enabled: true },
+      }),
     });
 
     await scanStatus({ json: true }, {} as never);
@@ -285,51 +213,14 @@ describe("scanStatus", () => {
   });
 
   it("skips plugin compatibility loading for status --json even with configured channels", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      gateway: {},
-      channels: { discord: {} },
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
-        gateway: {},
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: createStatusScanConfig({
         channels: { discord: {} },
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        channels: { discord: {} },
+      }),
     });
 
     await scanStatus({ json: true }, {} as never);
@@ -338,34 +229,15 @@ describe("scanStatus", () => {
   });
 
   it("skips gateway and update probes on cold-start status paths", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      plugins: { enabled: false },
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
+    configureScanStatus({
+      sourceConfig: createStatusScanConfig({
         plugins: { enabled: false },
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        plugins: { enabled: false },
+      }),
+      update: false,
+      gatewayProbe: false,
     });
 
     await scanStatus({ json: true }, {} as never);
@@ -376,49 +248,7 @@ describe("scanStatus", () => {
   });
 
   it("skips memory backend inspection for default memory-core with no existing store", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    configureScanStatus();
 
     await scanStatus({ json: true }, {} as never);
 
@@ -426,74 +256,7 @@ describe("scanStatus", () => {
   });
 
   it("inspects memory backend when memory search is explicitly configured", async () => {
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      gateway: {},
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "local",
-            local: { modelPath: "/tmp/model.gguf" },
-            fallback: "none",
-          },
-        },
-      },
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
-        gateway: {},
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "local",
-              local: { modelPath: "/tmp/model.gguf" },
-              fallback: "none",
-            },
-          },
-        },
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: undefined,
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-    mocks.getMemorySearchManager.mockResolvedValue({
-      manager: {
-        probeVectorAvailability: vi.fn(async () => true),
-        status: vi.fn(() => ({ files: 0, chunks: 0, dirty: false })),
-        close: vi.fn(async () => {}),
-      },
-    });
+    configureScanStatus({ memoryConfigured: true });
 
     await scanStatus({ json: true }, {} as never);
 
@@ -511,53 +274,17 @@ describe("scanStatus", () => {
   });
 
   it("preloads configured channel plugins for status --json when channel config exists", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      plugins: { enabled: false },
-      gateway: {},
-      channels: { telegram: { enabled: false } },
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: createStatusScanConfig({
         plugins: { enabled: false },
-        gateway: {},
         channels: { telegram: { enabled: false } },
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: { linked: false },
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        plugins: { enabled: false },
+        channels: { telegram: { enabled: false } },
+      }),
+      summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
     await scanStatus({ json: true }, {} as never);
@@ -576,64 +303,20 @@ describe("scanStatus", () => {
   });
 
   it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
-    const prevMatrixToken = process.env.MATRIX_ACCESS_TOKEN;
-    process.env.MATRIX_ACCESS_TOKEN = "token";
-    mocks.readBestEffortConfig.mockResolvedValue({
-      session: {},
-      plugins: { enabled: false },
-      gateway: {},
-    });
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: {
-        session: {},
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: createStatusScanConfig({
         plugins: { enabled: false },
-        gateway: {},
-      },
-      diagnostics: [],
-    });
-    mocks.getUpdateCheckResult.mockResolvedValue({
-      installKind: "git",
-      git: null,
-      registry: null,
-    });
-    mocks.getAgentLocalStatuses.mockResolvedValue({
-      defaultId: "main",
-      agents: [],
-    });
-    mocks.getStatusSummary.mockResolvedValue({
-      linkChannel: { linked: false },
-      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
-    });
-    mocks.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "default",
-    });
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      }),
+      resolvedConfig: createStatusScanConfig({
+        plugins: { enabled: false },
+      }),
+      summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
-    try {
+    await withTemporaryEnv({ MATRIX_ACCESS_TOKEN: "token" }, async () => {
       await scanStatus({ json: true }, {} as never);
-    } finally {
-      if (prevMatrixToken === undefined) {
-        delete process.env.MATRIX_ACCESS_TOKEN;
-      } else {
-        process.env.MATRIX_ACCESS_TOKEN = prevMatrixToken;
-      }
-    }
+    });
 
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
