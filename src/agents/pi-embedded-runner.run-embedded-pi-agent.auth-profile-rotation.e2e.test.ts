@@ -57,6 +57,7 @@ const installRunEmbeddedMocks = () => {
   }));
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+    shouldInjectOllamaCompatNumCtx: vi.fn(() => false),
   }));
   vi.doMock("../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: async (params: {

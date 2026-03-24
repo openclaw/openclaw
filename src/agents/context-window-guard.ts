@@ -23,6 +23,7 @@ export function resolveContextWindowInfo(params: {
   provider: string;
   modelId: string;
   modelContextWindow?: number;
+  preferModelContextWindow?: boolean;
   defaultTokens: number;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
@@ -35,11 +36,17 @@ export function resolveContextWindowInfo(params: {
     return normalizePositiveInt(match?.contextWindow);
   })();
   const fromModel = normalizePositiveInt(params.modelContextWindow);
-  const baseInfo = fromModelsConfig
-    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
-    : fromModel
+  const baseInfo = params.preferModelContextWindow
+    ? fromModel
       ? { tokens: fromModel, source: "model" as const }
-      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+      : fromModelsConfig
+        ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+        : { tokens: Math.floor(params.defaultTokens), source: "default" as const }
+    : fromModelsConfig
+      ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+      : fromModel
+        ? { tokens: fromModel, source: "model" as const }
+        : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {

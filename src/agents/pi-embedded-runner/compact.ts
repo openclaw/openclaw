@@ -785,6 +785,7 @@ export async function compactEmbeddedPiSessionDirect(
         runtimeModel.api === "ollama"
           ? resolveOllamaContextWindowTokens(runtimeModel)
           : runtimeModel.contextWindow,
+      preferModelContextWindow: runtimeModel.api === "ollama",
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     const effectiveModel = applyLocalNoAuthHeaderOverride(
@@ -1315,6 +1316,7 @@ export async function compactEmbeddedPiSession(
             ceModel?.api === "ollama"
               ? resolveOllamaContextWindowTokens(ceModel)
               : ceModel?.contextWindow,
+          preferModelContextWindow: ceModel?.api === "ollama",
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
         // When the context engine owns compaction, its compact() implementation

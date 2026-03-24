@@ -304,6 +304,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./run/attempt.js", () => ({
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+    shouldInjectOllamaCompatNumCtx: vi.fn(() => false),
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({

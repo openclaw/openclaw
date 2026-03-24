@@ -45,7 +45,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveOllamaContextWindowTokens } from "../ollama-stream.js";
+import { clampOllamaNumCtx, resolveOllamaContextWindowTokens } from "../ollama-stream.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
@@ -72,7 +72,7 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
+import { runEmbeddedAttempt, shouldInjectOllamaCompatNumCtx } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -389,14 +389,29 @@ export async function runEmbeddedPiAgent(
       }
       let runtimeModel = model;
 
+      // Keep local budgeting aligned with the request-time Ollama num_ctx cap instead
+      // of the defaulted models-config contextWindow written during model resolution.
+      const shouldPreferModelContextWindow =
+        runtimeModel.api === "ollama" ||
+        shouldInjectOllamaCompatNumCtx({
+          model: runtimeModel,
+          config: params.config,
+          providerId: provider,
+        });
+      const runtimeModelContextWindow =
+        runtimeModel.api === "ollama"
+          ? resolveOllamaContextWindowTokens(runtimeModel)
+          : shouldPreferModelContextWindow
+            ? (clampOllamaNumCtx(
+                runtimeModel.contextWindow ?? runtimeModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+              ) ?? DEFAULT_CONTEXT_TOKENS)
+            : runtimeModel.contextWindow;
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
         provider,
         modelId,
-        modelContextWindow:
-          runtimeModel.api === "ollama"
-            ? resolveOllamaContextWindowTokens(runtimeModel)
-            : runtimeModel.contextWindow,
+        modelContextWindow: runtimeModelContextWindow,
+        preferModelContextWindow: shouldPreferModelContextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       });
       // Apply contextTokens cap to model so pi-coding-agent's auto-compaction

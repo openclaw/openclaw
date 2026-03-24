@@ -27,6 +27,7 @@ function resolveContextWindowTokens(params: {
       params.model?.api === "ollama"
         ? resolveOllamaContextWindowTokens(params.model)
         : params.model?.contextWindow,
+    preferModelContextWindow: params.model?.api === "ollama",
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   }).tokens;
 }

@@ -85,6 +85,44 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(true);
   });
 
+  it("prefers model contextWindow when requested", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            api: "ollama",
+            models: [
+              {
+                id: "tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "tiny",
+      modelContextWindow: 131_072,
+      preferModelContextWindow: true,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "model",
+      tokens: 131_072,
+    });
+  });
+
   it("caps with agents.defaults.contextTokens", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 20_000 } },
