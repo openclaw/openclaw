@@ -1,10 +1,11 @@
+
 # OpenClaw 🦞 中文版
 
-> **你的私人 AI 助手** — 任何系统、任何平台、龙虾之道 🦐
+> **你的私人 AI 助手** — 任何系统、任何平台、龙虾之道 🦞
 
 ---
 
-## 🦐 这是什么？
+## 🦞 这是什么？
 
 OpenClaw 是一个**本地优先**的个人 AI 助手框架。
 
@@ -39,24 +40,44 @@ npm install -g openclaw@latest
 
 # 或使用 pnpm
 pnpm add -g openclaw@latest
-初始化
-砰复制！
+```
+
+### 初始化
+
+```bash
 openclaw onboard --install-daemon
-启动
-砰复制！
+```
+
+### 启动
+
+```bash
 openclaw gateway --port 18789 --verbose
-与助手对话
-砰复制！
+```
+
+### 与助手对话
+
+```bash
 openclaw agent --message "帮我整理今天的任务" --thinking high
-📚 支持的渠道
-渠道	状态	渠道	状态
-WhatsApp	✅	电报	✅
-松弛	✅	Discord	✅
-飞书	✅	微信	✅
-信号	✅	iMessage	✅
-谷歌聊天	✅	Microsoft Teams	✅
-🏗️ 架构
-复制！
+```
+
+---
+
+## 📚 支持的渠道
+
+| 渠道 | 状态 | 渠道 | 状态 |
+|------|------|------|------|
+| WhatsApp | ✅ | Telegram | ✅ |
+| Slack | ✅ | Discord | ✅ |
+| 飞书 | ✅ | 微信 | ✅ |
+| Signal | ✅ | iMessage | ✅ |
+| Google Chat | ✅ | Microsoft Teams | ✅ |
+| Matrix | ✅ | LINE | ✅ |
+
+---
+
+## 🏗️ 架构
+
+```
 消息渠道 (WhatsApp/Telegram/飞书/...)
      │
      ▼
@@ -71,40 +92,64 @@ WhatsApp	✅	电报	✅
     ▼       ▼       ▼           ▼
   Pi Agent  CLI   WebChat   iOS/Android
   (RPC)           UI        Nodes
-📖 文档
-🌐 官网
-📚 文档
-❓ 常见问题
-💬 Discord社区
-🛡️ 安全
-OpenClaw 连接真实的消息平台，请将收到的消息视为不可信输入。
+```
+
+---
+
+## 📖 文档
+
+- 🌐 [官网](https://openclaw.ai)
+- 📚 [文档](https://docs.openclaw.ai)
+- ❓ [FAQ](https://docs.openclaw.ai/help/faq)
+- 💬 [Discord 社区](https://discord.gg/clawd)
+
+---
+
+## 🛡️ 安全
+
+OpenClaw 连接真实的消息平台，请将收到的消息视为**不可信输入**。
 
 默认行为：
+- 私聊需要**配对** (`dmPolicy="pairing"`)
+- 未知发送者会收到配对码
 
-私聊需要配对 (dmPolicy="pairing")
-未知发送者会收到配对码
-详见：安全指南
+详见：[安全指南](https://docs.openclaw.ai/gateway/security)
 
-🤝 贡献
+---
+
+## 🤝 贡献
+
 我们欢迎所有形式的贡献！
 
-🐛 提交 议题
-💡 功能建议
-📝 文档改进
-🔧 代码贡献
-详见 CONTRIBUTING.md
+详见 [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-📜 许可证
-麻省理工学院许可
+---
 
-🦐 关于
-OpenClaw 最初为 Molty 构建——一只太空龙虾 AI 助手。🦞
+## 📜 许可证
 
-由 Peter Steinberger 和社区共同打造。
+MIT License
 
-<div align=“中心”>
-游在数据流中的赛博虾，随叫随到，偶尔还会蹦跶两下。 🦐
+---
 
-官网 ·文档 ·Discord
+## 🦞 关于
 
-</div> ```
+OpenClaw 最初为 **Molty** 构建——一只太空龙虾 AI 助手。🦞
+
+由 [Peter Steinberger](https://steipete.me) 和社区共同打造。
+
+---
+
+<div align="center">
+
+**游在数据流中的赛博龙虾，随叫随到，偶尔还会蹦跶两下。** 🦞
+
+[官网](https://openclaw.ai) · [文档](https://docs.openclaw.ai) · [Discord](https://discord.gg/clawd)
+
+</div>
+```
+
+4. **提交更改**
+
+---
+
+修复完成后告诉我，我帮你检查！🦞
