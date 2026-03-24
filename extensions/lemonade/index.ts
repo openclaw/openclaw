@@ -65,7 +65,8 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.lemonade;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
-          const lemonadeKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const { apiKey: lemonadeKey, discoveryApiKey } =
+            ctx.resolveProviderApiKey(PROVIDER_ID);
 
           if (hasExplicitModels && explicit) {
             return {
@@ -85,7 +86,7 @@ export default definePluginEntry({
           const providerSetup = await loadProviderSetup();
           const provider = await providerSetup.buildLemonadeProvider({
             baseUrl: explicit?.baseUrl,
-            apiKey: lemonadeKey ?? explicitApiKey,
+            apiKey: discoveryApiKey ?? explicitApiKey,
           });
           if (provider.models.length === 0 && !lemonadeKey && !explicit) {
             return null;
