@@ -169,6 +169,24 @@ describe("channel-auth", () => {
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
+  it("ignores plugins with prototype-chain IDs like __proto__", async () => {
+    const protoPlugin = {
+      id: "__proto__",
+      auth: { login: vi.fn() },
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.listChannelPlugins.mockReturnValue([protoPlugin, plugin]);
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
   it("throws for unsupported channel aliases", async () => {
     mocks.normalizeChannelId.mockReturnValueOnce(undefined);
 
