@@ -699,29 +699,5 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         });
       },
     },
-    sendPayload: async ({ to, payload, accountId, deps, replyToId, threadId, cfg }) => {
-      const slackData = payload.channelData?.slack;
-      const rawBlocks =
-        slackData && typeof slackData === "object" && !Array.isArray(slackData)
-          ? (slackData as { blocks?: unknown }).blocks
-          : undefined;
-      const blocks = rawBlocks ? parseSlackBlocksInput(rawBlocks) : undefined;
-      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
-        cfg,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId,
-        threadId,
-      });
-      const result = await send(to, payload.text ?? "", {
-        cfg,
-        ...(blocks && blocks.length > 0 ? { blocks } : {}),
-        mediaUrl: payload.mediaUrl,
-        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
-        accountId: accountId ?? undefined,
-        ...(tokenOverride ? { token: tokenOverride } : {}),
-      });
-      return { channel: "slack" as const, ...result };
-    },
   },
 });

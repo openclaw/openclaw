@@ -25,6 +25,15 @@ function escapeCodeBlock(text: string): string {
     .replaceAll("`", "\u02CB");
 }
 
+/** Reverse escapeCodeBlock so extracted text can be re-escaped without doubling. */
+function unescapeCodeBlock(text: string): string {
+  return text
+    .replaceAll("\u02CB", "`")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
+}
+
 function decisionLabel(decision: string): string {
   switch (decision) {
     case "allow-once":
@@ -60,6 +69,9 @@ export function buildSlackExecApprovalPendingBlocks(
   }
   if (request.request.ask) {
     metaLines.push(`*Ask:* ${escapeSlackMrkdwn(request.request.ask)}`);
+  }
+  if (request.request.envKeys?.length) {
+    metaLines.push(`*Env:* ${escapeSlackMrkdwn(request.request.envKeys.join(", "))}`);
   }
   metaLines.push(`*Expires in:* ${expiresIn}s`);
 
@@ -124,7 +136,7 @@ export function extractCommandFromPendingBlocks(blocks: unknown[] | undefined): 
     if (typed.type === "section" && typed.text?.type === "mrkdwn") {
       const match = typed.text.text?.match(/^```([\s\S]*)```$/);
       if (match) {
-        return match[1];
+        return unescapeCodeBlock(match[1]);
       }
     }
   }
