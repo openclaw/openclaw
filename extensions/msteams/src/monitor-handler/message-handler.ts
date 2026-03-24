@@ -324,6 +324,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
+    // Extract clientInfo entity (Teams sends this on every activity with timezone, locale, etc.)
+    const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+      | { timezone?: string; locale?: string; country?: string; platform?: string }
+      | undefined;
+
     // Build conversation reference for proactive replies.
     const agent = activity.recipient;
     const conversationRef: StoredConversationReference = {
@@ -340,6 +345,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
       locale: activity.locale,
+      // Only set timezone if present (preserve previously stored value on next upsert)
+      ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
     };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
       log.debug?.("failed to save conversation reference", {
@@ -575,10 +582,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sharePointSiteId,
     });
 
+    // Use Teams clientInfo timezone if no explicit userTimezone is configured.
+    // This ensures the agent knows the sender's timezone for time-aware responses
+    // and proactive sends within the same session.
+    // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
+    const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
+    const effectiveCfg =
+      senderTimezone && !cfg.agents?.defaults?.userTimezone
+        ? {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
+            },
+          }
+        : cfg;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg,
+        cfg: effectiveCfg,
         ctxPayload,
         dispatcher,
         onSettled: () => markDispatchIdle(),
