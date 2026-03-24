@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -9,7 +9,7 @@ installPwToolsCoreTestHooks();
 let mod: typeof import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./pw-tools-core.js");
   });
