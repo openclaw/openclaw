@@ -83,19 +83,6 @@ export async function checkInboundAccessControl(params: {
     typeof params.messageTimestampMs === "number" &&
     params.messageTimestampMs < params.connectedAtMs - pairingGraceMs;
 
-  // Filter fromMe messages in groups to prevent infinite loops
-  // When an agent sends a message to a group, WhatsApp echoes it back.
-  // Without this filter, the agent would respond to its own message.
-  if (params.group && params.isFromMe) {
-    logVerbose("Skipping fromMe group message (prevents infinite loop)");
-    return {
-      allowed: false,
-      shouldMarkRead: false,
-      isSelfChat,
-      resolvedAccountId: account.accountId,
-    };
-  }
-
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
   // - "disabled": block all group messages entirely
