@@ -588,7 +588,7 @@
 }
 
 .settings-slider__key-swatch--round {
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 
 .settings-slider__value {

@@ -588,7 +588,7 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.15);
   color: inherit;
   opacity: 0.8;
@@ -1230,7 +1230,7 @@
   line-height: 1.2;
   padding: 6px 14px;
   margin-bottom: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--panel-strong);
   color: var(--text);
@@ -1316,14 +1316,14 @@
 
 .code-block-wrapper {
   position: relative;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   margin-top: 0.75em;
 }
 
 .code-block-wrapper pre {
   margin: 0;
-  border-radius: 0 0 6px 6px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .code-block-header {
@@ -2319,7 +2319,7 @@ td.data-table-key-col {
 .chat-new-messages {
   align-self: center;
   margin: 8px auto 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   padding: 6px 12px;
   font-size: 12px;
   line-height: 1;
