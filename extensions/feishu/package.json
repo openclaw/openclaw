@@ -6,7 +6,8 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@sinclair/typebox": "0.34.48",
-    "https-proxy-agent": "^8.0.0"
+    "https-proxy-agent": "^8.0.0",
+    "music-metadata": "^11.12.3"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

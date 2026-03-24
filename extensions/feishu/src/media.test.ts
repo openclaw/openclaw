@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
+const parseBufferMock = vi.hoisted(() => vi.fn());
+vi.mock("music-metadata", () => ({
+  parseBuffer: parseBufferMock,
+}));
+
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
@@ -133,6 +138,9 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     imageGetMock.mockResolvedValue(Buffer.from("image-bytes"));
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
+
+    // music-metadata mock: return undefined duration by default (graceful degradation)
+    parseBufferMock.mockResolvedValue({ format: { duration: undefined } });
   });
 
   it("uses msg_type=media for mp4 video", async () => {
@@ -224,7 +232,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("falls back to generic file for unsupported audio formats", async () => {
+  it("uses msg_type=audio for mp3 via content-type fallback", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-mp3"),
       fileName: "song.mp3",
@@ -240,12 +248,63 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(fileCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ file_type: "stream" }),
+        data: expect.objectContaining({ file_type: "opus" }),
       }),
     );
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it.each([
+    { ext: "wav", contentType: "audio/wav" },
+    { ext: "m4a", contentType: "audio/mp4" },
+    { ext: "flac", contentType: "audio/flac" },
+    { ext: "aac", contentType: "audio/aac" },
+  ])("uses msg_type=audio for $ext files", async ({ ext }) => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("audio-data"),
+      fileName: `test.${ext}`,
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "opus" }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=audio for unknown extension with audio/* content-type", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-audio"),
+      fileName: "download",
+      kind: "audio",
+      contentType: "audio/mpeg",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/audio-stream",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "opus" }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });
