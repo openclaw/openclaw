@@ -1263,7 +1263,22 @@ export function renderApp(state: AppViewState) {
                     if (!configValue) {
                       return;
                     }
-                    updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                    const list = (
+                      getCurrentConfigValue() as { agents?: { list?: Dict<unknown>[] } } | null
+                    )?.agents?.list;
+                    if (!Array.isArray(list)) {
+                      return;
+                    }
+                    const defaultIndex:number = list.findIndex((item: unknown) => (item as { default?: unknown }).default === true);
+                    if (defaultIndex >= 0) {
+                      delete list[defaultIndex].default;
+                    }
+                    const index = list.findIndex((item: unknown) => (item as { id?: unknown }).id === agentId)
+                    if (index < 0) {
+                      return;
+                    }
+                    list[index].default = true;
+                    updateConfigFormValue(state, ["agents", "list"], list);
                   },
                 }),
               )
