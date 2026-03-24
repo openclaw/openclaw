@@ -8,7 +8,13 @@ import { resolveFeishuCardTemplate } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type CardState = {
+  cardId: string;
+  messageId: string;
+  sequence: number;
+  currentText: string;
+  hasNote: boolean;
+};
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
@@ -25,6 +31,7 @@ type StreamingStartOptions = {
   replyInThread?: boolean;
   rootId?: string;
   header?: StreamingCardHeader;
+  note?: string;
 };
 
 // Token cache (keyed by domain + appId)
@@ -201,6 +208,14 @@ export class FeishuStreamingSession {
         elements: [{ tag: "markdown", content: "⏳ Thinking...", element_id: "content" }],
       },
     };
+    if (options?.note) {
+      (cardJson.body as { elements: Record<string, unknown>[] }).elements.push({ tag: "hr" });
+      (cardJson.body as { elements: Record<string, unknown>[] }).elements.push({
+        tag: "markdown",
+        content: `<font color='grey'>${options.note}</font>`,
+        element_id: "note",
+      });
+    }
     if (options?.header) {
       cardJson.header = {
         title: { tag: "plain_text", content: options.header.title },
@@ -277,7 +292,13 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
+    this.state = {
+      cardId,
+      messageId: sendRes.data.message_id,
+      sequence: 1,
+      currentText: "",
+      hasNote: !!options?.note,
+    };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
@@ -370,7 +391,36 @@ export class FeishuStreamingSession {
     await this.queue;
   }
 
-  async close(finalText?: string): Promise<void> {
+  private async updateNoteContent(note: string): Promise<void> {
+    if (!this.state || !this.state.hasNote) {
+      return;
+    }
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/note/content`,
+      init: {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content: `<font color='grey'>${note}</font>`,
+          sequence: this.state.sequence,
+          uuid: `n_${this.state.cardId}_${this.state.sequence}`,
+        }),
+      },
+      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+      auditContext: "feishu.streaming-card.note-update",
+    })
+      .then(async ({ release }) => {
+        await release();
+      })
+      .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
+  }
+
+  async close(finalText?: string, options?: { note?: string }): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
@@ -386,6 +436,10 @@ export class FeishuStreamingSession {
     if (text && text !== this.state.currentText) {
       await this.updateCardContent(text);
       this.state.currentText = text;
+    }
+
+    if (options?.note) {
+      await this.updateNoteContent(options.note);
     }
 
     // Close streaming mode
