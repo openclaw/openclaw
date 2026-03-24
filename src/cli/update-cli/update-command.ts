@@ -24,10 +24,12 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
@@ -343,9 +345,27 @@ async function runPackageInstallUpdate(params: {
   const steps = [updateStep];
   let afterVersion = beforeVersion;
 
-  if (pkgRoot) {
-    afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+  const verifiedPackageRoot =
+    (await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs)) ?? pkgRoot;
+  if (verifiedPackageRoot) {
+    afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+        stdoutTail: null,
+      });
+    }
+    const entryPath = path.join(verifiedPackageRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -361,7 +381,7 @@ async function runPackageInstallUpdate(params: {
   return {
     status: failedStep ? "error" : "ok",
     mode: manager,
-    root: pkgRoot ?? params.root,
+    root: verifiedPackageRoot ?? params.root,
     reason: failedStep ? failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: afterVersion },

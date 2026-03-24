@@ -28,6 +28,14 @@ const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
+const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
+  "dist/extensions/whatsapp/light-runtime-api.js",
+  "dist/extensions/whatsapp/runtime-api.js",
+  "dist/extensions/matrix/helper-api.js",
+  "dist/extensions/matrix/runtime-api.js",
+  "dist/extensions/matrix/thread-bindings-runtime.js",
+  "dist/extensions/msteams/runtime-api.js",
+] as const;
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -613,6 +621,58 @@ describe("update-cli", () => {
       await scenario.run();
       expectPackageInstallSpec(scenario.expectedSpec);
     }
+  });
+
+  it("fails package updates when the installed correction version does not match the requested target", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    mockPackageInstallStatus(tempDir);
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
+      "utf-8",
+    );
+    for (const relativePath of REQUIRED_BUNDLED_RUNTIME_SIDECARS) {
+      const absolutePath = path.join(pkgRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+    readPackageVersion.mockResolvedValue("2026.3.23");
+    pathExists.mockImplementation(async (candidate: string) =>
+      REQUIRED_BUNDLED_RUNTIME_SIDECARS.some(
+        (relativePath) => candidate === path.join(pkgRoot, relativePath),
+      ),
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: nodeModules,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, tag: "2026.3.23-2" });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("global install verify");
+    expect(logs.join("\n")).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
   });
 
   it("prepends portable Git PATH for package updates on Windows", async () => {

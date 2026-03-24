@@ -21,12 +21,15 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallSpec,
+  resolveGlobalPackageRoot,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -1045,12 +1048,34 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    const afterVersion = await readPackageVersion(pkgRoot);
+    const verifiedPackageRoot =
+      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs)) ?? pkgRoot;
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+      });
+    }
+    const afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const failedStep =
+      finalStep.exitCode !== 0
+        ? finalStep
+        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
+          null);
     return {
-      status: finalStep.exitCode === 0 ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       mode: globalManager,
-      root: pkgRoot,
-      reason: finalStep.exitCode === 0 ? undefined : finalStep.name,
+      root: verifiedPackageRoot,
+      reason: failedStep ? failedStep.name : undefined,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,
