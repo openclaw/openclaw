@@ -3,6 +3,7 @@ import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { transcribeOpenAiCompatibleAudio } from "openclaw/plugin-sdk/media-understanding";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
@@ -22,12 +23,39 @@ import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
+const DEFAULT_DIRECT_AUDIO_TRANSCRIBE_TIMEOUT_MS = 20_000;
+const DEFAULT_DIRECT_AUDIO_TRANSCRIBE_MODEL = "gpt-4o-transcribe";
+const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
+
+type InboundAudioUnderstandingConfig = {
+  enabled?: boolean;
+  prompt?: string;
+  timeoutSeconds?: number;
+  language?: string;
+  echoTranscript?: boolean;
+  echoFormat?: string;
+  models?: Array<{
+    provider?: string;
+    model?: string;
+    timeoutSeconds?: number;
+  }>;
+};
+
+function isAudioMediaType(mediaType: string | undefined): boolean {
+  return /^audio\//i.test((mediaType ?? "").trim());
+}
+
+function formatEchoTranscript(transcript: string, format: string): string {
+  return format.replace("{transcript}", transcript);
+}
+
 export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   mediaMaxMb?: number;
+  audioUnderstanding?: InboundAudioUnderstandingConfig;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
@@ -263,6 +291,82 @@ export async function monitorWebInbox(options: {
     mediaFileName?: string;
   };
 
+  const maybeTranscribeInboundAudio = async (params: {
+    body: string;
+    mediaPath?: string;
+    mediaType?: string;
+    mediaFileName?: string;
+    chatJid: string;
+  }): Promise<{
+    body: string;
+    consumedAudio: boolean;
+  }> => {
+    const normalizedBody = params.body.trim();
+    if (normalizedBody && normalizedBody !== "<media:audio>") {
+      return { body: params.body, consumedAudio: false };
+    }
+    if (!params.mediaPath || !isAudioMediaType(params.mediaType)) {
+      return { body: params.body, consumedAudio: false };
+    }
+
+    const audioCfg = options.audioUnderstanding;
+    if (!audioCfg || audioCfg.enabled === false) {
+      return { body: params.body, consumedAudio: false };
+    }
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return { body: params.body, consumedAudio: false };
+    }
+
+    const configuredOpenAiModel = audioCfg.models?.find(
+      (entry) => entry?.provider?.trim().toLowerCase() === "openai",
+    );
+    const model = configuredOpenAiModel?.model?.trim() || DEFAULT_DIRECT_AUDIO_TRANSCRIBE_MODEL;
+    const timeoutMs = Math.max(
+      1000,
+      Math.floor((configuredOpenAiModel?.timeoutSeconds ?? audioCfg.timeoutSeconds ?? 20) * 1000),
+    );
+
+    try {
+      const buffer = await (await import("node:fs/promises")).readFile(params.mediaPath);
+      const result = await transcribeOpenAiCompatibleAudio({
+        buffer,
+        fileName: params.mediaFileName?.trim() || "voice.ogg",
+        mime: params.mediaType,
+        apiKey,
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: DEFAULT_DIRECT_AUDIO_TRANSCRIBE_MODEL,
+        model,
+        language: audioCfg.language,
+        prompt: audioCfg.prompt,
+        timeoutMs: Math.min(timeoutMs, DEFAULT_DIRECT_AUDIO_TRANSCRIBE_TIMEOUT_MS),
+      });
+      const transcript = result.text?.trim();
+      if (!transcript) {
+        return { body: params.body, consumedAudio: false };
+      }
+      if (audioCfg.echoTranscript) {
+        await sock.sendMessage(params.chatJid, {
+          text: formatEchoTranscript(
+            transcript,
+            audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+          ),
+        });
+      }
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `whatsapp inbound audio transcribed via openai/${result.model ?? model} (${transcript.length} chars)`,
+        );
+      }
+      return { body: transcript, consumedAudio: true };
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(`whatsapp inbound audio transcribe failed: ${String(err)}`);
+      }
+      return { body: params.body, consumedAudio: false };
+    }
+  };
+
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
     const location = extractLocationData(msg.message ?? undefined);
     const locationText = location ? formatLocationText(location) : undefined;
@@ -302,6 +406,20 @@ export async function monitorWebInbox(options: {
       }
     } catch (err) {
       logVerbose(`Inbound media download failed: ${String(err)}`);
+    }
+
+    const audioResolution = await maybeTranscribeInboundAudio({
+      body,
+      mediaPath,
+      mediaType,
+      mediaFileName,
+      chatJid: msg.key?.remoteJid ?? "",
+    });
+    body = audioResolution.body;
+    if (audioResolution.consumedAudio) {
+      mediaPath = undefined;
+      mediaType = undefined;
+      mediaFileName = undefined;
     }
 
     return {
