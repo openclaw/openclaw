@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -189,20 +190,12 @@ describe("update global helpers", () => {
 
   it("checks bundled runtime sidecars, including Matrix helper-api", async () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-global-pkg-"));
-    const sidecars = [
-      "dist/extensions/whatsapp/light-runtime-api.js",
-      "dist/extensions/whatsapp/runtime-api.js",
-      "dist/extensions/matrix/helper-api.js",
-      "dist/extensions/matrix/runtime-api.js",
-      "dist/extensions/matrix/thread-bindings-runtime.js",
-      "dist/extensions/msteams/runtime-api.js",
-    ] as const;
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
       JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
-    for (const relativePath of sidecars) {
+    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(packageRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
