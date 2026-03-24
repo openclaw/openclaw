@@ -142,7 +142,16 @@ describe("redactConfigSecrets", () => {
     expect(result.providers[0].credentials[1].secret).toBe("<REDACTED>");
   });
 
-  it("returns invalid JSON as-is", () => {
-    expect(redactConfigSecrets("not json")).toBe("not json");
+  it("throws on unparseable config", () => {
+    expect(() => redactConfigSecrets("not json {{{")).toThrow("Failed to parse config");
+  });
+
+  it("handles JSON5 syntax (comments, trailing commas)", () => {
+    const input = `{
+      // this is a comment
+      "gateway": { "authToken": "secret123", },
+    }`;
+    const result = JSON.parse(redactConfigSecrets(input));
+    expect(result.gateway.authToken).toBe("<REDACTED>");
   });
 });

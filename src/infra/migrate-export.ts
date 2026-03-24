@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSON5 from "json5";
 import * as tar from "tar";
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import {
@@ -142,12 +143,15 @@ async function canonicalizePathForContainment(targetPath: string): Promise<strin
  */
 function redactConfigSecrets(configContent: string): string {
   try {
-    const parsed = JSON.parse(configContent);
+    // Use JSON5 to handle OpenClaw's JSON5-compatible config files
+    // (comments, trailing commas). Output as standard JSON.
+    const parsed = JSON5.parse(configContent);
     redactObjectSecrets(parsed);
     return JSON.stringify(parsed, null, 2);
   } catch {
-    // If config is not valid JSON, return as-is.
-    return configContent;
+    throw new Error(
+      "Failed to parse config for secret redaction. The config file may be malformed.",
+    );
   }
 }
 

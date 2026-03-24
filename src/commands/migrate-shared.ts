@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import {
   readConfigFileSnapshot,
   resolveConfigPath,
@@ -143,18 +144,33 @@ function resolveAgentScopedWorkspaceDirs(
   cfg: OpenClawConfig,
   agentIds: readonly string[],
 ): string[] {
-  const dirs: string[] = [];
+  const dirs = new Set<string>();
   const agentIdSet = new Set(agentIds);
+
+  // Resolve the inherited default workspace (agents.defaults.workspace or system default).
+  const defaultWorkspace =
+    typeof cfg.agents?.defaults?.workspace === "string" && cfg.agents.defaults.workspace.trim()
+      ? resolveUserPath(cfg.agents.defaults.workspace)
+      : resolveDefaultAgentWorkspaceDir();
+
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  let foundExplicit = false;
   for (const agent of list) {
     const agentRecord = agent as { id?: string; workspace?: string };
     if (typeof agentRecord.id === "string" && agentIdSet.has(agentRecord.id)) {
       if (typeof agentRecord.workspace === "string" && agentRecord.workspace.trim()) {
-        dirs.push(resolveUserPath(agentRecord.workspace));
+        dirs.add(resolveUserPath(agentRecord.workspace));
+        foundExplicit = true;
       }
     }
   }
-  return dirs;
+
+  // If any selected agent has no explicit workspace, include the inherited default.
+  if (!foundExplicit || dirs.size === 0) {
+    dirs.add(defaultWorkspace);
+  }
+
+  return [...dirs];
 }
 
 export async function resolveMigratePlanFromDisk(params: {
@@ -300,7 +316,9 @@ export async function resolveMigratePlanFromDisk(params: {
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs: workspaceDirs.map((entry) => path.resolve(entry)),
+    workspaceDirs: await Promise.all(
+      workspaceDirs.map((entry) => canonicalizeExistingPath(path.resolve(entry))),
+    ),
     included,
     skipped,
   };

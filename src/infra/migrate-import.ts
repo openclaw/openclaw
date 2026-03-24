@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSON5 from "json5";
 import * as tar from "tar";
 import type {
   MigrateAssetKind,
@@ -297,7 +298,7 @@ async function mergeConfigFiles(existingPath: string, importedPath: string): Pro
   let existingContent: Record<string, unknown> = {};
   try {
     const raw = await fs.readFile(existingPath, "utf8");
-    existingContent = JSON.parse(raw);
+    existingContent = JSON5.parse(raw);
   } catch {
     // If existing config is missing or invalid, overwrite.
   }
@@ -305,9 +306,9 @@ async function mergeConfigFiles(existingPath: string, importedPath: string): Pro
   const importedRaw = await fs.readFile(importedPath, "utf8");
   let importedContent: unknown;
   try {
-    importedContent = JSON.parse(importedRaw);
+    importedContent = JSON5.parse(importedRaw);
   } catch (err) {
-    throw new Error(`Imported config file is not valid JSON: ${String(err)}`, { cause: err });
+    throw new Error(`Imported config file is not valid JSON/JSON5: ${String(err)}`, { cause: err });
   }
 
   const merged = applyMergePatch(existingContent, importedContent, {
@@ -478,6 +479,13 @@ export async function importMigrateArchive(
         await fs.access(extractedPath);
       } catch {
         warnings.push(`Asset not found in archive: ${manifestAsset.archivePath}`);
+        continue;
+      }
+
+      // Reject symlinked payloads before any read operation.
+      const payloadStat = await fs.lstat(extractedPath);
+      if (payloadStat.isSymbolicLink()) {
+        warnings.push(`Skipping symlinked payload: ${manifestAsset.archivePath}`);
         continue;
       }
 
