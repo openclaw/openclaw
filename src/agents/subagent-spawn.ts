@@ -353,10 +353,9 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
+  const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
   const attachMountPathIgnored =
-    Array.isArray(params.attachments) &&
-    params.attachments.length > 0 &&
-    Boolean(params.attachMountPath?.trim());
+    Array.isArray(params.attachments) && params.attachments.length > 0 && Boolean(mountPathHint);
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -571,8 +570,6 @@ export async function spawnSubagentDirect(
     }
     threadBindingReady = true;
   }
-  const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
-
   let childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
     requesterOrigin,
