@@ -202,9 +202,6 @@ async function fetchGeminiEmbeddingPayload(params: {
   });
 }
 
-// Private normalizeGeminiBaseUrl removed – now using shared
-// normalizeGeminiBaseUrl from src/utils/gemini-url.ts
-
 function buildGeminiModelPath(model: string): string {
   return model.startsWith("models/") ? model : `models/${model}`;
 }
