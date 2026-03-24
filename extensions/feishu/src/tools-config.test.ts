@@ -8,6 +8,11 @@ describe("feishu tools config", () => {
     expect(resolved.chat).toBe(true);
   });
 
+  it("keeps perm tool disabled by default", () => {
+    const resolved = resolveToolsConfig(undefined);
+    expect(resolved.perm).toBe(false);
+  });
+
   it("accepts tools.chat in config schema", () => {
     const parsed = FeishuConfigSchema.parse({
       enabled: true,
