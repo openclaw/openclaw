@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
@@ -68,6 +69,39 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
+
+const log = createSubsystemLogger("agents/model-providers");
+
+function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+  const live =
+    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
+  if (!live) {
+    return null;
+  }
+  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return 15_000;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+}
+
+function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+  const live =
+    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
+  if (!live) {
+    return undefined;
+  }
+  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
+  if (!raw || raw === "all") {
+    return undefined;
+  }
+  const ids = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? [...new Set(ids)] : undefined;
+}
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -665,10 +699,12 @@ async function mergePluginImplicitProvidersFromDiscovery(
   // Load bundled provider plugins once per implicit resolve. Previously each discovery
   // order (simple/profile/paired/late) re-ran resolvePluginDiscoveryProviders, which
   // calls loadOpenClawPlugins({ cache: false }) — four full plugin loads and easy CI timeouts.
+  const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
   const pluginProviders = resolvePluginDiscoveryProviders({
     config: ctx.config,
     workspaceDir: ctx.workspaceDir,
     env: ctx.env,
+    onlyPluginIds,
   });
   const byOrder = groupPluginDiscoveryProvidersByOrder(pluginProviders);
   const catalogConfig =
@@ -689,7 +725,7 @@ async function mergePluginImplicitProvidersFromDiscovery(
   for (const order of orders) {
     const discovered: Record<string, ProviderConfig> = {};
     for (const provider of byOrder[order]) {
-      const result = await runProviderCatalog({
+      const catalogRun = runProviderCatalog({
         provider,
         config: catalogConfig,
         agentDir: ctx.agentDir,
@@ -700,6 +736,37 @@ async function mergePluginImplicitProvidersFromDiscovery(
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
       });
+      const timeoutMs = resolveLiveProviderCatalogTimeoutMs(ctx.env);
+      let result: Awaited<ReturnType<typeof runProviderCatalog>>;
+      if (!timeoutMs) {
+        result = await catalogRun;
+      } else {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          result = await Promise.race([
+            catalogRun,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                reject(
+                  new Error(`provider catalog timed out after ${timeoutMs}ms: ${provider.id}`),
+                );
+              }, timeoutMs);
+              timer.unref?.();
+            }),
+          ]);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("provider catalog timed out after")) {
+            log.warn(`${message}; skipping provider discovery`);
+            continue;
+          }
+          throw error;
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
+      }
       mergeImplicitProviderSet(
         discovered,
         normalizePluginDiscoveryResult({
