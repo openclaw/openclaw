@@ -867,6 +867,101 @@ describe("handleCommands owner gating for privileged show commands", () => {
   });
 });
 
+describe("handleCommands /send owner gating", () => {
+  it("blocks authorized non-owner senders from mutating session send policy", async () => {
+    const params = buildParams("/send off", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = false;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(sessionEntry.sendPolicy).toBe("allow");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("allow");
+  });
+
+  it("allows owners to mutate session send policy", async () => {
+    const params = buildParams("/send off", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy-owner",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Send policy set to off");
+    expect(sessionEntry.sendPolicy).toBe("deny");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("deny");
+  });
+
+  it("returns an explicit unauthorized reply for native /send from non-owners", async () => {
+    const params = buildParams(
+      "/send off",
+      {
+        commands: { text: true },
+        channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+    params.command.senderIsOwner = false;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-send-policy-native",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+    });
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+    expect(sessionEntry.sendPolicy).toBe("allow");
+    expect(sessionStore[params.sessionKey]?.sendPolicy).toBe("allow");
+  });
+});
+
 describe("handleCommands /config configWrites gating", () => {
   it("blocks disallowed /config set writes", async () => {
     const cases = [
