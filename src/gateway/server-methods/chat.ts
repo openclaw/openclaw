@@ -91,15 +91,17 @@ function filterFallbacksByAllowlist(params: {
   agentId?: string;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   defaultProvider: string;
+  defaultModel?: string;
   imageModelProvider?: string;
 }): string[] {
-  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider, imageModelProvider } = params;
+  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider, defaultModel, imageModelProvider } =
+    params;
   const providerForResolution = imageModelProvider ?? defaultProvider;
   const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
     catalog: [],
     defaultProvider,
-    defaultModel: undefined,
+    defaultModel,
     agentId,
   });
   if (allowAny) {
@@ -1511,6 +1513,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentId,
                 aliasIndex,
                 defaultProvider,
+                defaultModel: agentDefault.model,
                 imageModelProvider,
               });
               imageModelFallbacks = canonicalizeFallbacks({
@@ -1536,6 +1539,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentId,
                 aliasIndex,
                 defaultProvider,
+                defaultModel: agentDefault.model,
                 imageModelProvider,
               });
               imageModelFallbacks = canonicalizeFallbacks({
@@ -1562,6 +1566,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               agentId,
               aliasIndex,
               defaultProvider,
+              defaultModel: agentDefault.model,
               imageModelProvider,
             });
             // Canonicalize fallbacks with image model's provider context
