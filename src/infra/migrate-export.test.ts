@@ -12,6 +12,7 @@ function makeResult(overrides: Partial<MigrateExportResult> = {}): MigrateExport
     stripSecrets: false,
     assets: [],
     skipped: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -85,5 +86,18 @@ describe("formatMigrateExportSummary", () => {
 
     expect(lines).toContain("Skipped 1 path:");
     expect(lines.some((l) => l.includes("workspace: ~/workspace (covered)"))).toBe(true);
+  });
+
+  it("shows warnings", () => {
+    const lines = formatMigrateExportSummary(
+      makeResult({
+        warnings: [
+          "--strip-secrets only redacts the JSON config file. credentials (OAuth tokens) are exported unredacted.",
+        ],
+      }),
+    );
+
+    expect(lines).toContain("Warnings:");
+    expect(lines.some((l) => l.includes("--strip-secrets only redacts"))).toBe(true);
   });
 });

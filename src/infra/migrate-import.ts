@@ -174,6 +174,37 @@ async function extractManifestFromArchive(archivePath: string): Promise<MigrateM
 }
 
 /**
+ * Normalize a foreign path to POSIX style so that `path.posix.relative` works
+ * correctly even when the source path comes from a different platform (e.g.
+ * Windows `C:\Users\...` imported on Linux/macOS).
+ */
+export function toPosixPath(p: string): string {
+  // Convert Windows drive-letter paths: C:\foo\bar → /C/foo/bar
+  const winMatch = p.match(/^([A-Za-z]):[/\\](.*)/);
+  if (winMatch) {
+    return `/${winMatch[1]}/${winMatch[2].replaceAll("\\", "/")}`;
+  }
+  return p.replaceAll("\\", "/");
+}
+
+/**
+ * Compute the relative portion of `child` under `parent`, normalizing both to
+ * POSIX first so cross-platform archives produce valid results.
+ */
+export function crossPlatformRelative(parent: string, child: string): string | undefined {
+  const normalizedParent = toPosixPath(parent);
+  const normalizedChild = toPosixPath(child);
+  if (normalizedParent === normalizedChild) {
+    return "";
+  }
+  const rel = path.posix.relative(normalizedParent, normalizedChild);
+  if (!rel || rel.startsWith("..")) {
+    return undefined;
+  }
+  return rel;
+}
+
+/**
  * Remap the source path from the archive manifest to a target path on the local machine.
  * Handles cross-platform path differences.
  */
@@ -203,8 +234,8 @@ function remapSourceToTarget(params: {
 
   // Agent data: remap from source state dir to local state dir.
   if (kind === "agents" && params.sourceStateDir) {
-    const relative = path.relative(params.sourceStateDir, sourcePath);
-    if (!relative.startsWith("..")) {
+    const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
+    if (relative !== undefined) {
       return path.join(params.localStateDir, relative);
     }
   }
@@ -223,8 +254,8 @@ function remapSourceToTarget(params: {
     }
     // Default: place workspace under the local state dir.
     if (params.sourceStateDir) {
-      const relative = path.relative(params.sourceStateDir, sourcePath);
-      if (!relative.startsWith("..")) {
+      const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
+      if (relative !== undefined) {
         return path.join(params.localStateDir, relative);
       }
     }
@@ -233,8 +264,8 @@ function remapSourceToTarget(params: {
 
   // Fallback: place under local state dir using relative path from source state dir.
   if (params.sourceStateDir) {
-    const relative = path.relative(params.sourceStateDir, sourcePath);
-    if (!relative.startsWith("..")) {
+    const relative = crossPlatformRelative(params.sourceStateDir, sourcePath);
+    if (relative !== undefined) {
       return path.join(params.localStateDir, relative);
     }
   }
@@ -252,7 +283,12 @@ async function mergeConfigFiles(existingPath: string, importedPath: string): Pro
   }
 
   const importedRaw = await fs.readFile(importedPath, "utf8");
-  const importedContent = JSON.parse(importedRaw);
+  let importedContent: unknown;
+  try {
+    importedContent = JSON.parse(importedRaw);
+  } catch (err) {
+    throw new Error(`Imported config file is not valid JSON: ${String(err)}`, { cause: err });
+  }
 
   const merged = applyMergePatch(existingContent, importedContent, {
     mergeObjectArraysById: true,
@@ -393,6 +429,17 @@ export async function importMigrateArchive(
       }
 
       const extractedPath = path.join(tempDir, manifestAsset.archivePath);
+      const resolvedTempDir = path.resolve(tempDir);
+      const resolvedExtracted = path.resolve(extractedPath);
+      // Guard against path traversal via crafted manifest archivePath values.
+      if (
+        resolvedExtracted !== resolvedTempDir &&
+        !resolvedExtracted.startsWith(resolvedTempDir + path.sep)
+      ) {
+        warnings.push(`Skipping asset with unsafe archive path: ${manifestAsset.archivePath}`);
+        continue;
+      }
+
       const targetPath = importAsset.targetPath;
 
       try {

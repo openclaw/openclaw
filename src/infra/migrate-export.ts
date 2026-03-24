@@ -39,6 +39,7 @@ export type MigrateExportResult = {
   stripSecrets: boolean;
   assets: MigrateAsset[];
   skipped: SkippedMigrateAsset[];
+  warnings: string[];
 };
 
 async function resolveOutputPath(params: {
@@ -248,6 +249,12 @@ export function formatMigrateExportSummary(result: MigrateExportResult): string[
       lines.push(`  ${entry.kind}: ${entry.displayPath} (${entry.reason})`);
     }
   }
+  if (result.warnings.length > 0) {
+    lines.push("Warnings:");
+    for (const warning of result.warnings) {
+      lines.push(`  ${warning}`);
+    }
+  }
   if (result.dryRun) {
     lines.push("Dry run only; archive was not written.");
   } else {
@@ -305,6 +312,26 @@ export async function createMigrateArchive(
   // Resolve agent ids from included assets.
   const agentIds = [...new Set(plan.included.filter((a) => a.agentId).map((a) => a.agentId!))];
 
+  const warnings: string[] = [];
+
+  // Warn when --strip-secrets is used but credentials/sessions are still included.
+  if (stripSecrets) {
+    const hasCredentials = plan.included.some((a) => a.kind === "credentials");
+    const hasSessions = plan.included.some((a) => a.kind === "agents");
+    if (hasCredentials || hasSessions) {
+      const parts: string[] = [];
+      if (hasCredentials) {
+        parts.push("credentials (OAuth tokens)");
+      }
+      if (hasSessions) {
+        parts.push("agent session data");
+      }
+      warnings.push(
+        `--strip-secrets only redacts the JSON config file. ${parts.join(" and ")} are exported unredacted. Use --include to exclude them if sharing this archive.`,
+      );
+    }
+  }
+
   const createdAt = new Date(nowMs).toISOString();
   const result: MigrateExportResult = {
     createdAt,
@@ -316,6 +343,7 @@ export async function createMigrateArchive(
     stripSecrets,
     assets: plan.included,
     skipped: plan.skipped,
+    warnings,
   };
 
   if (opts.dryRun) {

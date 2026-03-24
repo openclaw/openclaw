@@ -51,7 +51,11 @@ export function registerMigrateCommand(program: Command) {
       `Components to include (comma-separated: ${ALL_MIGRATE_COMPONENTS.join(", ")})`,
     )
     .option("--agents <ids>", "Export only these agent IDs (comma-separated)")
-    .option("--strip-secrets", "Redact API keys and tokens from exported config", false)
+    .option(
+      "--strip-secrets",
+      "Redact API keys and tokens from the JSON config file (credentials and sessions are not redacted)",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .option("--dry-run", "Print the export plan without writing the archive", false)
     .addHelpText(

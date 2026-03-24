@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatMigrateImportSummary, type MigrateImportResult } from "./migrate-import.js";
+import {
+  crossPlatformRelative,
+  formatMigrateImportSummary,
+  type MigrateImportResult,
+  toPosixPath,
+} from "./migrate-import.js";
 
 function makeResult(overrides: Partial<MigrateImportResult> = {}): MigrateImportResult {
   return {
@@ -91,5 +96,48 @@ describe("formatMigrateImportSummary", () => {
 
     expect(lines).toContain("Agents: main, research");
     expect(lines.some((l) => l.includes("(agent: main)"))).toBe(true);
+  });
+});
+
+describe("toPosixPath", () => {
+  it("converts Windows drive-letter paths to POSIX", () => {
+    expect(toPosixPath("C:\\Users\\alice\\.openclaw")).toBe("/C/Users/alice/.openclaw");
+  });
+
+  it("converts Windows paths with forward slashes", () => {
+    expect(toPosixPath("D:/data/.openclaw")).toBe("/D/data/.openclaw");
+  });
+
+  it("passes POSIX paths through unchanged", () => {
+    expect(toPosixPath("/home/user/.openclaw")).toBe("/home/user/.openclaw");
+  });
+
+  it("handles mixed separators", () => {
+    expect(toPosixPath("C:\\Users/alice\\.openclaw")).toBe("/C/Users/alice/.openclaw");
+  });
+});
+
+describe("crossPlatformRelative", () => {
+  it("returns relative path for POSIX child under POSIX parent", () => {
+    expect(crossPlatformRelative("/home/user/.openclaw", "/home/user/.openclaw/agents/main")).toBe(
+      "agents/main",
+    );
+  });
+
+  it("returns relative path for Windows child under Windows parent", () => {
+    expect(
+      crossPlatformRelative(
+        "C:\\Users\\alice\\.openclaw",
+        "C:\\Users\\alice\\.openclaw\\agents\\main",
+      ),
+    ).toBe("agents/main");
+  });
+
+  it("returns undefined when child is not under parent", () => {
+    expect(crossPlatformRelative("/home/user/.openclaw", "/home/other/.openclaw")).toBe(undefined);
+  });
+
+  it("returns empty string when paths are equal", () => {
+    expect(crossPlatformRelative("/home/user/.openclaw", "/home/user/.openclaw")).toBe("");
   });
 });
