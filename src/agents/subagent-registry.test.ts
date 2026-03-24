@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
@@ -429,6 +432,36 @@ describe("subagent registry seam flow", () => {
         reason: "deleted",
         workspaceDir: "/tmp/killed-delete-workspace",
       });
+    });
+  });
+
+  it("removes attachments for killed delete-mode runs", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-kill-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
+
+    mod.registerSubagentRun({
+      runId: "run-killed-delete-attachments",
+      childSessionKey: "agent:main:subagent:killed-delete-attachments",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill and delete attachments",
+      cleanup: "delete",
+      attachmentsDir,
+      attachmentsRootDir,
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete-attachments",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    await vi.waitFor(async () => {
+      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });
