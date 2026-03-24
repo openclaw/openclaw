@@ -626,7 +626,9 @@ async function resolveSteerTarget(
   if (spaceIdx > 0) {
     const maybeTarget = trimmed.slice(0, spaceIdx);
     const rest = trimmed.slice(spaceIdx + 1).trim();
-    if (rest) {
+    // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
+    // target a single session, so "all good now" should not match subagents.
+    if (rest && maybeTarget.toLowerCase() !== "all") {
       const sessions = await client.request<SessionsListResult>("sessions.list", {});
       const matched = resolveKillTargets(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
