@@ -7,7 +7,9 @@ import {
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 
 type ChannelAuthOptions = {
   channel?: string;
@@ -23,7 +25,16 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
-  const channelCfg = cfg.channels?.[plugin.id as keyof NonNullable<typeof cfg.channels>];
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const key = plugin.id;
+  if (
+    !channels ||
+    isBlockedObjectKey(key) ||
+    !Object.prototype.hasOwnProperty.call(channels, key)
+  ) {
+    return false;
+  }
+  const channelCfg = channels[key];
   if (!channelCfg || typeof channelCfg !== "object") {
     return false;
   }
@@ -59,8 +70,9 @@ function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAut
   if (configured.length === 0) {
     throw new Error(`Channel is required (no configured channels support ${mode}).`);
   }
+  const safeIds = configured.map(sanitizeForLog);
   throw new Error(
-    `Channel is required when multiple configured channels support ${mode}: ${configured.join(", ")}`,
+    `Channel is required when multiple configured channels support ${mode}: ${safeIds.join(", ")}`,
   );
 }
 
