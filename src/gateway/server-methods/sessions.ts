@@ -2,13 +2,21 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { resolveEmbeddedSessionLane } from "../../agents/pi-embedded.js";
+import {
+  countActiveDescendantRuns,
+  countActiveRunsForSession,
+} from "../../agents/subagent-registry.js";
+import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { getFollowupQueueSize } from "../../auto-reply/reply/queue/state.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -18,6 +26,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { CronJob } from "../../cron/types.js";
+import { getQueueSize } from "../../process/command-queue.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -27,6 +37,7 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
+  validateSessionsActivityParams,
   validateSessionsAbortParams,
   validateSessionsCompactParams,
   validateSessionsCreateParams,
@@ -258,6 +269,92 @@ function resolveAbortSessionKey(params: {
     }
   }
   return params.requestedKey;
+}
+
+function resolveSessionQueueKeys(params: {
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+}): string[] {
+  return [
+    ...new Set(
+      [params.requestedKey, params.canonicalKey, params.sessionId].filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      ),
+    ),
+  ];
+}
+
+function isSessionBoundCronJob(job: CronJob, sessionKey: string): boolean {
+  const target = typeof job.sessionTarget === "string" ? job.sessionTarget.trim() : "";
+  const boundTarget = `session:${sessionKey}`;
+  if (target === boundTarget) {
+    return true;
+  }
+  const jobSessionKey = typeof job.sessionKey === "string" ? job.sessionKey.trim() : "";
+  return jobSessionKey === sessionKey;
+}
+
+async function listEnabledSessionBoundCronJobs(params: {
+  context: Pick<GatewayRequestContext, "cron">;
+  canonicalKey: string;
+}): Promise<CronJob[]> {
+  const jobs = await params.context.cron.list({ includeDisabled: true });
+  return jobs.filter((job) => job.enabled && isSessionBoundCronJob(job, params.canonicalKey));
+}
+
+type SessionActivitySummary = {
+  activeRunIds: string[];
+  embeddedRunActive: boolean;
+  followupQueued: number;
+  commandQueued: number;
+  activeSubagentRuns: number;
+  activeDescendantRuns: number;
+  boundCronJobIds: string[];
+  canStop: boolean;
+};
+
+async function collectSessionActivity(params: {
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "cron">;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+}): Promise<SessionActivitySummary> {
+  const queueKeys = resolveSessionQueueKeys(params);
+  const activeRunIds: string[] = [];
+  for (const [runId, active] of params.context.chatAbortControllers) {
+    if (active.sessionKey === params.requestedKey || active.sessionKey === params.canonicalKey) {
+      activeRunIds.push(runId);
+    }
+  }
+  const followupQueued = queueKeys.reduce((total, key) => total + getFollowupQueueSize(key), 0);
+  const commandQueued = [
+    ...new Set(queueKeys.map((key) => resolveEmbeddedSessionLane(key))),
+  ].reduce((total, lane) => total + getQueueSize(lane), 0);
+  const activeSubagentRuns = countActiveRunsForSession(params.canonicalKey);
+  const activeDescendantRuns = countActiveDescendantRuns(params.canonicalKey);
+  const boundCronJobIds = (await listEnabledSessionBoundCronJobs(params)).map((job) => job.id);
+  const embeddedRunActive =
+    typeof params.sessionId === "string" && params.sessionId
+      ? isEmbeddedPiRunActive(params.sessionId)
+      : false;
+  return {
+    activeRunIds,
+    embeddedRunActive,
+    followupQueued,
+    commandQueued,
+    activeSubagentRuns,
+    activeDescendantRuns,
+    boundCronJobIds,
+    canStop:
+      activeRunIds.length > 0 ||
+      embeddedRunActive ||
+      followupQueued > 0 ||
+      commandQueued > 0 ||
+      activeSubagentRuns > 0 ||
+      activeDescendantRuns > 0 ||
+      boundCronJobIds.length > 0,
+  };
 }
 
 function hasTrackedActiveSessionRun(params: {
@@ -805,6 +902,40 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       interruptIfActive: true,
     });
   },
+  "sessions.activity": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsActivityParams, "sessions.activity", respond)) {
+      return;
+    }
+    const key = requireSessionKey((params as { key?: unknown }).key, respond);
+    if (!key) {
+      return;
+    }
+    const { entry, canonicalKey } = loadSessionEntry(key);
+    const activity = await collectSessionActivity({
+      context,
+      requestedKey: key,
+      canonicalKey,
+      sessionId: entry?.sessionId,
+    });
+    respond(
+      true,
+      {
+        key,
+        canonicalKey,
+        activeRunCount: activity.activeRunIds.length,
+        activeRunIds: activity.activeRunIds,
+        embeddedRunActive: activity.embeddedRunActive,
+        followupQueued: activity.followupQueued,
+        commandQueued: activity.commandQueued,
+        activeSubagentRuns: activity.activeSubagentRuns,
+        activeDescendantRuns: activity.activeDescendantRuns,
+        boundCronJobCount: activity.boundCronJobIds.length,
+        boundCronJobIds: activity.boundCronJobIds,
+        canStop: activity.canStop,
+      },
+      undefined,
+    );
+  },
   "sessions.abort": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
@@ -814,7 +945,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const { canonicalKey } = loadSessionEntry(key);
+    const cfg = loadConfig();
+    const { entry, canonicalKey } = loadSessionEntry(key);
+    const activityBefore = await collectSessionActivity({
+      context,
+      requestedKey: key,
+      canonicalKey,
+      sessionId: entry?.sessionId,
+    });
     const abortSessionKey = resolveAbortSessionKey({
       context,
       requestedKey: key,
@@ -822,6 +960,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       runId: typeof p.runId === "string" ? p.runId : undefined,
     });
     let abortedRunId: string | null = null;
+    let abortMeta: Record<string, unknown> | undefined;
+    let abortFailed = false;
     await chatHandlers["chat.abort"]({
       req,
       params: {
@@ -830,6 +970,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       respond: (ok, payload, error, meta) => {
         if (!ok) {
+          abortFailed = true;
           respond(ok, payload, error, meta);
           return;
         }
@@ -842,27 +983,95 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               )
             : [];
         abortedRunId = runIds[0] ?? null;
-        respond(
-          true,
-          {
-            ok: true,
-            abortedRunId,
-            status: abortedRunId ? "aborted" : "no-active-run",
-          },
-          undefined,
-          meta,
-        );
+        abortMeta = meta;
       },
       context,
       client,
       isWebchatConnect,
     });
-    if (abortedRunId) {
+    if (abortFailed) {
+      return;
+    }
+    const queueKeys = resolveSessionQueueKeys({
+      requestedKey: key,
+      canonicalKey,
+      sessionId: entry?.sessionId,
+    });
+    const clearedQueues = clearSessionQueues(queueKeys);
+    const { stopped: stoppedSubagents } = stopSubagentsForRequester({
+      cfg,
+      requesterSessionKey: canonicalKey,
+    });
+
+    let acpCancelRequested = false;
+    if (entry?.acp) {
+      acpCancelRequested = true;
+      try {
+        await getAcpSessionManager().cancelSession({
+          cfg,
+          sessionKey: canonicalKey,
+          reason: "session-abort",
+        });
+      } catch (error) {
+        context.logGateway.warn?.(
+          `sessions.abort: ACP cancel failed for ${canonicalKey}: ${String(error)}`,
+        );
+      }
+    }
+
+    const disabledCronJobIds: string[] = [];
+    for (const job of await listEnabledSessionBoundCronJobs({ context, canonicalKey })) {
+      await context.cron.update(job.id, { enabled: false });
+      disabledCronJobIds.push(job.id);
+    }
+
+    if (activityBefore.embeddedRunActive && entry?.sessionId) {
+      abortEmbeddedPiRun(entry.sessionId);
+      const ended = await waitForEmbeddedPiRunEnd(entry.sessionId, 15_000);
+      if (!ended) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${key} is still active; try again in a moment.`,
+          ),
+        );
+        return;
+      }
+    }
+
+    const stopped =
+      Boolean(abortedRunId) ||
+      clearedQueues.followupCleared > 0 ||
+      clearedQueues.laneCleared > 0 ||
+      stoppedSubagents > 0 ||
+      disabledCronJobIds.length > 0 ||
+      acpCancelRequested ||
+      activityBefore.embeddedRunActive;
+    if (stopped) {
       emitSessionsChanged(context, {
         sessionKey: canonicalKey,
         reason: "abort",
       });
     }
+    respond(
+      true,
+      {
+        ok: true,
+        abortedRunId,
+        status: abortedRunId ? "aborted" : stopped ? "stopped" : "no-active-run",
+        stopped,
+        clearedFollowups: clearedQueues.followupCleared,
+        clearedCommands: clearedQueues.laneCleared,
+        stoppedSubagents,
+        disabledCronJobIds,
+        disabledCronJobs: disabledCronJobIds.length,
+        acpCancelRequested,
+      },
+      undefined,
+      abortMeta,
+    );
   },
   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {

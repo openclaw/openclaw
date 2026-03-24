@@ -404,6 +404,21 @@ export type GatewaySessionRow = {
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
+export type ChatSessionActivity = {
+  key: string;
+  canonicalKey: string;
+  activeRunCount: number;
+  activeRunIds: string[];
+  embeddedRunActive: boolean;
+  followupQueued: number;
+  commandQueued: number;
+  activeSubagentRuns: number;
+  activeDescendantRuns: number;
+  boundCronJobCount: number;
+  boundCronJobIds: string[];
+  canStop: boolean;
+};
+
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;

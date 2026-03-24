@@ -44,6 +44,7 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
   chatStopping?: boolean;
+  chatSessionActivity?: { canStop?: boolean } | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   ignoredTerminalRunIds?: Set<string>;
@@ -330,25 +331,24 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   try {
     const response = await state.client.request<{
       ok?: boolean;
-      aborted?: boolean;
-      runIds?: string[];
-    }>(
-      "chat.abort",
-      runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
-    );
-    const abortedRunIds = Array.isArray(response.runIds)
-      ? response.runIds.filter((value): value is string => typeof value === "string")
-      : [];
-    const abortedCurrentRun = Boolean(runId && abortedRunIds.includes(runId));
+      abortedRunId?: string | null;
+      status?: string;
+      stopped?: boolean;
+    }>("sessions.abort", runId ? { key: state.sessionKey, runId } : { key: state.sessionKey });
+    const abortedCurrentRun = Boolean(runId && response.abortedRunId === runId);
     if (abortedCurrentRun) {
       state.ignoredTerminalRunIds ??= new Set<string>();
-      state.ignoredTerminalRunIds.add(runId);
+      state.ignoredTerminalRunIds.add(runId!);
       commitStreamTextToHistory(state, state.chatStream ?? "");
       clearActiveRunState(state);
       maybeResetToolStream(state);
+      state.chatSessionActivity = null;
       return true;
     }
-    state.chatStopping = Boolean(runId && response.aborted);
+    state.chatStopping = false;
+    if (response.stopped) {
+      state.chatSessionActivity = null;
+    }
     return true;
   } catch (err) {
     state.chatStopping = false;

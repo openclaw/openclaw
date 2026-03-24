@@ -136,6 +136,7 @@ function createHost() {
     chatStreamStartedAt: null,
     chatRunId: null,
     chatStopping: false,
+    chatSessionActivity: null,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,

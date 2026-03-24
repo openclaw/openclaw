@@ -30,6 +30,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatQueue: [],
     chatRunId: null,
     chatStopping: false,
+    chatSessionActivity: null,
     chatSending: false,
     lastError: null,
     sessionKey: "agent:main",

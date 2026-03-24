@@ -60,6 +60,7 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  abortTitle?: string;
   compactionStatus?: CompactionIndicatorStatus | null;
   fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
@@ -1343,9 +1344,28 @@ export function renderChat(props: ChatProps) {
             </button>
 
             ${
+              canAbort && !(isBusy || props.sending)
+                ? html`
+                  <button
+                    class="btn btn--ghost"
+                    @click=${props.onAbort}
+                    title=${props.abortTitle ?? "Stop session tasks"}
+                    aria-label=${props.abortTitle ?? "Stop session tasks"}
+                  >
+                    ${icons.stop}
+                  </button>
+                `
+                : nothing
+            }
+            ${
               canAbort && (isBusy || props.sending)
                 ? html`
-                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop" aria-label="Stop generating">
+                  <button
+                    class="chat-send-btn chat-send-btn--stop"
+                    @click=${props.onAbort}
+                    title="Stop"
+                    aria-label="Stop generating"
+                  >
                     ${icons.stop}
                   </button>
                 `

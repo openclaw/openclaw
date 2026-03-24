@@ -22,6 +22,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  ChatSessionActivity,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -69,6 +70,7 @@ export type AppViewState = {
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
   chatStopping: boolean;
+  chatSessionActivity: ChatSessionActivity | null;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;

@@ -12,6 +12,7 @@ import {
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadChatSessionActivity } from "./controllers/session-activity.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -490,6 +491,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   state.sessionKey = nextSessionKey;
   state.chatMessage = "";
   state.chatStream = null;
+  state.chatSessionActivity = null;
   // P1: Clear queued chat items from the previous session
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
@@ -508,6 +510,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     true,
   );
   void loadChatHistory(state as unknown as ChatState);
+  void loadChatSessionActivity(state as unknown as Parameters<typeof loadChatSessionActivity>[0]);
   void refreshSessionOptions(state);
 }
 

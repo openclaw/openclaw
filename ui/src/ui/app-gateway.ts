@@ -28,6 +28,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
+import { loadChatSessionActivity } from "./controllers/session-activity.ts";
 import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -211,6 +212,7 @@ export function connectGateway(host: GatewayHost) {
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
       (host as unknown as { chatStopping?: boolean }).chatStopping = false;
+      (host as unknown as { chatSessionActivity?: unknown }).chatSessionActivity = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
@@ -375,6 +377,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     void loadSessions(host as unknown as OpenClawApp);
+    void loadChatSessionActivity(host as unknown as OpenClawApp);
     return;
   }
 

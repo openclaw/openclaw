@@ -110,6 +110,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.create",
     "sessions.send",
     "sessions.steer",
+    "sessions.activity",
     "sessions.abort",
     "browser.request",
     "push.test",

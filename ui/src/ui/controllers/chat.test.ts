@@ -615,8 +615,8 @@ describe("abortChatRun", () => {
   it("commits the current stream and clears active run state when abort succeeds", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: true,
-      aborted: true,
-      runIds: ["run-1"],
+      abortedRunId: "run-1",
+      stopped: true,
     });
     const state = createState({
       connected: true,
@@ -657,8 +657,8 @@ describe("abortChatRun", () => {
     const result = await abortChatRun(state);
 
     expect(result).toBe(false);
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "main",
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "main",
       runId: "run-1",
     });
     expect(state.lastError).toContain("device identity required");
@@ -667,8 +667,8 @@ describe("abortChatRun", () => {
   it("drops a late aborted event after local abort already committed the partial", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: true,
-      aborted: true,
-      runIds: ["run-1"],
+      abortedRunId: "run-1",
+      stopped: true,
     });
     const state = createState({
       connected: true,
@@ -692,6 +692,26 @@ describe("abortChatRun", () => {
     expect(terminalState).toBe("aborted");
     expect(state.chatMessages).toHaveLength(1);
     expect(state.ignoredTerminalRunIds?.has("run-1")).toBe(false);
+  });
+
+  it("clears autonomous stop state when the session stop succeeds without an active run", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "stopped",
+      stopped: true,
+      abortedRunId: null,
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatSessionActivity: { canStop: true },
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledWith("sessions.abort", { key: "main" });
+    expect(state.chatSessionActivity).toBeNull();
   });
 });
 

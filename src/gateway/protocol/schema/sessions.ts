@@ -86,6 +86,13 @@ export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsActivityParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsAbortParamsSchema = Type.Object(
   {
     key: NonEmptyString,

@@ -70,6 +70,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadChatSessionActivity } from "./controllers/session-activity.ts";
 import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -1392,6 +1393,7 @@ export function renderApp(state: AppViewState) {
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
                   state.chatStopping = false;
+                  state.chatSessionActivity = null;
                   state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
@@ -1402,6 +1404,7 @@ export function renderApp(state: AppViewState) {
                   });
                   void state.loadAssistantIdentity();
                   void loadChatHistory(state);
+                  void loadChatSessionActivity(state);
                   void refreshChatAvatar(state);
                 },
                 thinkingLevel: state.chatThinkingLevel,
@@ -1427,7 +1430,11 @@ export function renderApp(state: AppViewState) {
                 focusMode: chatFocus,
                 onRefresh: () => {
                   state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                  return Promise.all([
+                    loadChatHistory(state),
+                    loadChatSessionActivity(state),
+                    refreshChatAvatar(state),
+                  ]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {
@@ -1445,7 +1452,12 @@ export function renderApp(state: AppViewState) {
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
-                canAbort: Boolean(state.chatRunId || state.chatStopping),
+                canAbort: Boolean(
+                  state.chatRunId || state.chatStopping || state.chatSessionActivity?.canStop,
+                ),
+                abortTitle: state.chatSessionActivity?.canStop
+                  ? "Stop autonomous session tasks"
+                  : undefined,
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
@@ -1459,7 +1471,9 @@ export function renderApp(state: AppViewState) {
                     state.chatStream = null;
                     state.chatRunId = null;
                     state.chatStopping = false;
+                    state.chatSessionActivity = null;
                     await loadChatHistory(state);
+                    await loadChatSessionActivity(state);
                   } catch (err) {
                     state.lastError = String(err);
                   }
@@ -1472,12 +1486,14 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatRunId = null;
                   state.chatStopping = false;
+                  state.chatSessionActivity = null;
                   state.applySettings({
                     ...state.settings,
                     sessionKey: state.sessionKey,
                     lastActiveSessionKey: state.sessionKey,
                   });
                   void loadChatHistory(state);
+                  void loadChatSessionActivity(state);
                   void state.loadAssistantIdentity();
                 },
                 onNavigateToAgent: () => {

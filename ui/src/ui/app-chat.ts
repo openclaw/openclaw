@@ -7,10 +7,11 @@ import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
+import { loadChatSessionActivity } from "./controllers/session-activity.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, ChatSessionActivity, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -24,6 +25,7 @@ export type ChatHost = {
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatStopping?: boolean;
+  chatSessionActivity: ChatSessionActivity | null;
   chatSending: boolean;
   lastError?: string | null;
   sessionKey: string;
@@ -338,7 +340,9 @@ async function clearChatHistory(host: ChatHost) {
     host.chatStream = null;
     host.chatRunId = null;
     host.chatStopping = false;
+    host.chatSessionActivity = null;
     await loadChatHistory(host as unknown as OpenClawApp);
+    await loadChatSessionActivity(host as unknown as OpenClawApp);
   } catch (err) {
     host.lastError = String(err);
   }
@@ -359,6 +363,7 @@ function injectCommandResult(host: ChatHost, content: string) {
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
+    loadChatSessionActivity(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: 0,
       limit: 0,

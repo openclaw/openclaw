@@ -98,6 +98,7 @@ function createHost() {
     sessionKey: "main",
     chatRunId: null,
     chatStopping: false,
+    chatSessionActivity: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
