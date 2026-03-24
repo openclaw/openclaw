@@ -105,6 +105,30 @@ describe("plugin install plan helpers", () => {
     expect(result).toBeNull();
   });
 
+  it("resolves bundled plugin when catalog pluginId matches bare npmSpec despite scoped bundled npmSpec", () => {
+    const findBundledSource = vi
+      .fn()
+      .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
+        if (kind === "pluginId") {
+          return {
+            pluginId: "acpx",
+            localPath: "/tmp/extensions/acpx",
+            npmSpec: "@openclaw/acpx",
+          };
+        }
+        return undefined;
+      });
+
+    const result = resolveBundledInstallPlanForCatalogEntry({
+      pluginId: "acpx",
+      npmSpec: "acpx",
+      findBundledSource,
+    });
+
+    expect(result?.bundledSource.pluginId).toBe("acpx");
+    expect(result?.bundledSource.localPath).toBe("/tmp/extensions/acpx");
+  });
+
   it("uses npm-spec bundled fallback only for package-not-found", () => {
     const findBundledSource = vi.fn().mockReturnValue({
       pluginId: "voice-call",

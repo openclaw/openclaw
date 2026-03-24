@@ -38,7 +38,12 @@ export function resolveBundledInstallPlanForCatalogEntry(params: {
   if (bundledById?.pluginId !== pluginId) {
     return null;
   }
-  if (bundledById.npmSpec && bundledById.npmSpec !== npmSpec) {
+  // Only enforce npmSpec mismatch when the catalog npmSpec differs AND the input
+  // is an explicit npm specifier (scoped or versioned).  When the user passes a
+  // bare plugin id that matches the bundled pluginId, the npmSpec format
+  // difference (e.g. "@openclaw/acpx" vs "acpx") should not block resolution.
+  const isExplicitNpmSpec = npmSpec !== pluginId;
+  if (isExplicitNpmSpec && bundledById.npmSpec && bundledById.npmSpec !== npmSpec) {
     return null;
   }
 
