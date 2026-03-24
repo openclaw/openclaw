@@ -19,6 +19,10 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   registerSubagentRunMock: vi.fn(),
+  hookRunner: {
+    hasHooks: vi.fn(() => false),
+    runSubagentSpawning: vi.fn(),
+  },
 }));
 
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
@@ -68,7 +72,7 @@ vi.mock("./sandbox/runtime-status.js", () => ({
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  getGlobalHookRunner: () => hoisted.hookRunner,
 }));
 
 vi.mock("../utils/delivery-context.js", () => ({
@@ -144,7 +148,7 @@ async function loadFreshSubagentSpawnWorkspaceModuleForTest() {
     resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
   }));
   vi.doMock("../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: () => ({ hasHooks: () => false }),
+    getGlobalHookRunner: () => hoisted.hookRunner,
   }));
   vi.doMock("../utils/delivery-context.js", () => ({
     normalizeDeliveryContext: (value: unknown) => value,
@@ -196,6 +200,9 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     await loadFreshSubagentSpawnWorkspaceModuleForTest();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
+    hoisted.hookRunner.hasHooks.mockReset();
+    hoisted.hookRunner.hasHooks.mockImplementation(() => false);
+    hoisted.hookRunner.runSubagentSpawning.mockReset();
     hoisted.configOverride = createConfigOverride();
     setupGatewayMock();
   });
@@ -287,6 +294,74 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       key: result.childSessionKey,
       deleteTranscript: true,
       emitLifecycleHooks: false,
+    });
+  });
+
+  it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
+    hoisted.hookRunner.hasHooks.mockImplementation((name?: string) => name === "subagent_spawning");
+    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
+      status: "ok",
+      threadBindingReady: true,
+    });
+    hoisted.registerSubagentRunMock.mockImplementation(() => {
+      throw new Error("registry unavailable");
+    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: {
+        method?: string;
+        params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
+      }) => {
+        if (request.method === "sessions.patch") {
+          return { ok: true };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-thread-register-fail" };
+        }
+        if (request.method === "sessions.delete") {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "fail after register with thread binding",
+        thread: true,
+        mode: "session",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "acct-1",
+        agentTo: "user-1",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "Failed to register subagent run: registry unavailable",
+      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
+      runId: "run-thread-register-fail",
+    });
+
+    const deleteCall = hoisted.callGatewayMock.mock.calls.findLast(
+      ([request]) => (request as { method?: string }).method === "sessions.delete",
+    )?.[0] as
+      | {
+          params?: {
+            key?: string;
+            deleteTranscript?: boolean;
+            emitLifecycleHooks?: boolean;
+          };
+        }
+      | undefined;
+
+    expect(deleteCall?.params).toMatchObject({
+      key: result.childSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: true,
     });
   });
 });
