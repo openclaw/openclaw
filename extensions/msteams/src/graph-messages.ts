@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../runtime-api.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { deleteGraphRequest, fetchGraphJson, postGraphJson, resolveGraphToken } from "./graph.js";
 
 type GraphMessageBody = {
@@ -47,6 +48,34 @@ function stripTargetPrefix(raw: string): string {
   return trimmed;
 }
 
+/**
+ * Resolve a target to a Graph-compatible conversation ID.
+ * `user:<aadId>` targets are looked up in the conversation store to find the
+ * actual `19:xxx@thread.*` chat ID that Graph API requires.
+ * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
+ */
+async function resolveGraphConversationId(to: string): Promise<string> {
+  const trimmed = to.trim();
+  const isUserTarget = /^user:/i.test(trimmed);
+  const cleaned = stripTargetPrefix(trimmed);
+
+  // teamId/channelId or already a conversation ID (19:xxx) — use directly
+  if (!isUserTarget) {
+    return cleaned;
+  }
+
+  // user:<aadId> — look up the conversation store for the real chat ID
+  const store = createMSTeamsConversationStoreFs();
+  const found = await store.findByUserId(cleaned);
+  if (!found) {
+    throw new Error(
+      `No conversation found for user:${cleaned}. ` +
+        "The bot must receive a message from this user before Graph API operations work.",
+    );
+  }
+  return found.conversationId;
+}
+
 function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
@@ -91,7 +120,8 @@ export async function getMessageMSTeams(
   params: GetMessageMSTeamsParams,
 ): Promise<GetMessageMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const { basePath } = resolveConversationPath(params.to);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessage>({ token, path });
   return {
@@ -116,7 +146,8 @@ export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
   const token = await resolveGraphToken(params.cfg);
-  const conv = resolveConversationPath(params.to);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
     // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
@@ -153,7 +184,8 @@ export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const token = await resolveGraphToken(params.cfg);
-  const conv = resolveConversationPath(params.to);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const conv = resolveConversationPath(conversationId);
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
@@ -175,7 +207,8 @@ export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
 ): Promise<ListPinsMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const conv = resolveConversationPath(params.to);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const conv = resolveConversationPath(conversationId);
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
   const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
   const pins = (res.value ?? []).map((pin) => ({

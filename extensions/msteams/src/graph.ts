@@ -84,6 +84,7 @@ export async function postGraphJson<T>(params: {
   const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
     method: "POST",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${params.token}`,
       "Content-Type": "application/json",
     },
@@ -104,6 +105,7 @@ export async function deleteGraphRequest(params: { token: string; path: string }
   const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
     method: "DELETE",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${params.token}`,
     },
   });
