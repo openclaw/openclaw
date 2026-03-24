@@ -29,8 +29,20 @@ heartbeat cycle for completions of tasks it sent.
 
 ```javascript
 const bus = require("/path/to/bus_client.js");
-const tasks = await bus.getPendingTasks("my-agent");
-// process tasks...
+
+// When dispatching a task — publishTask must include requested_by in the payload
+// so the specialist can echo it back in the result:
+const taskId = await bus.publishTask("specialist-agent", "Analyze X", {
+  fromAgent: "my-agent", // dispatcher identity — echoed in result as requested_by
+});
+
+// When picking up a result — filter by requested_by, not from_agent
+const results = await bus.getRecentResults(20);
+for (const r of results) {
+  if (r.requested_by === "my-agent") {
+    // this result was from a task I dispatched
+  }
+}
 ```
 
 ### Step 2: Check agents:results for YOUR dispatched tasks (new)
@@ -39,11 +51,13 @@ const tasks = await bus.getPendingTasks("my-agent");
 const results = await bus.getRecentResults(20);
 
 for (const r of results) {
+  // Filter by requested_by — the dispatcher identity from publishTask.
+  // This is NOT the same as from_agent (which is the specialist's name).
   if (r.requested_by === "my-agent") {
     const alreadySeen = await bus.isResultSeen(r.task_id, "my-agent");
     if (!alreadySeen) {
       // Act on the result
-      console.log(`Result from ${r.from_agent}: ${r.status}`);
+      console.log(`Result from ${r.from_agent} for task ${r.task_id}: ${r.status}`);
       // → Notify the user, chain the next task, etc.
       await bus.markResultSeen(r.task_id, "my-agent");
     }
@@ -162,11 +176,27 @@ completed result to the user or chaining the next step.
 The fix was implemented, tested, and validated in that deployment before being
 contributed back to OpenClaw.
 
+## Field Lifecycle (Critical)
+
+The `requested_by` field is the thread that connects the task to its result across agents:
+
+```
+Dispatcher calls publishTask()
+  → writes requested_by=<dispatcher> to agents:tasks:{specialist}
+  → specialist receives task { requested_by: <dispatcher>, ... }
+  → specialist calls publishResult(..., requestedBy=task.from_agent)
+  → result written to agents:results { requested_by: <dispatcher>, ... }
+  → dispatcher heartbeat scans agents:results, filters requested_by === self
+```
+
+Without this chain, the dispatcher cannot distinguish "results from my tasks" from
+"results from other dispatchers' tasks" when multiple orchestrators share the same bus.
+
 ## Redis Key Reference
 
 | Key Pattern                     | Type   | Description                                      |
 | ------------------------------- | ------ | ------------------------------------------------ |
-| `agents:tasks:{name}`           | Stream | Agent's task inbox                               |
-| `agents:results`                | Stream | Global results stream — all agents write here    |
+| `agents:tasks:{name}`           | Stream | Agent's task inbox — includes `requested_by`     |
+| `agents:results`                | Stream | Global results stream — includes `requested_by`  |
 | `agents:results:seen:{task_id}` | Hash   | Tracks which agents have processed which results |
 | `agent:{name}:status`           | Hash   | Agent status: idle / busy / blocked              |
