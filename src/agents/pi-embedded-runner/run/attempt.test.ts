@@ -26,6 +26,7 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -320,6 +321,17 @@ describe("resolvePromptModeForSession", () => {
 });
 
 describe("shouldInjectHeartbeatPrompt", () => {
+  it("uses trigger policy defaults for non-cron triggers", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
+  });
+
+  it("uses trigger policy overrides for cron", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
+  });
+
   it("injects the heartbeat prompt for default-agent non-cron runs", () => {
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
