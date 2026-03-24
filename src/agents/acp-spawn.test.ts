@@ -1008,20 +1008,6 @@ describe("spawnAcpDirect", () => {
   it("implicitly streams mode=run ACP spawns for main (non-subagent) sessions", async () => {
     const handle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValueOnce(handle);
-    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
-      const store: Record<
-        string,
-        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
-      > = {};
-      return new Proxy(store, {
-        get(target, prop) {
-          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
-            return { sessionId: "sess-123", updatedAt: Date.now() };
-          }
-          return target[prop as keyof typeof target];
-        },
-      });
-    });
 
     const result = await spawnAcpDirect(
       {
