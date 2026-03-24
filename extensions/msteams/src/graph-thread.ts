@@ -56,12 +56,8 @@ export async function resolveTeamGroupId(
     const path = `/teams/${encodeURIComponent(conversationTeamId)}?$select=id`;
     const team = await fetchGraphJson<{ id?: string }>({ token, path });
     groupId = team.id ?? conversationTeamId;
-  } catch (err) {
-    console.warn(
-      `[msteams] resolveTeamGroupId: Graph /teams/${conversationTeamId} failed — ` +
-        `Team.ReadBasic.All permission may be missing. Falling back to raw conversationTeamId.`,
-      err,
-    );
+  } catch {
+    // Fallback to raw team ID when /teams endpoint is unavailable (missing Team.ReadBasic.All)
     groupId = conversationTeamId;
   }
 
@@ -109,7 +105,9 @@ export async function fetchThreadReplies(
   limit = 50,
 ): Promise<GraphThreadMessage[]> {
   const top = Math.min(Math.max(limit, 1), 50);
-  // Note: Graph API replies endpoint does not support $orderby, results are ascending by default.
+  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
+  // For threads with >50 replies, only the oldest 50 are returned. The most recent
+  // replies (often the most relevant context) may be truncated.
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
   return res.value ?? [];
