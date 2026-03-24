@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Mock loadConfig so the single-arg setActiveWebListener overload resolves
+// the configured default account as "work" (matching the regression test).
+// All other tests pass explicit accountIds and are unaffected by this mock.
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  loadConfig: () => ({
+    channels: { whatsapp: { accounts: { work: { enabled: true } }, defaultAccount: "work" } },
+  }),
+}));
+
 type ActiveListenerModule = typeof import("./active-listener.js");
 
 const activeListenerModuleUrl = new URL("./active-listener.ts", import.meta.url).href;
