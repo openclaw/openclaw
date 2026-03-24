@@ -15,8 +15,6 @@ import {
 } from "../infra/clawhub.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
-
-export const OPENCLAW_PLUGIN_API_VERSION = resolveRuntimeServiceVersion();
 export const CLAWHUB_INSTALL_ERROR_CODE = {
   INVALID_SPEC: "invalid_spec",
   PACKAGE_NOT_FOUND: "package_not_found",
@@ -175,17 +173,17 @@ function validateClawHubPluginPackage(params: {
   }
 
   const compatibility = params.compatibility;
+  const runtimeVersion = resolveRuntimeServiceVersion();
   if (
     compatibility?.pluginApiRange &&
-    !satisfiesPluginApiRange(OPENCLAW_PLUGIN_API_VERSION, compatibility.pluginApiRange)
+    !satisfiesPluginApiRange(runtimeVersion, compatibility.pluginApiRange)
   ) {
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${OPENCLAW_PLUGIN_API_VERSION}.`,
+      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${runtimeVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
     );
   }
 
-  const runtimeVersion = resolveRuntimeServiceVersion();
   if (
     compatibility?.minGatewayVersion &&
     !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
