@@ -9,7 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -100,74 +100,16 @@ async function applyLinkUnderstandingIfNeeded(params: {
   return true;
 }
 
-/**
- * Check whether a config object has unresolved SecretRef values in channel
- * token fields.  Channel monitors (Telegram, Slack, Discord) capture a config
- * snapshot at startup and pass it as `configOverride` into the reply pipeline.
- * If the snapshot was taken before secrets were resolved, it still contains raw
- * SecretRef objects.  Falling back to `loadConfig()` (which reads the runtime
- * snapshot with resolved secrets) prevents the embedded agent run from crashing
- * with "unresolved SecretRef" errors.
- *
- * See: https://github.com/openclaw/openclaw/issues/45838
- */
-function hasUnresolvedChannelSecrets(cfg: OpenClawConfig): boolean {
-  const check = (value: unknown): boolean => coerceSecretRef(value) !== null;
-  const telegram = cfg.channels?.telegram;
-  if (telegram) {
-    if (check(telegram.botToken)) {
-      return true;
-    }
-    for (const account of Object.values(telegram.accounts ?? {})) {
-      if (account && check((account as Record<string, unknown>).botToken)) {
-        return true;
-      }
-    }
-  }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  for (const channelKey of ["slack", "discord"] as const) {
-    const channel = channels?.[channelKey] as Record<string, unknown> | undefined;
-    if (!channel) {
-      continue;
-    }
-    for (const tokenKey of ["botToken", "appToken", "token", "userToken"]) {
-      if (check(channel[tokenKey])) {
-        return true;
-      }
-    }
-    const accounts = channel.accounts as Record<string, unknown> | undefined;
-    if (accounts) {
-      for (const account of Object.values(accounts)) {
-        if (account && typeof account === "object") {
-          for (const tokenKey of ["botToken", "appToken", "token", "userToken"]) {
-            if (check((account as Record<string, unknown>)[tokenKey])) {
-              return true;
-            }
-          }
-        }
-      }
-    }
-  }
-  return false;
-}
-
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  // When the caller-supplied config still contains unresolved SecretRef objects
-  // (for example a stale startup snapshot from a channel monitor), discard it
-  // and use the runtime snapshot via loadConfig() instead.
-  const hasStaleSecrets = configOverride != null && hasUnresolvedChannelSecrets(configOverride);
-  if (hasStaleSecrets) {
-    defaultRuntime.error?.(
-      "getReplyFromConfig: configOverride contains unresolved SecretRef — falling back to loadConfig()",
-    );
-  }
-  const safeOverride = hasStaleSecrets ? undefined : configOverride;
-  const cfg = safeOverride ?? loadConfig();
+  const cfg =
+    configOverride == null
+      ? loadConfig()
+      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
