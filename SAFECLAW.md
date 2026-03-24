@@ -80,6 +80,26 @@ OpenClaw Agent → AEP Safety Proxy → LLM API (OpenAI, Anthropic, etc.)
 
 The AEP proxy is a reverse proxy. It reads every request and response. Safe calls pass through with receipts. Dangerous calls are blocked before they reach the LLM.
 
+## Four Pillars of Accountability
+
+| Pillar                 | How SafeClaw Enables It                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| **Cost Tracking**      | AEP proxy counts tokens per call, per model. Dashboard shows cumulative spend.                    |
+| **Safety Enforcement** | PASS/FLAG/BLOCK on every call. PII, toxicity, agent threats blocked before reaching the LLM.      |
+| **Provenance**         | Set `AEP_TRACE_ID` to correlate calls across agent workflows. Citation chains track data sources. |
+| **Governance**         | Set `AEP_ENTITY` and `AEP_CLASSIFICATION` to tag calls with org identity and data sensitivity.    |
+
+### Enable Governance Headers
+
+```bash
+# In your .env or shell:
+export AEP_ENTITY="org:your-company"
+export AEP_CLASSIFICATION="confidential"
+export AEP_TRACE_ID="workflow-$(date +%s)"
+```
+
+These headers are injected into every LLM call. The AEP proxy parses them, strips them before forwarding to the LLM provider, and includes them in the dashboard and audit trail.
+
 ## Tested With
 
 - OpenClaw (this repo)
