@@ -8,7 +8,7 @@
         "id": "main", 
         "default": true, 
         "name": "Coordinator",
-        "subagents": { "allowAgents": ["researcher"] } 
+        "subagents": { "allowAgents": ["researcher", "trader"] } 
       },
       { 
         "id": "researcher", 
