@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -31,6 +31,9 @@ async function loadResolveBrowserExecutableForPlatform() {
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  let resolveBrowserExecutableForPlatform: Awaited<
+    ReturnType<typeof loadResolveBrowserExecutableForPlatform>
+  >;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -58,8 +61,11 @@ describe("browser default executable detection", () => {
     });
   }
 
+  beforeAll(async () => {
+    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
   });
@@ -67,7 +73,6 @@ describe("browser default executable detection", () => {
   it("prefers default Chromium browser on macOS", async () => {
     mockMacDefaultBrowser("com.google.Chrome", "/Applications/Google Chrome.app");
     mockChromeExecutableExists();
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
 
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
@@ -81,7 +86,6 @@ describe("browser default executable detection", () => {
   it("falls back when default browser is non-Chromium on macOS", async () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
 
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
