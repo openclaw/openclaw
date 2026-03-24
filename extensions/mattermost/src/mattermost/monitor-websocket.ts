@@ -27,8 +27,6 @@ export type MattermostWebSocketLike = {
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "pong", listener: () => void): void;
-  ping?: (data?: unknown, mask?: boolean, cb?: (err: Error) => void) => void;
   send(data: string): void;
   close(): void;
   terminate(): void;
@@ -56,9 +54,15 @@ type CreateMattermostConnectOnceOpts = {
   onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
-  pingIntervalMs?: number;
-  pongTimeoutMs?: number;
-  botUserId?: string;
+  /**
+   * Called periodically to check whether the bot account has been modified
+   * (e.g. disabled then re-enabled) since the WebSocket was opened.
+   * Returns the bot's current `update_at` timestamp.  When it differs from
+   * the value recorded at connect time, the connection is terminated so the
+   * reconnect loop can establish a fresh one.
+   */
+  getBotUpdateAt?: () => Promise<number>;
+  healthCheckIntervalMs?: number;
 };
 
 export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
@@ -107,8 +111,7 @@ export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
   const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
-  const pingIntervalMs = opts.pingIntervalMs ?? 30_000;
-  const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
+  const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 15_000;
   return async () => {
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
@@ -118,17 +121,13 @@ export function createMattermostConnectOnce(
       return await new Promise<void>((resolve, reject) => {
         let opened = false;
         let settled = false;
-        let pingTimer: ReturnType<typeof setInterval> | undefined;
-        let pongTimer: ReturnType<typeof setTimeout> | undefined;
+        let healthCheckTimer: ReturnType<typeof setInterval> | undefined;
+        let initialUpdateAt: number | undefined;
 
-        const clearHealthTimers = () => {
-          if (pingTimer !== undefined) {
-            clearInterval(pingTimer);
-            pingTimer = undefined;
-          }
-          if (pongTimer !== undefined) {
-            clearTimeout(pongTimer);
-            pongTimer = undefined;
+        const clearTimers = () => {
+          if (healthCheckTimer !== undefined) {
+            clearInterval(healthCheckTimer);
+            healthCheckTimer = undefined;
           }
         };
 
@@ -137,7 +136,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
-          clearHealthTimers();
+          clearTimers();
           resolve();
         };
         const rejectOnce = (error: Error) => {
@@ -145,7 +144,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
-          clearHealthTimers();
+          clearTimers();
           reject(error);
         };
 
@@ -164,25 +163,34 @@ export function createMattermostConnectOnce(
             }),
           );
 
-          // Start ping/pong health check
-          if (ws.ping) {
-            pingTimer = setInterval(() => {
-              if (!ws.ping) {
-                return;
-              }
-              ws.ping();
-              pongTimer = setTimeout(() => {
-                opts.runtime.error?.("mattermost websocket pong timeout — terminating connection");
-                ws.terminate();
-              }, pongTimeoutMs);
-            }, pingIntervalMs);
-
-            ws.on("pong", () => {
-              if (pongTimer !== undefined) {
-                clearTimeout(pongTimer);
-                pongTimer = undefined;
-              }
-            });
+          // Periodically check if the bot account was modified (e.g. disable/enable).
+          // After such a cycle the WebSocket silently stops delivering events even
+          // though the connection itself stays alive.  Comparing update_at detects
+          // this reliably regardless of how quickly the cycle happens.
+          if (opts.getBotUpdateAt) {
+            const getBotUpdateAt = opts.getBotUpdateAt;
+            // Capture initial update_at, then start polling.
+            getBotUpdateAt()
+              .then((ts) => {
+                initialUpdateAt = ts;
+                healthCheckTimer = setInterval(() => {
+                  getBotUpdateAt()
+                    .then((current) => {
+                      if (initialUpdateAt !== undefined && current !== initialUpdateAt) {
+                        opts.runtime.log?.(
+                          `mattermost: bot account updated (update_at changed: ${initialUpdateAt} → ${current}) — reconnecting`,
+                        );
+                        ws.terminate();
+                      }
+                    })
+                    .catch((err) => {
+                      opts.runtime.error?.(`mattermost: health check error: ${String(err)}`);
+                    });
+                }, healthCheckIntervalMs);
+              })
+              .catch((err) => {
+                opts.runtime.error?.(`mattermost: failed to get initial update_at: ${String(err)}`);
+              });
           }
         });
 
@@ -193,34 +201,6 @@ export function createMattermostConnectOnce(
             payload = JSON.parse(raw) as MattermostEventPayload;
           } catch {
             return;
-          }
-
-          // Detect bot deactivation via user_updated event
-          if (payload.event === "user_updated" && opts.botUserId) {
-            try {
-              const userData =
-                typeof payload.data === "object" && payload.data !== null
-                  ? (payload.data as Record<string, unknown>)
-                  : null;
-              const userObj =
-                userData && typeof userData.user === "object" && userData.user !== null
-                  ? (userData.user as Record<string, unknown>)
-                  : null;
-              if (
-                userObj &&
-                userObj.id === opts.botUserId &&
-                typeof userObj.delete_at === "number" &&
-                userObj.delete_at !== 0
-              ) {
-                opts.runtime.error?.(
-                  "mattermost bot deactivated (user_updated delete_at !== 0) — terminating connection",
-                );
-                ws.terminate();
-                return;
-              }
-            } catch {
-              // Ignore parse errors for user_updated
-            }
           }
 
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
@@ -250,7 +230,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
-          clearHealthTimers();
+          clearTimers();
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
