@@ -328,24 +328,24 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_default");
   });
 
-  it("surfaces unresolved SecretRef errors in account resolution", () => {
-    expect(() =>
-      resolveFeishuAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              accounts: {
-                main: {
-                  appId: "cli_123",
-                  appSecret: { source: "file", provider: "default", id: "path/to/secret" },
-                } as never,
-              },
+  it("treats unresolved SecretRef as not configured in account resolution", () => {
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                appId: "cli_123",
+                appSecret: { source: "file", provider: "default", id: "path/to/secret" },
+              } as never,
             },
           },
-        } as never,
-        accountId: "main",
-      }),
-    ).toThrow(/unresolved SecretRef/i);
+        },
+      } as never,
+      accountId: "main",
+    });
+    expect(account.configured).toBe(false);
+    expect(account.appSecret).toBeUndefined();
   });
 
   it("does not throw when account name is non-string", () => {
