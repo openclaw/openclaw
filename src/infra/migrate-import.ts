@@ -459,12 +459,27 @@ export async function importMigrateArchive(
   // Extract to a temporary directory.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-import-"));
   try {
+    const blockedTarEntryTypes = new Set([
+      "SymbolicLink",
+      "Link",
+      "BlockDevice",
+      "CharacterDevice",
+      "FIFO",
+      "Socket",
+    ]);
     await tar.x({
       file: archivePath,
       cwd: tempDir,
       gzip: true,
       strip: 0,
       preservePaths: false,
+      onReadEntry(entry) {
+        if (blockedTarEntryTypes.has(entry.type)) {
+          const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
+          const emitter = this as unknown as { abort?: (error: Error) => void };
+          emitter.abort?.(error);
+        }
+      },
     });
 
     const resolvedTempDir = await fs.realpath(tempDir);
