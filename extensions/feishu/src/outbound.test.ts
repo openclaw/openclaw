@@ -534,4 +534,44 @@ describe("feishuOutbound.sendPayload", () => {
     );
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
   });
+
+  it("short-circuits without sending when payload has no text, media, or card", async () => {
+    const result = await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: {},
+    } as any);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "" }));
+  });
+
+  it("prefers mediaUrls over legacy mediaUrl when both are present", async () => {
+    await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: {
+        mediaUrl: "https://example.com/legacy.png",
+        mediaUrls: ["https://example.com/new1.png", "https://example.com/new2.png"],
+      },
+    } as any);
+
+    // Should send the two mediaUrls entries, not the legacy mediaUrl
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/new1.png" }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/new2.png" }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/legacy.png" }),
+    );
+  });
 });

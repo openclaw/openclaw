@@ -122,17 +122,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
     // Fallback: send text + media via standard outbound paths.
     // Collect all media URLs to handle multi-attachment payloads.
+    // mediaUrls is authoritative; mediaUrl is a legacy fallback only used when mediaUrls is absent.
     const mediaUrls: string[] = [];
-    if (payload.mediaUrl) {
-      mediaUrls.push(payload.mediaUrl);
-    }
-    if (payload.mediaUrls) {
+    if (payload.mediaUrls && payload.mediaUrls.length > 0) {
       for (const url of payload.mediaUrls) {
-        // Avoid duplicating the single mediaUrl if it also appears in mediaUrls
-        if (url && !mediaUrls.includes(url)) {
-          mediaUrls.push(url);
-        }
+        if (url) mediaUrls.push(url);
       }
+    } else if (payload.mediaUrl) {
+      mediaUrls.push(payload.mediaUrl);
     }
 
     if (mediaUrls.length > 0) {
@@ -174,13 +171,16 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return attachChannelToResult("feishu", lastResult!);
     }
 
-    // Text-only payload.
+    // Text-only payload — short-circuit if there is nothing to send.
+    if (!text?.trim()) {
+      return attachChannelToResult("feishu", { messageId: "" });
+    }
     return attachChannelToResult(
       "feishu",
       await sendOutboundText({
         cfg,
         to,
-        text: text || "",
+        text,
         accountId: accountId ?? undefined,
         replyToMessageId,
       }),
