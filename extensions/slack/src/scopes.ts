@@ -1,6 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
+import { formatSlackError } from "./errors.js";
 
 export type SlackScopesResult = {
   ok: boolean;
@@ -84,7 +85,7 @@ async function callSlack(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatSlackError(err),
     };
   }
 }

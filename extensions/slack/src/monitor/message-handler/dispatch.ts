@@ -79,6 +79,8 @@ function shouldUseStreaming(params: {
   return true;
 }
 
+import { formatSlackError } from "../../errors.js";
+
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
@@ -293,7 +295,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     } catch (err) {
       runtime.error?.(
-        danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
+        danger(`slack-stream: streaming API call failed: ${formatSlackError(err)}, falling back`),
       );
       streamFailed = true;
       await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
@@ -341,7 +343,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return;
         } catch (err) {
           logVerbose(
-            `slack: preview final edit failed; falling back to standard send (${String(err)})`,
+            `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
           );
         }
       } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
@@ -357,7 +359,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             });
           }
         } catch (err) {
-          logVerbose(`slack: status_final completion update failed (${String(err)})`);
+          logVerbose(`slack: status_final completion update failed (${formatSlackError(err)})`);
         }
       } else if (reply.hasMedia) {
         await draftStream?.clear();
@@ -367,7 +369,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally(payload);
     },
     onError: (err, info) => {
-      runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
+      runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
       replyPipeline.typingCallbacks?.onIdle?.();
     },
   });
@@ -478,7 +480,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(err)}`));
     }
   }
 

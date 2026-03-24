@@ -13,6 +13,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "./auth.js";
@@ -628,7 +629,9 @@ export async function registerSlackMonitorSlashCommands(params: {
           ...replyPipeline,
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
-            runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
+            runtime.error?.(
+              danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
+            );
           },
         },
         replyOptions: {

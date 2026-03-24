@@ -12,6 +12,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
@@ -282,7 +283,7 @@ export function createSlackMonitorContext(params: {
         await client.apiCall("assistant.threads.setStatus", payload);
       }
     } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
+      logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
     }
   };
 

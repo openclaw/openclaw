@@ -32,6 +32,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { formatSlackError } from "../../errors.js";
 import { sendMessageSlack } from "../../send.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -563,7 +564,9 @@ export async function prepareSlackMessage(params: {
         }).then(
           () => true,
           (err) => {
-            logVerbose(`slack react failed for channel ${message.channel}: ${String(err)}`);
+            logVerbose(
+              `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
+            );
             return false;
           },
         )
