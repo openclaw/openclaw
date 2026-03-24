@@ -95,6 +95,16 @@ export function compareOpenClawVersions(
   return 0;
 }
 
+export function shouldWarnOnTouchedVersion(
+  current: string | null | undefined,
+  touched: string | null | undefined,
+): boolean {
+  if (isSameOpenClawStableFamily(current, touched)) {
+    return false;
+  }
+  const cmp = compareOpenClawVersions(current, touched);
+  return cmp !== null && cmp < 0;
+}
 function normalizeLegacyDotBetaVersion(version: string): string {
   const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(version);
   if (!dotBetaMatch) {

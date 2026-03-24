@@ -1,51 +1,65 @@
 "use strict";
 
-function pluginSdkStub() {
-  return stub;
-}
+let stub;
 
-Object.defineProperty(pluginSdkStub, "__esModule", {
-  configurable: true,
-  enumerable: false,
-  value: true,
-  writable: false,
-});
-
-Object.defineProperty(pluginSdkStub, "default", {
-  configurable: true,
-  enumerable: false,
-  value: pluginSdkStub,
-  writable: false,
-});
-
-const stub = new Proxy(pluginSdkStub, {
-  apply() {
+stub = new Proxy(
+  function pluginSdkStub() {
     return stub;
   },
-  construct() {
-    return stub;
-  },
-  get(target, prop, receiver) {
-    if (prop === "then") {
+  {
+    apply() {
+      return stub;
+    },
+    construct() {
+      return stub;
+    },
+    get(_target, prop) {
+      if (prop === "__esModule") {
+        return true;
+      }
+      if (prop === "default") {
+        return stub;
+      }
+      if (prop === "then") {
+        return undefined;
+      }
+      if (prop === Symbol.toPrimitive) {
+        return () => "";
+      }
+      if (prop === "toJSON") {
+        return () => undefined;
+      }
+      if (prop === "toString") {
+        return () => "";
+      }
+      if (prop === "valueOf") {
+        return () => 0;
+      }
+      return stub;
+    },
+    ownKeys() {
+      return [];
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (prop === "__esModule") {
+        return {
+          configurable: true,
+          enumerable: false,
+          value: true,
+          writable: false,
+        };
+      }
+      if (prop === "default") {
+        return {
+          configurable: true,
+          enumerable: false,
+          value: stub,
+          writable: false,
+        };
+      }
       return undefined;
-    }
-    if (prop === Symbol.toPrimitive) {
-      return () => "";
-    }
-    if (prop === "toJSON") {
-      return () => undefined;
-    }
-    if (prop === "toString") {
-      return () => "";
-    }
-    if (prop === "valueOf") {
-      return () => 0;
-    }
-    if (Reflect.has(target, prop)) {
-      return Reflect.get(target, prop, receiver);
-    }
-    return stub;
+    },
   },
-});
+);
 
 module.exports = stub;

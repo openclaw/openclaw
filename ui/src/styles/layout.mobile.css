@@ -522,13 +522,13 @@
   }
 
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn-ghost {
+  .agent-chat__toolbar .btn--ghost {
     width: 28px;
     height: 28px;
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn-ghost svg {
+  .agent-chat__toolbar .btn--ghost svg {
     width: 14px;
     height: 14px;
   }

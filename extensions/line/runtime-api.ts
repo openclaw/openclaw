@@ -1,16 +1,37 @@
 // Private runtime barrel for the bundled LINE extension.
 // Keep this barrel thin and aligned with the local extension surface.
 
-export type { ChannelPlugin, OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
+export type {
+  ChannelPlugin,
+  OpenClawConfig,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/core";
+export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
 export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
+export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "openclaw/plugin-sdk/status-helpers";
 export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "openclaw/plugin-sdk/setup";
+// Pre-export all symbols that src/plugin-sdk/line-runtime.ts re-exports from this
+// extension's source files. These named exports register the symbols in jiti's
+// _exportNames map at transform time. The star re-export below then skips them
+// via the hasOwnProperty guard, preventing a second Object.defineProperty call
+// with configurable:false that would throw TypeError: Cannot redefine property.
+//
+// If src/plugin-sdk/line-runtime.ts gains new re-exports from extension source
+// files, add matching named exports here to keep the two files in sync.
+// See: src/plugin-sdk/line-runtime.ts for the authoritative list.
 export {
   firstDefined,
   isSenderAllowed,
@@ -19,6 +40,7 @@ export {
 } from "./src/bot-access.js";
 export { downloadLineMedia } from "./src/download.js";
 export { probeLineBot } from "./src/probe.js";
+export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
 export {
   createQuickReplyItems,
   pushFlexMessage,
@@ -29,14 +51,7 @@ export {
   pushTextMessageWithQuickReplies,
   sendMessageLine,
 } from "./src/send.js";
-export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
 export * from "openclaw/plugin-sdk/line-runtime";
-export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "./src/setup-runtime-api.js";
-export {
-  formatDocsLink,
-  setSetupChannelEnabled,
-  splitSetupEntries,
-} from "./src/setup-runtime-api.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";
