@@ -846,7 +846,7 @@ export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
-  kind?: "tool" | "block" | "final";
+  kind?: "tool" | "block" | "status" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {

@@ -61,7 +61,10 @@ const hasRenderableMedia = (payload: ReplyPayload): boolean =>
   Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
 export function createBlockReplyDeliveryHandler(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<boolean | void> | boolean | void;
   currentMessageId?: string;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
@@ -127,9 +130,11 @@ export function createBlockReplyDeliveryHandler(params: {
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
-      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply(blockPayload);
+      // Only track successful direct sends so declined deliveries still fall back to final output.
+      const didSend = (await params.onBlockReply(blockPayload)) !== false;
+      if (didSend) {
+        params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      }
     }
     // When streaming is disabled entirely, blocks are accumulated in final text instead.
   };

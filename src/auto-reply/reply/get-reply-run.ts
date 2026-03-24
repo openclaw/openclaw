@@ -17,6 +17,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { logInfo } from "../../logger.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -43,9 +44,12 @@ import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./i
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
+import { arbitrateQueueDecision } from "./queue/arbitration.js";
+import { resolveQueueModelArbitrator } from "./queue/model-arbitrator.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import { translateLegacyQueueDecision } from "./supervisor/translate.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -252,9 +256,7 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  // Always include persistent group chat context (name, participants, reply guidance)
   const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
-  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
         cfg,
@@ -275,7 +277,6 @@ export async function runPreparedReply(
     groupSystemPrompt,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
@@ -317,8 +318,7 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // When the user sends media without text, provide a minimal body so the agent
-  // run proceeds and the image/document is injected by the embedded runner.
+
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
     : "[User sent media without caption]";
@@ -333,9 +333,6 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
-  // low|medium|high shorthand the user typed.
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
@@ -344,10 +341,7 @@ export async function runPreparedReply(
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
   }
-  // Drain system events once, then prepend to each path's body independently.
-  // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
-  // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
-  // post-think-hint-strip) so the run sees the cleaned-up body.
+
   const eventsBlock = await drainFormattedSystemEvents({
     cfg,
     sessionKey,
@@ -384,7 +378,7 @@ export async function runPreparedReply(
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
-  let prefixedCommandBody = mediaNote
+  const prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
   if (!resolvedThinkLevel) {
@@ -424,19 +418,30 @@ export async function runPreparedReply(
       defaultModel,
     });
   }
+
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
     sessionIdFinal,
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
-  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
-  const resolvedQueue = resolveQueueSettings({
+  const hasExplicitQueueMode =
+    perMessageQueueMode !== undefined ||
+    sessionEntry?.queueMode !== undefined ||
+    (() => {
+      const channelKey = sessionCtx.Provider?.trim().toLowerCase();
+      const queueCfg = cfg.messages?.queue;
+      const providerModeRaw =
+        channelKey && queueCfg?.byChannel
+          ? (queueCfg.byChannel as Record<string, string | undefined>)[channelKey]
+          : undefined;
+      return typeof providerModeRaw === "string" || typeof queueCfg?.mode === "string";
+    })();
+  let resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
     sessionEntry,
@@ -445,14 +450,56 @@ export async function runPreparedReply(
   });
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
+  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+  const configuredQueueMode = resolvedQueue.mode;
+  const modelArbitrator = resolveQueueModelArbitrator(cfg);
+  const arbitration = await arbitrateQueueDecision({
+    configuredMode: configuredQueueMode,
+    isActive,
+    isStreaming,
+    hasExplicitMode: hasExplicitQueueMode,
+    body: baseBodyTrimmedRaw,
+    modelArbitrator,
+  });
+  resolvedQueue = {
+    ...resolvedQueue,
+    mode: arbitration.finalDecision,
+  };
+  if (!hasExplicitQueueMode && isActive) {
+    const preview = baseBodyTrimmedRaw.replace(/\s+/g, " ").slice(0, 80);
+    const modelResultLabel =
+      arbitration.ruleResult === "defer"
+        ? arbitration.modelResult
+          ? arbitration.modelResult
+          : modelArbitrator
+            ? "no-decision"
+            : "disabled"
+        : "n/a";
+    const modelLatencyLabel =
+      arbitration.ruleResult === "defer" ? (arbitration.modelLatencyMs ?? 0) : "n/a";
+    logInfo(
+      `reply: Queue arbitration: session=${sessionKey ?? sessionIdFinal} active=${isActive} streaming=${isStreaming} lane=${laneSize} configured=${configuredQueueMode} rule_result=${arbitration.ruleResult} model_result=${modelResultLabel} model_latency_ms=${modelLatencyLabel} final_decision=${resolvedQueue.mode} body="${preview}"`,
+    );
+  }
+  if (opts?.onLatencyStage) {
+    const translated = translateLegacyQueueDecision(resolvedQueue.mode);
+    opts.onLatencyStage({
+      stage: "queue_arbitrated",
+      queueModeConfigured: configuredQueueMode,
+      queueModeFinal: resolvedQueue.mode,
+      supervisorAction: translated.action,
+      supervisorRelation: translated.relation,
+      durationMs: 0,
+    });
+  }
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+
   const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
-  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -474,7 +521,6 @@ export async function runPreparedReply(
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
-    // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: ctx.AccountId,
@@ -487,9 +533,6 @@ export async function runPreparedReply(
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
@@ -543,6 +586,7 @@ export async function runPreparedReply(
     shouldFollowup,
     isActive,
     isStreaming,
+    laneSize,
     opts,
     typing,
     sessionEntry,

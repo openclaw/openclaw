@@ -4,13 +4,14 @@ import { Type } from "@sinclair/typebox";
 import { type ExecHost } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
-import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { applyPathAppend, findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
+export { applyPathAppend } from "../infra/path-prepend.js";
 export {
   normalizeExecAsk,
   normalizeExecHost,
@@ -88,6 +89,7 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 );
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+export const HOST_SYSTEM_PATH_BASELINE = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
@@ -197,6 +199,12 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (merged) {
     env[pathKey] = merged;
   }
+}
+
+export function ensureHostSystemPath(env: Record<string, string>) {
+  applyPathAppend(env, HOST_SYSTEM_PATH_BASELINE.split(path.delimiter).filter(Boolean), {
+    requireExisting: false,
+  });
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
@@ -523,12 +531,14 @@ export async function runExecProcess(opts: {
       const durationMs = Date.now() - startedAt;
       const isNormalExit = exit.reason === "exit";
       const exitCode = exit.exitCode ?? 0;
+      // Any non-zero exit should surface as a failed tool call so the agent
+      // cannot mistake a failed shell/API attempt for a completed command.
+      const exitedSuccessfully = isNormalExit && exitCode === 0;
       // Shell exit codes 126 (not executable) and 127 (command not found) are
-      // unrecoverable infrastructure failures that should surface as real errors
-      // rather than silently completing — e.g. `python: command not found`.
+      // still called out explicitly because they usually indicate environment
+      // or invocation mistakes rather than command-level business failure.
       const isShellFailure = exitCode === 126 || exitCode === 127;
-      const status: "completed" | "failed" =
-        isNormalExit && !isShellFailure ? "completed" : "failed";
+      const status: "completed" | "failed" = exitedSuccessfully ? "completed" : "failed";
 
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
@@ -551,15 +561,17 @@ export async function runExecProcess(opts: {
         ? exitCode === 127
           ? "Command not found"
           : "Command not executable (permission denied)"
-        : exit.reason === "overall-timeout"
-          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
-            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
-          : exit.reason === "no-output-timeout"
-            ? "Command timed out waiting for output"
-            : exit.exitSignal != null
-              ? `Command aborted by signal ${exit.exitSignal}`
-              : "Command aborted before exit code was captured";
+        : isNormalExit
+          ? `Command exited with code ${exitCode}`
+          : exit.reason === "overall-timeout"
+            ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
+              ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+              : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
+            : exit.reason === "no-output-timeout"
+              ? "Command timed out waiting for output"
+              : exit.exitSignal != null
+                ? `Command aborted by signal ${exit.exitSignal}`
+                : "Command aborted before exit code was captured";
       return {
         status: "failed",
         exitCode: exit.exitCode,

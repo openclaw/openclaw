@@ -90,6 +90,8 @@ export type SessionEntry = {
   subagentControlScope?: "children" | "none";
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Monotonic reply generation for stale reply suppression. */
+  replyGeneration?: number;
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying

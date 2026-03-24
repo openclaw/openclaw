@@ -17,9 +17,29 @@ import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js"
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
-/** Detect if text contains markdown elements that benefit from card rendering */
+const FEISHU_CARD_LONG_TEXT_THRESHOLD = 900;
+
+/** Prefer card rendering for content users expect to read as one composed reply. */
 function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const hasCodeBlock = /```[\s\S]*?```/.test(normalized);
+  const hasMarkdownTable = /\|.+\|[\r\n]+\|[-:| ]+\|/.test(normalized);
+  const hasHeading = /^(#{1,6}\s+.+|第[一二三四五六七八九十0-9]+章[:：]?.+)$/m.test(normalized);
+  const hasList = /^(\s*[-*]\s+.+|\s*\d+\.\s+.+)$/m.test(normalized);
+  const hasMultipleParagraphs = /\n\s*\n/.test(normalized);
+  const isLongForm = normalized.length >= FEISHU_CARD_LONG_TEXT_THRESHOLD;
+
+  return (
+    hasCodeBlock ||
+    hasMarkdownTable ||
+    hasHeading ||
+    hasList ||
+    (isLongForm && hasMultipleParagraphs)
+  );
 }
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
@@ -259,6 +279,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
+  const sendCardWithFallback = async (text: string) => {
+    try {
+      await sendMarkdownCardFeishu({
+        cfg,
+        to: chatId,
+        text,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        mentions: mentionTargets,
+        accountId,
+      });
+      deliveredFinalTexts.add(text);
+      return;
+    } catch (error) {
+      params.runtime.error?.(
+        `feishu[${account.accountId}] single-card delivery failed, falling back to chunked cards: ${String(error)}`,
+      );
+    }
+    await sendChunkedTextReply({ text, useCard: true, infoKind: "final" });
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -293,8 +334,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
+            // Drop internal block chunks unless we can safely reuse them as
+            // fallback stream content for card rendering.
             if (!(streamingEnabled && useCard)) {
               return;
             }
@@ -314,7 +355,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (streaming?.isActive()) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
+              // Mirror block text so onIdle close can still deliver the last snapshot.
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
@@ -339,7 +380,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (useCard) {
-            await sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind });
+            if (info?.kind === "final") {
+              await sendCardWithFallback(text);
+            } else {
+              await sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind });
+            }
           } else {
             await sendChunkedTextReply({ text, useCard: false, infoKind: info?.kind });
           }
@@ -373,6 +418,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks.onCleanup?.();
       },
     });
+
+  if (dispatcher.setDeliveryGuard) {
+    const baseSetDeliveryGuard = dispatcher.setDeliveryGuard.bind(dispatcher);
+    dispatcher.setDeliveryGuard = (guard) => {
+      if (!guard) {
+        baseSetDeliveryGuard(undefined);
+        return;
+      }
+      baseSetDeliveryGuard(() => {
+        const allowed = guard();
+        if (!allowed) {
+          void closeStreaming();
+        }
+        return allowed;
+      });
+    };
+  }
+
+  dispatcher.notifySuperseded = () => {
+    void closeStreaming();
+  };
 
   return {
     dispatcher,

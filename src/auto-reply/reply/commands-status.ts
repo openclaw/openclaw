@@ -22,11 +22,12 @@ import {
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
-import { buildStatusMessage } from "../status.js";
+import { buildQueueStatus, buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
+import { resolveQueueArbitratorProvider } from "./queue/model-arbitrator.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
 export async function buildStatusReply(params: {
@@ -199,14 +200,15 @@ export async function buildStatusReply(params: {
     modelAuth: selectedModelAuth,
     activeModelAuth,
     usageLine: usageLine ?? undefined,
-    queue: {
+    queue: buildQueueStatus({
       mode: queueSettings.mode,
       depth: queueDepth,
       debounceMs: queueSettings.debounceMs,
       cap: queueSettings.cap,
       dropPolicy: queueSettings.dropPolicy,
+      arbitratorProvider: resolveQueueArbitratorProvider(cfg),
       showDetails: queueOverrides,
-    },
+    }),
     subagentsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,

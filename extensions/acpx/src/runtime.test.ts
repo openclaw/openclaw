@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -152,6 +153,22 @@ describe("AcpxRuntime", () => {
     const resumeFlagIndex = resumeArgs.indexOf("--resume-session");
     expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
+  });
+
+  it("passes the bundled plugin-local codex-acp command to acpx by default", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:local-command",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(ensureArgs[agentFlagIndex + 1]).toBe(ACPX_CODEX_ACP_BUNDLED_BIN);
   });
 
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
@@ -464,6 +481,63 @@ describe("AcpxRuntime", () => {
         };
         expect(payload.targetCommand).toContain("custom-codex-acp");
       }
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("keeps MCP proxying for unresolved agent ids when MCP servers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+        },
+      },
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:custom-agent:acp:mcp",
+      agent: "custom-agent",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+    expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+    const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+    expect(payloadMatch?.[1]).toBeDefined();
+    const payload = JSON.parse(
+      Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+    ) as {
+      targetCommand: string;
+    };
+    expect(payload.targetCommand).toBe("custom-agent");
+  });
+
+  it("quotes plugin-local agent command paths that include spaces", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "/tmp/dir with spaces/codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:quoted-command",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const agentFlagIndex = ensureArgs.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(ensureArgs[agentFlagIndex + 1]).toBe('"/tmp/dir with spaces/codex-acp"');
     } finally {
       delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
     }

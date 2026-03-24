@@ -18,6 +18,7 @@ const {
   mockDownloadMessageResourceFeishu,
   mockCreateFeishuClient,
   mockResolveAgentRoute,
+  mockLoadConfig,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -40,6 +41,7 @@ const {
     mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
+  mockLoadConfig: vi.fn(),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -139,6 +141,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLoadConfig.mockImplementation(() => ({}) as ClawdbotConfig);
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -160,6 +163,9 @@ describe("handleFeishuMessage command authorization", () => {
       createPluginRuntimeMock({
         system: {
           enqueueSystemEvent: mockEnqueueSystemEvent,
+        },
+        config: {
+          loadConfig: mockLoadConfig as never,
         },
         channel: {
           routing: {
@@ -1739,6 +1745,82 @@ describe("handleFeishuMessage command authorization", () => {
 
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads config before dispatch so agent runs use fresh defaults", async () => {
+    const staleCfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "aliyun/qwen3.5-plus",
+          },
+        },
+      },
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+    const freshCfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "minimax/MiniMax-M2.5-highspeed",
+          },
+        },
+      },
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+    mockLoadConfig.mockReturnValue(freshCfg);
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-refresh",
+        },
+      },
+      message: {
+        message_id: "msg-refresh-config",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "/reset" }),
+      },
+    };
+
+    await dispatchMessage({ cfg: staleCfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              model: expect.objectContaining({
+                primary: "minimax/MiniMax-M2.5-highspeed",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              model: expect.objectContaining({
+                primary: "minimax/MiniMax-M2.5-highspeed",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 });
 

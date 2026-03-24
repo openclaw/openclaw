@@ -7,6 +7,8 @@ import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import * as skillsModule from "../agents/skills.js";
+import * as skillsRefreshModule from "../agents/skills/refresh.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -40,6 +42,7 @@ vi.mock("../agents/skills.js", () => ({
 }));
 
 vi.mock("../agents/skills/refresh.js", () => ({
+  ensureSkillsWatcher: vi.fn(),
   getSkillsSnapshotVersion: vi.fn(() => 0),
 }));
 
@@ -260,6 +263,11 @@ function createTelegramOutboundPlugin() {
 beforeEach(() => {
   vi.clearAllMocks();
   configModule.clearRuntimeConfigSnapshot();
+  vi
+    .mocked(skillsModule.buildWorkspaceSkillSnapshot)
+    .mockImplementation(() => undefined as never);
+  vi.mocked(skillsRefreshModule.ensureSkillsWatcher).mockImplementation(() => {});
+  vi.mocked(skillsRefreshModule.getSkillsSnapshotVersion).mockReturnValue(0);
   runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -434,6 +442,64 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("refreshes session skills snapshot when watcher version advances", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const workspace = path.join(home, "openclaw");
+      const sessionKey = "agent:main:main";
+      const staleSnapshot = {
+        version: 1,
+        prompt: "OLD",
+        skills: [],
+        resolvedSkills: [],
+      };
+      const refreshedSnapshot = {
+        version: 2,
+        prompt: "NEW",
+        skills: [
+          {
+            id: "multi-search-engine",
+            name: "multi-search-engine",
+            description: "Search with installed skill",
+            location: path.join(workspace, "skills", "multi-search-engine", "SKILL.md"),
+          },
+        ],
+        resolvedSkills: [],
+      };
+
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: staleSnapshot,
+        },
+      });
+      mockConfig(home, store);
+      vi.mocked(skillsRefreshModule.getSkillsSnapshotVersion).mockReturnValue(2);
+      vi.mocked(skillsModule.buildWorkspaceSkillSnapshot).mockReturnValue(
+        refreshedSnapshot as never,
+      );
+
+      await agentCommand({ message: "use the skill", sessionKey }, runtime);
+
+      expect(skillsRefreshModule.ensureSkillsWatcher).toHaveBeenCalledWith({
+        workspaceDir: workspace,
+        config: expect.any(Object),
+      });
+      expect(skillsModule.buildWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        workspace,
+        expect.objectContaining({
+          snapshotVersion: 2,
+        }),
+      );
+      expect(getLastEmbeddedCall()?.skillsSnapshot).toEqual(refreshedSnapshot);
+
+      const saved = readSessionStore<{ skillsSnapshot?: typeof refreshedSnapshot }>(store);
+      expect(saved[sessionKey]?.skillsSnapshot).toEqual(refreshedSnapshot);
     });
   });
 

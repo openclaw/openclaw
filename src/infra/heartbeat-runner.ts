@@ -71,7 +71,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import {
+  drainSystemEventEntries,
+  peekSystemEventEntries,
+  requeueSystemEventEntries,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -579,10 +583,11 @@ function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
+  pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   canRelayToUser: boolean;
   workspaceDir: string;
 }): HeartbeatPromptResolution {
-  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const pendingEventEntries = params.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries.map((event) => event.text)
     : [];
@@ -658,6 +663,9 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+  const consumedEventEntries = preflight.shouldInspectPendingEvents
+    ? drainSystemEventEntries(sessionKey)
+    : [];
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -695,6 +703,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     heartbeat,
     preflight,
+    pendingEventEntries: consumedEventEntries,
     canRelayToUser,
     workspaceDir,
   });
@@ -929,6 +938,9 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        if (consumedEventEntries.length > 0) {
+          requeueSystemEventEntries(sessionKey, consumedEventEntries);
+        }
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -993,6 +1005,9 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
+    if (consumedEventEntries.length > 0) {
+      requeueSystemEventEntries(sessionKey, consumedEventEntries);
+    }
     const reason = formatErrorMessage(err);
     emitHeartbeatEvent({
       status: "failed",

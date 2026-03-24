@@ -39,7 +39,7 @@ import {
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -873,8 +873,13 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
+    ensureSkillsWatcher({ workspaceDir, config: cfg });
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const shouldRefreshSkillsSnapshot =
+      skillsSnapshotVersion > 0 &&
+      (sessionEntry?.skillsSnapshot?.version ?? 0) < skillsSnapshotVersion;
+    const needsSkillsSnapshot =
+      isNewSession || !sessionEntry?.skillsSnapshot || shouldRefreshSkillsSnapshot;
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {

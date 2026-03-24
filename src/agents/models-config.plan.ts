@@ -59,12 +59,23 @@ function resolveExplicitBaseUrlProviders(
   );
 }
 
+function resolveExplicitProviders(
+  providers: OpenClawConfig["models"] | undefined,
+): ReadonlySet<string> {
+  return new Set(
+    Object.keys(providers?.providers ?? {})
+      .map((key) => key.trim())
+      .filter(Boolean),
+  );
+}
+
 async function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
+  explicitProviders: ReadonlySet<string>;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -82,6 +93,7 @@ async function resolveProvidersForMode(params: {
     existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
     explicitBaseUrlProviders: params.explicitBaseUrlProviders,
+    explicitProviders: params.explicitProviders,
   });
 }
 
@@ -118,6 +130,7 @@ export async function planOpenClawModelsJson(params: {
     providers: normalizedProviders,
     secretRefManagedProviders,
     explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
+    explicitProviders: resolveExplicitProviders(cfg.models),
   });
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({

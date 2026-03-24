@@ -263,6 +263,9 @@ importers:
 
   extensions/acpx:
     dependencies:
+      '@zed-industries/codex-acp':
+        specifier: 0.9.5
+        version: 0.9.5
       acpx:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
@@ -454,6 +457,12 @@ importers:
   extensions/ollama: {}
 
   extensions/open-prose: {}
+
+  extensions/openviking:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.3.11'
+        version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/sglang: {}
 
@@ -3585,6 +3594,46 @@ packages:
     resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
+  '@zed-industries/codex-acp-darwin-arm64@0.9.5':
+    resolution: {integrity: sha512-VZsC/VOxY2/vCXV3/k09bKg1gQzaRnVoYoPgBF8JbZbPLLBiJZVCTGq5uND9wH8O3FAoIAEDm9icFsIL1eUd3g==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.9.5':
+    resolution: {integrity: sha512-K+HQzbdzfsCEFdjsMDT9mUXPAy/b63Har1Zzy+/bFRv8bVti52Nfv9SYnnHsEVVRSSwzStYbWNP9cXUywO2X1w==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.9.5':
+    resolution: {integrity: sha512-BtgoSxxKkDjZPtovdhmLpLFk2LBS2qY9wVOAAzO8b6PRS8t1ufaGTocJheb/Cb6kb5cHAqXtvo0sexDh8LwiiA==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-x64@0.9.5':
+    resolution: {integrity: sha512-8TGNNP6HAAxy+Y8cBzAySKzKSpb4Sgraz1Yl5b0VzvSV7iYg77hIAyR4zsywymK3fzF1MGUO1ZNYt2JR1ZnPMw==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.9.5':
+    resolution: {integrity: sha512-5UVyGMDia0YZi8yf/4ZvuCUy+WA83kXQkfucroCmAnxWDyrp3KKIOpAgTzBb5MHQkEtYGNjR6eA9UkPbwj9fPg==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-x64@0.9.5':
+    resolution: {integrity: sha512-jCzCjmj1wpq78jXC6lVm86bA69dYGm/l3DbeVyiMiUF3uimeNieauNK9sLDXbrWpLGVju3lqsFax8vIposahBQ==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp@0.9.5':
+    resolution: {integrity: sha512-rS3Mv+N9N2eUpjiGmUT+P3fBO2ZXnDtH1L+efvL9q3Shm9EVG2FByNrDRI1+NxQzmgtsgTpm+xTxg/9jdwXYlA==}
+    hasBin: true
+
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
 
@@ -5530,6 +5579,17 @@ packages:
       ws:
         optional: true
       zod:
+        optional: true
+
+  openclaw@2026.3.13:
+    resolution: {integrity: sha512-/juSUb070Xz8K8CnShjaZQr7CVtRaW4FbR93lgr1hLepcRSbyz2PQR+V4w5giVWkea61opXWPA6Vb8dybaztFg==}
+    engines: {node: '>=22.16.0'}
+    hasBin: true
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.89
+      node-llama-cpp: 3.16.2
+    peerDependenciesMeta:
+      node-llama-cpp:
         optional: true
 
   opus-decoder@0.7.11:
@@ -10706,6 +10766,33 @@ snapshots:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
 
+  '@zed-industries/codex-acp-darwin-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp@0.9.5':
+    optionalDependencies:
+      '@zed-industries/codex-acp-darwin-arm64': 0.9.5
+      '@zed-industries/codex-acp-darwin-x64': 0.9.5
+      '@zed-industries/codex-acp-linux-arm64': 0.9.5
+      '@zed-industries/codex-acp-linux-x64': 0.9.5
+      '@zed-industries/codex-acp-win32-arm64': 0.9.5
+      '@zed-industries/codex-acp-win32-x64': 0.9.5
+
   abbrev@1.1.1:
     optional: true
 
@@ -12806,6 +12893,83 @@ snapshots:
     optionalDependencies:
       ws: 8.19.0
       zod: 4.3.6
+
+  openclaw@2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3)):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.1009.0
+      '@buape/carbon': 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.7)(opusscript@0.1.1)
+      '@clack/prompts': 1.1.0
+      '@discordjs/voice': 0.19.1(@discordjs/opus@0.10.0)(opusscript@0.1.1)
+      '@grammyjs/runner': 2.0.3(grammy@1.41.1)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.41.1)
+      '@homebridge/ciao': 1.3.5
+      '@larksuiteoapi/node-sdk': 1.59.0
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.58.0
+      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
+      '@mozilla/readability': 0.6.0
+      '@napi-rs/canvas': 0.1.95
+      '@sinclair/typebox': 0.34.48
+      '@slack/bolt': 4.6.0(@types/express@5.0.6)
+      '@slack/web-api': 7.15.0
+      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      discord-api-types: 0.38.42
+      dotenv: 17.3.1
+      express: 5.2.1
+      file-type: 21.3.2
+      grammy: 1.41.1
+      hono: 4.12.7
+      https-proxy-agent: 8.0.0
+      ipaddr.js: 2.3.0
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      node-edge-tts: 1.2.10
+      opusscript: 0.1.1
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.5.207
+      playwright-core: 1.58.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      sqlite-vec: 0.1.7-alpha.2
+      tar: 7.5.11
+      tslog: 4.10.2
+      undici: 7.24.1
+      ws: 8.19.0
+      yaml: 2.8.2
+      zod: 4.3.6
+    optionalDependencies:
+      node-llama-cpp: 3.16.2(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - '@discordjs/opus'
+      - '@types/express'
+      - audio-decode
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - ffmpeg-static
+      - jimp
+      - link-preview-js
+      - node-opus
+      - supports-color
+      - utf-8-validate
 
   opus-decoder@0.7.11:
     dependencies:

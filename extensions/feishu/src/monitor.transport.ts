@@ -108,6 +108,19 @@ function formatLoggerArgs(args: unknown[]): string {
     .trim();
 }
 
+function normalizeFeishuWsError(text: string): string {
+  if (text.includes("1000040350") || text.includes("exceed_conn_limit")) {
+    return "Feishu WebSocket connection limit reached (1000040350 exceed_conn_limit). Another OpenClaw gateway instance is likely already connected.";
+  }
+  if (text.includes("PingInterval")) {
+    return "Feishu WebSocket reconnect failed while parsing PingInterval. This usually follows an upstream connection-limit or system-busy response.";
+  }
+  if (text.includes("unable to connect to the server after trying")) {
+    return "Feishu WebSocket reconnect attempts failed to reach the server.";
+  }
+  return text;
+}
+
 export function createFeishuWsLifecycleLogger(params: {
   accountId: string;
   runtime?: RuntimeEnv;
@@ -147,14 +160,11 @@ export function createFeishuWsLifecycleLogger(params: {
     info: (...args: unknown[]) => {
       log(...args);
       const text = formatLoggerArgs(args);
-      if (!text.includes("[ws]")) {
-        return;
-      }
       if (text.includes("reconnect success") || text.includes("ws client ready")) {
         updateConnected(true);
         return;
       }
-      if (text.includes("reconnect")) {
+      if (text.includes("reconnect") || text.includes("unable to connect to the server after trying")) {
         updateConnected(false);
         return;
       }
@@ -181,9 +191,12 @@ export function createFeishuWsLifecycleLogger(params: {
       if (
         text.includes("ws connect failed") ||
         text.includes("connect failed") ||
-        text.includes("ws error")
+        text.includes("ws error") ||
+        text.includes("1000040350") ||
+        text.includes("exceed_conn_limit") ||
+        text.includes("PingInterval")
       ) {
-        updateConnected(false, { error: text });
+        updateConnected(false, { error: normalizeFeishuWsError(text) });
       }
     },
   };

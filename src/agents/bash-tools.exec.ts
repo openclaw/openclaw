@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { OPENCLAW_CLI_PATH_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -16,6 +17,7 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  ensureHostSystemPath,
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
@@ -51,6 +53,33 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+function shellEscapeSingleQuoted(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function maybeRewriteOpenClawCommand(params: {
+  command: string;
+  env: Record<string, string>;
+  nodePath: string;
+}): string {
+  const trimmedCliPath = params.env[OPENCLAW_CLI_PATH_ENV_VAR]?.trim();
+  if (!trimmedCliPath) {
+    return params.command;
+  }
+  if (!/^\s*openclaw(?=\s|$)/.test(params.command)) {
+    return params.command;
+  }
+
+  const escapedCliPath = shellEscapeSingleQuoted(trimmedCliPath);
+  const escapedNodePath = shellEscapeSingleQuoted(params.nodePath);
+  const cliInvocation =
+    trimmedCliPath.endsWith(".js") || trimmedCliPath.endsWith(".mjs")
+      ? `${escapedNodePath} ${escapedCliPath}`
+      : escapedCliPath;
+
+  return params.command.replace(/^\s*openclaw(?=\s|$)/, cliInvocation);
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -387,6 +416,7 @@ export function createExecTool(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
         });
         applyShellPath(env, shellPath);
+        ensureHostSystemPath(env);
       }
 
       // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
@@ -397,6 +427,14 @@ export function createExecTool(
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      if (host === "gateway") {
+        params.command = maybeRewriteOpenClawCommand({
+          command: params.command,
+          env,
+          nodePath: process.execPath,
+        });
       }
 
       if (host === "node") {

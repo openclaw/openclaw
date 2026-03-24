@@ -7,7 +7,12 @@ import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normaliz
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type ReplyDispatchKind = "tool" | "block" | "status" | "final";
+
+export type FirstVisibleReplyInfo = {
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+};
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -15,6 +20,8 @@ type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
 ) => void;
+
+type FirstVisibleReplyHandler = (info: FirstVisibleReplyInfo) => void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
@@ -54,6 +61,8 @@ export type ReplyDispatcherOptions = {
   onError?: ReplyDispatchErrorHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
+  /** Fires once, after the first successful user-visible delivery for this dispatcher. */
+  onFirstVisible?: FirstVisibleReplyHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
 };
@@ -77,10 +86,15 @@ type ReplyDispatcherWithTypingResult = {
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
+  sendStatusReply?: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
+  setDeliveryGuard?: (guard: (() => boolean) | undefined) => void;
+  setFirstVisibleHandler?: (handler: FirstVisibleReplyHandler | undefined) => void;
+  reportVisibleDelivery?: (info: FirstVisibleReplyInfo) => void;
+  notifySuperseded?: () => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
@@ -112,6 +126,7 @@ function normalizeReplyPayloadInternal(
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
+  let deliveryGuard: (() => boolean) | undefined;
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
   // This is decremented when markComplete() is called to signal no more replies will come.
@@ -123,7 +138,18 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
     block: 0,
+    status: 0,
     final: 0,
+  };
+  let firstVisibleDelivered = false;
+  let firstVisibleHandler = options.onFirstVisible;
+
+  const markFirstVisible = (info: FirstVisibleReplyInfo) => {
+    if (firstVisibleDelivered) {
+      return;
+    }
+    firstVisibleDelivered = true;
+    firstVisibleHandler?.(info);
   };
 
   // Register this dispatcher globally for gateway restart coordination.
@@ -155,6 +181,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
     sendChain = sendChain
       .then(async () => {
+        if (deliveryGuard && !deliveryGuard()) {
+          return;
+        }
         // Add human-like delay between block replies for natural rhythm.
         if (shouldDelay) {
           const delayMs = getHumanDelay(options.humanDelay);
@@ -165,6 +194,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        markFirstVisible({ kind, payload: normalized });
       })
       .catch((err) => {
         options.onError?.(err, { kind });
@@ -210,10 +240,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   return {
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
+    sendStatusReply: (payload) => enqueue("status", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,
+    setDeliveryGuard: (guard) => {
+      deliveryGuard = guard;
+    },
+    setFirstVisibleHandler: (handler) => {
+      firstVisibleHandler = handler;
+    },
+    reportVisibleDelivery: (info) => {
+      markFirstVisible(info);
+    },
+    notifySuperseded: () => {},
   };
 }
 

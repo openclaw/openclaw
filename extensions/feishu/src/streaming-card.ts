@@ -9,6 +9,9 @@ import type { FeishuDomain } from "./types.js";
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
 
+const STREAMING_UPDATE_THROTTLE_MS = 160;
+const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
+
 /** Optional header for streaming cards (title bar with color template) */
 export type StreamingCardHeader = {
   title: string;
@@ -96,6 +99,21 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+function hasNaturalStreamingBoundary(text: string): boolean {
+  return /[\n。！？!?；;：:]$/.test(text);
+}
+
+function shouldPushStreamingUpdate(previousText: string, nextText: string): boolean {
+  if (!previousText) {
+    return true;
+  }
+  if (hasNaturalStreamingBoundary(nextText)) {
+    return true;
+  }
+  const delta = nextText.length - previousText.length;
+  return delta >= STREAMING_SIGNIFICANT_DELTA_CHARS;
+}
+
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -152,7 +170,8 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -290,6 +309,28 @@ export class FeishuStreamingSession {
       .catch((error) => onError?.(error));
   }
 
+  private clearFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+  }
+
+  private schedulePendingFlush(): void {
+    if (this.flushTimer || !this.pendingText || this.closed) {
+      return;
+    }
+    const delayMs = Math.max(0, this.updateThrottleMs - (Date.now() - this.lastUpdateTime));
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      const pending = this.pendingText;
+      if (!pending || this.closed) {
+        return;
+      }
+      void this.update(pending);
+    }, delayMs);
+  }
+
   async update(text: string): Promise<void> {
     if (!this.state || this.closed) {
       return;
@@ -298,24 +339,30 @@ export class FeishuStreamingSession {
     if (!mergedInput || mergedInput === this.state.currentText) {
       return;
     }
+    this.pendingText = mergedInput;
+    this.clearFlushTimer();
 
-    // Throttle: skip if updated recently, but remember pending text
+    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
+
+    // Throttle tiny intermediate changes, but always flush quickly once we have a
+    // meaningful chunk or a natural boundary so the card feels like deliberate typing.
     const now = Date.now();
-    if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+    if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
+      this.schedulePendingFlush();
       return;
     }
-    this.pendingText = null;
     this.lastUpdateTime = now;
 
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
+      const nextText = this.pendingText ?? mergedInput;
+      const mergedText = mergeStreamingText(this.state.currentText, nextText);
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
+      this.pendingText = null;
       this.state.currentText = mergedText;
       await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
@@ -327,6 +374,7 @@ export class FeishuStreamingSession {
       return;
     }
     this.closed = true;
+    this.clearFlushTimer();
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);

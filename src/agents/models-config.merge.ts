@@ -177,6 +177,7 @@ function shouldPreserveExistingApiKey(params: {
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
   secretRefManagedProviders: ReadonlySet<string>;
+  explicitProviders: ReadonlySet<string>;
 }): boolean {
   const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
   const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
@@ -184,6 +185,7 @@ function shouldPreserveExistingApiKey(params: {
     return false;
   }
   return (
+    !params.explicitProviders.has(providerKey) &&
     !secretRefManagedProviders.has(providerKey) &&
     typeof existing.apiKey === "string" &&
     existing.apiKey.length > 0 &&
@@ -216,6 +218,7 @@ export function mergeWithExistingProviderSecrets(params: {
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
+  explicitProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
     params;
@@ -236,6 +239,7 @@ export function mergeWithExistingProviderSecrets(params: {
         existing,
         nextEntry: newEntry,
         secretRefManagedProviders,
+        explicitProviders: params.explicitProviders,
       })
     ) {
       preserved.apiKey = existing.apiKey;

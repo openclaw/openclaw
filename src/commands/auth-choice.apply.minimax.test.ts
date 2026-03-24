@@ -89,7 +89,7 @@ describe("applyAuthChoiceMiniMax", () => {
       tokenProvider: "minimax",
       token: "mm-opts-token",
       profileId: "minimax:global",
-      expectedModel: "minimax/MiniMax-M2.5",
+      expectedModel: "minimax/MiniMax-M2.7",
     },
     {
       caseName: "uses opts token for minimax-cn-api with trimmed/case-insensitive tokenProvider",
@@ -97,7 +97,7 @@ describe("applyAuthChoiceMiniMax", () => {
       tokenProvider: "  MINIMAX  ",
       token: "mm-cn-opts-token",
       profileId: "minimax:cn",
-      expectedModel: "minimax/MiniMax-M2.5",
+      expectedModel: "minimax/MiniMax-M2.7",
     },
   ])("$caseName", async ({ authChoice, tokenProvider, token, profileId, expectedModel }) => {
     const { agentDir, result, text, confirm } = await runMiniMaxChoice({
@@ -153,7 +153,7 @@ describe("applyAuthChoiceMiniMax", () => {
         mode: "api_key",
       });
       expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-        "minimax/MiniMax-M2.5",
+        "minimax/MiniMax-M2.7",
       );
     }
     expect(text).not.toHaveBeenCalled();
@@ -168,7 +168,7 @@ describe("applyAuthChoiceMiniMax", () => {
     }
   });
 
-  it("minimax-global-api uses minimax:global profile and minimax/MiniMax-M2.5 model", async () => {
+  it("minimax-global-api uses minimax:global profile and minimax/MiniMax-M2.7 model", async () => {
     const { agentDir, result, text, confirm } = await runMiniMaxChoice({
       authChoice: "minimax-global-api",
       opts: {
@@ -183,7 +183,7 @@ describe("applyAuthChoiceMiniMax", () => {
       mode: "api_key",
     });
     expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-      "minimax/MiniMax-M2.5",
+      "minimax/MiniMax-M2.7",
     );
     expect(result?.config.models?.providers?.minimax?.baseUrl).toContain("minimax.io");
     expect(text).not.toHaveBeenCalled();

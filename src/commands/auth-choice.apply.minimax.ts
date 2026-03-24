@@ -92,7 +92,7 @@ export async function applyAuthChoiceMiniMax(
     });
 
     await applyProviderDefaultModel({
-      defaultModel: "minimax/MiniMax-M2.5",
+      defaultModel: "minimax/MiniMax-M2.7",
       applyDefaultConfig: (config) =>
         isCn ? applyMinimaxApiConfigCn(config) : applyMinimaxApiConfig(config),
       applyProviderConfig: (config) =>
