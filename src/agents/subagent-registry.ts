@@ -436,6 +436,12 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  const cfg = loadConfig();
+  ensureRuntimePluginsLoaded({
+    config: cfg,
+    workspaceDir: params.entry.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
   const reason = params.reason ?? params.entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   const outcome = resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
   const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
