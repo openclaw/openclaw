@@ -3,23 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
 
 describe("resolveNpmRunner", () => {
-  it("uses npm_execpath when it already points to npm", () => {
-    expect(
-      resolveNpmRunner({
-        env: {
-          npm_execpath: "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
-        },
-        execPath: "/usr/local/bin/node",
-        existsSync: () => false,
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js"],
-      shell: false,
-    });
-  });
-
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
     const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
     const expectedNpmCliPath = path.resolve(
@@ -29,6 +12,7 @@ describe("resolveNpmRunner", () => {
 
     const runner = resolveNpmRunner({
       execPath,
+      env: {},
       existsSync: (candidate: string) => candidate === expectedNpmCliPath,
       platform: "darwin",
     });

@@ -90,14 +90,6 @@ export function resolveNpmRunner(params = {}) {
   const pathImpl = platform === "win32" ? path.win32 : path;
   const nodeDir = pathImpl.dirname(execPath);
   const npmCliPath = pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js");
-  const npmExecPath = env.npm_execpath;
-  if (typeof npmExecPath === "string" && isNpmExecPath(npmExecPath)) {
-    return {
-      command: execPath,
-      args: [npmExecPath],
-      shell: false,
-    };
-  }
   if (existsSync(npmCliPath)) {
     return {
       command: execPath,
@@ -120,10 +112,6 @@ export function resolveNpmRunner(params = {}) {
           : nodeDir,
     },
   };
-}
-
-function isNpmExecPath(value) {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
 }
 
 function resolvePathEnvKey(env) {
