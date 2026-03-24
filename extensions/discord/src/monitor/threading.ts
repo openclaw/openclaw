@@ -8,6 +8,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import {
+  type DiscordEmbedLike,
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
   resolveDiscordMessageChannelId,
@@ -188,7 +189,7 @@ export async function resolveDiscordThreadStarter(params: {
       Routes.channelMessage(messageChannelId, params.channel.id),
     )) as {
       content?: string | null;
-      embeds?: Array<{ title?: string | null; description?: string | null }>;
+      embeds?: Array<DiscordEmbedLike>;
       member?: { nick?: string | null; displayName?: string | null };
       author?: {
         id?: string | null;
@@ -201,7 +202,10 @@ export async function resolveDiscordThreadStarter(params: {
       return null;
     }
     const content = starter.content?.trim() ?? "";
-    const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
+    const embedText = (starter.embeds ?? [])
+      .map((e) => resolveDiscordEmbedText(e))
+      .filter(Boolean)
+      .join("\n---\n");
     const text = content || embedText;
     if (!text) {
       return null;
