@@ -355,7 +355,7 @@ export const OpenClawSchema = z
       .object({
         enabled: z.boolean().optional(),
         evaluateEnabled: z.boolean().optional(),
-        cdpUrl: z.string().optional(),
+        cdpUrl: z.string().optional().register(sensitive),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
         color: z.string().optional(),
@@ -383,7 +383,7 @@ export const OpenClawSchema = z
             z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
-                cdpUrl: z.string().optional(),
+                cdpUrl: z.string().optional().register(sensitive),
                 userDataDir: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])

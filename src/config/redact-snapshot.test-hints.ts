@@ -6,6 +6,8 @@ export const redactSnapshotTestHints: ConfigUiHints = {
   "agents.defaults.memorySearch.remote.apiKey": { sensitive: true },
   "agents.list[].memorySearch.remote.apiKey": { sensitive: true },
   "broadcast.apiToken[]": { sensitive: true },
+  "browser.cdpUrl": { sensitive: true },
+  "browser.profiles.*.cdpUrl": { sensitive: true },
   "env.GROQ_API_KEY": { sensitive: true },
   "gateway.auth.password": { sensitive: true },
   "models.providers.*.apiKey": { sensitive: true },

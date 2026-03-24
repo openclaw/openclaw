@@ -74,4 +74,30 @@ describe("realredactConfigSnapshot_real", () => {
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
     expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");
   });
+
+  it("redacts browser.cdpUrl and browser.profiles.*.cdpUrl via schema hints", () => {
+    const snapshot = makeSnapshot({
+      browser: {
+        cdpUrl: "wss://chrome.browserless.io/?token=secret-token-123",
+        profiles: {
+          remote: {
+            cdpUrl: "https://user:pass@browserbase.example.test/connect",
+            cdpPort: 9222,
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const config = result.config as typeof snapshot.config;
+    expect(config.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(config.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(config.browser.profiles.remote.cdpPort).toBe(9222);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
+    expect(restored.browser.cdpUrl).toBe("wss://chrome.browserless.io/?token=secret-token-123");
+    expect(restored.browser.profiles.remote.cdpUrl).toBe(
+      "https://user:pass@browserbase.example.test/connect",
+    );
+  });
 });

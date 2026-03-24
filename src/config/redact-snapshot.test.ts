@@ -189,6 +189,61 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).not.toContain("alice:secret@");
   });
 
+  it("redacts browser.cdpUrl with embedded credentials", () => {
+    const raw = `{
+  browser: {
+    cdpUrl: "https://alice:secret@chrome.example.test/?token=supersecret123",
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          cdpUrl: "https://alice:secret@chrome.example.test/?token=supersecret123",
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("supersecret123");
+    expect(result.raw).not.toContain("alice:secret@");
+  });
+
+  it("redacts browser.profiles.*.cdpUrl with embedded credentials", () => {
+    const raw = `{
+  browser: {
+    profiles: {
+      remote: {
+        cdpUrl: "wss://user:pass@browserless.example.test/?token=tok123",
+        cdpPort: 9222,
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          profiles: {
+            remote: {
+              cdpUrl: "wss://user:pass@browserless.example.test/?token=tok123",
+              cdpPort: 9222,
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.remote.cdpPort).toBe(9222);
+    expect(result.raw).not.toContain("tok123");
+    expect(result.raw).not.toContain("user:pass@");
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,

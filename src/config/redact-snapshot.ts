@@ -30,7 +30,7 @@ function isWholeObjectSensitivePath(path: string): boolean {
 }
 
 function isUserInfoUrlPath(path: string): boolean {
-  return path.endsWith(".baseUrl") || path.endsWith(".httpUrl");
+  return path.endsWith(".baseUrl") || path.endsWith(".httpUrl") || path.endsWith(".cdpUrl");
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
