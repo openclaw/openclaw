@@ -538,11 +538,12 @@ export async function dispatchCronDelivery(
       });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      await cleanupDirectCronSessionIfNeeded();
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
-        delivered: true,
+        delivered: false,
         ...params.telemetry,
       });
     }
