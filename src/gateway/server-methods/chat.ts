@@ -1154,14 +1154,33 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Generate cursor and hasMore from the actual delivered messages
     const deliveredMessages = bounded.messages as Array<{ timestamp?: number | string }>;
-    const oldestDelivered = deliveredMessages.length > 0 ? deliveredMessages[0] : null;
-    const cursorTimestamp = oldestDelivered?.timestamp;
+    // Use sliced (not bounded) for cursor calculation to get the earliest message in the page
+    const slicedMessages = sliced as Array<{ timestamp?: number | string }>;
+    const oldestInPage = slicedMessages.length > 0 ? slicedMessages[0] : null;
+    const cursorTimestamp = oldestInPage?.timestamp;
     const cursor =
       cursorTimestamp !== undefined && cursorTimestamp !== null
         ? String(typeof cursorTimestamp === "number" ? cursorTimestamp : new Date(cursorTimestamp).getTime())
         : null;
     // hasMore only if we have a usable cursor AND there are more messages
-    const hasMore = cursor !== null && rawMessages.length > bounded.messages.length;
+    const hasMore = cursor !== null && rawMessages.length > sliced.length;
+
+    // Debug logging for pagination
+    console.log(
+      "[chat.history pagination]",
+      "rawMessages:",
+      rawMessages.length,
+      "sliced:",
+      sliced.length,
+      "delivered:",
+      deliveredMessages.length,
+      "cursor:",
+      cursor,
+      "hasMore:",
+      hasMore,
+      "oldestTimestamp:",
+      cursorTimestamp,
+    );
 
     respond(true, {
       sessionKey,
