@@ -44,6 +44,13 @@ const EXTRA_PROVIDER_AUTH_ENV_VARS = [
   "VLLM_API_KEY",
 ] as const;
 
+export function getProviderEnvVars(providerId: string): string[] {
+  const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
+    ? PROVIDER_ENV_VARS[providerId]
+    : undefined;
+  return Array.isArray(envVars) ? [...envVars] : [];
+}
+
 const KNOWN_SECRET_ENV_VARS = [
   ...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys)),
 ];

@@ -60,3 +60,31 @@ export function createAccountListHelpers(
 
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
 }
+
+export function listCombinedAccountIds(params: {
+  configuredAccountIds: Iterable<string>;
+  additionalAccountIds?: Iterable<string>;
+  implicitAccountId?: string | undefined;
+  fallbackAccountIdWhenEmpty?: string | undefined;
+}): string[] {
+  const ids = new Set<string>();
+
+  for (const id of params.configuredAccountIds) {
+    if (id) {
+      ids.add(id);
+    }
+  }
+  for (const id of params.additionalAccountIds ?? []) {
+    if (id) {
+      ids.add(id);
+    }
+  }
+  if (params.implicitAccountId) {
+    ids.add(params.implicitAccountId);
+  }
+
+  if (ids.size === 0 && params.fallbackAccountIdWhenEmpty) {
+    return [params.fallbackAccountIdWhenEmpty];
+  }
+  return [...ids].toSorted((a, b) => a.localeCompare(b));
+}

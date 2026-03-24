@@ -87,3 +87,6 @@ export const deepgramProvider: MediaUnderstandingProvider = {
   capabilities: ["audio"],
   transcribeAudio: transcribeDeepgramAudio,
 };
+
+/** Alias matching upstream export name. */
+export const deepgramMediaUnderstandingProvider: MediaUnderstandingProvider = deepgramProvider;
