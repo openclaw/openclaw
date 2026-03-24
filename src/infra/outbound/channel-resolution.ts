@@ -96,12 +96,9 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  // Discord DMs: route "user:<id>" to the Discord plugin
+  // Discord DMs: route "user:<id>" to the Discord plugin (early return if not loaded)
   if (normalized.startsWith("user:")) {
-    const discordPlugin = getChannelPlugin("discord");
-    if (discordPlugin) {
-      return discordPlugin;
-    }
+    return getChannelPlugin("discord");
   }
 
   const resolve = () => getChannelPlugin(normalized);
