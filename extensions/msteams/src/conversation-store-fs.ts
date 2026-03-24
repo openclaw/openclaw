@@ -135,7 +135,9 @@ export function createMSTeamsConversationStoreFs(params?: {
     // When multiple conversations exist for the same user, prefer personal (1:1)
     // over group/channel to avoid routing DM-initiated proactive sends to the
     // wrong conversation (see #51947).
-    const personal = matches.find((m) => m.reference.conversation?.conversationType?.toLowerCase() === "personal");
+    const personal = matches.find(
+      (m) => m.reference.conversation?.conversationType?.toLowerCase() === "personal",
+    );
     if (personal) {
       return personal;
     }
