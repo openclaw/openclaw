@@ -50,8 +50,22 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+// ── Agent runtime types ─────────────────────────────────────────────
+
+export type AgentAbortParams = {
+  runId: string;
+  sessionKey?: string;
+};
+
+export type AgentAbortResult = {
+  aborted: boolean;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  agent: {
+    abort: (params: AgentAbortParams) => Promise<AgentAbortResult>;
+  };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
