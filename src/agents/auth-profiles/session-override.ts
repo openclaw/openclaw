@@ -178,9 +178,11 @@ export async function resolveSessionAuthProfileOverride(params: {
   // Skip persisting auth profile changes when image model is temporarily switched
   // to a different provider. The current stored profile is for the original provider
   // and should be preserved for when the session returns to the original provider
-  // after the image turn. However, update the source to "auto" for consistency.
+  // after the image turn.
+  // IMPORTANT: Do NOT modify authProfileOverrideSource here - preserving "user"
+  // prevents subsequent non-image turns from rotating away from the user's chosen
+  // account/provider unexpectedly.
   if (skipPersist) {
-    sessionEntry.authProfileOverrideSource = "auto";
     return next;
   }
 
