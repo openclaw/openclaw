@@ -23,7 +23,7 @@ HEARTBEAT_OK
 - Prefix first line with routing directive: `[[heartbeat_to:<recommended_target>]]` from `incident_routing`
 - Use only allowlisted destinations; if unsure, omit directive and keep base heartbeat destination.
 - Include `<@U07KE3NALTX>` in the first content line of each incident alert so Florian is notified.
-- First four content lines must be:
+- First few content lines should answer:
   - Incident
   - Customer impact
   - Affected services
@@ -78,12 +78,11 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - If thread context looks stale or a required artifact is missing, re-read the latest thread messages before asking again. If still blocked after refresh, mention the reporter or relevant human and ask one short clarifying question.
 - If a human explicitly says stop, ignore this thread, or don't answer this thread, abort immediately, clear queued follow-ups, and do not send a substantive reply.
 - Keep response tight (8-12 lines). Prioritize direct evidence + next action.
-- In `#bug-report` and incident threads, the first visible token of every substantive reply must be `*Incident:*`; never emit preambles such as `Found the root cause` or `Let me compose the response`.
+- In `#bug-report` and incident threads, lead with findings, not process narration; never emit preambles such as `Found the root cause` or `Let me compose the response`.
 - Use Slack mrkdwn only:
   - bold = `*text*`, inline code = `` `text` ``
   - never use Markdown bold `**text**` or Markdown headings
-  - all section labels (`*Incident:*`, `*Customer impact:*`, etc.) must use bold (`*Label:*`), never italic (`_Label:_`)
-  - bold formatting self-check: before posting, scan the draft for `_Label:_` patterns and replace with `*Label:*`. Full list: `*Incident:*`, `*Customer impact:*`, `*Affected services:*`, `*Status:*`, `*Evidence:*`, `*Likely cause:*`, `*Mitigation:*`, `*Validate:*`, `*Next:*`, `*Also watching:*`, `*Auto-fix PR:*`, `*Linear:*`, `*Suggested PR:*`, `*Fix PR:*`, `*Context:*`
+  - if you use labeled sections, use bold (`*Label:*`), never italic (`_Label:_`)
 - Enrich with BetterStack API context when needed:
   `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'`
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
@@ -93,18 +92,18 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - If auto-fix is blocked, post blocked reason + exact manual next step.
 - Cross-surface RCA consistency: the Slack thread response and any linked Linear ticket must state the same primary root cause and the same corrupt/affected artifact. Never post contradictory RCA across surfaces.
 - RCA correction process: if deeper analysis in the Linear ticket reveals a different cause than the initial Slack summary, update the Slack thread with a corrected hypothesis before posting the Linear update.
-- First four lines must answer: what broke, who feels it, what services are impacted, and what is happening now.
+- First few lines should answer: what broke, who feels it, what services are impacted, and what is happening now.
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
-- In `incidentRootOnly` channels, native preview streaming, partial reply streaming, and progress acknowledgements stay disabled by design; operators should expect one final incident-format reply once evidence is ready.
+- In `incidentRootOnly` channels, native preview streaming, partial reply streaming, and progress acknowledgements stay disabled by design; operators should expect one final reply once evidence is ready.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread.
-- Content gate anti-patterns — these are ALWAYS progress-only and must NEVER be posted as standalone messages: "Now let me...", "I need to...", "Good —...", "The script...", "Let me check...", "Let me compose...", "There are stale changes...", "The commit was created...", "PR is created. Let me...", "Now I see some issues...", "Honest answer:...". Buffer all intermediate work into the next substantive incident-format reply.
-- Meta-response handling: if a human asks about the bot's own capabilities, model, or environment, fold the answer into the next incident-format reply under a `*Context:*` section — do not send a standalone conversational message.
-- Content gate: before posting any message to an incident thread, verify it starts with the 4-line header and contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply.
+- Content gate anti-patterns — these are ALWAYS progress-only and must NEVER be posted as standalone messages: "Now let me...", "I need to...", "Good —...", "The script...", "Let me check...", "Let me compose...", "There are stale changes...", "The commit was created...", "PR is created. Let me...", "Now I see some issues...", "Honest answer:...". Buffer all intermediate work into the next substantive final reply.
+- Meta-response handling: if a human asks about the bot's own capabilities, model, or environment, fold the answer into the next final reply, optionally under a `*Context:*` section — do not send a standalone conversational message.
+- Content gate: before posting any message to an incident thread, verify it is a single substantive reply and not a progress update. Free-form structure is fine.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
-- Keep the same 4-line incident header on every follow-up update, not just the first reply in a thread.
+- Keep follow-up structure consistent if you choose labels, but free-form replies are allowed.
 - If new evidence disproves an earlier theory, retract that theory explicitly in the next update and continue from the new evidence.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
@@ -125,7 +124,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
   - include `Assumption: ...` and provide 2-3 actionable options (commands/checks).
   - ask one short clarifying question only when needed to choose between options.
 
-Suggested thread reply template:
+Optional thread reply shape:
 
 ```text
 *Incident:* <one-line summary>

@@ -31,6 +31,8 @@ describe("slack incident-thread streaming policy", () => {
       previewStreamingEnabled: false,
       streamingEnabled: false,
       sendProgressAck: false,
+      finalOnlyReplies: true,
+      disableTypingTtl: true,
     });
   });
 
@@ -45,6 +47,8 @@ describe("slack incident-thread streaming policy", () => {
       previewStreamingEnabled: true,
       streamingEnabled: false,
       sendProgressAck: true,
+      finalOnlyReplies: false,
+      disableTypingTtl: false,
     });
   });
 
@@ -59,6 +63,8 @@ describe("slack incident-thread streaming policy", () => {
       previewStreamingEnabled: true,
       streamingEnabled: true,
       sendProgressAck: false,
+      finalOnlyReplies: false,
+      disableTypingTtl: false,
     });
   });
 });

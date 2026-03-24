@@ -31,7 +31,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("in any Slack context. Wait for net-new evidence")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("in any Slack context. Wait for the final reply")
 ' "$CONFIG" >/dev/null
 
 jq -e '

@@ -37,6 +37,21 @@ describe("message_sending hook runner", () => {
 
     expect(result?.cancel).toBe(true);
   });
+
+  it("preserves earlier cancel decisions when later hooks only rewrite content", async () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "message_sending", handler: vi.fn().mockReturnValue({ cancel: true }) },
+      { hookName: "message_sending", handler: vi.fn().mockReturnValue({ content: "sanitized" }) },
+    ]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runMessageSending(
+      { to: "user-123", content: "blocked" },
+      { channelId: "telegram" },
+    );
+
+    expect(result).toEqual({ cancel: true, content: "sanitized" });
+  });
 });
 
 describe("message_sent hook runner", () => {

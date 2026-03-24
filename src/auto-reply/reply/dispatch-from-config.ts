@@ -112,6 +112,9 @@ export async function dispatchReplyFromConfig(params: {
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  // Resolve once per dispatch so callback wiring stays stable for the lifetime
+  // of this run even if callers mutate their options object later.
+  const finalOnlyReplies = params.replyOptions?.finalOnlyReplies === true;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
@@ -402,6 +405,15 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
+    if (finalOnlyReplies) {
+      logVerbose(
+        `dispatch-from-config: final-only reply mode active for session ${sessionKey ?? "unknown"}; suppressing tool and block replies`,
+      );
+    } else {
+      logVerbose(
+        `dispatch-from-config: final-only reply mode disabled for session ${sessionKey ?? "unknown"}; tool and block replies enabled`,
+      );
+    }
 
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
@@ -409,60 +421,64 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
-        onToolResult: (payload: ReplyPayload) => {
-          const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
-            const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
-            if (!deliveryPayload) {
-              return;
-            }
-            if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
-            } else {
-              dispatcher.sendToolResult(deliveryPayload);
-            }
-          };
-          return run();
-        },
-        onBlockReply: (payload: ReplyPayload, context) => {
-          const run = async () => {
-            // Suppress reasoning payloads — channels using this generic dispatch
-            // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
-            // Telegram has its own dispatch path that handles reasoning splitting.
-            if (shouldSuppressReasoningPayload(payload)) {
-              return;
-            }
-            // Accumulate block text for TTS generation after streaming
-            if (payload.text) {
-              if (accumulatedBlockText.length > 0) {
-                accumulatedBlockText += "\n";
-              }
-              accumulatedBlockText += payload.text;
-              blockCount++;
-            }
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "block",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
-            if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
-            } else {
-              dispatcher.sendBlockReply(ttsPayload);
-            }
-          };
-          return run();
-        },
+        onToolResult: finalOnlyReplies
+          ? undefined
+          : (payload: ReplyPayload) => {
+              const run = async () => {
+                const ttsPayload = await maybeApplyTtsToPayload({
+                  payload,
+                  cfg,
+                  channel: ttsChannel,
+                  kind: "tool",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                });
+                const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
+                if (!deliveryPayload) {
+                  return;
+                }
+                if (shouldRouteToOriginating) {
+                  await sendPayloadAsync(deliveryPayload, undefined, false);
+                } else {
+                  dispatcher.sendToolResult(deliveryPayload);
+                }
+              };
+              return run();
+            },
+        onBlockReply: finalOnlyReplies
+          ? undefined
+          : (payload: ReplyPayload, context) => {
+              const run = async () => {
+                // Suppress reasoning payloads — channels using this generic dispatch
+                // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
+                // Telegram has its own dispatch path that handles reasoning splitting.
+                if (shouldSuppressReasoningPayload(payload)) {
+                  return;
+                }
+                // Accumulate block text for TTS generation after streaming
+                if (payload.text) {
+                  if (accumulatedBlockText.length > 0) {
+                    accumulatedBlockText += "\n";
+                  }
+                  accumulatedBlockText += payload.text;
+                  blockCount++;
+                }
+                const ttsPayload = await maybeApplyTtsToPayload({
+                  payload,
+                  cfg,
+                  channel: ttsChannel,
+                  kind: "block",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                });
+                if (shouldRouteToOriginating) {
+                  await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+                } else {
+                  dispatcher.sendBlockReply(ttsPayload);
+                }
+              };
+              return run();
+            },
       },
       cfg,
     );

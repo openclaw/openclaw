@@ -1669,6 +1669,42 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("omits tool and block callbacks entirely for incident-style final-only runs", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "default",
+    });
+    let receivedToolResultCallback: GetReplyOptions["onToolResult"];
+    let receivedBlockReplyCallback: GetReplyOptions["onBlockReply"];
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      receivedToolResultCallback = options?.onToolResult;
+      receivedBlockReplyCallback = options?.onBlockReply;
+      expect(receivedToolResultCallback).toBeUndefined();
+      expect(receivedBlockReplyCallback).toBeUndefined();
+      return { text: "final summary" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { finalOnlyReplies: true },
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(receivedToolResultCallback).toBeUndefined();
+    expect(receivedBlockReplyCallback).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "final summary" }),
+    );
+  });
+
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
     setNoAbort();
     const cfg = emptyConfig;

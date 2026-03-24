@@ -80,4 +80,22 @@ describe("typing persistence bug fix", () => {
     controller.markDispatchIdle();
     expect(onCleanupSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("does not auto-clean up when typing TTL is disabled", async () => {
+    controller = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 0,
+      log: vi.fn(),
+    });
+
+    await controller.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5 * 60_000);
+
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+    expect(controller.isActive()).toBe(true);
+  });
 });

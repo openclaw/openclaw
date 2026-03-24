@@ -87,7 +87,9 @@ export function isSlackStreamingEnabled(params: {
 /**
  * Resolves Slack reply streaming behavior from normalized channel policy.
  * Incident-root-only channels disable previews, native partial streaming, and
- * progress acks so no partial reasoning leaks into incident threads.
+ * progress acks so no partial reasoning leaks into incident threads. Also
+ * enables final-only reply mode (suppressing tool/block callbacks) and
+ * disables the typing auto-stop TTL for long-running investigations.
  */
 export function resolveSlackReplyStreamingPolicy(params: {
   mode: "off" | "partial" | "block" | "progress";
@@ -97,12 +99,23 @@ export function resolveSlackReplyStreamingPolicy(params: {
   previewStreamingEnabled: boolean;
   streamingEnabled: boolean;
   sendProgressAck: boolean;
+  finalOnlyReplies: boolean;
+  disableTypingTtl: boolean;
 } {
   if (params.incidentRootOnly) {
+    // Incident threads still need visible liveness during long investigations,
+    // so typing stays active (disableTypingTtl: true). Reply content is still
+    // final-only: no previews, no tool/block chatter, only the final summary
+    // lands in the thread. This matches the SRE response discipline of one
+    // substantive reply and zero progress chatter in incident threads. The
+    // policy is resolved per dispatch, so follow-up turns re-evaluate it from
+    // current thread config rather than mutating mid-run.
     return {
       previewStreamingEnabled: false,
       streamingEnabled: false,
       sendProgressAck: false,
+      finalOnlyReplies: true,
+      disableTypingTtl: true,
     };
   }
 
@@ -113,6 +126,8 @@ export function resolveSlackReplyStreamingPolicy(params: {
       nativeStreaming: params.nativeStreaming,
     }),
     sendProgressAck: params.mode === "progress",
+    finalOnlyReplies: false,
+    disableTypingTtl: false,
   };
 }
 
@@ -222,6 +237,30 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     isThreadReply,
   });
 
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "slack",
+    accountId: route.accountId,
+  });
+
+  const slackStreaming = resolveSlackStreamingConfig({
+    streaming: account.config.streaming,
+    streamMode: account.config.streamMode,
+    nativeStreaming: account.config.nativeStreaming,
+  });
+  const streamingPolicy = resolveSlackReplyStreamingPolicy({
+    mode: slackStreaming.mode,
+    nativeStreaming: slackStreaming.nativeStreaming,
+    incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
+  });
+  const {
+    previewStreamingEnabled,
+    streamingEnabled,
+    sendProgressAck,
+    finalOnlyReplies,
+    disableTypingTtl,
+  } = streamingPolicy;
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
   const typingCallbacks = createTypingCallbacks({
@@ -274,26 +313,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         error: err,
       });
     },
+    maxDurationMs: disableTypingTtl ? 0 : undefined,
   });
-
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg,
-    agentId: route.agentId,
-    channel: "slack",
-    accountId: route.accountId,
-  });
-
-  const slackStreaming = resolveSlackStreamingConfig({
-    streaming: account.config.streaming,
-    streamMode: account.config.streamMode,
-    nativeStreaming: account.config.nativeStreaming,
-  });
-  const streamingPolicy = resolveSlackReplyStreamingPolicy({
-    mode: slackStreaming.mode,
-    nativeStreaming: slackStreaming.nativeStreaming,
-    incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
-  });
-  const { previewStreamingEnabled, streamingEnabled, sendProgressAck } = streamingPolicy;
   let didSendProgressAck = false;
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
@@ -595,6 +616,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyOptions: {
       ...replyOptions,
       skillFilter: prepared.channelConfig?.skills,
+      finalOnlyReplies,
+      typingTtlMs: disableTypingTtl ? 0 : undefined,
       hasRepliedRef,
       disableBlockStreaming: useStreaming
         ? true

@@ -4,71 +4,154 @@ import { stripSlackIncidentAllowedPrefixes } from "../../../slack/monitor/incide
 import type { OpenClawPluginDefinition } from "../../types.js";
 
 export const SRE_INCIDENT_FORMAT_PLUGIN_ID = "sre-incident-format";
-const PROGRESS_ONLY_LINE_RES = [
-  /^(?:on it|found it|checking(?:\.\.\.)?|let me verify)\b/i,
-  /^(?:now\s+)?let me\b/i,
-  /^i need to\b/i,
-  /^(?:ok|okay|wait)\b/i,
-  /^good\s+[--]/i,
-  /^the script\b/i,
-  /^there are stale changes\b/i,
-  /^the commit was created\b/i,
-  /^pr is created\b/i,
-  /^now i see some issues\b/i,
-  /^honest answer\b/i,
-  /^i(?:'m| am)\s+(?:going to|now going to|checking|looking into|pulling)\b/i,
-  /^this should work\b/i,
-  /^the code looks correct here\b/i,
+const PROGRESS_ONLY_EXACT_LINES = [
+  "on it",
+  "found it",
+  "ok",
+  "okay",
+  "wait",
+  "there are stale changes",
+  "the commit was created",
+  "pr is created",
+  "now i see some issues",
+  "the code looks correct here",
 ];
+const PROCEDURAL_PROGRESS_PREFIXES = ["checking", "let me verify", "let me", "i need to"];
+const SUBSTANTIVE_PROGRESS_SUFFIX_RE =
+  /\b(?:because|caused by|show(?:ed|s|ing)?|revealed?|found|confirm(?:ed|s)?|root cause|mitigation|impact|deployed)\b/i;
+const MAX_LABELED_PROGRESS_WORDS = 4;
+const ANGLE_BRACKET_METADATA_LINE_RE = /^<[^>\n]+>$/;
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PROGRESS_ONLY_EXACT_LINE_RES = PROGRESS_ONLY_EXACT_LINES.map(
+  (line) => new RegExp(`^(?:now\\s+)?${escapeRegex(line)}[.!]?$`, "i"),
+);
+const PROCEDURAL_PROGRESS_PREFIX_RES = PROCEDURAL_PROGRESS_PREFIXES.map(
+  (prefix) => new RegExp(`^(?:now\\s+)?${escapeRegex(prefix)}\\b`, "i"),
+);
+const DASHED_PROGRESS_PREFIX_RES = [/^(?:ok(?:ay)?|wait)\s+[-–—]\s+(?:i|we|this|that)\b/i];
+const GOOD_DASHED_PROGRESS_PREFIX_RE = /^good\s+[-–—]\s+i\s+(?:found|see|noticed)\b/i;
+const FIRST_PERSON_PROGRESS_PREFIX_RE =
+  /^(?:now\s+)?i(?:'m| am)\s+(?:going to|checking|looking into|pulling|writing|about to)\b/i;
 const SUMMARY_LABEL_RE = /^(?:\*[^*\n]+:\*|_[^_\n]+:_)/;
-const SUMMARY_BLOCK_RE = /^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+)/;
+const SUMMARY_BLOCK_RE = /^(?:#{1,6}\s+|[-*](?:\s+|$)|\d+\.(?:\s+|$))/;
 
 function isPrefixOnlyLine(line: string): boolean {
   const trimmed = line.trim();
   return Boolean(trimmed) && stripSlackIncidentAllowedPrefixes(trimmed) === "";
 }
 
-function isSummaryAnchorLine(line: string): boolean {
+function isAngleBracketMetadataLine(line: string): boolean {
   const trimmed = stripSlackIncidentAllowedPrefixes(line.trim());
   if (!trimmed) {
     return false;
   }
-  return SUMMARY_LABEL_RE.test(trimmed) || SUMMARY_BLOCK_RE.test(trimmed);
+  return ANGLE_BRACKET_METADATA_LINE_RE.test(trimmed);
+}
+
+function normalizeLineForProgressCheck(line: string): {
+  text: string;
+  hasSummaryLabel: boolean;
+  hasSummaryBlock: boolean;
+} {
+  let trimmed = stripSlackIncidentAllowedPrefixes(line.trim());
+  if (!trimmed) {
+    return { text: "", hasSummaryLabel: false, hasSummaryBlock: false };
+  }
+  const hasSummaryLabel = SUMMARY_LABEL_RE.test(trimmed);
+  if (hasSummaryLabel) {
+    trimmed = trimmed.replace(SUMMARY_LABEL_RE, "").trimStart();
+  }
+  const hasSummaryBlock = SUMMARY_BLOCK_RE.test(trimmed);
+  if (hasSummaryBlock) {
+    trimmed = trimmed.replace(SUMMARY_BLOCK_RE, "").trimStart();
+  }
+  return { text: trimmed, hasSummaryLabel, hasSummaryBlock };
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
 function looksLikeProgressOnlyLine(line: string): boolean {
-  const trimmed = stripSlackIncidentAllowedPrefixes(line.trim());
+  const normalized = normalizeLineForProgressCheck(line);
+  const trimmed = normalized.text;
   if (!trimmed) {
+    return normalized.hasSummaryLabel || normalized.hasSummaryBlock;
+  }
+  if (PROGRESS_ONLY_EXACT_LINE_RES.some((re) => re.test(trimmed))) {
+    return true;
+  }
+  if (GOOD_DASHED_PROGRESS_PREFIX_RE.test(trimmed)) {
+    return true;
+  }
+  if (SUBSTANTIVE_PROGRESS_SUFFIX_RE.test(trimmed)) {
     return false;
   }
-  return PROGRESS_ONLY_LINE_RES.some((re) => re.test(trimmed));
+  const matchedProceduralPrefix =
+    PROCEDURAL_PROGRESS_PREFIX_RES.some((re) => re.test(trimmed)) ||
+    DASHED_PROGRESS_PREFIX_RES.some((re) => re.test(trimmed)) ||
+    FIRST_PERSON_PROGRESS_PREFIX_RE.test(trimmed);
+  if (!matchedProceduralPrefix) {
+    return false;
+  }
+  if (normalized.hasSummaryLabel) {
+    return countWords(trimmed) <= MAX_LABELED_PROGRESS_WORDS;
+  }
+  return true;
 }
 
 export function sanitizeIncidentMessage(text: string): string {
   const lines = text.split("\n");
-  const anchorIndex = lines.findIndex((line) => isSummaryAnchorLine(line));
-  if (anchorIndex <= 0) {
+  const preservedPrefixes: string[] = [];
+  let contentStart = 0;
+
+  while (contentStart < lines.length) {
+    const line = lines[contentStart] ?? "";
+    if (!line.trim()) {
+      contentStart += 1;
+      continue;
+    }
+    if (!isPrefixOnlyLine(line)) {
+      break;
+    }
+    preservedPrefixes.push(line);
+    contentStart += 1;
+  }
+
+  let trimmedLeadingNoise = false;
+  while (contentStart < lines.length) {
+    const line = lines[contentStart] ?? "";
+    if (!line.trim()) {
+      contentStart += 1;
+      continue;
+    }
+    if (isAngleBracketMetadataLine(line)) {
+      contentStart += 1;
+      trimmedLeadingNoise = true;
+      continue;
+    }
+    if (!looksLikeProgressOnlyLine(line)) {
+      break;
+    }
+    contentStart += 1;
+    trimmedLeadingNoise = true;
+  }
+
+  if (!trimmedLeadingNoise) {
     return text.trim();
   }
 
-  const leadingContent = lines
-    .slice(0, anchorIndex)
-    .filter((line) => line.trim())
-    .filter((line) => !isPrefixOnlyLine(line));
-  if (leadingContent.length === 0) {
-    return text.trim();
+  const remainder = lines.slice(contentStart).join("\n").trim();
+  if (!remainder) {
+    // Edge case: every non-prefix line was progress chatter, so preserve any
+    // routing prefixes and drop the chatter instead of reintroducing it.
+    return preservedPrefixes.join("\n").trim();
   }
 
-  const preservedPrefixes = lines.slice(0, anchorIndex).filter((line) => isPrefixOnlyLine(line));
-  return [...preservedPrefixes, ...lines.slice(anchorIndex)].join("\n").trim();
+  return [...preservedPrefixes, remainder].join("\n").trim();
 }
 
-/**
- * Progress-only incident messages are pure play-by-play with no substantive
- * summary content after lightweight trimming.
- */
-export function isProgressOnlyMessage(text: string): boolean {
-  const trimmed = sanitizeIncidentMessage(text);
+function isProgressOnlyChatterFromSanitized(trimmed: string): boolean {
   if (!trimmed.trim()) {
     return true;
   }
@@ -81,27 +164,35 @@ export function isProgressOnlyMessage(text: string): boolean {
   if (lines.length === 0) {
     return true;
   }
-  if (lines.some((line) => isSummaryAnchorLine(line))) {
-    return false;
-  }
   return lines.every((line) => looksLikeProgressOnlyLine(line));
 }
+
+/**
+ * Progress-only incident messages are pure play-by-play with no substantive
+ * summary content after lightweight trimming.
+ */
+export function isProgressOnlyChatter(text: string): boolean {
+  const trimmed = sanitizeIncidentMessage(text);
+  return isProgressOnlyChatterFromSanitized(trimmed);
+}
+
+export const isProgressOnlyMessage = isProgressOnlyChatter;
 
 /**
  * Incident-channel replies may be free-form summaries, but must not be pure
  * progress chatter.
  */
 export function shouldBlockIncidentMessage(text: string): boolean {
-  return isProgressOnlyMessage(text);
+  return isProgressOnlyChatter(text);
 }
 
 export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
   return {
     id: SRE_INCIDENT_FORMAT_PLUGIN_ID,
     name: "SRE Incident Summary Gate",
-    version: "2.3.0",
+    version: "2.5.1",
     description:
-      "In incident channels, trims leading progress chatter and blocks pure play-by-play updates. Free-form final summaries are allowed.",
+      "Last-resort incident reply scrubber: trims leading progress chatter and blocks pure play-by-play updates. Free-form final summaries are allowed.",
     register(api) {
       api.on(
         "message_sending",
@@ -135,7 +226,7 @@ export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
             );
           }
 
-          if (shouldBlockIncidentMessage(sanitized)) {
+          if (isProgressOnlyChatterFromSanitized(sanitized)) {
             logVerbose(
               `sre-incident-format: blocked progress-only reply for ${slackConversationId}`,
             );
@@ -143,7 +234,7 @@ export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
           }
 
           if (sanitized !== content.trim()) {
-            return { content: sanitized, cancel: false };
+            return { content: sanitized };
           }
 
           return;

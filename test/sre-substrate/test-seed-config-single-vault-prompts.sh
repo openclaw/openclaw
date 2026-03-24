@@ -11,7 +11,7 @@ PROMPT_TEXT="$(
     bash -lc 'source "$1"; build_monitoring_incident_prompt' _ "$PROMPT_LIB"
 )"
 
-printf '%s' "$PROMPT_TEXT" | rg -F 'Keep that 4-line incident header on every follow-up update' >/dev/null
+printf '%s' "$PROMPT_TEXT" | rg -F 'First few lines should answer: Incident, Customer impact, Affected services, Status.' >/dev/null
 printf '%s' "$PROMPT_TEXT" | rg -F 'If new evidence disproves an earlier theory, state that directly in the next update' >/dev/null
 printf '%s' "$PROMPT_TEXT" | rg -F 'For one-address GraphQL' >/dev/null
 printf '%s' "$PROMPT_TEXT" | rg -F 'single-vault-graphql-evidence.sh when possible' >/dev/null

@@ -575,7 +575,7 @@ managed_tmp="$(mktemp)"
   printf '%s\n' "- Route bot/runtime/code proposals to ${SELF_IMPROVE_BOT_REPO}."
   printf '%s\n' "- Route deployment/config/seed-skill proposals to ${SELF_IMPROVE_INFRA_REPO}."
   printf '%s\n' '- Ignore heartbeat/system-prompt transcript content when preparing daily self-improve proposals.'
-  printf '%s\n' '- Preserve the plain-English incident summary contract in HEARTBEAT.md; do not rewrite the first-four-lines Incident/Customer impact/Affected services/Status structure.'
+  printf '%s\n' '- Preserve the plain-English incident summary contract in HEARTBEAT.md; keep the opening summary focused on Incident/Customer impact/Affected services/Status without reintroducing a rigid 4-line template.'
 } >"$managed_tmp"
 
 inject_managed_block "$heartbeat_abs" "$BLOCK_START" "$BLOCK_END" "$managed_tmp"

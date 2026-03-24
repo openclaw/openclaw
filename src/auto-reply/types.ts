@@ -61,6 +61,18 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /**
+   * Suppress tool/block intermediate replies.
+   * This is opt-in per run and is currently enabled by explicit incident-thread
+   * policy rather than by default generic dispatch behavior. When true,
+   * onToolResult and onBlockReply callbacks are disabled. Other streaming
+   * callbacks still depend on the caller's broader delivery policy. Does not
+   * affect streaming/preview callbacks; those are controlled separately.
+   * Final error/abort replies still flow through the normal final-delivery path.
+   */
+  finalOnlyReplies?: boolean;
+  /** Override the typing auto-stop TTL in milliseconds. Set 0 to disable. */
+  typingTtlMs?: number;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
