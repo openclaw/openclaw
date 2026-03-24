@@ -44,6 +44,7 @@ export async function runGatewayLoop(params: {
   // sequence — including after a failed in-process restart where the
   // process is idle and waiting for the next restart signal.
   let serverStarting = false;
+  let pendingSigterm = false;
 
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
@@ -194,7 +195,10 @@ export async function runGatewayLoop(params: {
     // failed restart where the process is idle) we honour the signal so that
     // `systemctl stop` always triggers a full graceful shutdown.
     if (serverStarting && !shuttingDown) {
-      gatewayLog.warn("signal SIGTERM received during server startup; ignoring spurious signal");
+      gatewayLog.warn(
+        "signal SIGTERM received during server startup; deferring until startup completes",
+      );
+      pendingSigterm = true;
       return;
     }
     gatewayLog.info("signal SIGTERM received");
@@ -253,6 +257,11 @@ export async function runGatewayLoop(params: {
         server = await params.start();
         serverStarting = false;
         isFirstStart = false;
+
+        if (pendingSigterm && !shuttingDown) {
+          gatewayLog.info("processing deferred SIGTERM after server startup");
+          request("stop", "SIGTERM");
+        }
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only
@@ -263,6 +272,11 @@ export async function runGatewayLoop(params: {
         }
         server = null;
         serverStarting = false;
+
+        if (pendingSigterm && !shuttingDown) {
+          gatewayLog.info("processing deferred SIGTERM after failed startup");
+          request("stop", "SIGTERM");
+        }
         // Release the gateway lock so that `daemon restart/stop` (which
         // discovers PIDs via the gateway port) can still manage the process.
         // Without this, the process holds the lock but is not listening,
