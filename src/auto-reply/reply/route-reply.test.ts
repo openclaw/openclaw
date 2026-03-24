@@ -130,7 +130,7 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
     label: "Microsoft Teams",
     selectionLabel: "Microsoft Teams (Bot Framework)",
     docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
+    blurb: "Teams SDK; enterprise support.",
   },
   capabilities: { chatTypes: ["direct"] },
   config: {

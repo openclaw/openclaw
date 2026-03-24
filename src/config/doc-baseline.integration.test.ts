@@ -118,7 +118,7 @@ describe("config doc baseline integration", () => {
     });
     expect(byPath.get("channels.msteams")).toMatchObject({
       label: "Microsoft Teams",
-      help: "Bot Framework; enterprise support.",
+      help: "Teams SDK; enterprise support.",
     });
     expect(byPath.get("channels.matrix")).toMatchObject({
       label: "Matrix",
