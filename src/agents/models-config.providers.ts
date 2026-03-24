@@ -104,37 +104,6 @@ function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | 
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
-function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
-  const live =
-    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return null;
-  }
-  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
-  if (!raw) {
-    return 15_000;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
-}
-
-function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
-  const live =
-    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
-  }
-  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
-  if (!raw || raw === "all") {
-    return undefined;
-  }
-  const ids = raw
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return ids.length > 0 ? [...new Set(ids)] : undefined;
-}
-
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
