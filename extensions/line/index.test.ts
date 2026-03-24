@@ -198,6 +198,7 @@ describe("line runtime api", () => {
           "probeLineBot",
           "pushMessageLine",
         ],
+        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/line-runtime"],
       }),
     ).toEqual({
       buildTemplateMessageFromPayload: "function",
