@@ -615,8 +615,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    await writeConfigFile(nextConfig);
-
     if (
       !(await appendWorkspaceFileOrRespond({
         respond,
@@ -627,6 +625,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+
+    await writeConfigFile(nextConfig);
 
     respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
   },
@@ -677,11 +677,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    await writeConfigFile(nextConfig);
-
     if (avatar) {
+      if (!identityWorkspaceDir) {
+        respondWorkspaceFileUnsafe(respond, DEFAULT_IDENTITY_FILENAME);
+        return;
+      }
       if (
-        !identityWorkspaceDir ||
         !(await appendWorkspaceFileOrRespond({
           respond,
           workspaceDir: identityWorkspaceDir,
@@ -692,6 +693,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    await writeConfigFile(nextConfig);
 
     respond(true, { ok: true, agentId }, undefined);
   },

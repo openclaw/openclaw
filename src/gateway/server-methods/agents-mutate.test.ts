@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { SafeOpenError } from "../../infra/fs-safe.js";
 
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
@@ -411,6 +412,26 @@ describe("agents.create", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.appendFileWithinRoot).not.toHaveBeenCalled();
   });
+
+  it("does not persist config when IDENTITY.md append is rejected after preflight", async () => {
+    mocks.appendFileWithinRoot.mockRejectedValueOnce(
+      new SafeOpenError("path escapes workspace root", "path escapes workspace root"),
+    );
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Append Reject Agent",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.appendFileWithinRoot).toHaveBeenCalledTimes(1);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
 });
 
 describe("agents.update", () => {
@@ -504,6 +525,26 @@ describe("agents.update", () => {
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.appendFileWithinRoot).not.toHaveBeenCalled();
+  });
+
+  it("does not persist config when avatar append is rejected after preflight", async () => {
+    mocks.appendFileWithinRoot.mockRejectedValueOnce(
+      new SafeOpenError("path-mismatch", "path escapes workspace root"),
+    );
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      avatar: "https://example.com/avatar.png",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.appendFileWithinRoot).toHaveBeenCalledTimes(1);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });
 
