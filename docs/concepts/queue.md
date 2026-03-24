@@ -69,6 +69,48 @@ Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when
 Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
 Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
+## Active-session arbitration
+
+When a session is already active, OpenClaw can refine the configured queue mode before the next turn starts.
+
+- Explicit queue settings still win. Session overrides, inline `/queue ...` directives, and explicit channel/global modes are not replaced.
+- Obvious topic shifts, stop requests, and standalone questions bias toward `interrupt`.
+- Obvious clarifications while the assistant is still streaming bias toward `steer`.
+- Tiny fragments like `以及` or `另外` bias toward `collect`.
+- Only ambiguous cases fall through to the optional local model arbitrator.
+
+If the current run is streaming and no arbitrator is enabled, ambiguous updates default to `interrupt`. This is intentionally conservative: it is safer to start a fresh turn than to splice a new request into an in-flight answer.
+
+OpenClaw also suppresses stale replies after a newer turn starts, so late tool/block/final output from the older turn is dropped instead of leaking into the chat.
+
+### Optional model arbitrator
+
+Use `messages.queue.arbitrator` when you want a small local model to classify ambiguous active-session updates:
+
+```json5
+{
+  messages: {
+    queue: {
+      mode: "collect",
+      arbitrator: {
+        enabled: true,
+        provider: "lmstudio", // or "ollama"
+        model: "qwen3-1.7b-instruct",
+        timeoutMs: 900,
+        temperature: 0,
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- The arbitrator is only consulted when heuristics defer.
+- Defaults to `lmstudio` if `provider` is omitted.
+- Intended for low-latency local models, not remote high-latency calls.
+- If the arbitrator times out or returns nothing parseable, OpenClaw falls back to the configured queue mode, except for ambiguous streaming updates where it still defaults to `interrupt`.
+
 ## Per-session overrides
 
 - Send `/queue <mode>` as a standalone command to store the mode for the current session.

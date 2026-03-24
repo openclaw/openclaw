@@ -9,7 +9,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/acpx",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.13",
     packageDescription: "OpenClaw ACP runtime backend via acpx",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2577,6 +2577,184 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Command Timeout Seconds",
           help: "Timeout for openshell CLI operations such as create/upload/download.",
           advanced: true,
+        },
+      },
+    },
+  },
+  {
+    dirName: "openviking",
+    idHint: "openviking",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/openviking",
+    packageVersion: "2026.3.12",
+    packageDescription: "OpenClaw OpenViking context-engine plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "openviking",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          baseUrl: {
+            type: "string",
+          },
+          account: {
+            type: "string",
+          },
+          user: {
+            type: "string",
+          },
+          agent: {
+            type: "string",
+          },
+          targetUri: {
+            type: "string",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10,
+          },
+          scoreThreshold: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
+          readLimit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 200,
+          },
+          injectAbstractsOnly: {
+            type: "boolean",
+          },
+          systemPromptHeader: {
+            type: "string",
+          },
+          requestTimeoutMs: {
+            type: "integer",
+            minimum: 1000,
+            maximum: 60000,
+          },
+          logQueries: {
+            type: "boolean",
+          },
+          logMisses: {
+            type: "boolean",
+          },
+          logWriteback: {
+            type: "boolean",
+          },
+          writebackEnabled: {
+            type: "boolean",
+          },
+          writebackMode: {
+            type: "string",
+            enum: ["session-api", "workspace-memory", "hybrid"],
+          },
+          writebackDirectory: {
+            type: "string",
+          },
+          writebackMaxChars: {
+            type: "integer",
+            minimum: 100,
+            maximum: 4000,
+          },
+          diagnosticEnabled: {
+            type: "boolean",
+          },
+          diagnosticFile: {
+            type: "string",
+          },
+        },
+      },
+      kind: "context-engine",
+      name: "OpenViking",
+      description: "Use OpenViking as the unified context-engine retrieval layer.",
+      uiHints: {
+        baseUrl: {
+          label: "Base URL",
+          placeholder: "http://127.0.0.1:1933",
+        },
+        account: {
+          label: "Account",
+        },
+        user: {
+          label: "User",
+        },
+        agent: {
+          label: "Agent",
+        },
+        targetUri: {
+          label: "Target URI",
+          help: "Usually viking://resources or a narrower subtree such as viking://resources/openclaw.",
+        },
+        limit: {
+          label: "Result Limit",
+        },
+        scoreThreshold: {
+          label: "Score Threshold",
+          advanced: true,
+        },
+        readLimit: {
+          label: "Read Line Limit",
+          advanced: true,
+        },
+        injectAbstractsOnly: {
+          label: "Inject Abstracts Only",
+          advanced: true,
+        },
+        systemPromptHeader: {
+          label: "System Prompt Header",
+          advanced: true,
+        },
+        requestTimeoutMs: {
+          label: "Request Timeout (ms)",
+          advanced: true,
+        },
+        logQueries: {
+          label: "Log Queries",
+          advanced: true,
+        },
+        logMisses: {
+          label: "Log Misses",
+          advanced: true,
+        },
+        logWriteback: {
+          label: "Log Writeback",
+          advanced: true,
+        },
+        writebackEnabled: {
+          label: "Enable Writeback",
+          advanced: true,
+        },
+        writebackMode: {
+          label: "Writeback Mode",
+          advanced: true,
+          help: "session-api writes directly into OpenViking memory, workspace-memory mirrors into OpenClaw markdown, hybrid does both.",
+        },
+        writebackDirectory: {
+          label: "Writeback Directory",
+          advanced: true,
+          help: "Workspace-relative directory used when workspace-memory writeback is enabled.",
+        },
+        writebackMaxChars: {
+          label: "Writeback Max Chars",
+          advanced: true,
+        },
+        diagnosticEnabled: {
+          label: "Write Diagnostic Snapshot",
+          advanced: true,
+        },
+        diagnosticFile: {
+          label: "Diagnostic File",
+          advanced: true,
+          help: "Workspace-relative JSON file used to store the most recent OpenViking retrieval and writeback status.",
         },
       },
     },
