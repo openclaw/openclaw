@@ -53,7 +53,11 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-import { compareOpenClawVersions } from "./version.js";
+import {
+  compareOpenClawVersions,
+  isSameOpenClawStableFamily,
+  parseOpenClawVersion,
+} from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -620,6 +624,24 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
+    return;
+  }
+  const currentVersion = parseOpenClawVersion(VERSION);
+  const touchedVersion = parseOpenClawVersion(touched);
+  if (!currentVersion || !touchedVersion) {
+    return;
+  }
+  if (isSameOpenClawStableFamily(VERSION, touched)) {
+    return;
+  }
+  const sameBaseRelease =
+    currentVersion.major === touchedVersion.major &&
+    currentVersion.minor === touchedVersion.minor &&
+    currentVersion.patch === touchedVersion.patch;
+  if (sameBaseRelease && touchedVersion.prerelease?.length) {
+    logger.warn(
+      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+    );
     return;
   }
   const cmp = compareOpenClawVersions(VERSION, touched);

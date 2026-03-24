@@ -25,9 +25,13 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveGatewayStartupPluginIds,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", () => ({
-  primeConfiguredBindingRegistry,
-}));
+vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/binding-registry.js")>();
+  return {
+    ...actual,
+    primeConfiguredBindingRegistry,
+  };
+});
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,

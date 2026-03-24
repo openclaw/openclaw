@@ -89,11 +89,30 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
-export function parseAt(input: string): string | null {
+const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+
+/**
+ * Parse a one-shot `--at` value into an ISO string (UTC).
+ *
+ * When `tz` is provided and the input is an offset-less datetime
+ * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
+ * that IANA timezone instead of UTC.
+ */
+export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
   }
+
+  // If a timezone is provided and the input looks like an offset-less ISO datetime,
+  // resolve it in the given IANA timezone so users get the time they expect.
+  if (tz && OFFSETLESS_ISO_DATETIME_RE.test(raw)) {
+    const resolved = parseOffsetlessAtInTimezone(raw, tz);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
     return new Date(absolute).toISOString();
@@ -103,6 +122,62 @@ export function parseAt(input: string): string | null {
     return new Date(Date.now() + dur).toISOString();
   }
   return null;
+}
+
+function parseOffsetlessAtInTimezone(raw: string, tz: string): string | null {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+
+    const naiveMs = new Date(`${raw}Z`).getTime();
+    if (Number.isNaN(naiveMs)) {
+      return null;
+    }
+
+    // Re-check the offset at the first candidate instant so DST boundaries
+    // land on the intended wall-clock time instead of drifting by one hour.
+    const firstOffsetMs = getTimezoneOffsetMs(naiveMs, tz);
+    const candidateMs = naiveMs - firstOffsetMs;
+    const finalOffsetMs = getTimezoneOffsetMs(candidateMs, tz);
+    return new Date(naiveMs - finalOffsetMs).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the UTC offset in milliseconds for a given IANA timezone at a given UTC instant.
+ * Positive means ahead of UTC (e.g. +3600000 for CET).
+ */
+function getTimezoneOffsetMs(utcMs: number, tz: string): number {
+  const d = new Date(utcMs);
+  // Format parts in the target timezone
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (type: string) => {
+    const part = parts.find((p) => p.type === type);
+    return Number.parseInt(part?.value ?? "0", 10);
+  };
+
+  // Reconstruct the local time as if it were UTC
+  const localAsUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+
+  return localAsUtc - utcMs;
 }
 
 const CRON_ID_PAD = 36;

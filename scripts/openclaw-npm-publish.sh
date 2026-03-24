@@ -16,6 +16,8 @@ release_channel="stable"
 if [[ "${package_version}" == *-beta.* ]]; then
   publish_cmd=(npm publish --access public --tag beta --provenance)
   release_channel="beta"
+elif [[ "${package_version}" == *-* ]]; then
+  publish_cmd=(npm publish --access public --tag latest --provenance)
 fi
 
 echo "Resolved package version: ${package_version}"
