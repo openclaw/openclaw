@@ -18,6 +18,16 @@ export function saveJsonFile(pathname: string, data: unknown) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  
+  // Atomic write via temp file and rename
+  const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  
+  try {
+    fs.chmodSync(tempPath, 0o600);
+  } catch (e) {
+    // Handle EPERM on Windows-mounted Docker volumes (Fixes #53947)
+  }
+  
+  fs.renameSync(tempPath, pathname);
 }
