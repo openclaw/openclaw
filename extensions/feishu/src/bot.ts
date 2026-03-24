@@ -61,7 +61,12 @@ const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const TOPIC_LABEL_TTL_MS = 10 * 60 * 1000;
 const TOPIC_LABEL_MAX_CHARS = 48;
-const topicLabelCache = new Map<string, { label: string; expireAt: number }>();
+const topicLabelCache = new Map<string, { label?: string; expireAt: number }>();
+
+export function clearFeishuBotCachesForTests() {
+  permissionErrorNotifiedAt.clear();
+  topicLabelCache.clear();
+}
 
 function buildFeishuGroupDisplayName(params: { chatId: string; groupName?: string }): string {
   const normalizedChatId = params.chatId.trim();
@@ -110,6 +115,11 @@ async function resolveFeishuTopicLabel(params: {
     return cached.label;
   }
 
+  const cacheMiss = () => {
+    topicLabelCache.set(cacheKey, { label: undefined, expireAt: now + TOPIC_LABEL_TTL_MS });
+    return undefined;
+  };
+
   try {
     const rootMessage = await getMessageFeishu({
       cfg,
@@ -118,13 +128,13 @@ async function resolveFeishuTopicLabel(params: {
     });
     const label = truncateFeishuTopicLabel(rootMessage?.content ?? "");
     if (!label) {
-      return undefined;
+      return cacheMiss();
     }
     topicLabelCache.set(cacheKey, { label, expireAt: now + TOPIC_LABEL_TTL_MS });
     return label;
   } catch (err) {
     log(`feishu: failed to resolve topic label for ${normalizedTopicRootId}: ${String(err)}`);
-    return undefined;
+    return cacheMiss();
   }
 }
 
@@ -403,12 +413,23 @@ export async function handleFeishuMessage(params: {
       senderOpenId: ctx.senderOpenId,
       log,
     });
-    if (directName) {
+    const fallbackSenderName = directName
+      ? undefined
+      : (
+          await resolveFeishuSenderName({
+            account,
+            senderId: ctx.senderOpenId,
+            senderUserId,
+            log,
+          })
+        ).name;
+    const resolvedDirectName = directName ?? fallbackSenderName;
+    if (resolvedDirectName) {
       ctx = {
         ...ctx,
         senderName: buildFeishuDirectDisplayName({
           senderOpenId: ctx.senderOpenId,
-          senderName: directName,
+          senderName: resolvedDirectName,
         }),
       };
     }
@@ -454,18 +475,7 @@ export async function handleFeishuMessage(params: {
       })
     : null;
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
-  const groupDisplayName = isGroup
-    ? buildFeishuGroupDisplayName({
-        chatId: ctx.chatId,
-        groupName: resolveSenderNamesEnabled
-          ? await resolveFeishuGroupName({
-              account,
-              chatId: ctx.chatId,
-              log,
-            })
-          : undefined,
-      })
-    : undefined;
+  let groupDisplayName: string | undefined;
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -567,6 +577,19 @@ export async function handleFeishuMessage(params: {
       return;
     }
   } else {
+  }
+
+  if (isGroup) {
+    groupDisplayName = buildFeishuGroupDisplayName({
+      chatId: ctx.chatId,
+      groupName: resolveSenderNamesEnabled
+        ? await resolveFeishuGroupName({
+            account,
+            chatId: ctx.chatId,
+            log,
+          })
+        : undefined,
+    });
   }
 
   log(

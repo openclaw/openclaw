@@ -20,9 +20,14 @@ const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const GROUP_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 const groupNameCache = new Map<string, { name?: string; expireAt: number }>();
+const directMemberNameCache = new Map<string, { name?: string; expireAt: number }>();
 
 function buildSenderCacheKey(accountId: string, senderId: string): string {
   return `${accountId}:${senderId}`;
+}
+
+function buildDirectMemberCacheKey(accountId: string, chatId: string, senderId: string): string {
+  return `${accountId}:${chatId}:${senderId}`;
 }
 
 function correctFeishuScopeInUrl(url: string): string {
@@ -63,13 +68,19 @@ function extractPermissionError(err: unknown): FeishuPermissionError | null {
 
 function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
   const trimmed = senderId.trim();
-  if (trimmed.startsWith("ou_")) {
+  if (trimmed.startsWith("ou_") || trimmed.startsWith("ou-")) {
     return "open_id";
   }
-  if (trimmed.startsWith("on_")) {
+  if (trimmed.startsWith("on_") || trimmed.startsWith("on-")) {
     return "union_id";
   }
   return "user_id";
+}
+
+export function clearFeishuSenderNameCachesForTests() {
+  senderNameCache.clear();
+  groupNameCache.clear();
+  directMemberNameCache.clear();
 }
 
 export async function resolveFeishuSenderName(params: {
@@ -218,19 +229,27 @@ export async function resolveFeishuDirectNameFromChatMember(params: {
     return undefined;
   }
 
-  const normalizedSenderOpenId = senderOpenId.trim();
+  const normalizedSenderId = senderOpenId.trim();
   const normalizedChatId = chatId.trim();
-  if (!normalizedSenderOpenId || !normalizedChatId) {
+  if (!normalizedSenderId || !normalizedChatId) {
     return undefined;
   }
 
-  const cached = senderNameCache.get(
-    buildSenderCacheKey(account.accountId, normalizedSenderOpenId),
+  const cacheKey = buildDirectMemberCacheKey(
+    account.accountId,
+    normalizedChatId,
+    normalizedSenderId,
   );
+  const cached = directMemberNameCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expireAt > now) {
     return cached.name;
   }
+
+  const cacheMiss = () => {
+    directMemberNameCache.set(cacheKey, { name: undefined, expireAt: now + SENDER_NAME_TTL_MS });
+    return undefined;
+  };
 
   try {
     const client = createFeishuClient(account) as any;
@@ -239,36 +258,35 @@ export async function resolveFeishuDirectNameFromChatMember(params: {
       return undefined;
     }
 
+    const memberIdType = resolveSenderLookupIdType(normalizedSenderId);
     const res: any = await getChatMembers({
       path: { chat_id: normalizedChatId },
-      params: { member_id_type: "open_id", page_size: 50 },
+      params: { member_id_type: memberIdType, page_size: 50 },
     });
     if (res?.code !== 0) {
       log(
-        `feishu: failed to resolve direct member name for ${normalizedSenderOpenId} in ${normalizedChatId}: code=${String(res?.code)} msg=${String(res?.msg ?? "")}`,
+        `feishu: failed to resolve direct member name for ${normalizedSenderId} in ${normalizedChatId}: code=${String(res?.code)} msg=${String(res?.msg ?? "")}`,
       );
-      return undefined;
+      return cacheMiss();
     }
 
     const item = Array.isArray(res?.data?.items)
       ? res.data.items.find(
           (entry: any) =>
-            typeof entry?.member_id === "string" && entry.member_id === normalizedSenderOpenId,
+            typeof entry?.member_id === "string" && entry.member_id === normalizedSenderId,
         )
       : undefined;
     const name = typeof item?.name === "string" ? item.name.trim() : "";
     if (name) {
-      senderNameCache.set(buildSenderCacheKey(account.accountId, normalizedSenderOpenId), {
-        name,
-        expireAt: now + SENDER_NAME_TTL_MS,
-      });
+      directMemberNameCache.set(cacheKey, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return name;
     }
   } catch (err) {
     log(
-      `feishu: failed to resolve direct member name for ${normalizedSenderOpenId} in ${normalizedChatId}: ${String(err)}`,
+      `feishu: failed to resolve direct member name for ${normalizedSenderId} in ${normalizedChatId}: ${String(err)}`,
     );
+    return cacheMiss();
   }
 
-  return undefined;
+  return cacheMiss();
 }
