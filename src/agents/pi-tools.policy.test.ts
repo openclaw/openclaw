@@ -421,6 +421,32 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("skips empty thread-specific DM entries and keeps probing parent direct policies", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner:thread:th_yyy": {},
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+        messageProvider: "feishu",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
   it("checks parent direct sender overrides before wildcard sender fallback when senderId is omitted", () => {
     const cfg = {
       channels: {
@@ -705,6 +731,36 @@ describe("resolveGroupToolPolicy", () => {
       resolveGroupToolPolicy({
         config: cfg,
         sessionKey: "agent:main:feishu:group:direct:abc",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("checks alternate account-scoped group candidates before settling on wildcard group policy", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            group: {
+              groups: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:group:abc",
       }),
     ).toEqual({ allow: ["read", "exec"] });
   });

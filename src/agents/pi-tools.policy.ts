@@ -309,6 +309,11 @@ function resolveDirectToolPolicyEntries(
   return { wildcard: entries["*"] };
 }
 
+type DirectPolicyResolution = {
+  policy?: DirectToolPolicyConfig;
+  rank: number;
+};
+
 function resolveDirectToolPolicyFromConfig(params: {
   config: OpenClawConfig;
   channel: string;
@@ -343,22 +348,6 @@ function resolveDirectToolPolicyFromConfig(params: {
       ? [params.directIdParent]
       : []),
   ];
-
-  let directEntry: DirectToolPolicyEntry | undefined;
-  let wildcardEntry: DirectToolPolicyEntry | undefined;
-  for (const directId of directIdsToTry) {
-    const scopedEntries = resolveDirectToolPolicyEntries(entries, directId);
-    wildcardEntry ??= scopedEntries.wildcard;
-    if (scopedEntries.direct) {
-      directEntry = scopedEntries.direct;
-      wildcardEntry = scopedEntries.wildcard;
-      break;
-    }
-  }
-  if (!directEntry && !wildcardEntry) {
-    return { rank: 0 };
-  }
-
   const senderIdsToTry = params.senderId
     ? [params.senderId]
     : [
@@ -409,22 +398,42 @@ function resolveDirectToolPolicyFromConfig(params: {
     const wildcardPolicy = toolsBySender["*"];
     return wildcardPolicy && pickSandboxToolPolicy(wildcardPolicy) ? wildcardPolicy : undefined;
   };
+  const resolvePolicyFromEntries = ({
+    direct,
+    wildcard,
+  }: {
+    direct?: DirectToolPolicyEntry;
+    wildcard?: DirectToolPolicyEntry;
+  }): DirectPolicyResolution => {
+    const senderPolicy = resolveSenderScopedPolicy(direct?.toolsBySender);
+    if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
+      return { policy: senderPolicy, rank: 4 };
+    }
+    if (direct?.tools && pickSandboxToolPolicy(direct.tools)) {
+      return { policy: direct.tools, rank: 3 };
+    }
+    const wildcardSenderPolicy = resolveSenderScopedPolicy(wildcard?.toolsBySender);
+    if (wildcardSenderPolicy && pickSandboxToolPolicy(wildcardSenderPolicy)) {
+      return { policy: wildcardSenderPolicy, rank: 2 };
+    }
+    if (wildcard?.tools && pickSandboxToolPolicy(wildcard.tools)) {
+      return { policy: wildcard.tools, rank: 1 };
+    }
+    return { rank: 0 };
+  };
 
-  const senderPolicy = resolveSenderScopedPolicy(directEntry?.toolsBySender);
-  if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
-    return { policy: senderPolicy, rank: 4 };
+  let best: DirectPolicyResolution = { rank: 0 };
+  for (const directId of directIdsToTry) {
+    const scopedEntries = resolveDirectToolPolicyEntries(entries, directId);
+    const resolved = resolvePolicyFromEntries(scopedEntries);
+    if (resolved.rank > best.rank) {
+      best = resolved;
+      if (best.rank >= 4) {
+        break;
+      }
+    }
   }
-  if (directEntry?.tools && pickSandboxToolPolicy(directEntry.tools)) {
-    return { policy: directEntry.tools, rank: 3 };
-  }
-  const wildcardSenderPolicy = resolveSenderScopedPolicy(wildcardEntry?.toolsBySender);
-  if (wildcardSenderPolicy && pickSandboxToolPolicy(wildcardSenderPolicy)) {
-    return { policy: wildcardSenderPolicy, rank: 2 };
-  }
-  if (wildcardEntry?.tools && pickSandboxToolPolicy(wildcardEntry.tools)) {
-    return { policy: wildcardEntry.tools, rank: 1 };
-  }
-  return { rank: 0 };
+  return best;
 }
 
 function resolveGroupPolicyLookupOptions(channel: string): { groupIdCaseInsensitive?: boolean } {
@@ -703,10 +712,16 @@ export function resolveGroupToolPolicy(params: {
       typeof candidate.groupId === "string" && candidate.groupId.length > 0,
   );
 
+  type GroupPolicyResolution = {
+    policy?: SandboxToolPolicy;
+    hasExplicitGroupMatch: boolean;
+    specificity: number;
+  };
+
   const resolveGroupCandidatePolicy = (candidate: {
     groupId: string;
     accountId?: string | null;
-  }): { policy?: SandboxToolPolicy; hasExplicitGroupMatch: boolean } => {
+  }): GroupPolicyResolution => {
     const { groupConfig } = resolveChannelGroupPolicy({
       cfg: config,
       channel,
@@ -740,13 +755,15 @@ export function resolveGroupToolPolicy(params: {
     return {
       policy: pickSandboxToolPolicy(toolsConfig),
       hasExplicitGroupMatch: Boolean(groupConfig),
+      specificity: candidate.accountId ? 1 : 0,
     };
   };
 
-  const resolveFirstGroupPolicy = () => {
+  const resolveBestGroupPolicy = (): GroupPolicyResolution | undefined => {
     if (groupCandidates.length === 0) {
       return undefined;
     }
+    let best: GroupPolicyResolution | undefined;
     const seenGroupCandidates = new Set<string>();
     for (const candidate of groupCandidates) {
       const key = `${candidate.accountId ?? ""}\n${candidate.groupId}`;
@@ -754,12 +771,21 @@ export function resolveGroupToolPolicy(params: {
         continue;
       }
       seenGroupCandidates.add(key);
-      const { policy } = resolveGroupCandidatePolicy(candidate);
-      if (policy) {
-        return policy;
+      const resolved = resolveGroupCandidatePolicy(candidate);
+      if (!resolved.policy) {
+        continue;
+      }
+      if (
+        !best ||
+        Number(resolved.hasExplicitGroupMatch) > Number(best.hasExplicitGroupMatch) ||
+        (resolved.hasExplicitGroupMatch &&
+          best.hasExplicitGroupMatch &&
+          resolved.specificity > best.specificity)
+      ) {
+        best = resolved;
       }
     }
-    return undefined;
+    return best;
   };
 
   const preferredGroupCandidate = params.groupId
@@ -798,24 +824,28 @@ export function resolveGroupToolPolicy(params: {
     return directResolution.policy;
   }
   if (preferredScopeKind === "group") {
-    const groupPolicy = preferredGroupCandidate
+    const preferredGroupPolicy = preferredGroupCandidate
       ? resolveGroupCandidatePolicy({
           groupId: preferredGroupCandidate.groupId,
           accountId: preferredGroupCandidate.accountId,
         })
-      : { policy: resolveFirstGroupPolicy(), hasExplicitGroupMatch: false };
+      : undefined;
+    const bestGroupPolicy = resolveBestGroupPolicy();
+    if (preferredGroupPolicy?.hasExplicitGroupMatch) {
+      return preferredGroupPolicy.policy;
+    }
+    if (bestGroupPolicy?.hasExplicitGroupMatch) {
+      return bestGroupPolicy.policy;
+    }
     if (!preferredGroupCandidate?.alternateDirectId) {
-      return groupPolicy.policy;
+      return preferredGroupPolicy?.policy ?? bestGroupPolicy?.policy;
     }
-    if (groupPolicy.hasExplicitGroupMatch) {
-      return groupPolicy.policy;
-    }
-    return directResolution.policy ?? groupPolicy.policy;
+    return directResolution.policy ?? preferredGroupPolicy?.policy ?? bestGroupPolicy?.policy;
   }
 
-  const groupPolicy = resolveFirstGroupPolicy();
-  if (groupPolicy) {
-    return groupPolicy;
+  const groupPolicy = resolveBestGroupPolicy();
+  if (groupPolicy?.policy) {
+    return groupPolicy.policy;
   }
   return directResolution.policy;
 }
