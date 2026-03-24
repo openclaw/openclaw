@@ -10,7 +10,6 @@ const lifecycleMocks = vi.hoisted(() => ({
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: lifecycleMocks.getGlobalHookRunner,
 }));
-
 function createRunEntry(): SubagentRunRecord {
   return {
     runId: "run-1",
