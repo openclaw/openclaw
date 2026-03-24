@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 
@@ -129,6 +130,7 @@ export async function withTempHome<T>(
   try {
     return await fn(base);
   } finally {
+    await cleanupSessionStateForTest().catch(() => undefined);
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);
     try {

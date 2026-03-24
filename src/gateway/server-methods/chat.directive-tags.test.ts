@@ -1185,6 +1185,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
+      waitForCompletion: false,
     });
 
     await waitForAssertion(() => {
