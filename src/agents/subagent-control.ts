@@ -728,12 +728,22 @@ export async function steerControlledSubagentRun(params: {
     };
   }
 
-  replaceSubagentRunAfterSteer({
+  const replaced = replaceSubagentRunAfterSteer({
     previousRunId: params.entry.runId,
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
   });
+  if (!replaced) {
+    clearSubagentRunSteerRestart(params.entry.runId);
+    return {
+      status: "error",
+      runId,
+      sessionKey: params.entry.childSessionKey,
+      sessionId,
+      error: "failed to replace steered subagent run",
+    };
+  }
 
   return {
     status: "accepted",

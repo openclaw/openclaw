@@ -9,6 +9,7 @@ import {
   __testing,
   killSubagentRunAdmin,
   sendControlledSubagentMessage,
+  steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
   addSubagentRunForTests,
@@ -214,6 +215,81 @@ describe("killSubagentRunAdmin", () => {
       expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
     } finally {
       updateSessionStoreSpy.mockRestore();
+    }
+  });
+});
+
+describe("steerControlledSubagentRun", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("returns an error and clears the restart marker when run remap fails", async () => {
+    addSubagentRunForTests({
+      runId: "run-steer-old",
+      childSessionKey: "agent:main:subagent:steer-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const replaceSpy = vi
+      .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
+      .mockReturnValue(false);
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-steer-new" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    try {
+      const result = await steerControlledSubagentRun({
+        cfg: {} as OpenClawConfig,
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry: {
+          runId: "run-steer-old",
+          childSessionKey: "agent:main:subagent:steer-worker",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          controllerSessionKey: "agent:main:main",
+          task: "initial task",
+          cleanup: "keep",
+          createdAt: Date.now() - 5_000,
+          startedAt: Date.now() - 4_000,
+        },
+        message: "updated direction",
+      });
+
+      expect(result).toEqual({
+        status: "error",
+        runId: "run-steer-new",
+        sessionKey: "agent:main:subagent:steer-worker",
+        sessionId: undefined,
+        error: "failed to replace steered subagent run",
+      });
+      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
+        runId: "run-steer-old",
+        suppressAnnounceReason: undefined,
+      });
+    } finally {
+      replaceSpy.mockRestore();
     }
   });
 });
