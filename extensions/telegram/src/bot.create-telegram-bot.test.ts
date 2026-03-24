@@ -35,6 +35,8 @@ const {
   useSpy,
 } = harness;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -79,21 +81,22 @@ describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveTelegramFetch } = await import("./fetch.js"));
+    ({
+      createTelegramBot: createTelegramBotBase,
+      getTelegramSequentialKey,
+      setTelegramBotRuntimeForTest,
+    } = await import("./bot.js"));
+  });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
   });
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    const {
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey: importedGetTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js");
+  beforeEach(() => {
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
-    getTelegramSequentialKey = importedGetTelegramSequentialKey;
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
