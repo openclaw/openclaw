@@ -124,6 +124,13 @@ export type DiscordVoiceAutoJoinConfig = {
   guildId: string;
   /** Voice channel ID to join. */
   channelId: string;
+  /**
+   * Optional text channel ID to use as the agent session channel.
+   * When set, STT transcripts and AI replies are routed to this text channel
+   * (with deliver: true) instead of the voice channel, making the conversation
+   * visible as text while audio playback continues in the voice channel.
+   */
+  sessionChannelId?: string;
 };
 
 export type DiscordVoiceConfig = {

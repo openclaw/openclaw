@@ -300,6 +300,7 @@ export class DiscordVoiceManager {
         await this.join({
           guildId: entry.guildId,
           channelId: entry.channelId,
+          sessionChannelId: entry.sessionChannelId,
         });
       }
     })().finally(() => {
@@ -317,7 +318,12 @@ export class DiscordVoiceManager {
     }));
   }
 
-  async join(params: { guildId: string; channelId: string }): Promise<VoiceOperationResult> {
+  async join(params: {
+    guildId: string;
+    channelId: string;
+    /** Optional text channel ID to use for the agent session instead of the voice channel. */
+    sessionChannelId?: string;
+  }): Promise<VoiceOperationResult> {
     if (!this.voiceEnabled) {
       return {
         ok: false,
@@ -332,7 +338,11 @@ export class DiscordVoiceManager {
     logVoiceVerbose(`join requested: guild ${guildId} channel ${channelId}`);
 
     const existing = this.sessions.get(guildId);
-    if (existing && existing.channelId === channelId) {
+    if (
+      existing &&
+      existing.channelId === channelId &&
+      existing.sessionChannelId === (params.sessionChannelId?.trim() || channelId)
+    ) {
       logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
       return {
         ok: true,
@@ -391,10 +401,17 @@ export class DiscordVoiceManager {
       return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
     }
 
-    const sessionChannelId = channelInfo?.id ?? channelId;
-    // Use the voice channel id as the session channel so text chat in the voice channel
+    const voiceChannelId = channelInfo?.id ?? channelId;
+    // If a sessionChannelId is explicitly configured, route the agent session to that channel
+    // (e.g. a paired text channel) so transcripts and replies are visible as text.
+    // Otherwise fall back to the voice channel so text chat in the voice channel
     // shares the same session as spoken audio.
-    if (sessionChannelId !== channelId) {
+    const sessionChannelId = params.sessionChannelId?.trim() || voiceChannelId;
+    if (sessionChannelId !== voiceChannelId) {
+      logVoiceVerbose(
+        `join: routing voice session to text channel ${sessionChannelId} (voice channel ${channelId})`,
+      );
+    } else if (sessionChannelId !== channelId) {
       logVoiceVerbose(
         `join: using session channel ${sessionChannelId} for voice channel ${channelId}`,
       );
@@ -612,6 +629,10 @@ export class DiscordVoiceManager {
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
+    // When the session is routed to a separate text channel (sessionChannelId !== voice channelId),
+    // deliver the reply so the conversation is visible as text. Otherwise keep deliver: false
+    // and rely on TTS audio playback only.
+    const deliverToTextChannel = entry.sessionChannelId !== entry.channelId;
     const result = await agentCommandFromIngress(
       {
         message: prompt,
@@ -620,7 +641,7 @@ export class DiscordVoiceManager {
         messageChannel: "discord",
         senderIsOwner: speaker.senderIsOwner,
         allowModelOverride: false,
-        deliver: false,
+        deliver: deliverToTextChannel,
       },
       this.params.runtime,
     );
