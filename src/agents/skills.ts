@@ -13,6 +13,8 @@ export {
 export {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  applySkillEnvOverridesFromSnapshotWithResult,
+  applySkillEnvOverridesWithResult,
   collectAllowedSensitiveKeysFromSkillEntries,
   collectAllowedSensitiveKeysFromSkillSnapshot,
 } from "./skills/env-overrides.js";

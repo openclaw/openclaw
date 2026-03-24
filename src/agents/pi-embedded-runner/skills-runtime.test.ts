@@ -148,4 +148,26 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       OPENAI_API_KEY: "sk-test",
     });
   });
+
+  it("does not sync null-byte env values into sandbox exec env", () => {
+    const sandbox = {
+      docker: { env: { LANG: "C.UTF-8" } },
+      backend: { env: { LANG: "C.UTF-8" } },
+    };
+
+    syncCurrentSkillEnvToSandbox({
+      sandbox,
+      envKeys: new Set(["OPENAI_API_KEY"]),
+      env: {
+        OPENAI_API_KEY: "sk-test\0bad",
+      },
+    });
+
+    expect(sandbox.docker.env).toEqual({
+      LANG: "C.UTF-8",
+    });
+    expect(sandbox.backend.env).toEqual({
+      LANG: "C.UTF-8",
+    });
+  });
 });

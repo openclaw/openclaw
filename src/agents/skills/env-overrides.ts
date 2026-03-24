@@ -77,6 +77,11 @@ type SanitizedSkillEnvOverrides = {
   warnings: string[];
 };
 
+export type AppliedSkillEnvOverrides = {
+  restore: () => void;
+  injectedKeys: ReadonlySet<string>;
+};
+
 // Always block skill env overrides that can alter runtime loading or host execution behavior.
 const SKILL_ALWAYS_BLOCKED_ENV_PATTERNS: ReadonlyArray<RegExp> = [
   /^OPENSSL_CONF$/i,
@@ -214,7 +219,17 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+function buildAppliedSkillEnvOverridesResult(updates: EnvUpdate[]): AppliedSkillEnvOverrides {
+  return {
+    restore: createEnvReverter(updates),
+    injectedKeys: new Set(updates.map((update) => update.key)),
+  };
+}
+
+export function applySkillEnvOverridesWithResult(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+}): AppliedSkillEnvOverrides {
   const { skills } = params;
   const config = resolveSkillRuntimeConfig(params.config);
   const updates: EnvUpdate[] = [];
@@ -235,17 +250,21 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
     });
   }
 
-  return createEnvReverter(updates);
+  return buildAppliedSkillEnvOverridesResult(updates);
 }
 
-export function applySkillEnvOverridesFromSnapshot(params: {
+export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+  return applySkillEnvOverridesWithResult(params).restore;
+}
+
+export function applySkillEnvOverridesFromSnapshotWithResult(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
-}) {
+}): AppliedSkillEnvOverrides {
   const { snapshot } = params;
   const config = resolveSkillRuntimeConfig(params.config);
   if (!snapshot) {
-    return () => {};
+    return { restore: () => {}, injectedKeys: new Set() };
   }
   const updates: EnvUpdate[] = [];
 
@@ -264,7 +283,14 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     });
   }
 
-  return createEnvReverter(updates);
+  return buildAppliedSkillEnvOverridesResult(updates);
+}
+
+export function applySkillEnvOverridesFromSnapshot(params: {
+  snapshot?: SkillSnapshot;
+  config?: OpenClawConfig;
+}) {
+  return applySkillEnvOverridesFromSnapshotWithResult(params).restore;
 }
 
 /**

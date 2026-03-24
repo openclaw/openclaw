@@ -12,6 +12,8 @@ import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  applySkillEnvOverridesFromSnapshotWithResult,
+  applySkillEnvOverridesWithResult,
   buildWorkspaceSkillCommandSpecs,
   buildWorkspaceSkillsPrompt,
   buildWorkspaceSkillSnapshot,
@@ -374,6 +376,54 @@ describe("applySkillEnvOverrides", () => {
         expect(process.env.ENV_KEY).toBe("snap-key");
       } finally {
         restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("reports only env keys injected by the current override call", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      process.env.ENV_KEY = "externally-managed";
+      const result = applySkillEnvOverridesWithResult({
+        skills: entries,
+        config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } }, // pragma: allowlist secret
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("externally-managed");
+        expect(result.injectedKeys.size).toBe(0);
+      } finally {
+        result.restore();
+        expect(process.env.ENV_KEY).toBe("externally-managed");
+      }
+    });
+  });
+
+  it("reports snapshot-injected env keys for the current override call", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
+    });
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const result = applySkillEnvOverridesFromSnapshotWithResult({
+        snapshot,
+        config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("snap-key");
+        expect(result.injectedKeys).toEqual(new Set(["ENV_KEY"]));
+      } finally {
+        result.restore();
         expect(process.env.ENV_KEY).toBeUndefined();
       }
     });

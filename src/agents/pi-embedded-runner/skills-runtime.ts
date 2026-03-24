@@ -42,7 +42,7 @@ export function syncCurrentSkillEnvToSandbox(params: {
       continue;
     }
     const value = envSource[key];
-    if (typeof value === "string") {
+    if (typeof value === "string" && !value.includes("\0")) {
       skillEnv[key] = value;
     }
   }

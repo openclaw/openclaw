@@ -77,8 +77,8 @@ import {
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
+  applySkillEnvOverridesFromSnapshotWithResult,
+  applySkillEnvOverridesWithResult,
   collectAllowedSensitiveKeysFromSkillEntries,
   collectAllowedSensitiveKeysFromSkillSnapshot,
   resolveSkillsPromptForRun,
@@ -760,18 +760,19 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
     });
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
+    const skillEnvOverrides = params.skillsSnapshot
+      ? applySkillEnvOverridesFromSnapshotWithResult({
           snapshot: params.skillsSnapshot,
           config: params.config,
         })
-      : applySkillEnvOverrides({
+      : applySkillEnvOverridesWithResult({
           skills: skillEntries ?? [],
           config: params.config,
         });
+    restoreSkillEnv = skillEnvOverrides.restore;
     syncCurrentSkillEnvToSandbox({
       sandbox,
-      envKeys: allowedSensitiveKeys,
+      envKeys: skillEnvOverrides.injectedKeys,
     });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
