@@ -862,6 +862,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "eternal-ai",
+    idHint: "eternal-ai",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/eternal-ai-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Eternal AI provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "eternal-ai",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["eternal-ai"],
+      providerAuthEnvVars: {
+        "eternal-ai": ["ETERNAL_AI_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "eternal-ai",
+          method: "api-key",
+          choiceId: "eternal-ai-api-key",
+          choiceLabel: "Eternal AI API key",
+          groupId: "eternal-ai",
+          groupLabel: "Eternal AI",
+          groupHint: "Uncensored and Private AI",
+          optionKey: "eternalAiApiKey",
+          cliFlag: "--eternal-ai-api-key",
+          cliOption: "--eternal-ai-api-key <key>",
+          cliDescription: "Eternal AI API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "exa",
     idHint: "exa-plugin",
     source: {
