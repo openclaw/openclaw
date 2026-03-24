@@ -239,6 +239,25 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         },
       };
     }
+    // For /new command without ACP binding, trigger session reset and stop
+    // This prevents spawning a subagent when user just wants to clear context
+    if (commandAction === "new") {
+      await emitResetCommandHooks({
+        action: commandAction,
+        ctx: params.ctx,
+        cfg: params.cfg,
+        command: params.command,
+        sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
+        previousSessionEntry: params.previousSessionEntry,
+        workspaceDir: params.workspaceDir,
+      });
+      return {
+        shouldContinue: false,
+        reply: { text: "✅ Session reset. Start fresh!" },
+      };
+    }
+    // For /reset without ACP binding, continue to allow normal processing
     await emitResetCommandHooks({
       action: commandAction,
       ctx: params.ctx,
