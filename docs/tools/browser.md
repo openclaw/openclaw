@@ -228,9 +228,16 @@ the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
   discover the WebSocket debugger URL, then connects.
 - **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
   skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com), [Browserless](https://browserless.io),
+  or any provider that hands you a WebSocket URL.
+
   [Browserless](https://browserless.io),
   [Browserbase](https://www.browserbase.com) or any provider that hands you a
   WebSocket URL.
+=======
+  [Browserbase](https://www.browserbase.com), [Browserless](https://browserless.io),
+  or any provider that hands you a WebSocket URL.
+>>>>>>> 06838c8 (docs(browser): fix Browserless websocket wording)
 
 ### Browserbase
 
