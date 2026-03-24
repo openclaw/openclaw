@@ -3,6 +3,7 @@
 
 #include <glib.h>
 
+gboolean systemd_is_gateway_unit_name(const gchar *unit_name);
 gboolean systemd_is_gateway_unit(const gchar *filename, const gchar *contents);
 gchar* systemd_normalize_unit_override(const gchar *raw_unit);
 gchar* systemd_normalize_profile(const gchar *raw_profile);

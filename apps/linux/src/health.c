@@ -305,7 +305,7 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     
-    g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
+    gboolean comm_ok = g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
     state_set_health_in_flight(FALSE);
     
@@ -316,10 +316,13 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     }
     
     HealthState hs = {0};
-    hs.last_updated = g_get_real_time();
     
-    if (!error && g_subprocess_get_if_exited(subprocess) && g_subprocess_get_exit_status(subprocess) == 0) {
+    if (comm_ok && !error && g_subprocess_get_if_exited(subprocess) && g_subprocess_get_exit_status(subprocess) == 0) {
+        hs.last_updated = g_get_real_time();
         parse_health_json(stdout_buf, &hs);
+    } else if (comm_ok) {
+        // Subprocess ran but exited non-zero — still mark timestamp so stale data is cleared
+        hs.last_updated = g_get_real_time();
     }
     
     state_update_health(&hs);
@@ -392,7 +395,7 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     
-    g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
+    gboolean comm_ok = g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
     state_set_probe_in_flight(FALSE);
     
@@ -406,6 +409,18 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     ps.ran = TRUE;
     ps.last_updated = g_get_real_time();
     
+    if (!comm_ok) {
+        ps.reachable = FALSE;
+        ps.connect_ok = FALSE;
+        ps.rpc_ok = FALSE;
+        ps.summary = g_strdup_printf("Probe communicate failed: %s", error ? error->message : "unknown error");
+        state_update_probe(&ps);
+        g_free(ps.summary);
+        g_free(stdout_buf);
+        g_free(stderr_buf);
+        goto check_pending;
+    }
+
     if (!g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
         if (error) {
             ps.summary = g_strdup_printf("Probe failed to execute: %s", error->message);

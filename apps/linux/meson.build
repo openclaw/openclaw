@@ -66,7 +66,7 @@ test_state_exe = executable('test_state',
 test('state', test_state_exe)
 
 test_systemd_exe = executable('test_systemd_helpers',
-  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c'],
+  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, gio_unix_dep])
 test('systemd_helpers', test_systemd_exe)
 

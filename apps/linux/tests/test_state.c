@@ -306,6 +306,33 @@ static void test_consecutive_freshness_invalidation_idempotence(void) {
     g_free(hs.probe_url);
 }
 
+static void test_health_communicate_failure_preserves_running_state(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    
+    // First hydration
+    HealthState hs_initial = {0};
+    hs_initial.last_updated = 12345;
+    hs_initial.loaded = TRUE;
+    hs_initial.rpc_ok = TRUE;
+    hs_initial.health_healthy = TRUE;
+    state_update_health(&hs_initial);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    
+    // Simulate communicate failure (0 timestamp, zeroed payload)
+    HealthState hs_fail = {0};
+    hs_fail.last_updated = 0;
+    // other fields false/0
+    state_update_health(&hs_fail);
+    
+    // Because last_updated is 0, the state machine should use the startup hydration guard
+    // and preserve STATE_RUNNING rather than transitioning to STATE_DEGRADED.
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -323,6 +350,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/transition_into_systemd_unavailable", test_transition_into_systemd_unavailable);
     g_test_add_func("/state/repeated_unit_retargets", test_repeated_unit_retargets);
     g_test_add_func("/state/consecutive_freshness_invalidation_idempotence", test_consecutive_freshness_invalidation_idempotence);
+    g_test_add_func("/state/health_communicate_failure_preserves_running_state", test_health_communicate_failure_preserves_running_state);
     
     return g_test_run();
 }
