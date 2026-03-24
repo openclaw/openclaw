@@ -155,6 +155,12 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
+type SourceAnalysis = {
+  text: string;
+  importSpecifiers: string[];
+  extensionImports: string[];
+};
+const sourceAnalysisCache = new Map<string, SourceAnalysis>();
 let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
@@ -352,12 +358,25 @@ function collectModuleSpecifiers(text: string): string[] {
   return [...specifiers];
 }
 
-function collectExtensionImports(text: string): string[] {
-  return collectModuleSpecifiers(text).filter((specifier) => specifier.includes("extensions/"));
-}
-
 function collectImportSpecifiers(text: string): string[] {
   return collectModuleSpecifiers(text);
+}
+
+function getSourceAnalysis(path: string): SourceAnalysis {
+  const fullPath = resolve(REPO_ROOT, path);
+  const cached = sourceAnalysisCache.get(fullPath);
+  if (cached) {
+    return cached;
+  }
+  const text = readSource(path);
+  const importSpecifiers = collectImportSpecifiers(text);
+  const analysis = {
+    text,
+    importSpecifiers,
+    extensionImports: importSpecifiers.filter((specifier) => specifier.includes("extensions/")),
+  } satisfies SourceAnalysis;
+  sourceAnalysisCache.set(fullPath, analysis);
+  return analysis;
 }
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
@@ -420,11 +439,11 @@ describe("channel import guardrails", () => {
 
   it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
     for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
+      const analysis = getSourceAnalysis(file);
+      expect(analysis.text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
         /["']openclaw\/plugin-sdk["']/,
       );
-      expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
+      expect(analysis.text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
         /["']openclaw\/plugin-sdk\/compat["']/,
       );
     }
@@ -433,8 +452,8 @@ describe("channel import guardrails", () => {
   it("keeps bundled extension source files off legacy core send-deps src imports", () => {
     const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
     for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
+      const analysis = getSourceAnalysis(file);
+      expect(analysis.text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
         legacyCoreSendDepsImport,
       );
     }
@@ -442,8 +461,8 @@ describe("channel import guardrails", () => {
 
   it("keeps core production files off extension private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import extensions/*/src`).not.toMatch(
+      const analysis = getSourceAnalysis(file);
+      expect(analysis.text, `${file} should not import extensions/*/src`).not.toMatch(
         /["'][^"']*extensions\/[^/"']+\/src\//,
       );
     }
@@ -451,20 +470,19 @@ describe("channel import guardrails", () => {
 
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expectNoSiblingExtensionPrivateSrcImports(file, collectImportSpecifiers(text));
+      expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
     }
   });
 
   it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readSource(file)));
+      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
     }
   });
 
   it("keeps extension-to-extension imports limited to approved public surfaces", () => {
     for (const file of collectExtensionSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readSource(file)));
+      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
     }
   });
 
@@ -483,7 +501,7 @@ describe("channel import guardrails", () => {
         ) {
           continue;
         }
-        const text = readSource(file);
+        const { text } = getSourceAnalysis(file);
         expect(
           text,
           `${normalized} should import ${extensionId} helpers via the local api barrel`,
