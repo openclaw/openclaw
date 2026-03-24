@@ -161,18 +161,21 @@ describe("runPreparedReply media-only handling", () => {
     vi.clearAllMocks();
   });
 
-  it("allows media-only prompts and preserves thread context in queued followups", async () => {
+  it("allows media-only prompts and moves thread context to system prompt on first turn", async () => {
     const result = await runPreparedReply(baseParams());
     expect(result).toEqual({ text: "ok" });
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+    // Thread context should be in the system prompt, not in the user message body
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("[Thread history - for context]");
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("Earlier message in this thread");
+    // User message body should NOT contain thread history (avoids transcript pollution)
+    expect(call?.followupRun.prompt).not.toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("keeps thread history context on follow-up turns", async () => {
+  it("omits thread history context on follow-up turns (already in conversation history)", async () => {
     const result = await runPreparedReply(
       baseParams({
         isNewSession: false,
@@ -182,8 +185,12 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+    // On subsequent turns, thread context should NOT be injected anywhere
+    // (it's already in the LLM's conversation history from the first turn's system prompt)
+    expect(call?.followupRun.prompt).not.toContain("[Thread history - for context]");
+    expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain(
+      "[Thread history - for context]",
+    );
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {
