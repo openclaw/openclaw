@@ -10,9 +10,11 @@ import {
 } from "./interactive-dispatch-adapters.js";
 import type {
   PluginInteractiveDiscordHandlerContext,
+  PluginInteractiveDiscordHandlerRegistration,
   PluginInteractiveButtons,
   PluginInteractiveHandlerRegistration,
   PluginInteractiveSlackHandlerContext,
+  PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
@@ -222,9 +224,11 @@ export async function dispatchPluginInteractiveHandler(params: {
   await params.onMatched?.();
 
   let result: ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>;
+  type RegisteredMetadata = { pluginId: string; pluginName?: string; pluginRoot?: string };
   if (params.channel === "telegram") {
     result = dispatchTelegramInteractiveHandler({
-      registration: match.registration,
+      registration: match.registration as PluginInteractiveTelegramHandlerRegistration &
+        RegisteredMetadata,
       data: params.data,
       namespace: match.namespace,
       payload: match.payload,
@@ -233,7 +237,8 @@ export async function dispatchPluginInteractiveHandler(params: {
     });
   } else if (params.channel === "discord") {
     result = dispatchDiscordInteractiveHandler({
-      registration: match.registration,
+      registration: match.registration as PluginInteractiveDiscordHandlerRegistration &
+        RegisteredMetadata,
       data: params.data,
       namespace: match.namespace,
       payload: match.payload,
@@ -242,7 +247,8 @@ export async function dispatchPluginInteractiveHandler(params: {
     });
   } else {
     result = dispatchSlackInteractiveHandler({
-      registration: match.registration,
+      registration: match.registration as PluginInteractiveSlackHandlerRegistration &
+        RegisteredMetadata,
       data: params.data,
       namespace: match.namespace,
       payload: match.payload,

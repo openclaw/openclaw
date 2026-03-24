@@ -348,7 +348,8 @@ export function loadEnabledBundleMcpConfig(params: {
     const loaded = loadBundleMcpConfig({
       pluginId: record.id,
       rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
+      // bundleFormat is non-null here: guarded by the `!record.bundleFormat` check above.
+      bundleFormat: record.bundleFormat!,
     });
     merged = applyMergePatch(merged, loaded.config) as BundleMcpConfig;
     for (const message of loaded.diagnostics) {

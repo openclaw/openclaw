@@ -106,7 +106,6 @@ const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "config",
-  "agent",
   "subagent",
   "system",
   "media",

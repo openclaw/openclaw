@@ -238,11 +238,10 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
   contextWindow?: number;
   maxTokens?: number;
 }): Promise<OpenClawConfig | null> {
-  const baseUrl = (params.ctx.opts.customBaseUrl?.trim() || params.defaultBaseUrl).replace(
-    /\/+$/,
-    "",
-  );
-  const modelId = params.ctx.opts.customModelId?.trim();
+  const baseUrl = (
+    (params.ctx.opts.customBaseUrl as string | undefined)?.trim() || params.defaultBaseUrl
+  ).replace(/\/+$/, "");
+  const modelId = (params.ctx.opts.customModelId as string | undefined)?.trim();
   if (!modelId) {
     params.ctx.runtime.error(
       buildMissingNonInteractiveModelIdMessage({
@@ -257,7 +256,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
 
   const resolved = await params.ctx.resolveApiKey({
     provider: params.providerId,
-    flagValue: params.ctx.opts.customApiKey,
+    flagValue: params.ctx.opts.customApiKey as string | undefined,
     flagName: "--custom-api-key",
     envVar: params.defaultApiKeyEnvVar,
     envVarName: params.defaultApiKeyEnvVar,

@@ -5,7 +5,14 @@ import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
+import type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+  PluginKind,
+  PluginOrigin,
+} from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -37,6 +44,18 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  /** Plugin package format: "bundle" for MCP bundle plugins, omitted for standard. */
+  format?: PluginFormat;
+  /** Bundle-specific format identifier (e.g. "mcp-json"). */
+  bundleFormat?: PluginBundleFormat;
+  /** Capabilities provided by a bundle plugin. */
+  bundleCapabilities?: string[];
+  /** Whether this plugin is enabled by default (without explicit config). */
+  enabledByDefault?: boolean;
+  /** Source of the setup wizard for channel plugins. */
+  setupSource?: string;
+  /** Defer full channel plugin load until after gateway listen. */
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
 export type PluginManifestRegistry = {
@@ -132,6 +151,13 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    format: params.manifest.format,
+    bundleFormat: params.manifest.bundleFormat,
+    bundleCapabilities: params.manifest.bundleCapabilities,
+    enabledByDefault: params.manifest.enabledByDefault,
+    setupSource: params.manifest.setupSource,
+    startupDeferConfiguredChannelFullLoadUntilAfterListen:
+      params.manifest.startupDeferConfiguredChannelFullLoadUntilAfterListen,
   };
 }
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
+import type { PluginBundleFormat, PluginConfigUiHint, PluginFormat, PluginKind } from "./types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -20,6 +20,16 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  /** Plugin package format: "bundle" for MCP bundle plugins, omitted for standard. */
+  format?: PluginFormat;
+  /** Bundle-specific format identifier (e.g. "mcp-json"). */
+  bundleFormat?: PluginBundleFormat;
+  /** Capabilities provided by a bundle plugin. */
+  bundleCapabilities?: string[];
+  /** Source path for the setup-runtime entry point (channel plugins only). */
+  setupSource?: string;
+  /** Defer full channel plugin load until after gateway listen completes. */
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
 export type PluginManifestLoadResult =
@@ -102,6 +112,20 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
+  const format =
+    typeof raw.format === "string"
+      ? (raw.format.trim() as PluginFormat) || undefined
+      : undefined;
+  const bundleFormat =
+    typeof raw.bundleFormat === "string"
+      ? (raw.bundleFormat.trim() as PluginBundleFormat) || undefined
+      : undefined;
+  const bundleCapabilities = normalizeStringList(raw.bundleCapabilities);
+  const setupSource =
+    typeof raw.setupSource === "string" ? raw.setupSource.trim() || undefined : undefined;
+  const startupDeferConfiguredChannelFullLoadUntilAfterListen =
+    raw.startupDeferConfiguredChannelFullLoadUntilAfterListen === true;
+
   return {
     ok: true,
     manifest: {
@@ -116,6 +140,13 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      ...(format ? { format } : {}),
+      ...(bundleFormat ? { bundleFormat } : {}),
+      ...(bundleCapabilities.length > 0 ? { bundleCapabilities } : {}),
+      ...(setupSource ? { setupSource } : {}),
+      ...(startupDeferConfiguredChannelFullLoadUntilAfterListen
+        ? { startupDeferConfiguredChannelFullLoadUntilAfterListen }
+        : {}),
     },
     manifestPath,
   };

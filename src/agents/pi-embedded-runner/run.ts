@@ -844,7 +844,6 @@ export async function runEmbeddedPiAgent(
           reason,
           cfg: params.config,
           agentDir,
-          runId: params.runId,
         });
       };
       const resolveAuthProfileFailureReason = (

@@ -421,25 +421,14 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
-  if (typeof effectiveExtraParams?.fastMode === "boolean") {
-    log.debug(
-      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
-    );
-    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
-    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+  if (typeof merged?.fastMode === "boolean") {
+    log.debug(`applying MiniMax fast mode=${merged.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, merged.fastMode);
+    log.debug(`applying xAI fast mode=${merged.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, merged.fastMode);
   }
 
-  if (typeof effectiveExtraParams?.fastMode === "boolean") {
-    log.debug(
-      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
-    );
-    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
-    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
-  }
-
-  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
+  const openAIFastMode = resolveOpenAIFastMode(merged);
   if (openAIFastMode) {
     log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);

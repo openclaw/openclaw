@@ -53,8 +53,11 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: model.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const opts: AnthropicOptions = {
-      client: client as unknown as AnthropicOptions["client"],
+    // Inject the AnthropicVertex client via a type-cast extension.
+    // The pi-ai streamAnthropic function accepts a client override at runtime
+    // even though the public AnthropicOptions type does not expose it.
+    const opts: AnthropicOptions & { client: AnthropicVertex } = {
+      client,
       temperature: options?.temperature,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
@@ -95,7 +98,9 @@ export function createAnthropicVertexStreamFn(
       opts.thinkingEnabled = false;
     }
 
-    return streamAnthropic(model as Model<"anthropic-messages">, context, opts);
+    // Cast to AnthropicOptions to drop the client field which is not in the
+    // public type but is used at runtime by pi-ai's streamAnthropic.
+    return streamAnthropic(model as Model<"anthropic-messages">, context, opts as AnthropicOptions);
   };
 }
 

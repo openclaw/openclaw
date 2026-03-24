@@ -4,8 +4,14 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
+import {
+  describeImageFile,
+  describeVideoFile,
+  runMediaUnderstandingFile,
+  transcribeAudioFile as transcribeAudioFileRuntime,
+} from "../../media-understanding/runtime.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
-import { textToSpeechTelephony } from "../../tts/tts.js";
+import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/tts.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
@@ -47,6 +53,8 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
 
 export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
+  /** When true, allows plugin subagent API to bind to the active gateway request context. */
+  allowGatewaySubagentBinding?: boolean;
 };
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
@@ -58,6 +66,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     media: createRuntimeMedia(),
     tts: { textToSpeech, textToSpeechTelephony, listVoices: listSpeechVoices },
     stt: { transcribeAudioFile },
+    mediaUnderstanding: {
+      runFile: runMediaUnderstandingFile,
+      describeImageFile,
+      describeVideoFile,
+      transcribeAudioFile: transcribeAudioFileRuntime,
+    },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
