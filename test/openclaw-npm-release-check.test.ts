@@ -14,6 +14,7 @@ describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
     expect(parseReleaseVersion("2026.3.10")).toMatchObject({
       version: "2026.3.10",
+      baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
@@ -24,6 +25,7 @@ describe("parseReleaseVersion", () => {
   it("parses beta CalVer releases", () => {
     expect(parseReleaseVersion("2026.3.10-beta.2")).toMatchObject({
       version: "2026.3.10-beta.2",
+      baseVersion: "2026.3.10",
       channel: "beta",
       year: 2026,
       month: 3,
@@ -32,20 +34,33 @@ describe("parseReleaseVersion", () => {
     });
   });
 
+  it("parses stable correction releases", () => {
+    expect(parseReleaseVersion("2026.3.10-1")).toMatchObject({
+      version: "2026.3.10-1",
+      baseVersion: "2026.3.10",
+      channel: "stable",
+      year: 2026,
+      month: 3,
+      day: 10,
+      correctionNumber: 1,
+    });
+  });
+
   it("rejects legacy and malformed release formats", () => {
-    expect(parseReleaseVersion("2026.3.10-1")).toBeNull();
     expect(parseReleaseVersion("2026.03.09")).toBeNull();
     expect(parseReleaseVersion("v2026.3.10")).toBeNull();
     expect(parseReleaseVersion("2026.2.30")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-0")).toBeNull();
     expect(parseReleaseVersion("2.0.0-beta2")).toBeNull();
   });
 });
 
 describe("parseReleaseTagVersion", () => {
-  it("accepts fallback correction tags for stable releases", () => {
+  it("accepts correction release tags", () => {
     expect(parseReleaseTagVersion("2026.3.10-2")).toMatchObject({
       version: "2026.3.10-2",
-      packageVersion: "2026.3.10",
+      packageVersion: "2026.3.10-2",
+      baseVersion: "2026.3.10",
       channel: "stable",
       correctionNumber: 2,
     });
@@ -174,6 +189,16 @@ describe("collectReleaseTagErrors", () => {
     expect(
       collectReleaseTagErrors({
         packageVersion: "2026.3.10",
+        releaseTag: "v2026.3.10-1",
+        now: new Date("2026-03-10T00:00:00Z"),
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts correction package versions paired with matching correction tags", () => {
+    expect(
+      collectReleaseTagErrors({
+        packageVersion: "2026.3.10-1",
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
