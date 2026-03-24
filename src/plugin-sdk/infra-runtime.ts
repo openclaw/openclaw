@@ -30,6 +30,7 @@ export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/send-deps.js";
+export * from "../infra/perf-trace.ts";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
 export * from "../infra/scp-host.ts";

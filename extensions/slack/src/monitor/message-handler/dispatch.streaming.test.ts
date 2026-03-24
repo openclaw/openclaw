@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackStreamingThreadHint,
+  shouldEnableSlackPreviewStreaming,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -43,5 +47,35 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack preview streaming eligibility", () => {
+  it("stays on for room messages when streaming mode is enabled", () => {
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "partial",
+        isDirectMessage: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays off for top-level DMs without a reply thread", () => {
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "partial",
+        isDirectMessage: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows DM preview when the reply is threaded", () => {
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "partial",
+        isDirectMessage: true,
+        threadTs: "1000.1",
+      }),
+    ).toBe(true);
   });
 });
