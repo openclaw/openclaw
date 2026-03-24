@@ -252,6 +252,6 @@ openclaw channels status
 
 相关文档：
 
-- [Gateway 网关配置](/gateway/configuration)
-- [安全](/gateway/security)
-- [表情回应](/tools/reactions)
+- [Gateway 网关配置](/zh-CN/gateway/configuration)
+- [安全](/zh-CN/gateway/security)
+- [表情回应](/zh-CN/tools/reactions)

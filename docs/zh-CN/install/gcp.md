@@ -39,7 +39,7 @@ Gateway 网关可以通过以下方式访问：
 
 本指南使用 GCP Compute Engine 上的 Debian。
 Ubuntu 也可以；请相应地映射软件包。
-有关通用 Docker 流程，请参阅 [Docker](/install/docker)。
+有关通用 Docker 流程，请参阅 [Docker](/zh-CN/install/docker)。
 
 ---
 

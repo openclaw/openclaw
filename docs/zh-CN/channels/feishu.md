@@ -126,7 +126,11 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
       "im:message:send_as_bot",
       "im:resource"
     ],
-    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+    "user": [
+      "aily:file:read",
+      "aily:file:write",
+      "im:chat.access_event.bot_p2p_chat:read"
+    ]
   }
 }
 ```
@@ -659,13 +663,13 @@ openclaw pairing list feishu
 - `match.peer.kind`：`"direct"` 或 `"group"`
 - `match.peer.id`：用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`）
 
-查找提示请参见 [获取群组/用户 ID](#get-groupuser-ids)。
+查找提示请参见 [获取群组/用户 ID](#获取群组/用户-id)。
 
 ---
 
 ## 配置参考
 
-完整配置：[Gateway 网关配置](/gateway/configuration)
+完整配置：[Gateway 网关配置](/zh-CN/gateway/configuration)
 
 关键选项：
 

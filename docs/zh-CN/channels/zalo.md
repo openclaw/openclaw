@@ -22,7 +22,7 @@ Zalo 以插件形式提供，不包含在核心安装中。
 
 - 通过 CLI 安装：`openclaw plugins install @openclaw/zalo`
 - 或在新手引导期间选择 **Zalo** 并确认安装提示
-- 详情：[插件](/tools/plugin)
+- 详情：[插件](/zh-CN/tools/plugin)
 
 ## 快速设置（初学者）
 

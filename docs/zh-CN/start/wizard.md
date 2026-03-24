@@ -59,7 +59,7 @@ CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
     - Gateway 网关端口 **18789**
     - Gateway 网关认证 **Token**（即使在 loopback 上也会自动生成）
     - 新本地设置的默认工具策略：`tools.profile: "coding"`（会保留现有显式配置文件）
-    - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/start/wizard-cli-reference#outputs-and-internals)
+    - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/zh-CN/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale 暴露 **关闭**
     - Telegram + WhatsApp 私信默认使用 **allowlist**（系统会提示你输入电话号码）
   </Tab>
@@ -119,14 +119,14 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 ## 完整参考
 
 有关详细的分步骤拆解和配置输出，请参见
-[CLI 设置参考](/start/wizard-cli-reference)。
-有关非交互式示例，请参见 [CLI 自动化](/start/wizard-cli-automation)。
+[CLI 设置参考](/zh-CN/start/wizard-cli-reference)。
+有关非交互式示例，请参见 [CLI 自动化](/zh-CN/start/wizard-cli-automation)。
 有关更深入的技术参考（包括 RPC 细节），请参见
-[新手引导参考](/reference/wizard)。
+[新手引导参考](/zh-CN/reference/wizard)。
 
 ## 相关文档
 
-- CLI 命令参考：[`openclaw onboard`](/cli/onboard)
-- 新手引导概览：[Onboarding Overview](/start/onboarding-overview)
-- macOS 应用新手引导：[新手引导](/start/onboarding)
-- 智能体首次运行仪式：[智能体引导](/start/bootstrapping)
+- CLI 命令参考：[`openclaw onboard`](/zh-CN/cli/onboard)
+- 新手引导概览：[Onboarding Overview](/zh-CN/start/onboarding-overview)
+- macOS 应用新手引导：[新手引导](/zh-CN/start/onboarding)
+- 智能体首次运行仪式：[智能体引导](/zh-CN/start/bootstrapping)

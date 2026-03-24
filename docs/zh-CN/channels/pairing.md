@@ -21,7 +21,7 @@ x-i18n:
 1. **私信配对**（谁被允许与机器人对话）
 2. **节点配对**（哪些设备/节点被允许加入 Gateway 网关网络）
 
-安全上下文：[安全](/gateway/security)
+安全上下文：[安全](/zh-CN/gateway/security)
 
 ## 1）私信配对（入站聊天访问）
 
@@ -78,12 +78,12 @@ openclaw devices reject <requestId>
 
 ## 相关文档
 
-- 安全模型 + 提示注入：[安全](/gateway/security)
-- 安全更新（运行 doctor）：[更新](/install/updating)
+- 安全模型 + 提示注入：[安全](/zh-CN/gateway/security)
+- 安全更新（运行 doctor）：[更新](/zh-CN/install/updating)
 - 渠道配置：
-  - Telegram：[Telegram](/channels/telegram)
-  - WhatsApp：[WhatsApp](/channels/whatsapp)
-  - Signal：[Signal](/channels/signal)
-  - iMessage：[iMessage](/channels/imessage)
-  - Discord：[Discord](/channels/discord)
-  - Slack：[Slack](/channels/slack)
+  - Telegram：[Telegram](/zh-CN/channels/telegram)
+  - WhatsApp：[WhatsApp](/zh-CN/channels/whatsapp)
+  - Signal：[Signal](/zh-CN/channels/signal)
+  - iMessage：[iMessage](/zh-CN/channels/imessage)
+  - Discord：[Discord](/zh-CN/channels/discord)
+  - Slack：[Slack](/zh-CN/channels/slack)

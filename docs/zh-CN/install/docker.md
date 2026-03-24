@@ -21,14 +21,14 @@ Docker 是**可选的**。仅当你想要容器化的 Gateway 网关或验证 Do
 
 - **是**：你想要一个隔离的、可丢弃的 Gateway 网关环境，或在没有本地安装的主机上运行 OpenClaw。
 - **否**：你在自己的机器上运行，只想要最快的开发循环。请改用正常的安装流程。
-- **沙箱注意事项**：智能体沙箱隔离也使用 Docker，但它**不需要**完整的 Gateway 网关在 Docker 中运行。参阅[沙箱隔离](/gateway/sandboxing)。
+- **沙箱注意事项**：智能体沙箱隔离也使用 Docker，但它**不需要**完整的 Gateway 网关在 Docker 中运行。参阅[沙箱隔离](/zh-CN/gateway/sandboxing)。
 
 本指南涵盖：
 
 - 容器化 Gateway 网关（完整的 OpenClaw 在 Docker 中）
 - 每会话智能体沙箱（主机 Gateway 网关 + Docker 隔离的智能体工具）
 
-沙箱隔离详情：[沙箱隔离](/gateway/sandboxing)
+沙箱隔离详情：[沙箱隔离](/zh-CN/gateway/sandboxing)
 
 ## 要求
 
@@ -70,7 +70,7 @@ Docker 是**可选的**。仅当你想要容器化的 Gateway 网关或验证 Do
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-在 VPS 上运行？参阅 [Hetzner（Docker VPS）](/install/hetzner)。
+在 VPS 上运行？参阅 [Hetzner（Docker VPS）](/zh-CN/install/hetzner)。
 
 ### 手动流程（compose）
 
@@ -96,7 +96,7 @@ docker compose run --rm openclaw-cli devices list
 docker compose run --rm openclaw-cli devices approve <requestId>
 ```
 
-更多详情：[仪表板](/web/dashboard)，[设备](/cli/devices)。
+更多详情：[仪表板](/zh-CN/web/dashboard)，[设备](/zh-CN/cli/devices)。
 
 ### 额外挂载（可选）
 
@@ -259,7 +259,7 @@ Discord（bot token）：
 docker compose run --rm openclaw-cli channels add --channel discord --token "<token>"
 ```
 
-文档：[WhatsApp](/channels/whatsapp)，[Telegram](/channels/telegram)，[Discord](/channels/discord)
+文档：[WhatsApp](/zh-CN/channels/whatsapp)，[Telegram](/zh-CN/channels/telegram)，[Discord](/zh-CN/channels/discord)
 
 ### OpenAI Codex OAuth（无头 Docker）
 
@@ -291,7 +291,7 @@ pnpm test:docker:qr
 
 ## 智能体沙箱（主机 Gateway 网关 + Docker 工具）
 
-深入了解：[沙箱隔离](/gateway/sandboxing)
+深入了解：[沙箱隔离](/zh-CN/gateway/sandboxing)
 
 ### 它做什么
 
@@ -314,7 +314,7 @@ pnpm test:docker:qr
 - 只读工具 + 只读工作区（家庭/工作智能体）
 - 无文件系统/shell 工具（公共智能体）
 
-参阅[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)了解示例、优先级和故障排除。
+参阅[多智能体沙箱与工具](/zh-CN/tools/multi-agent-sandbox-tools)了解示例、优先级和故障排除。
 
 ### 默认行为
 

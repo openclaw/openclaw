@@ -130,4 +130,4 @@ openclaw gateway restart
 openclaw health
 ```
 
-指南：[Updating](/install/updating)
+指南：[Updating](/zh-CN/install/updating)

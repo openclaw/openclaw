@@ -26,9 +26,9 @@ openclaw channels status --probe
 
 ## 渠道
 
-- Discord：[/channels/discord#troubleshooting](/channels/discord#troubleshooting)
-- Telegram：[/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)
-- WhatsApp：[/channels/whatsapp#troubleshooting-quick](/channels/whatsapp#troubleshooting-quick)
+- Discord：[/消息渠道/discord#故障排除](/zh-CN/channels/discord#故障排除)
+- Telegram：[/消息渠道/telegram#故障排除](/zh-CN/channels/telegram#故障排除)
+- WhatsApp：[/消息渠道/whatsapp#故障排除](/zh-CN/channels/whatsapp#故障排除)
 
 ## Telegram 快速修复
 

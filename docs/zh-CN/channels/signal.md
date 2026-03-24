@@ -88,7 +88,7 @@ x-i18n:
 }
 ```
 
-多账户支持：使用 `channels.signal.accounts` 配置每个账户及可选的 `name`。共享模式请参见 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
+多账户支持：使用 `channels.signal.accounts` 配置每个账户及可选的 `name`。共享模式请参见 [配置](/zh-CN/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
 
 ## 外部守护进程模式（httpUrl）
 

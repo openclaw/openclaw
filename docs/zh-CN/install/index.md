@@ -16,11 +16,11 @@ x-i18n:
 
 # 安装
 
-已经按照 [入门指南](/start/getting-started) 操作过了吗？那你已经准备好了 —— 本页适用于其他安装方法、特定平台说明以及维护操作。
+已经按照 [入门指南](/zh-CN/start/getting-started) 操作过了吗？那你已经准备好了 —— 本页适用于其他安装方法、特定平台说明以及维护操作。
 
 ## 系统要求
 
-- **[Node 24（推荐）](/install/node)**（出于兼容性考虑，仍支持 Node 22 LTS，目前为 `22.16+`；如果缺失，[安装脚本](#install-methods) 会安装 Node 24）
+- **[Node 24（推荐）](/zh-CN/install/node)**（出于兼容性考虑，仍支持 Node 22 LTS，目前为 `22.16+`；如果缺失，[安装脚本](#install-methods) 会安装 Node 24）
 - macOS、Linux 或 Windows
 - 仅当你从源码构建时需要 `pnpm`
 
@@ -72,7 +72,7 @@ x-i18n:
       </Tab>
     </Tabs>
 
-    所有标志、环境变量以及 CI/自动化选项，请参阅 [Installer internals](/install/installer)。
+    所有标志、环境变量以及 CI/自动化选项，请参阅 [Installer internals](/zh-CN/install/installer)。
 
   </Accordion>
 
@@ -160,19 +160,19 @@ x-i18n:
 ## 其他安装方法
 
 <CardGroup cols={2}>
-  <Card title="Docker" href="/install/docker" icon="container">
+  <Card title="Docker" href="/zh-CN/install/docker" icon="container">
     容器化或无头部署。
   </Card>
-  <Card title="Podman" href="/install/podman" icon="container">
+  <Card title="Podman" href="/zh-CN/install/podman" icon="container">
     无 root 容器：先运行一次 `setup-podman.sh`，然后运行启动脚本。
   </Card>
-  <Card title="Nix" href="/install/nix" icon="snowflake">
+  <Card title="Nix" href="/zh-CN/install/nix" icon="snowflake">
     通过 Nix 进行声明式安装。
   </Card>
-  <Card title="Ansible" href="/install/ansible" icon="server">
+  <Card title="Ansible" href="/zh-CN/install/ansible" icon="server">
     自动化批量配置。
   </Card>
-  <Card title="Bun" href="/install/bun" icon="zap">
+  <Card title="Bun" href="/zh-CN/install/bun" icon="zap">
     通过 Bun 运行时进行仅 CLI 使用。
   </Card>
 </CardGroup>
@@ -193,7 +193,7 @@ openclaw dashboard      # 打开浏览器 UI
 - `OPENCLAW_STATE_DIR` 用于可变状态位置
 - `OPENCLAW_CONFIG_PATH` 用于配置文件位置
 
-有关优先级和完整细节，请参阅 [Environment vars](/help/environment)。
+有关优先级和完整细节，请参阅 [Environment vars](/zh-CN/help/environment)。
 
 ## 故障排除：找不到 `openclaw`
 
@@ -223,13 +223,13 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 ## 更新 / 卸载
 
 <CardGroup cols={3}>
-  <Card title="更新" href="/install/updating" icon="refresh-cw">
+  <Card title="更新" href="/zh-CN/install/updating" icon="refresh-cw">
     让 OpenClaw 保持最新。
   </Card>
-  <Card title="迁移" href="/install/migrating" icon="arrow-right">
+  <Card title="迁移" href="/zh-CN/install/migrating" icon="arrow-right">
     迁移到新机器。
   </Card>
-  <Card title="卸载" href="/install/uninstall" icon="trash-2">
+  <Card title="卸载" href="/zh-CN/install/uninstall" icon="trash-2">
     完全移除 OpenClaw。
   </Card>
 </CardGroup>

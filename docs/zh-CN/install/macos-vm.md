@@ -19,9 +19,9 @@ x-i18n:
 
 ## 推荐默认方案（适用于大多数用户）
 
-- **小型 Linux VPS**：适合始终在线的 Gateway 网关，且成本较低。参见 [VPS hosting](/vps)。
+- **小型 Linux VPS**：适合始终在线的 Gateway 网关，且成本较低。参见 [VPS hosting](/zh-CN/vps)。
 - **专用硬件**（Mac mini 或 Linux 主机）：如果你希望完全控制，并为浏览器自动化获得一个**住宅 IP**。许多网站会屏蔽数据中心 IP，因此本地浏览通常效果更好。
-- **混合方案：** 将 Gateway 网关放在便宜的 VPS 上，当你需要浏览器/UI 自动化时，再将你的 Mac 作为一个 **node** 连接进来。参见 [Nodes](/nodes) 和 [Gateway remote](/gateway/remote)。
+- **混合方案：** 将 Gateway 网关放在便宜的 VPS 上，当你需要浏览器/UI 自动化时，再将你的 Mac 作为一个 **node** 连接进来。参见 [Nodes](/zh-CN/nodes) 和 [Gateway remote](/zh-CN/gateway/remote)。
 
 当你明确需要 macOS 独有能力（iMessage/BlueBubbles），或希望与你的日常 Mac 严格隔离时，再使用 macOS VM。
 
@@ -278,11 +278,11 @@ lume run openclaw --no-display
 
 ## 相关文档
 
-- [VPS hosting](/vps)
-- [Nodes](/nodes)
-- [Gateway remote](/gateway/remote)
-- [BlueBubbles channel](/channels/bluebubbles)
+- [VPS hosting](/zh-CN/vps)
+- [Nodes](/zh-CN/nodes)
+- [Gateway remote](/zh-CN/gateway/remote)
+- [BlueBubbles channel](/zh-CN/channels/bluebubbles)
 - [Lume Quickstart](https://cua.ai/docs/lume/guide/getting-started/quickstart)
 - [Lume CLI Reference](https://cua.ai/docs/lume/reference/cli-reference)
 - [Unattended VM Setup](https://cua.ai/docs/lume/guide/fundamentals/unattended-setup)（高级）
-- [Docker Sandboxing](/install/docker)（另一种隔离方案）
+- [Docker Sandboxing](/zh-CN/install/docker)（另一种隔离方案）

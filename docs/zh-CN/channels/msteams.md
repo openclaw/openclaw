@@ -18,7 +18,7 @@ x-i18n:
 
 更新时间：2026-01-21
 
-状态：支持文本 + 私信附件；频道/群组文件发送需要 `sharePointSiteId` + Graph 权限（参见[在群聊中发送文件](#sending-files-in-group-chats)）。投票通过 Adaptive Cards 发送。
+状态：支持文本 + 私信附件；频道/群组文件发送需要 `sharePointSiteId` + Graph 权限（参见[在群聊中发送文件](#在群聊中发送文件)）。投票通过 Adaptive Cards 发送。
 
 ## 需要插件
 
@@ -474,11 +474,11 @@ Teams markdown 比 Slack 或 Discord 更有限：
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`：每频道覆盖。
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`：每频道工具策略覆盖（`allow`/`deny`/`alsoAllow`）。
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`：每频道每发送者工具策略覆盖（支持 `"*"` 通配符）。
-- `channels.msteams.sharePointSiteId`：用于群聊/频道文件上传的 SharePoint 站点 ID（见[在群聊中发送文件](#sending-files-in-group-chats)）。
+- `channels.msteams.sharePointSiteId`：用于群聊/频道文件上传的 SharePoint 站点 ID（见[在群聊中发送文件](#在群聊中发送文件)）。
 
 ## 路由和会话
 
-- 会话键遵循标准智能体格式（见 [/concepts/session](/concepts/session)）：
+- 会话键遵循标准智能体格式（见 [会话管理](/zh-CN/concepts/session)）：
   - 私信共享主会话（`agent:<agentId>:<mainKey>`）。
   - 频道/群组消息使用会话 ID：
     - `agent:<agentId>:msteams:channel:<conversationId>`

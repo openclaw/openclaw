@@ -138,6 +138,6 @@ x-i18n:
 
 ## 后续步骤
 
-- 私信安全和批准：[Pairing](/channels/pairing)
-- 连接更多渠道：[Channels](/channels)
-- 高级工作流和源码安装：[Setup](/start/setup)
+- 私信安全和批准：[Pairing](/zh-CN/channels/pairing)
+- 连接更多渠道：[Channels](/zh-CN/channels)
+- 高级工作流和源码安装：[Setup](/zh-CN/start/setup)
