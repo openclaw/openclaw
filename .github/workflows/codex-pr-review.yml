@@ -22,7 +22,9 @@ permissions: {}
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.title, '[skip-ai-review]')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
