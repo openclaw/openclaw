@@ -144,14 +144,19 @@ describe("async policy enforcement via blocking handler", () => {
   });
 
   it("observer mutation does not affect blocking handler input", async () => {
-    // Observer that mutates its event — should NOT affect blocking handler
+    // Observer that mutates its event (top-level and nested) — should NOT affect blocking handler
     const observerHandler = vi.fn().mockImplementation(async (event) => {
       event.content = "mutated-by-observer";
+      if (event.metadata) {
+        event.metadata.senderId = "tampered";
+      }
     });
 
     let blockingReceivedContent: string | undefined;
+    let blockingReceivedMetadata: Record<string, unknown> | undefined;
     const blockingHandler = vi.fn().mockImplementation(async (event) => {
       blockingReceivedContent = event.content;
+      blockingReceivedMetadata = event.metadata;
       return undefined;
     });
 
@@ -166,14 +171,15 @@ describe("async policy enforcement via blocking handler", () => {
     const runner = createHookRunner(registry);
 
     await runner.runMessageReceived(
-      { from: "user-1", content: "original-content" },
+      { from: "user-1", content: "original-content", metadata: { senderId: "original" } },
       { channelId: "slack" },
     );
 
-    // Observer saw and mutated its own copy
+    // Observer saw and mutated its own deep copy
     expect(observerHandler).toHaveBeenCalled();
-    // Blocking handler received the original, unmutated content
+    // Blocking handler received the original, unmutated content and metadata
     expect(blockingReceivedContent).toBe("original-content");
+    expect(blockingReceivedMetadata).toEqual({ senderId: "original" });
   });
 });
 

@@ -616,9 +616,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     const blockingHooks = hooks.filter((h) => h.messageReceivedMode === "blocking");
 
     if (observerHooks.length > 0) {
-      // Observers get a shallow copy so they cannot mutate the event/ctx
-      // that blocking hooks will read — observers remain pure fire-and-forget.
-      runVoidHooksList(observerHooks, "message_received", { ...event }, { ...ctx }).catch(() => {});
+      // Deep-clone so observers cannot mutate the event/ctx (including nested
+      // fields like metadata) that blocking hooks will read.
+      runVoidHooksList(
+        observerHooks,
+        "message_received",
+        structuredClone(event),
+        structuredClone(ctx),
+      ).catch(() => {});
     }
 
     if (blockingHooks.length === 0) {
