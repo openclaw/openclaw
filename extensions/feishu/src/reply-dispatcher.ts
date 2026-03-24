@@ -12,7 +12,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
@@ -110,7 +110,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
