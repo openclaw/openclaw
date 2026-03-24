@@ -28,6 +28,44 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
+/** Resolve all media URLs from a reply payload (handles both mediaUrl and mediaUrls). */
+export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
+  if (payload.mediaUrls?.length) {
+    return payload.mediaUrls;
+  }
+  if (payload.mediaUrl) {
+    return [payload.mediaUrl];
+  }
+  return [];
+}
+
+/** Send one message per media URL, passing text only with the first message. */
+export async function sendPayloadMediaSequence<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+}): Promise<TResult | undefined> {
+  let lastResult: TResult | undefined;
+  for (let i = 0; i < params.mediaUrls.length; i += 1) {
+    const mediaUrl = params.mediaUrls[i];
+    if (!mediaUrl) {
+      continue;
+    }
+    lastResult = await params.send({
+      text: i === 0 ? params.text : "",
+      mediaUrl,
+      index: i,
+      isFirst: i === 0,
+    });
+  }
+  return lastResult;
+}
+
 export async function sendTextMediaPayload(params: {
   channel: string;
   ctx: SendPayloadContext;

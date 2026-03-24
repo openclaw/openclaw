@@ -30,6 +30,9 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: ^3.1011.0
         version: 3.1015.0
+      '@buape/carbon':
+        specifier: 0.0.0-beta-20260216184201
+        version: 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.11.10)(opusscript@0.1.1)
       '@clack/prompts':
         specifier: ^1.1.0
         version: 1.1.0

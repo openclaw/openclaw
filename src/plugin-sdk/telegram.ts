@@ -12,11 +12,7 @@ export type {
   TelegramActionConfig,
   TelegramNetworkConfig,
 } from "../config/types.js";
-export type {
-  ChannelConfiguredBindingProvider,
-  ChannelConfiguredBindingConversationRef,
-  ChannelConfiguredBindingMatch,
-} from "../channels/plugins/types.adapters.js";
+// ChannelConfiguredBinding types will be available once a later phase adds them to types.adapters.ts
 export type { InspectedTelegramAccount } from "../../extensions/telegram/api.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/api.js";
 export type { TelegramProbe } from "../../extensions/telegram/runtime-api.js";
@@ -90,20 +86,18 @@ export {
   collectTelegramUnmentionedGroupIds,
   createForumTopicTelegram,
   deleteMessageTelegram,
-  editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
   monitorTelegramProvider,
-  pinMessageTelegram,
   reactMessageTelegram,
-  renameForumTopicTelegram,
   probeTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
   sendTypingTelegram,
-  unpinMessageTelegram,
 } from "../../extensions/telegram/runtime-api.js";
+// editForumTopicTelegram, pinMessageTelegram, renameForumTopicTelegram, unpinMessageTelegram
+// will be available once a later phase adds them
 export { getCacheStats, searchStickers } from "../../extensions/telegram/api.js";
 export { resolveTelegramToken } from "../../extensions/telegram/runtime-api.js";
 export { telegramMessageActions } from "../../extensions/telegram/runtime-api.js";

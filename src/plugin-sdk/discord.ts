@@ -15,11 +15,7 @@ export type {
   ThreadBindingRecord,
   ThreadBindingTargetKind,
 } from "../../extensions/discord/runtime-api.js";
-export type {
-  ChannelConfiguredBindingProvider,
-  ChannelConfiguredBindingConversationRef,
-  ChannelConfiguredBindingMatch,
-} from "../channels/plugins/types.adapters.js";
+// ChannelConfiguredBinding types will be available once a later phase adds them to types.adapters.ts
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
