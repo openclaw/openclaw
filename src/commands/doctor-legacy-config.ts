@@ -580,7 +580,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     if (!hasGoogleApiKey && legacyApiKey) {
       rawGoogle.apiKey = legacyApiKey;
       if (!rawGoogle.baseUrl) {
-        rawGoogle.baseUrl = "https://generativelanguage.googleapis.com";
+        rawGoogle.baseUrl = "https://generativelanguage.googleapis.com/v1beta";
       }
       if (!Array.isArray(rawGoogle.models)) {
         rawGoogle.models = [];
