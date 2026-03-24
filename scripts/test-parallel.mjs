@@ -42,6 +42,13 @@ const writeTempJsonArtifact = (name, value) => {
   fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
   return filePath;
 };
+const sanitizeArtifactName = (value) => {
+  const normalized = value
+    .trim()
+    .replace(/[^a-z0-9._-]+/giu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return normalized || "artifact";
+};
 const cleanupTempArtifacts = () => {
   if (tempArtifactDir === null) {
     return;
@@ -1055,6 +1062,13 @@ const heapSnapshotBaseDir = heapSnapshotEnabled
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
 const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
+const getShardLabel = (args) => {
+  const shardIndex = args.findIndex((arg) => arg === "--shard");
+  if (shardIndex < 0) {
+    return "";
+  }
+  return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
+};
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
@@ -1072,6 +1086,19 @@ const runOnce = (entry, extraArgs = []) =>
           ...extraArgs,
         ]
       : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
+    const shardLabel = getShardLabel(extraArgs);
+    const artifactStem = [
+      sanitizeArtifactName(entry.name),
+      shardLabel ? `shard-${sanitizeArtifactName(shardLabel)}` : "",
+      String(startedAt),
+    ]
+      .filter(Boolean)
+      .join("-");
+    const laneLogPath = path.join(ensureTempArtifactDir(), `${artifactStem}.log`);
+    const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
+    laneLogStream.write(`[test-parallel] entry=${entry.name}\n`);
+    laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
+    laneLogStream.write(`[test-parallel] command=${[pnpm, ...args].join(" ")}\n\n`);
     console.log(
       `[test-parallel] start ${entry.name} workers=${maxWorkers ?? "default"} filters=${String(
         countExplicitEntryFilters(entryArgs) ?? "all",
@@ -1264,6 +1291,7 @@ const runOnce = (entry, extraArgs = []) =>
         }, heapSnapshotIntervalMs);
       }
     } catch (err) {
+      laneLogStream.end();
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
       resolve(1);
       return;
@@ -1273,6 +1301,7 @@ const runOnce = (entry, extraArgs = []) =>
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      laneLogStream.write(text);
       logMemoryTraceForText(text);
       process.stdout.write(chunk);
     });
@@ -1280,11 +1309,13 @@ const runOnce = (entry, extraArgs = []) =>
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      laneLogStream.write(text);
       logMemoryTraceForText(text);
       process.stderr.write(chunk);
     });
     child.on("error", (err) => {
       childError = err;
+      laneLogStream.write(`\n[test-parallel] child error: ${String(err)}\n`);
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
     child.on("close", (code, signal) => {
@@ -1296,15 +1327,36 @@ const runOnce = (entry, extraArgs = []) =>
       }
       children.delete(child);
       const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
+      const elapsedMs = Date.now() - startedAt;
       logMemoryTraceSummary();
       if (resolvedCode !== 0) {
         const failureTail = formatCapturedOutputTail(output);
+        const failureArtifactPath = writeTempJsonArtifact(`${artifactStem}-failure`, {
+          entry: entry.name,
+          command: [pnpm, ...args],
+          elapsedMs,
+          error: childError ? String(childError) : null,
+          exitCode: resolvedCode,
+          fatalSeen,
+          logPath: laneLogPath,
+          outputTail: failureTail,
+          signal: signal ?? null,
+        });
         if (failureTail) {
           console.error(`[test-parallel] failure tail ${entry.name}\n${failureTail}`);
         }
+        console.error(
+          `[test-parallel] failure artifacts ${entry.name} log=${laneLogPath} meta=${failureArtifactPath}`,
+        );
       }
+      laneLogStream.write(
+        `\n[test-parallel] done ${entry.name} code=${String(resolvedCode)} signal=${
+          signal ?? "none"
+        } elapsed=${formatElapsedMs(elapsedMs)}\n`,
+      );
+      laneLogStream.end();
       console.log(
-        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
+        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
       );
       resolve(resolvedCode);
     });
