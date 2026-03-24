@@ -18,10 +18,10 @@ export function extractOutboundMentions(
   text: string,
   participantJidMap?: Map<string, string>,
 ): string[] {
-  // Replace inline code spans with underscores (a non-boundary char) so that
-  // adjacent tokens don't merge into false mentions and content inside code
-  // spans is never matched.
-  const cleaned = text.replace(/`[^`]*`/g, (m) => "_".repeat(m.length));
+  // Replace inline code spans (single, double, and triple backtick) with
+  // underscores (a non-boundary char) so that adjacent tokens don't merge
+  // into false mentions and content inside code spans is never matched.
+  const cleaned = text.replace(/(`{1,3})[\s\S]*?\1/g, (m) => "_".repeat(m.length));
   const pattern = /(?<=^|[\s({\[<])@\+?(\d{7,25})(?![:\d@\p{L}_\-/])/gu;
   const jids = new Set<string>();
   let match: RegExpExecArray | null;
