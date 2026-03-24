@@ -24,6 +24,7 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { TeamsHttpStream } from "./streaming-message.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -45,33 +46,46 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
 
+  // Determine conversation type to decide typing vs streaming behavior:
+  // - personal (1:1): typing bubble + streaming (typing shows immediately,
+  //   streaming takes over once tokens arrive)
+  // - groupChat: typing bubble only, no streaming
+  // - channel: neither (Teams doesn't support typing or streaming in channels)
+  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const isPersonal = conversationType === "personal";
+  const isGroupChat = conversationType === "groupchat";
+  const isChannel = conversationType === "channel";
+
   /**
    * Send a typing indicator.
-   *
-   * First tries the live turn context (cheapest path).  When the context has
-   * been revoked (debounced messages) we fall back to proactive messaging via
-   * the stored conversation reference so the user still sees the "…" bubble.
+   * Sent for personal and group chats so users see immediate feedback.
+   * Channels don't support typing indicators.
    */
-  const sendTypingIndicator = async () => {
-    await withRevokedProxyFallback({
-      run: async () => {
-        await params.context.sendActivity({ type: "typing" });
-      },
-      onRevoked: async () => {
-        const baseRef = buildConversationReference(params.conversationRef);
-        await params.adapter.continueConversation(
-          params.appId,
-          { ...baseRef, activityId: undefined },
-          async (ctx) => {
-            await ctx.sendActivity({ type: "typing" });
-          },
-        );
-      },
-      onRevokedLog: () => {
-        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      },
-    });
-  };
+  const sendTypingIndicator =
+    isPersonal || isGroupChat
+      ? async () => {
+          await withRevokedProxyFallback({
+            run: async () => {
+              await params.context.sendActivity({ type: "typing" });
+            },
+            onRevoked: async () => {
+              const baseRef = buildConversationReference(params.conversationRef);
+              await params.adapter.continueConversation(
+                params.appId,
+                { ...baseRef, activityId: undefined },
+                async (ctx) => {
+                  await ctx.sendActivity({ type: "typing" });
+                },
+              );
+            },
+            onRevokedLog: () => {
+              params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+            },
+          });
+        }
+      : async () => {
+          // No-op for channels (not supported)
+        };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
@@ -99,12 +113,26 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
+  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
+
+  // Streaming for personal (1:1) chats using the Teams streaminfo protocol.
+  let stream: TeamsHttpStream | undefined;
+  // Track whether onPartialReply was ever called — if so, the stream
+  // owns the text delivery and deliver should skip text payloads.
+  let streamReceivedTokens = false;
+
+  if (isPersonal) {
+    stream = new TeamsHttpStream({
+      sendActivity: (activity) => params.context.sendActivity(activity),
+      feedbackLoopEnabled,
+      onError: (err) => {
+        params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
+      },
+    });
+  }
 
   // Accumulate rendered messages from all deliver() calls so the entire turn's
-  // reply is sent in a single sendMSTeamsMessages() call. This avoids Teams
-  // silently dropping blocks 2+ when each deliver() opened its own independent
-  // continueConversation() call — only the first proactive send per turn context
-  // window succeeds. (#29379)
+  // reply is sent in a single sendMSTeamsMessages() call. (#29379)
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
   const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
@@ -115,7 +143,6 @@ export function createMSTeamsReplyDispatcher(params: {
       conversationRef: params.conversationRef,
       context: params.context,
       messages,
-      // Enable default retry/backoff for throttling/transient failures.
       retry: {},
       onRetry: (event) => {
         params.log.debug?.("retrying send", {
@@ -126,6 +153,7 @@ export function createMSTeamsReplyDispatcher(params: {
       tokenProvider: params.tokenProvider,
       sharePointSiteId: params.sharePointSiteId,
       mediaMaxBytes,
+      feedbackLoopEnabled,
     });
   };
 
@@ -133,16 +161,12 @@ export function createMSTeamsReplyDispatcher(params: {
     if (pendingMessages.length === 0) {
       return;
     }
-    // Copy the buffer before draining so we have a reference for per-message
-    // retry if the batch send fails.
     const toSend = pendingMessages.splice(0);
     const total = toSend.length;
     let ids: string[];
     try {
       ids = await sendMessages(toSend);
     } catch {
-      // Batch send failed (e.g. bad attachment on one message); retry each
-      // message individually so trailing blocks are not silently lost.
       ids = [];
       let failed = 0;
       for (const msg of toSend) {
@@ -175,6 +199,18 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     typingCallbacks,
     deliver: async (payload) => {
+      // When streaming received tokens AND hasn't failed, skip text delivery —
+      // finalize() handles the final message. If streaming failed (>4000 chars),
+      // fall through so deliver sends the complete response.
+      // For payloads with media, strip the text and send media only.
+      if (stream && streamReceivedTokens && stream.hasContent) {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        if (!hasMedia) {
+          return;
+        }
+        payload = { ...payload, text: undefined };
+      }
+
       // Render the payload to messages and accumulate them. All messages from
       // this turn are flushed together in markDispatchIdle() so they go out
       // in a single continueConversation() call.
@@ -203,8 +239,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  // Wrap markDispatchIdle to flush all accumulated messages before signalling idle.
-  // Returns a promise so callers (e.g. onSettled) can await completion.
+  // Wrap markDispatchIdle to flush accumulated messages and finalize stream.
   const markDispatchIdle = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err) => {
@@ -218,14 +253,36 @@ export function createMSTeamsReplyDispatcher(params: {
           hint,
         });
       })
+      .then(() => {
+        if (stream) {
+          return stream.finalize().catch((err) => {
+            params.log.debug?.("stream finalize failed", { error: String(err) });
+          });
+        }
+      })
       .finally(() => {
         baseMarkDispatchIdle();
       });
   };
 
+  // Build reply options with onPartialReply for streaming.
+  // Send the informative update on the first token (not eagerly at stream creation)
+  // so it only appears when the LLM is actually generating text — not when the
+  // agent uses a tool (e.g. sends an adaptive card) without streaming.
+  const streamingReplyOptions = stream
+    ? {
+        onPartialReply: (payload: { text?: string }) => {
+          if (payload.text) {
+            streamReceivedTokens = true;
+            stream!.update(payload.text);
+          }
+        },
+      }
+    : {};
+
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected },
+    replyOptions: { ...replyOptions, ...streamingReplyOptions, onModelSelected },
     markDispatchIdle,
   };
 }
