@@ -8,6 +8,7 @@ import {
   failDelivery,
   loadPendingDeliveries,
   moveToFailed,
+  type QueuedDelivery,
 } from "./delivery-queue.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
@@ -39,7 +40,7 @@ describe("delivery-queue storage", () => {
       expect(files).toHaveLength(1);
       expect(files[0]).toBe(`${id}.json`);
 
-      const entry = readQueuedEntry(tmpDir(), id);
+      const entry = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       expect(entry).toMatchObject({
         id,
         channel: "whatsapp",
@@ -120,7 +121,7 @@ describe("delivery-queue storage", () => {
 
       await failDelivery(id, "connection refused", tmpDir());
 
-      const entry = readQueuedEntry(tmpDir(), id);
+      const entry = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       expect(entry.retryCount).toBe(1);
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
@@ -149,7 +150,7 @@ describe("delivery-queue storage", () => {
 
       await failDelivery(id, "boom", tmpDir());
 
-      const entry = readQueuedEntry(tmpDir(), id);
+      const entry = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       expect(entry.retryCount).toBe(1);
       expect(entry.lastError).toBe("boom");
       expect(Array.isArray(entry.payloads)).toBe(true);
@@ -210,7 +211,7 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
       const filePath = path.join(tmpDir(), "delivery-queue", `${id}.json`);
-      const legacyEntry = readQueuedEntry(tmpDir(), id);
+      const legacyEntry = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       legacyEntry.retryCount = 2;
       delete legacyEntry.lastAttemptAt;
       fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
@@ -219,11 +220,11 @@ describe("delivery-queue storage", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
 
-      const persisted = readQueuedEntry(tmpDir(), id);
+      const persisted = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
     });
 
-    it("preserves mirror idempotency keys and forceDocument when normalizing legacy entries", async () => {
+    it("preserves mirror group context, idempotency keys, and forceDocument when normalizing legacy entries", async () => {
       const id = "legacy-normalized-entry";
       const filePath = path.join(tmpDir(), "delivery-queue", `${id}.json`);
       await ensureQueueDir(tmpDir());
@@ -241,6 +242,8 @@ describe("delivery-queue storage", () => {
             mirror: {
               sessionKey: "agent:main:main",
               idempotencyKey: "idem-legacy-1",
+              isGroup: true,
+              groupId: "telegram:group:123",
             },
           },
           null,
@@ -253,10 +256,14 @@ describe("delivery-queue storage", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]?.forceDocument).toBe(true);
       expect(entries[0]?.mirror?.idempotencyKey).toBe("idem-legacy-1");
+      expect(entries[0]?.mirror?.isGroup).toBe(true);
+      expect(entries[0]?.mirror?.groupId).toBe("telegram:group:123");
 
-      const persisted = readQueuedEntry(tmpDir(), id);
+      const persisted = readQueuedEntry<QueuedDelivery>(tmpDir(), id);
       expect(persisted.forceDocument).toBe(true);
       expect(persisted.mirror?.idempotencyKey).toBe("idem-legacy-1");
+      expect(persisted.mirror?.isGroup).toBe(true);
+      expect(persisted.mirror?.groupId).toBe("telegram:group:123");
       expect(Array.isArray(persisted.payloads)).toBe(true);
       expect(persisted.retryCount).toBe(0);
     });

@@ -31,10 +31,10 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   };
 }
 
-export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
+export function readQueuedEntry<T = Record<string, unknown>>(tmpDir: string, id: string): T {
   return JSON.parse(
     fs.readFileSync(path.join(tmpDir, "delivery-queue", `${id}.json`), "utf-8"),
-  ) as Record<string, unknown>;
+  ) as T;
 }
 
 export function setQueuedEntryState(

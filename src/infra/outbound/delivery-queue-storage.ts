@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
-import type { OutboundMirror } from "./mirror.js";
+import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -25,7 +25,7 @@ export type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
-  mirror?: OutboundMirror;
+  mirror?: DeliveryMirror;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
 };
@@ -89,10 +89,6 @@ async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise
     mode: 0o600,
   });
   await fs.promises.rename(tmp, filePath);
-}
-
-async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {
-  return JSON.parse(await fs.promises.readFile(filePath, "utf-8")) as QueuedDelivery;
 }
 
 function asTrimmedString(value: unknown): string | null {
@@ -190,7 +186,7 @@ function normalizeQueuedDelivery(raw: unknown, fallbackId: string): QueuedDelive
 
   const mirrorRecord =
     record.mirror && typeof record.mirror === "object"
-      ? (record.mirror as Partial<OutboundMirror>)
+      ? (record.mirror as Partial<DeliveryMirror>)
       : null;
   const mirrorSessionKey = asTrimmedString(mirrorRecord?.sessionKey);
   const mirror =
@@ -205,6 +201,8 @@ function normalizeQueuedDelivery(raw: unknown, fallbackId: string): QueuedDelive
               )
             : undefined,
           idempotencyKey: asTrimmedString(mirrorRecord?.idempotencyKey) ?? undefined,
+          isGroup: asBoolean(mirrorRecord?.isGroup),
+          groupId: asTrimmedString(mirrorRecord?.groupId) ?? undefined,
         }
       : undefined;
 
