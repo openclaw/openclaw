@@ -30,7 +30,6 @@ import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -473,7 +472,7 @@ export async function killAllControlledSubagentRuns(params: {
     if (!childKey || seenChildSessionKeys.has(childKey)) {
       continue;
     }
-    const currentEntry = getSubagentRunByChildSessionKey(childKey);
+    const currentEntry = getLatestSubagentRunByChildSessionKey(childKey);
     if (!currentEntry || currentEntry.runId !== entry.runId) {
       continue;
     }
