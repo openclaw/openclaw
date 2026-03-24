@@ -2440,4 +2440,93 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.tools).toEqual([{ type: "web_search" }]);
   });
+
+  it("lets snake_case false disable a global camelCase web search flag", () => {
+    const merged = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qaq/gpt-5.4": {
+                params: {
+                  openaiWebSearch: true,
+                  openaiWebSearchToolType: "web_search_preview",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "agent-1",
+              params: {
+                openai_web_search: false,
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      provider: "qaq",
+      modelId: "gpt-5.4",
+      agentId: "agent-1",
+    });
+
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "qaq",
+      applyModelId: "gpt-5.4",
+      extraParamsOverride: merged,
+      model: {
+        api: "openai-responses",
+        provider: "qaq",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-responses">,
+      payload: { store: false },
+    });
+
+    expect(payload.tools).toBeUndefined();
+  });
+
+  it("lets snake_case tool type override a camelCase global tool type", () => {
+    const merged = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qaq/gpt-5.4": {
+                params: {
+                  openaiWebSearch: true,
+                  openaiWebSearchToolType: "web_search_preview",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "agent-1",
+              params: {
+                openai_web_search: true,
+                openai_web_search_tool_type: "web_search",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      provider: "qaq",
+      modelId: "gpt-5.4",
+      agentId: "agent-1",
+    });
+
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "qaq",
+      applyModelId: "gpt-5.4",
+      extraParamsOverride: merged,
+      model: {
+        api: "openai-responses",
+        provider: "qaq",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-responses">,
+      payload: { store: false },
+    });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+  });
 });

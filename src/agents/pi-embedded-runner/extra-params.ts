@@ -66,6 +66,36 @@ export function resolveExtraParams(params: {
     delete merged.parallelToolCalls;
   }
 
+  const resolvedOpenaiWebSearch = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "openai_web_search",
+    "openaiWebSearch",
+  );
+  if (resolvedOpenaiWebSearch !== undefined) {
+    merged.openai_web_search = resolvedOpenaiWebSearch;
+    delete merged.openaiWebSearch;
+  }
+
+  const resolvedOpenaiWebSearchRequired = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "openai_web_search_required",
+    "openaiWebSearchRequired",
+  );
+  if (resolvedOpenaiWebSearchRequired !== undefined) {
+    merged.openai_web_search_required = resolvedOpenaiWebSearchRequired;
+    delete merged.openaiWebSearchRequired;
+  }
+
+  const resolvedOpenaiWebSearchToolType = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "openai_web_search_tool_type",
+    "openaiWebSearchToolType",
+  );
+  if (resolvedOpenaiWebSearchToolType !== undefined) {
+    merged.openai_web_search_tool_type = resolvedOpenaiWebSearchToolType;
+    delete merged.openaiWebSearchToolType;
+  }
+
   return merged;
 }
 
@@ -82,16 +112,10 @@ function resolveOpenAIBuiltInTools(
   }
 
   const configured: Array<Record<string, unknown>> = [];
-  const webSearchEnabled =
-    extraParams.openaiWebSearch === true || extraParams.openai_web_search === true;
+  const webSearchEnabled = extraParams.openai_web_search === true;
   if (webSearchEnabled) {
-    const rawToolType =
-      typeof extraParams.openaiWebSearchToolType === "string"
-        ? extraParams.openaiWebSearchToolType
-        : typeof extraParams.openai_web_search_tool_type === "string"
-          ? extraParams.openai_web_search_tool_type
-          : undefined;
-    const toolType = rawToolType?.trim() || "web_search_preview";
+    const rawToolType = extraParams.openai_web_search_tool_type;
+    const toolType = typeof rawToolType === "string" ? rawToolType.trim() || "web_search_preview" : "web_search_preview";
     configured.push({ type: toolType });
   }
 
@@ -182,8 +206,12 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
   const openaiBuiltInTools = resolveOpenAIBuiltInTools(extraParams);
-  const openaiWebSearchRequired =
-    extraParams.openaiWebSearchRequired === true || extraParams.openai_web_search_required === true;
+  const rawOpenaiWebSearchRequired = resolveAliasedParamValue(
+    [extraParams],
+    "openai_web_search_required",
+    "openaiWebSearchRequired",
+  );
+  const openaiWebSearchRequired = rawOpenaiWebSearchRequired === true;
   if (openaiWebSearchRequired && openaiBuiltInTools.length === 0) {
     log.warn("ignoring openaiWebSearchRequired because no OpenAI built-in tools were configured");
   }
