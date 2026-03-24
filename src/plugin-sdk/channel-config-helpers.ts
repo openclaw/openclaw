@@ -3,6 +3,15 @@ import {
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+  type ConfigWriteAuthorizationResult,
+  type ConfigWriteScope,
+  type ConfigWriteTarget,
+} from "../channels/plugins/config-writes.js";
+import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
@@ -16,6 +25,14 @@ import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+
+export {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+};
+export type { ConfigWriteAuthorizationResult, ConfigWriteScope, ConfigWriteTarget };
 
 /** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
 export function mapAllowFromEntries(
@@ -38,6 +55,13 @@ export function resolveOptionalConfigString(
   }
   const normalized = String(value).trim();
   return normalized || undefined;
+}
+
+/** Adapt `{ cfg, accountId }` accessors to callback sites that pass positional args. */
+export function adaptScopedAccountAccessor<Result, Config extends OpenClawConfig = OpenClawConfig>(
+  accessor: (params: { cfg: Config; accountId?: string | null }) => Result,
+): (cfg: Config, accountId?: string | null) => Result {
+  return (cfg, accountId) => accessor({ cfg, accountId });
 }
 
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */

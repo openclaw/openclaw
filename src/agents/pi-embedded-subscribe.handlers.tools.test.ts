@@ -40,6 +40,8 @@ function createTestContext(): {
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
+      pendingToolMediaUrls: [],
+      pendingToolAudioAsVoice: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -173,6 +175,66 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("clears edit failure when the retry succeeds through common file path aliases", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-1",
+        args: {
+          file_path: "/tmp/demo.txt",
+          old_string: "beta stale",
+          new_string: "beta fixed",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-1",
+        isError: true,
+        result: { error: "Could not find the exact text in /tmp/demo.txt" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError?.toolName).toBe("edit");
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-2",
+        args: {
+          file: "/tmp/demo.txt",
+          oldText: "beta",
+          newText: "beta fixed",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-2",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
   });
 });
 

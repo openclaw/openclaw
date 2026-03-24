@@ -1,19 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackMessageHandler } from "./message-handler.js";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
+let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
 
-vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
-  resolveInboundDebounceMs: () => 10,
-  createInboundDebouncer: () => ({
-    enqueue: (entry: unknown) => enqueueMock(entry),
-    flushKey: (key: string) => flushKeyMock(key),
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    createChannelInboundDebouncer: () => ({
+      debounceMs: 10,
+      debouncer: {
+        enqueue: (entry: unknown) => enqueueMock(entry),
+        flushKey: (key: string) => flushKeyMock(key),
+      },
+    }),
+    shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,
+  };
+});
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
@@ -63,10 +70,12 @@ async function handleDirectMessage(
 }
 
 describe("createSlackMessageHandler", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     resolveThreadTsMock.mockClear();
+    ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 
   it("does not track invalid non-message events from the message stream", async () => {

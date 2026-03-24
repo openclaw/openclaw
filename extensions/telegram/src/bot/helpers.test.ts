@@ -248,6 +248,44 @@ describe("describeReplyTarget", () => {
     expect(result?.kind).toBe("reply");
   });
 
+  it("handles non-string reply text gracefully (issue #27201)", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        // Simulate edge case where text is an unexpected non-string value
+        text: { some: "object" },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    // Should not throw when reply text is malformed; return null instead.
+    expect(result).toBeNull();
+  });
+
+  it("falls back to caption when reply text is malformed", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: { some: "object" },
+        caption: "Caption body",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result?.body).toBe("Caption body");
+    expect(result?.kind).toBe("reply");
+  });
+
   it("extracts forwarded context from reply_to_message (issue #9619)", () => {
     // When user forwards a message with a comment, the comment message has
     // reply_to_message pointing to the forwarded message. We should extract

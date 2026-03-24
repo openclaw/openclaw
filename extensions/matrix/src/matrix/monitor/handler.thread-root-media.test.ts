@@ -1,29 +1,13 @@
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { describe, expect, it, vi } from "vitest";
-import { setMatrixRuntime } from "../../runtime.js";
+import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler thread root media", () => {
   it("keeps image-only thread roots visible via attachment markers", async () => {
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
 
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
     const formatAgentEnvelope = vi
@@ -44,6 +28,9 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
             sessionKey: "agent:main:matrix:channel:!room:example.org",
             mainSessionKey: "agent:main:main",
           }),
+        },
+        mentions: {
+          buildMentionRegexes: vi.fn().mockReturnValue([]),
         },
         session: {
           resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
@@ -115,10 +102,10 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       mediaMaxBytes: 5 * 1024 * 1024,
       startupMs: Date.now() - 120_000,
       startupGraceMs: 60_000,
-      dropPreStartupMessages: false,
       directTracker: {
         isDirectMessage: vi.fn().mockResolvedValue(true),
       },
+      dropPreStartupMessages: true,
       getRoomInfo: vi.fn().mockResolvedValue({
         name: "Media Room",
         canonicalAlias: "#media:example.org",

@@ -1,11 +1,21 @@
-import { ProxyAgent } from "undici";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_GAXIOS_CONSTRUCTOR_OVERRIDE = "__OPENCLAW_TEST_GAXIOS_CONSTRUCTOR__";
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+let ProxyAgent: typeof import("undici").ProxyAgent;
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
+  vi.resetModules();
+  const require = createRequire(import.meta.url);
+  ({ ProxyAgent } = require("undici") as typeof import("undici"));
+});
 
 describe("gaxios fetch compat", () => {
   afterEach(() => {
+    vi.doUnmock("undici");
     Reflect.deleteProperty(globalThis as object, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE);
     vi.resetModules();
     vi.restoreAllMocks();

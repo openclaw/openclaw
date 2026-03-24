@@ -1,13 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createDiscordMessageHandler,
-  preflightDiscordMessageMock,
-  processDiscordMessageMock,
-} from "./message-handler.module-test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+let createDiscordMessageHandler: typeof import("./message-handler.module-test-helpers.js").createDiscordMessageHandler;
+let preflightDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").preflightDiscordMessageMock;
+let processDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").processDiscordMessageMock;
 
 const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
 type SetStatusFn = (patch: Record<string, unknown>) => void;
@@ -86,6 +84,12 @@ async function createLifecycleStopScenario(params: {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createDiscordMessageHandler, preflightDiscordMessageMock, processDiscordMessageMock } =
+      await import("./message-handler.module-test-helpers.js"));
+  });
+
   it("resets busy counters when the handler is created", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -154,6 +158,22 @@ describe("createDiscordMessageHandler queue behavior", () => {
         }),
       );
     });
+  });
+
+  it("drops duplicate inbound message deliveries before they reach preflight", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const handler = createHandlerWithDefaultPreflight();
+    const duplicate = createMessageData("m-dup");
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {
