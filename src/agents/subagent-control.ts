@@ -298,7 +298,15 @@ export function buildSubagentList(params: {
     });
     const childSessions = Array.from(
       new Set(
-        listSubagentRunsForController(entry.childSessionKey).map((run) => run.childSessionKey),
+        listSubagentRunsForController(entry.childSessionKey)
+          .map((run) => run.childSessionKey?.trim())
+          .filter((childSessionKey): childSessionKey is string => Boolean(childSessionKey))
+          .filter((childSessionKey) => {
+            const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+            const latestControllerSessionKey =
+              latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+            return latestControllerSessionKey === entry.childSessionKey;
+          }),
       ),
     );
     const runtime = formatDurationCompact(runtimeMs);
@@ -417,6 +425,16 @@ async function cascadeKillChildren(params: {
   for (const run of listSubagentRunsForController(params.parentChildSessionKey)) {
     const childKey = run.childSessionKey?.trim();
     if (!childKey) {
+      continue;
+    }
+    const latest = getLatestSubagentRunByChildSessionKey(childKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (
+      !latest ||
+      latest.runId !== run.runId ||
+      latestControllerSessionKey !== params.parentChildSessionKey
+    ) {
       continue;
     }
     const existing = childRunsBySessionKey.get(childKey);

@@ -144,6 +144,44 @@ describe("subagent registry query regressions", () => {
     expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(2);
   });
 
+  it("ignores stale older parent rows when a child session moved to a newer controller", () => {
+    const oldParentSessionKey = "agent:main:subagent:old-parent";
+    const newParentSessionKey = "agent:main:subagent:new-parent";
+    const childSessionKey = "agent:main:subagent:shared-child";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-old-parent",
+        childSessionKey: oldParentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 100,
+      }),
+      makeRun({
+        runId: "run-new-parent",
+        childSessionKey: newParentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: 200,
+      }),
+      makeRun({
+        runId: "run-child-stale-parent",
+        childSessionKey,
+        requesterSessionKey: oldParentSessionKey,
+        controllerSessionKey: oldParentSessionKey,
+        createdAt: 300,
+        endedAt: 350,
+      }),
+      makeRun({
+        runId: "run-child-current-parent",
+        childSessionKey,
+        requesterSessionKey: newParentSessionKey,
+        controllerSessionKey: newParentSessionKey,
+        createdAt: 400,
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, oldParentSessionKey)).toBe(0);
+    expect(countPendingDescendantRunsFromRuns(runs, newParentSessionKey)).toBe(1);
+  });
+
   it("regression excluding current run, countPendingDescendantRunsExcludingRun keeps sibling gating intact", () => {
     // Regression guard: excluding the currently announcing run must not hide sibling pending work.
     const runs = toRunMap([

@@ -1068,6 +1068,94 @@ describe("sessions tools", () => {
     expect(details.text).not.toContain("active (waiting on 2 children)");
   });
 
+  it("subagents list does not keep childSessions attached to a stale older parent", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const oldParentKey = "agent:main:subagent:old-parent";
+    const newParentKey = "agent:main:subagent:new-parent";
+    const childKey = "agent:main:subagent:shared-child";
+
+    addSubagentRunForTests({
+      runId: "run-old-parent",
+      childSessionKey: oldParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent",
+      childSessionKey: newParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent task",
+      cleanup: "keep",
+      createdAt: now - 8_000,
+      startedAt: now - 7_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-shared-child-stale-parent",
+      childSessionKey: childKey,
+      requesterSessionKey: oldParentKey,
+      requesterDisplayKey: oldParentKey,
+      controllerSessionKey: oldParentKey,
+      task: "shared child stale parent",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_000,
+      endedAt: now - 4_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-shared-child-current-parent",
+      childSessionKey: childKey,
+      requesterSessionKey: newParentKey,
+      requesterDisplayKey: newParentKey,
+      controllerSessionKey: newParentKey,
+      task: "shared child current parent",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-stale-parent", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{
+        runId?: string;
+        childSessions?: string[];
+        pendingDescendants?: number;
+        status?: string;
+      }>;
+    };
+
+    expect(details.status).toBe("ok");
+    const oldParent = details.active?.find((entry) => entry.runId === "run-old-parent");
+    const newParent = details.active?.find((entry) => entry.runId === "run-new-parent");
+    expect(oldParent).toMatchObject({
+      runId: "run-old-parent",
+      pendingDescendants: 0,
+      status: "running",
+    });
+    expect(oldParent?.childSessions).toBeUndefined();
+    expect(newParent).toMatchObject({
+      runId: "run-new-parent",
+      childSessions: [childKey],
+      pendingDescendants: 1,
+      status: "active (waiting on 1 child)",
+    });
+  });
+
   it("subagents list dedupes stale rows for the same child session", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();

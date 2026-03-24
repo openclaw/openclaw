@@ -620,6 +620,105 @@ describe("killControlledSubagentRun", () => {
     });
     expect(getSubagentRunByChildSessionKey(leafSessionKey)?.endedAt).toBeTypeOf("number");
   });
+
+  it("does not cascade through a child session that moved to a newer parent", async () => {
+    const oldParentSessionKey = "agent:main:subagent:old-parent";
+    const newParentSessionKey = "agent:main:subagent:new-parent";
+    const childSessionKey = "agent:main:subagent:shared-child";
+    const leafSessionKey = `${childSessionKey}:subagent:leaf`;
+
+    addSubagentRunForTests({
+      runId: "run-old-parent-current",
+      childSessionKey: oldParentSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 8_000,
+      startedAt: Date.now() - 7_000,
+      endedAt: Date.now() - 6_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent-current",
+      childSessionKey: newParentSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-stale-old-parent",
+      childSessionKey,
+      controllerSessionKey: oldParentSessionKey,
+      requesterSessionKey: oldParentSessionKey,
+      requesterDisplayKey: oldParentSessionKey,
+      task: "stale shared child task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_500,
+      endedAt: Date.now() - 3_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-child-current-new-parent",
+      childSessionKey,
+      controllerSessionKey: newParentSessionKey,
+      requesterSessionKey: newParentSessionKey,
+      requesterDisplayKey: newParentSessionKey,
+      task: "current shared child task",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_500,
+    });
+    addSubagentRunForTests({
+      runId: "run-leaf-active",
+      childSessionKey: leafSessionKey,
+      controllerSessionKey: childSessionKey,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "leaf task",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    });
+
+    const result = await killControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-old-parent-current",
+        childSessionKey: oldParentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "old parent task",
+        cleanup: "keep",
+        createdAt: Date.now() - 8_000,
+        startedAt: Date.now() - 7_000,
+        endedAt: Date.now() - 6_000,
+        outcome: { status: "ok" },
+      },
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-old-parent-current",
+      sessionKey: oldParentSessionKey,
+      label: "old parent task",
+      text: "old parent task is already finished.",
+    });
+    expect(getSubagentRunByChildSessionKey(leafSessionKey)?.endedAt).toBeUndefined();
+  });
 });
 
 describe("killAllControlledSubagentRuns", () => {
