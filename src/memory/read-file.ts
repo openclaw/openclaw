@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
