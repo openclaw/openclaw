@@ -10,7 +10,7 @@ export function computeInlineScriptHashes(html: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     const openTag = match[0].slice(0, match[0].indexOf(">") + 1);
-    if (/\bsrc\s*=/i.test(openTag)) {
+    if (hasScriptSrcAttribute(openTag)) {
       continue;
     }
     const content = match[1];
@@ -21,6 +21,60 @@ export function computeInlineScriptHashes(html: string): string[] {
     hashes.push(`sha256-${hash}`);
   }
   return hashes;
+}
+
+function hasScriptSrcAttribute(openTag: string): boolean {
+  let i = openTag.search(/\bscript\b/i);
+  if (i < 0) {
+    return false;
+  }
+  i += "script".length;
+  while (i < openTag.length) {
+    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
+      i += 1;
+    }
+    const current = openTag[i];
+    if (!current || current === ">") {
+      return false;
+    }
+    if (current === "/") {
+      i += 1;
+      continue;
+    }
+    const nameStart = i;
+    while (i < openTag.length && /[^\s=/>]/.test(openTag[i] ?? "")) {
+      i += 1;
+    }
+    const attributeName = openTag.slice(nameStart, i).toLowerCase();
+    if (attributeName === "src") {
+      return true;
+    }
+    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
+      i += 1;
+    }
+    if ((openTag[i] ?? "") !== "=") {
+      continue;
+    }
+    i += 1;
+    while (i < openTag.length && /\s/.test(openTag[i] ?? "")) {
+      i += 1;
+    }
+    const quote = openTag[i];
+    if (quote === '"' || quote === "'") {
+      i += 1;
+      while (i < openTag.length && openTag[i] !== quote) {
+        i += 1;
+      }
+      if (openTag[i] === quote) {
+        i += 1;
+      }
+      continue;
+    }
+    while (i < openTag.length && /[^\s>]/.test(openTag[i] ?? "")) {
+      i += 1;
+    }
+  }
+  return false;
 }
 
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
