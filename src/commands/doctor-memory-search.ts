@@ -68,7 +68,7 @@ export async function noteMemorySearchHealth(
       note(
         [
           'Memory search provider is set to "local" but the configured local model file was not found.',
-          'OpenClaw local embeddings use `node-llama-cpp` + GGUF models (not torch / sentence-transformers).',
+          "OpenClaw local embeddings use `node-llama-cpp` + GGUF models (not torch / sentence-transformers).",
           "",
           "Fix (pick one):",
           `- Point agents.defaults.memorySearch.local.modelPath at a valid GGUF file or hf: URI`,
@@ -149,8 +149,8 @@ export async function noteMemorySearchHealth(
       "Fix (pick one):",
       "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- For local embeddings, set agents.defaults.memorySearch.provider = \"local\" (or keep auto) and use a GGUF model via node-llama-cpp`,
-      `- For Ollama embeddings, set agents.defaults.memorySearch.provider = \"ollama\" explicitly (auto mode does not pick Ollama)`,
+      `- For local embeddings, set agents.defaults.memorySearch.provider = "local", or keep "auto" and set agents.defaults.memorySearch.local.modelPath to an existing GGUF file or hf: URI`,
+      `- For Ollama embeddings, set agents.defaults.memorySearch.provider = "ollama" explicitly (auto mode does not pick Ollama)`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
       "",
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,

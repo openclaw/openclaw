@@ -99,10 +99,10 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg, {});
 
     const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain('configured local model file was not found');
-    expect(message).toContain('node-llama-cpp` + GGUF');
-    expect(message).toContain('Remove the custom local.modelPath');
-    expect(message).toContain('pnpm approve-builds -g');
+    expect(message).toContain("configured local model file was not found");
+    expect(message).toContain("node-llama-cpp` + GGUF");
+    expect(message).toContain("Remove the custom local.modelPath");
+    expect(message).toContain("pnpm approve-builds -g");
   });
 
   it("does not warn when local provider with default model and gateway probe is ready", async () => {
@@ -281,6 +281,8 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
+    expect(message).toContain('keep "auto" and set agents.defaults.memorySearch.local.modelPath');
+    expect(message).toContain("existing GGUF file or hf: URI");
   });
 
   it("still warns in auto mode when only ollama credentials exist", async () => {
