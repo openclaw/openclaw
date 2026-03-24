@@ -2589,7 +2589,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openviking",
-    packageVersion: "2026.3.12",
+    packageVersion: "2026.3.23",
     packageDescription: "OpenClaw OpenViking context-engine plugin",
     packageManifest: {
       extensions: ["./index.ts"],
