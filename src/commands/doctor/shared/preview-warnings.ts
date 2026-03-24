@@ -5,6 +5,11 @@ import {
   scanBundledPluginLoadPathMigrations,
 } from "./bundled-plugin-load-paths.js";
 import {
+  type BundledPluginInstallPathOptions,
+  collectBundledPluginInstallPathWarnings,
+  scanBundledPluginInstallPathRepairs,
+} from "./bundled-plugin-install-paths.js";
+import {
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorPreviewWarnings,
 } from "./channel-doctor.js";
@@ -37,6 +42,7 @@ import {
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
+  bundledPluginPathOptions?: BundledPluginInstallPathOptions;
 }): Promise<string[]> {
   const warnings: string[] = [];
 
@@ -117,6 +123,19 @@ export async function collectDoctorPreviewWarnings(params: {
   const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
   if (safeBinTrustedDirHints.length > 0) {
     warnings.push(collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"));
+  }
+
+  const staleBundledPluginPaths = scanBundledPluginInstallPathRepairs(
+    params.cfg,
+    params.bundledPluginPathOptions,
+  );
+  if (staleBundledPluginPaths.length > 0) {
+    warnings.push(
+      ...collectBundledPluginInstallPathWarnings({
+        hits: staleBundledPluginPaths,
+        doctorFixCommand: params.doctorFixCommand,
+      }),
+    );
   }
 
   return warnings;

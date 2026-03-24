@@ -1,6 +1,9 @@
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
+  type BundledPluginInstallPathOptions,
+  maybeRepairBundledPluginInstallPaths,
+} from "./shared/bundled-plugin-install-paths.js";
 import {
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorRepairMutations,
@@ -18,6 +21,7 @@ import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  bundledPluginPathOptions?: BundledPluginInstallPathOptions;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -52,6 +56,9 @@ export async function runDoctorRepairSequence(params: {
   })) {
     applyMutation(mutation);
   }
+  applyMutation(
+    maybeRepairBundledPluginInstallPaths(state.candidate, params.bundledPluginPathOptions),
+  );
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, process.env));
   applyMutation(maybeRepairStalePluginConfig(state.candidate, process.env));

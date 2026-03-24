@@ -232,4 +232,44 @@ describe("doctor preview warnings", () => {
     ]);
     expect(warnings[0]).not.toContain("first-time setup mode");
   });
+
+  it("warns about stale bundled plugin path references", async () => {
+    const stalePath = "/pkg/extensions/acpx";
+    const nextPath = "/pkg/dist/extensions/acpx";
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          load: { paths: [stalePath] },
+          installs: {
+            acpx: {
+              source: "path",
+              spec: "acpx",
+              sourcePath: stalePath,
+              installPath: stalePath,
+            },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      bundledPluginPathOptions: {
+        bundledSources: new Map([
+          [
+            "acpx",
+            {
+              pluginId: "acpx",
+              localPath: nextPath,
+            },
+          ],
+        ]),
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(`Bundled plugin "acpx" now resolves to ${nextPath}`),
+    ]);
+    expect(warnings[0]).toContain(`plugins.installs.acpx.sourcePath: ${stalePath}`);
+    expect(warnings[0]).toContain(`plugins.load.paths[0]: ${stalePath}`);
+    expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
+  });
 });
