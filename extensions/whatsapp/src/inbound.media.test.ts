@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
   mockGetContentType,
@@ -12,9 +12,39 @@ import {
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
-const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
-const saveMediaBufferSpy = vi.fn();
+const {
+  readAllowFromStoreMock,
+  upsertPairingRequestMock,
+  saveMediaBufferSpy,
+  transcribeOpenAiCompatibleAudioMock,
+  sendMessageSpy,
+} = vi.hoisted(() => ({
+  readAllowFromStoreMock: vi.fn().mockResolvedValue([]),
+  upsertPairingRequestMock: vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true }),
+  saveMediaBufferSpy: vi.fn(),
+  transcribeOpenAiCompatibleAudioMock: vi.fn(),
+  sendMessageSpy: vi.fn().mockResolvedValue(undefined),
+}));
+
+const DEFAULT_TEST_CONFIG = {
+  channels: {
+    whatsapp: {
+      allowFrom: ["*"],
+    },
+  },
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openai", model: "gpt-4o-transcribe", timeoutSeconds: 45 }],
+      },
+    },
+  },
+  messages: {
+    messagePrefix: undefined,
+    responsePrefix: undefined,
+  },
+};
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
@@ -22,17 +52,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   );
   return {
     ...actual,
-    loadConfig: vi.fn().mockReturnValue({
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"], // Allow all in tests
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    }),
+    loadConfig: vi.fn().mockReturnValue(DEFAULT_TEST_CONFIG),
   };
 });
 
@@ -57,6 +77,16 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
       saveMediaBufferSpy(...args);
       return actual.saveMediaBuffer(...args);
     }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/media-understanding", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-understanding")>(
+    "openclaw/plugin-sdk/media-understanding",
+  );
+  return {
+    ...actual,
+    transcribeOpenAiCompatibleAudio: transcribeOpenAiCompatibleAudioMock,
   };
 });
 
@@ -98,7 +128,7 @@ vi.mock("./session.js", async () => {
     ev,
     ws: { close: vi.fn() },
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
-    sendMessage: vi.fn().mockResolvedValue(undefined),
+    sendMessage: sendMessageSpy,
     readMessages: vi.fn().mockResolvedValue(undefined),
     updateMediaMessage: vi.fn(),
     logger: {},
@@ -135,12 +165,19 @@ describe("web inbound media saves with extension", () => {
     vi.useRealTimers();
     vi.resetModules();
     saveMediaBufferSpy.mockClear();
+    sendMessageSpy.mockClear();
+    transcribeOpenAiCompatibleAudioMock.mockReset();
   });
 
   beforeEach(async () => {
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
     ({ createWaSocket } = await import("./session.js"));
     resetWebInboundDedupe();
+  });
+
+  afterEach(async () => {
+    const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+    vi.mocked(loadConfig).mockReturnValue(DEFAULT_TEST_CONFIG as ReturnType<typeof loadConfig>);
   });
 
   beforeAll(async () => {
@@ -259,5 +296,100 @@ describe("web inbound media saves with extension", () => {
     expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
 
     await listener.close();
+  });
+
+  it("pretranscribes inbound audio before forwarding to the agent", async () => {
+    process.env.OPENAI_API_KEY = "test-openai-key";
+    transcribeOpenAiCompatibleAudioMock.mockResolvedValue({
+      text: "ses notu transcript",
+      model: "gpt-4o-transcribe",
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "aud1", fromMe: false, remoteJid: "444@s.whatsapp.net" },
+          message: { audioMessage: { mimetype: "audio/ogg; codecs=opus" } },
+          messageTimestamp: 1_700_000_005,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(transcribeOpenAiCompatibleAudioMock).toHaveBeenCalledTimes(1);
+    expect(inbound.body).toBe("ses notu transcript");
+    expect(inbound.mediaPath).toBeUndefined();
+    expect(inbound.mediaType).toBeUndefined();
+
+    await listener.close();
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it("echoes transcript when inbound audio echoTranscript is enabled", async () => {
+    process.env.OPENAI_API_KEY = "test-openai-key";
+    transcribeOpenAiCompatibleAudioMock.mockResolvedValue({
+      text: "echo transcript",
+      model: "gpt-4o-transcribe",
+    });
+    const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+    vi.mocked(loadConfig).mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+      },
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            echoTranscript: true,
+            echoFormat: "🎙️ Transcript:\n{transcript}",
+            models: [{ provider: "openai", model: "gpt-4o-transcribe", timeoutSeconds: 45 }],
+          },
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    } as ReturnType<typeof loadConfig>);
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "aud2", fromMe: false, remoteJid: "555@s.whatsapp.net" },
+          message: { audioMessage: { mimetype: "audio/ogg; codecs=opus" } },
+          messageTimestamp: 1_700_000_006,
+        },
+      ],
+    });
+
+    await waitForMessage(onMessage);
+    expect(sendMessageSpy).toHaveBeenCalledWith("555@s.whatsapp.net", {
+      text: "🎙️ Transcript:\necho transcript",
+    });
+
+    await listener.close();
+    delete process.env.OPENAI_API_KEY;
   });
 });
