@@ -10,7 +10,7 @@ import {
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -48,6 +48,76 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
 
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
+}
+
+const SYSTEMD_ENVFILE_MANAGED_KEYS = new Set<string>([
+  "OPENCLAW_GATEWAY_TOKEN",
+  "CLAWDBOT_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+  "CLAWDBOT_GATEWAY_PASSWORD",
+  "TELEGRAM_BOT_TOKEN",
+  "DISCORD_BOT_TOKEN",
+  "SLACK_BOT_TOKEN",
+  "SLACK_APP_TOKEN",
+  "LINE_CHANNEL_ACCESS_TOKEN",
+  "LINE_CHANNEL_SECRET",
+]);
+
+function resolveSystemdGatewayEnvFilePath(env: GatewayServiceEnv): string {
+  return path.posix.join(toPosixPath(resolveGatewayStateDir(env)), ".env");
+}
+
+function compactSystemdEnvironmentFilePath(pathname: string, env: GatewayServiceEnv): string {
+  const normalizedPath = toPosixPath(pathname);
+  const home = toPosixPath(resolveHomeDir(env));
+  if (normalizedPath === home) {
+    return "%h";
+  }
+  if (normalizedPath.startsWith(`${home}/`)) {
+    return `%h${normalizedPath.slice(home.length)}`;
+  }
+  return normalizedPath;
+}
+
+async function resolveSystemdInstallEnvironment(params: {
+  env: GatewayServiceEnv;
+  environment?: GatewayServiceEnv;
+}): Promise<{
+  environment?: GatewayServiceEnv;
+  environmentFiles?: string[];
+}> {
+  const environment = params.environment ? { ...params.environment } : undefined;
+  if (!environment) {
+    return {};
+  }
+
+  const envFilePath = resolveSystemdGatewayEnvFilePath(params.env);
+  let envFileKeys: Set<string> | undefined;
+  try {
+    envFileKeys = new Set(Object.keys(await readSystemdEnvironmentFile(envFilePath)));
+  } catch {
+    envFileKeys = undefined;
+  }
+
+  if (!envFileKeys || envFileKeys.size === 0) {
+    return { environment };
+  }
+
+  let stripped = false;
+  for (const key of SYSTEMD_ENVFILE_MANAGED_KEYS) {
+    if (!envFileKeys.has(key) || environment[key] === undefined) {
+      continue;
+    }
+    delete environment[key];
+    stripped = true;
+  }
+
+  return {
+    environment,
+    environmentFiles: stripped
+      ? [compactSystemdEnvironmentFilePath(envFilePath, params.env)]
+      : undefined,
+  };
 }
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
@@ -472,12 +542,21 @@ async function writeSystemdUnit({
     // File does not exist yet — nothing to back up.
   }
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment,
+    description,
+  });
+  const renderedEnvironment = await resolveSystemdInstallEnvironment({
+    env,
+    environment,
+  });
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: renderedEnvironment.environment,
+    environmentFiles: renderedEnvironment.environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };

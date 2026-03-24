@@ -35,11 +35,25 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   });
 }
 
+function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
+  if (!environmentFiles || environmentFiles.length === 0) {
+    return [];
+  }
+  return environmentFiles
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
+      return `EnvironmentFile=${systemdEscapeArg(entry)}`;
+    });
+}
+
 export function buildSystemdUnit({
   description,
   programArguments,
   workingDirectory,
   environment,
+  environmentFiles,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -48,6 +62,7 @@ export function buildSystemdUnit({
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
+  const envFileLines = renderEnvironmentFileLines(environmentFiles);
   const envLines = renderEnvLines(environment);
   return [
     "[Unit]",
@@ -66,6 +81,7 @@ export function buildSystemdUnit({
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
     workingDirLine,
+    ...envFileLines,
     ...envLines,
     "",
     "[Install]",

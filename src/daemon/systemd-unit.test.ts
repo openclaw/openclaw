@@ -24,6 +24,22 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("SuccessExitStatus=0 143");
   });
 
+  it("renders EnvironmentFile entries before inline environment values", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environmentFiles: ["%h/.openclaw/.env"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+      },
+    });
+    expect(unit).toContain("EnvironmentFile=%h/.openclaw/.env");
+    expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=19001");
+    expect(unit.indexOf("EnvironmentFile=%h/.openclaw/.env")).toBeLessThan(
+      unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=19001"),
+    );
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({
