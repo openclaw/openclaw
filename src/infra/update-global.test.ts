@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   canResolveRegistryVersionForPackageTarget,
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
@@ -184,5 +185,34 @@ describe("update global helpers", () => {
     });
     await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
     await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+  });
+
+  it("checks bundled runtime sidecars, including Matrix helper-api", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-global-pkg-"));
+    const sidecars = [
+      "dist/extensions/whatsapp/light-runtime-api.js",
+      "dist/extensions/whatsapp/runtime-api.js",
+      "dist/extensions/matrix/helper-api.js",
+      "dist/extensions/matrix/runtime-api.js",
+      "dist/extensions/matrix/thread-bindings-runtime.js",
+      "dist/extensions/msteams/runtime-api.js",
+    ] as const;
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+    for (const relativePath of sidecars) {
+      const absolutePath = path.join(packageRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+
+    await fs.rm(path.join(packageRoot, "dist/extensions/matrix/helper-api.js"));
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+      "missing bundled runtime sidecar dist/extensions/matrix/helper-api.js",
+    );
   });
 });
