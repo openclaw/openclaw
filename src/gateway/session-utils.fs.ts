@@ -762,6 +762,52 @@ function extractLatestUsageFromTranscriptChunk(
   return snapshot;
 }
 
+type SessionUsageCacheEntry = {
+  result: SessionTranscriptUsageSnapshot | null;
+  mtimeMs: number;
+  size: number;
+};
+
+const sessionUsageCache = new Map<string, SessionUsageCacheEntry>();
+const MAX_SESSION_USAGE_CACHE_ENTRIES = 5000;
+
+function getCachedSessionUsage(
+  cacheKey: string,
+  stat: fs.Stats,
+): SessionTranscriptUsageSnapshot | null | undefined {
+  const cached = sessionUsageCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    sessionUsageCache.delete(cacheKey);
+    return undefined;
+  }
+  // LRU bump
+  sessionUsageCache.delete(cacheKey);
+  sessionUsageCache.set(cacheKey, cached);
+  return cached.result;
+}
+
+function setCachedSessionUsage(
+  cacheKey: string,
+  stat: fs.Stats,
+  result: SessionTranscriptUsageSnapshot | null,
+) {
+  sessionUsageCache.set(cacheKey, {
+    result,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  });
+  while (sessionUsageCache.size > MAX_SESSION_USAGE_CACHE_ENTRIES) {
+    const oldestKey = sessionUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionUsageCache.delete(oldestKey);
+  }
+}
+
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -773,14 +819,37 @@ export function readLatestSessionUsageFromTranscript(
     return null;
   }
 
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    if (stat.size === 0) {
-      return null;
-    }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+
+  const cached = getCachedSessionUsage(filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    setCachedSessionUsage(filePath, stat, null);
+    return null;
+  }
+
+  // Distinguish "file read succeeded but no usage data" (cache the null)
+  // from "transient I/O error" (don't cache). withOpenTranscriptFd returns
+  // null for both cases, so we track success explicitly.
+  let readSucceeded = false;
+  const result = withOpenTranscriptFd(filePath, (fd) => {
     const chunk = fs.readFileSync(fd, "utf-8");
+    readSucceeded = true;
     return extractLatestUsageFromTranscriptChunk(chunk);
   });
+
+  if (readSucceeded) {
+    setCachedSessionUsage(filePath, stat, result);
+  }
+  return result;
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
