@@ -42,6 +42,14 @@ OpenClaw has three public release lanes:
 - Run `pnpm release:check` before every tagged release
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
+- After npm publish, run
+  `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
+  (or the matching beta/correction version) to verify the published registry
+  install path in a fresh temp prefix
+- For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
+  also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
+  so release corrections cannot silently leave older global installs on the
+  base stable payload
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
