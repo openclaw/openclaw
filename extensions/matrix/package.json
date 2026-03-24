@@ -23,7 +23,8 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.ts",
+      "./src/plugin-entry.runtime.ts"
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
