@@ -243,6 +243,55 @@ describe("getHealthSnapshot", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("probes multiple configured accounts in parallel", async () => {
+    testConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            a: { botToken: "token-a" },
+            b: { botToken: "token-b" },
+          },
+          defaultAccountId: "a",
+        },
+      },
+    };
+    testStore = {};
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        if (url.includes("/getMe")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { username: "bot" } }),
+          } as unknown as Response;
+        }
+        if (url.includes("/getWebhookInfo")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { url: "https://example.test/hook" } }),
+          } as unknown as Response;
+        }
+        throw new Error(`unexpected url: ${url}`);
+      }),
+    );
+
+    const started = Date.now();
+    const snap = await getHealthSnapshot({ timeoutMs: 250 });
+    const elapsed = Date.now() - started;
+    const telegram = snap.channels.telegram as {
+      accounts?: Record<string, { probe?: { ok?: boolean } }>;
+    };
+    expect(telegram.accounts?.a?.probe?.ok).toBe(true);
+    expect(telegram.accounts?.b?.probe?.ok).toBe(true);
+    expect(elapsed).toBeLessThan(100);
+  });
+
   it("returns a structured telegram probe error when getMe fails", async () => {
     testConfig = { channels: { telegram: { botToken: "bad-token" } } };
     testStore = {};
