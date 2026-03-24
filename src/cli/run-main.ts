@@ -5,10 +5,10 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { enableConsoleCapture } from "../logging.js";
+import { enableConsoleCapture, routeLogsToStderr } from "../logging.js";
 import {
   getCommandPathWithRootOptions,
-  getPrimaryCommand,
+  getCommandPositionalsWithRootOptions,
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
@@ -127,9 +127,50 @@ export async function runCli(argv: string[] = process.argv) {
     });
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+
+    // Determine primary command first, so ACP protocol-safe routing happens before
+    // registration side-effects.
+    const [routePathPrimary] = getCommandPathWithRootOptions(parseArgv, 2);
+    const primary = routePathPrimary ?? null;
+
+    const acpCommandArgs =
+      primary === "acp"
+        ? getCommandPositionalsWithRootOptions(parseArgv, {
+            commandPath: ["acp"],
+            booleanFlags: [
+              "--require-existing",
+              "--reset-session",
+              "--no-prefix-cwd",
+              "--verbose",
+              "-v",
+              "--server-verbose",
+            ],
+            valueFlags: [
+              "--url",
+              "--token",
+              "--token-file",
+              "--password",
+              "--password-file",
+              "--session",
+              "--session-label",
+              "--provenance",
+              "--cwd",
+              "--server",
+              "--server-args",
+            ],
+          })
+        : null;
+    const isAcpClient = acpCommandArgs?.[0] === "client";
+
+    // Route logs to stderr for ACP bridge mode before registration side-effects,
+    // so stdout remains clean for protocol clients when running `openclaw acp`
+    // (including `--url`, `--token`, etc. variants).
+    if (routePathPrimary === "acp" && !isAcpClient) {
+      routeLogsToStderr();
+    }
+
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
-    const primary = getPrimaryCommand(parseArgv);
     if (primary) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);
