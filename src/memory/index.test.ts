@@ -1031,6 +1031,80 @@ describe("memory index", () => {
     expect(perFileHashPrepareCalls).toBe(0);
   });
 
+  it("uses a single sqlite aggregation query for status counts", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-status-aggregate-${randomUUID()}.sqlite`),
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      onSearch: false,
+    });
+
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "beta line\n");
+
+    const stateDir = path.join(fixtureRoot, `state-status-${randomUUID()}`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, "status.jsonl"),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "session status line" }] },
+      }) + "\n",
+    );
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => { all: (...args: unknown[]) => unknown };
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let aggregatePrepareCalls = 0;
+    let legacyCountPrepareCalls = 0;
+    db.prepare = ((sql: string) => {
+      if (
+        sql.includes(`SELECT 'files' AS kind, source, COUNT(*) as c FROM files`) &&
+        sql.includes(`UNION ALL`)
+      ) {
+        aggregatePrepareCalls += 1;
+      }
+      if (
+        sql === `SELECT COUNT(*) as c FROM files WHERE 1=1` ||
+        sql === `SELECT COUNT(*) as c FROM chunks WHERE 1=1` ||
+        sql === `SELECT source, COUNT(*) as c FROM files WHERE 1=1 GROUP BY source` ||
+        sql === `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1 GROUP BY source`
+      ) {
+        legacyCountPrepareCalls += 1;
+      }
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+
+    try {
+      const status = manager.status();
+      expect(status.files).toBeGreaterThan(0);
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(
+        status.sourceCounts?.find((entry) => entry.source === "memory")?.files,
+      ).toBeGreaterThan(0);
+      expect(
+        status.sourceCounts?.find((entry) => entry.source === "sessions")?.files,
+      ).toBeGreaterThan(0);
+    } finally {
+      db.prepare = originalPrepare;
+      vi.unstubAllEnvs();
+    }
+
+    expect(aggregatePrepareCalls).toBe(1);
+    expect(legacyCountPrepareCalls).toBe(0);
+  });
+
   it("reindexes when Gemini outputDimensionality changes", async () => {
     const base = createCfg({
       storePath: indexModelPath,
