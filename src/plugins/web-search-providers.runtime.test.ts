@@ -106,7 +106,10 @@ describe("resolvePluginWebSearchProviders", () => {
             configUiHints: { unrelated: { label: "nope" } },
           },
         ],
-      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (...args: any[]) => infer R
+        diagnostics: [],
+      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+        ...args: unknown[]
+      ) => infer R
         ? R
         : never);
     const loaderModule = await import("./loader.js");
