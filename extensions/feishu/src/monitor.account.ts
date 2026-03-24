@@ -623,7 +623,10 @@ function registerEventHandlers(
 // instead of silently hitting the probe error cache.
 const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000];
 
-export function waitForAbortableDelay(delayMs: number, abortSignal?: AbortSignal): Promise<boolean> {
+export function waitForAbortableDelay(
+  delayMs: number,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
   if (abortSignal?.aborted) {
     return Promise.resolve(false);
   }
