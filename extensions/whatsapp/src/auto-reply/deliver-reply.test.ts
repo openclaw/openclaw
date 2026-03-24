@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../../../src/globals.js";
 import { sleep } from "../../../../src/utils.js";
 import { loadWebMedia } from "../media.js";
@@ -85,7 +85,7 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ deliverWebReply } = await import("./deliver-reply.js"));
   });
