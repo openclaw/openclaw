@@ -40,10 +40,10 @@ git clone https://github.com/DennySun2020/DeepRhapsody.git
 cd DeepRhapsody
 
 # Install Python dependencies
-pip install torch transformers
+python3 -m pip install torch transformers
 
 # For fine-tuning (optional)
-pip install peft==0.7.1
+python3 -m pip install peft==0.7.1
 ```
 
 ## Quick Start: Software Debugging

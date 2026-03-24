@@ -177,9 +177,9 @@ rm -rf ~/.cache/huggingface/hub/NeuralDebug-finetuned/gpt2-medium
 
 ## Troubleshooting
 
-| Problem                               | Solution                                                  |
-| ------------------------------------- | --------------------------------------------------------- |
-| Loss doesn't decrease                 | Increase `learning_rate` (try 2e-4) or `lora_r` (try 16+) |
-| Model generates EOS after fine-tuning | Use declarative prompts, not questions                    |
-| Timeout on large models               | Use `-t 600` for gpt2-medium, `-t 1800` for gpt2-xl       |
-| `peft` import error                   | Install exact version: `pip install peft==0.7.1`          |
+| Problem                               | Solution                                                    |
+| ------------------------------------- | ----------------------------------------------------------- |
+| Loss doesn't decrease                 | Increase `learning_rate` (try 2e-4) or `lora_r` (try 16+)   |
+| Model generates EOS after fine-tuning | Use declarative prompts, not questions                      |
+| Timeout on large models               | Use `-t 600` for gpt2-medium, `-t 1800` for gpt2-xl         |
+| `peft` import error                   | Install exact version: `python3 -m pip install peft==0.7.1` |
