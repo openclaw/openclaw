@@ -128,11 +128,8 @@ function collectImageModelKeys(
  * 1. "provider/model" format (exact match against provider-qualified keys)
  * 2. Stored model string directly (matches raw IDs like "gpt-4.1" added by collectImageModelKeys)
  * 3. Pure model name against raw entries (providerless IDs from imageModel fallbacks)
- *
- * Note: We intentionally do NOT match across providers by pure model name alone.
- * If imageModel is configured as "providerA/model", a stored override "providerB/model"
- * will NOT be considered image-safe. This prevents incorrect image model selection
- * when two providers share a model ID but only one supports images.
+ * 4. Pure model name against all entries' pure names (handles provider-qualified imageModel
+ *    entries matching providerless stored models, e.g., imageModel "openai/gpt-4.1" vs stored "gpt-4.1")
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
   const modelSlash = model.indexOf("/");
@@ -156,6 +153,16 @@ function isImageModel(provider: string, model: string, imageModelKeys: Set<strin
   // and we're checking against a stored model that also lacks a provider prefix.
   if (imageModelKeys.has(pureModel)) {
     return true;
+  }
+
+  // 4. Compare stored model's pure name against all entries' pure names
+  // This handles provider-qualified imageModel entries matching providerless stored models
+  for (const entry of imageModelKeys) {
+    const slash = entry.indexOf("/");
+    const entryPureModel = slash > 0 ? entry.slice(slash + 1) : entry;
+    if (entryPureModel === pureModel) {
+      return true;
+    }
   }
 
   return false;
