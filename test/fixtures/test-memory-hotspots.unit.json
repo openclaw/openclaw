@@ -1,6 +1,6 @@
 {
   "config": "vitest.unit.config.ts",
-  "generatedAt": "2026-03-24T17:41:36.385Z",
+  "generatedAt": "2026-03-24T17:44:58.770Z",
   "defaultMinDeltaKb": 262144,
   "lane": "unit-fast, unit-*",
   "files": {
@@ -44,6 +44,12 @@
       "deltaKb": 946790,
       "sources": [
         "openclaw-test-memory-trace:unit-run.cron-model-override-memory-isolated"
+      ]
+    },
+    "src/channels/plugins/plugins-core.test.ts": {
+      "deltaKb": 792269,
+      "sources": [
+        "openclaw-plugins-core-mem:unit"
       ]
     },
     "src/plugins/manifest-registry.test.ts": {
