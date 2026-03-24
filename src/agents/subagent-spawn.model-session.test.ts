@@ -1,7 +1,5 @@
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
 
 const callGatewayMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -76,8 +74,79 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({ hasHooks: () => false }),
 }));
 
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+
+async function loadFreshSubagentSpawnModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => ({
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        agents: {
+          defaults: {
+            workspace: os.tmpdir(),
+          },
+        },
+      }),
+    };
+  });
+  vi.doMock("../config/sessions.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/sessions.js")>();
+    return {
+      ...actual,
+      updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
+    };
+  });
+  vi.doMock("../gateway/session-utils.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+    return {
+      ...actual,
+      resolveGatewaySessionStoreTarget: (params: { key: string }) => ({
+        agentId: "main",
+        storePath: "/tmp/subagent-spawn-model-session.json",
+        canonicalKey: params.key,
+        storeKeys: [params.key],
+      }),
+      pruneLegacyStoreKeys: (...args: unknown[]) => pruneLegacyStoreKeysMock(...args),
+    };
+  });
+  vi.doMock("./subagent-registry.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+    return {
+      ...actual,
+      countActiveRunsForSession: () => 0,
+      registerSubagentRun: () => {},
+    };
+  });
+  vi.doMock("./subagent-announce.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./subagent-announce.js")>();
+    return {
+      ...actual,
+      buildSubagentSystemPrompt: () => "system-prompt",
+    };
+  });
+  vi.doMock("./subagent-depth.js", () => ({
+    getSubagentDepthFromSessionStore: () => 0,
+  }));
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  }));
+  ({ resetSubagentRegistryForTests } = await import("./subagent-registry.js"));
+  ({ spawnSubagentDirect } = await import("./subagent-spawn.js"));
+}
+
 describe("spawnSubagentDirect runtime model persistence", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshSubagentSpawnModulesForTest();
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();

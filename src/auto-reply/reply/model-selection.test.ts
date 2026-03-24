@@ -413,7 +413,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-reasoning");
+    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
     expect(state.resetModelOverride).toBe(false);
   });
 
