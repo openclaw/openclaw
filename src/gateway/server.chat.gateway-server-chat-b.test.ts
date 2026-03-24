@@ -287,6 +287,40 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves long assistant text that fits within the history byte budget", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const historyMaxBytes = 128 * 1024;
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
+
+      const longText = "L".repeat(50_000);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            timestamp: Date.now(),
+            content: [{ type: "text", text: longText }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(1);
+
+      const first = messages[0] as { content?: Array<{ text?: string }> };
+      expect(first.content?.[0]?.text).toBe(longText);
+
+      const serialized = JSON.stringify(messages);
+      const bytes = Buffer.byteLength(serialized, "utf8");
+      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(serialized).not.toContain("...(truncated)...");
+      expect(serialized).not.toContain("[chat.history omitted: message too large]");
+    });
+  });
+
   test("chat.history preserves usage and cost metadata for assistant messages", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
