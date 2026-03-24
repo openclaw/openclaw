@@ -508,7 +508,7 @@ describe("coercePayload — script kind trimming", () => {
       schedule: { kind: "cron", expr: "* * * * *" },
       payload: { kind: "script", command: "  ~/scripts/run.sh  ", cwd: "  ~/scripts  " },
     });
-    const payload = normalized.payload as Record<string, unknown>;
+    const payload = normalized!.payload as Record<string, unknown>;
     expect(payload.command).toBe("~/scripts/run.sh");
     expect(payload.cwd).toBe("~/scripts");
   });
@@ -519,7 +519,7 @@ describe("coercePayload — script kind trimming", () => {
       schedule: { kind: "cron", expr: "* * * * *" },
       payload: { kind: "script", command: "~/scripts/run.sh", cwd: "   " },
     });
-    const payload = normalized.payload as Record<string, unknown>;
+    const payload = normalized!.payload as Record<string, unknown>;
     expect(payload.cwd).toBeUndefined();
   });
 
@@ -529,7 +529,7 @@ describe("coercePayload — script kind trimming", () => {
       schedule: { kind: "cron", expr: "* * * * *" },
       payload: { kind: "script", command: "   " },
     });
-    const payload = normalized.payload as Record<string, unknown>;
+    const payload = normalized!.payload as Record<string, unknown>;
     expect(payload.command).toBeUndefined();
   });
 });

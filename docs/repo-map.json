@@ -1,7 +1,7 @@
 {
   "_authored": "cc (Claude Code) | 2026-03-13",
   "version": "1.0",
-  "generated": "2026-03-23",
+  "generated": "2026-03-24",
   "files": {
     "extensions/twilio-sms/index.ts": {
       "purpose": "",
@@ -65,6 +65,34 @@
       "purpose": "Agent spawning, process management, event handling (546 files)",
       "exports": ["spawnAgent", "AgentProcess"],
       "dependencies": ["src/config/", "src/infra/", "src/process/"]
+    },
+    "src/agents/skills/workspace.ts": {
+      "purpose": "",
+      "exports": [
+        "buildWorkspaceSkillCommandSpecs",
+        "buildWorkspaceSkillSnapshot",
+        "buildWorkspaceSkillsPrompt",
+        "filterWorkspaceSkillEntries",
+        "formatSkillsCompact",
+        "loadWorkspaceSkillEntries",
+        "resolveSkillsPromptForRun",
+        "syncSkillsToWorkspace"
+      ],
+      "dependencies": [
+        "src/agents/sandbox-paths.js",
+        "src/agents/skills/bundled-dir.js",
+        "src/agents/skills/config.js",
+        "src/agents/skills/filter.js",
+        "src/agents/skills/frontmatter.js",
+        "src/agents/skills/plugin-skills.js",
+        "src/agents/skills/serialize.js",
+        "src/agents/skills/types.js",
+        "src/config/config.js",
+        "src/infra/path-guards.js",
+        "src/logging/subsystem.js",
+        "src/plugins/bundle-commands.js",
+        "src/utils.js"
+      ]
     },
     "src/channels/allowlists/": {
       "purpose": "Allowlist matching and allow-from policy for channels",
@@ -413,6 +441,11 @@
       "exports": ["handleCall"],
       "dependencies": ["src/agents/", "src/gateway/agent-prompt.ts"]
     },
+    "src/gateway/control-ui-ip-filter.ts": {
+      "purpose": "",
+      "exports": ["isControlUiIpAllowed"],
+      "dependencies": ["src/config/types.gateway.js", "src/gateway/net.js", "src/shared/net/ip.js"]
+    },
     "src/gateway/protocol/schema/cron.ts": {
       "purpose": "",
       "exports": [
@@ -477,6 +510,7 @@
         "HooksRequestHandler"
       ],
       "dependencies": [
+        "extensions/slack/api.js",
         "src/agents/identity-avatar.js",
         "src/canvas-host/a2ui.js",
         "src/canvas-host/server.js",
@@ -500,8 +534,7 @@
         "src/gateway/server/ws-types.js",
         "src/gateway/tools-invoke-http.js",
         "src/logging/subsystem.js",
-        "src/security/secret-equal.js",
-        "src/slack/http/index.js"
+        "src/security/secret-equal.js"
       ]
     },
     "src/hooks/": {

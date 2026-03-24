@@ -106,6 +106,11 @@ export type GatewayControlUiConfig = {
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
+   * IP/CIDR allowlist for HTTP access to the Control UI (web chat).
+   * Loopback (127.0.0.1, ::1) is always permitted regardless of this list.
+   */
+  allowedNetworks?: string[];
+  /**
    * DANGEROUS: Keep Host-header origin fallback behavior.
    * Supported long-term for deployments that intentionally rely on this policy.
    */

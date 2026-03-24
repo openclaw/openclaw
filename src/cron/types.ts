@@ -1,7 +1,7 @@
 import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobHooksConfig } from "../config/types.cron.js";
+import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =

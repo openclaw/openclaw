@@ -3040,6 +3040,25 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     manifest: {
       id: "twilio-sms",
       configSchema: {
+        $defs: {
+          secretRef: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              source: {
+                type: "string",
+                enum: ["env", "file", "exec"],
+              },
+              provider: {
+                type: "string",
+              },
+              id: {
+                type: "string",
+              },
+            },
+            required: ["source", "provider", "id"],
+          },
+        },
         type: "object",
         additionalProperties: false,
         properties: {
@@ -3052,10 +3071,24 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
             additionalProperties: false,
             properties: {
               accountSid: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    $ref: "#/$defs/secretRef",
+                  },
+                ],
               },
               authToken: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    $ref: "#/$defs/secretRef",
+                  },
+                ],
               },
             },
           },
@@ -3306,6 +3339,25 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     manifest: {
       id: "voice-call",
       configSchema: {
+        $defs: {
+          secretRef: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              source: {
+                type: "string",
+                enum: ["env", "file", "exec"],
+              },
+              provider: {
+                type: "string",
+              },
+              id: {
+                type: "string",
+              },
+            },
+            required: ["source", "provider", "id"],
+          },
+        },
         type: "object",
         additionalProperties: false,
         properties: {
@@ -3336,10 +3388,24 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
             additionalProperties: false,
             properties: {
               accountSid: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    $ref: "#/$defs/secretRef",
+                  },
+                ],
               },
               authToken: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    $ref: "#/$defs/secretRef",
+                  },
+                ],
               },
             },
           },

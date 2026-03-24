@@ -132,10 +132,6 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  const isIsolatedLike =
-    job.sessionTarget === "isolated" ||
-    job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }

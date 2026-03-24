@@ -466,9 +466,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 cdpUrl: {
                   type: "string",
                 },
-                userDataDir: {
-                  type: "string",
-                },
                 driver: {
                   anyOf: [
                     {
@@ -478,6 +475,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     {
                       type: "string",
                       const: "clawd",
+                    },
+                    {
+                      type: "string",
+                      const: "extension",
                     },
                     {
                       type: "string",
@@ -502,6 +503,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             items: {
               type: "string",
             },
+          },
+          relayBindHost: {
+            anyOf: [
+              {
+                type: "string",
+                format: "ipv4",
+                pattern:
+                  "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$",
+              },
+              {
+                type: "string",
+                format: "ipv6",
+                pattern:
+                  "^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$",
+              },
+            ],
           },
         },
         additionalProperties: false,
@@ -10362,6 +10379,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                 },
               },
+              allowedNetworks: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
               dangerouslyAllowHostHeaderOriginFallback: {
                 type: "boolean",
               },
@@ -10608,16 +10631,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             minimum: 0,
             maximum: 9007199254740991,
           },
-          channelStaleEventThresholdMinutes: {
-            type: "integer",
-            minimum: 1,
-            maximum: 9007199254740991,
-          },
-          channelMaxRestartsPerHour: {
-            type: "integer",
-            minimum: 1,
-            maximum: 9007199254740991,
-          },
           tailscale: {
             type: "object",
             properties: {
@@ -10829,11 +10842,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 ],
               },
               debounceMs: {
-                type: "integer",
-                minimum: 0,
-                maximum: 9007199254740991,
-              },
-              deferralTimeoutMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
@@ -11392,62 +11400,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         },
         additionalProperties: false,
       },
-      mcp: {
-        type: "object",
-        properties: {
-          servers: {
-            type: "object",
-            propertyNames: {
-              type: "string",
-            },
-            additionalProperties: {
-              type: "object",
-              properties: {
-                command: {
-                  type: "string",
-                },
-                args: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-                env: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "number",
-                      },
-                      {
-                        type: "boolean",
-                      },
-                    ],
-                  },
-                },
-                cwd: {
-                  type: "string",
-                },
-                workingDirectory: {
-                  type: "string",
-                },
-                url: {
-                  type: "string",
-                  format: "uri",
-                },
-              },
-              additionalProperties: {},
-            },
-          },
-        },
-        additionalProperties: false,
-      },
       skills: {
         type: "object",
         properties: {
@@ -11634,6 +11586,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               additionalProperties: false,
             },
           },
+          dynamicLoading: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -11699,21 +11660,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: false,
                 },
-                subagent: {
-                  type: "object",
-                  properties: {
-                    allowModelOverride: {
-                      type: "boolean",
-                    },
-                    allowedModels: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                  },
-                  additionalProperties: false,
-                },
                 config: {
                   type: "object",
                   propertyNames: {
@@ -11736,28 +11682,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 source: {
                   anyOf: [
                     {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "npm",
-                        },
-                        {
-                          type: "string",
-                          const: "archive",
-                        },
-                        {
-                          type: "string",
-                          const: "path",
-                        },
-                        {
-                          type: "string",
-                          const: "clawhub",
-                        },
-                      ],
+                      type: "string",
+                      const: "npm",
                     },
                     {
                       type: "string",
-                      const: "marketplace",
+                      const: "archive",
+                    },
+                    {
+                      type: "string",
+                      const: "path",
+                    },
+                    {
+                      type: "string",
+                      const: "clawhub",
                     },
                   ],
                 },
@@ -11827,15 +11765,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "private",
                     },
                   ],
-                },
-                marketplaceName: {
-                  type: "string",
-                },
-                marketplaceSource: {
-                  type: "string",
-                },
-                marketplacePlugin: {
-                  type: "string",
                 },
               },
               required: ["source"],
@@ -12310,21 +12239,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Optional default working directory for this agent's ACP sessions.",
       tags: ["advanced"],
     },
-    "agents.list[].thinkingDefault": {
-      label: "Agent Thinking Default",
-      help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
-      tags: ["advanced"],
-    },
-    "agents.list[].reasoningDefault": {
-      label: "Agent Reasoning Default",
-      help: "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
-      tags: ["advanced"],
-    },
-    "agents.list[].fastModeDefault": {
-      label: "Agent Fast Mode Default",
-      help: "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
-      tags: ["advanced"],
-    },
     "agents.defaults": {
       label: "Agent Defaults",
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
@@ -12419,16 +12333,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway Channel Health Check Interval (min)",
       help: "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
       tags: ["network", "reliability"],
-    },
-    "gateway.channelStaleEventThresholdMinutes": {
-      label: "Gateway Channel Stale Event Threshold (min)",
-      help: "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
-      tags: ["network"],
-    },
-    "gateway.channelMaxRestartsPerHour": {
-      label: "Gateway Channel Max Restarts Per Hour",
-      help: "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
-      tags: ["network", "performance"],
     },
     "gateway.tailscale": {
       label: "Gateway Tailscale",
@@ -12602,6 +12506,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
       tags: ["storage"],
     },
+    "browser.relayBindHost": {
+      label: "Browser Relay Bind Address",
+      tags: ["advanced"],
+    },
     "browser.profiles": {
       label: "Browser Profiles",
       help: "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
@@ -12615,11 +12523,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "browser.profiles.*.cdpUrl": {
       label: "Browser Profile CDP URL",
       help: "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
-      tags: ["storage"],
-    },
-    "browser.profiles.*.userDataDir": {
-      label: "Browser Profile User Data Dir",
-      help: "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
       tags: ["storage"],
     },
     "browser.profiles.*.driver": {
@@ -13017,11 +12920,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Allow stdin-only safe binaries to run without explicit allowlist entries.",
       tags: ["tools"],
     },
-    "tools.exec.strictInlineEval": {
-      label: "Require Inline-Eval Approval",
-      help: "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
-      tags: ["tools"],
-    },
     "tools.exec.safeBinTrustedDirs": {
       label: "Exec Safe Bin Trusted Dirs",
       help: "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
@@ -13132,6 +13030,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Search provider id. Auto-detected from available API keys if omitted.",
       tags: ["tools"],
     },
+    "tools.web.search.apiKey": {
+      label: "Brave Search API Key",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
     "tools.web.search.maxResults": {
       label: "Web Search Max Results",
       help: "Number of results to return (1-10).",
@@ -13146,6 +13049,54 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Web Search Cache TTL (min)",
       help: "Cache TTL in minutes for web_search results.",
       tags: ["performance", "storage", "tools"],
+    },
+    "tools.web.search.brave.mode": {
+      label: "Brave Search Mode",
+      tags: ["tools"],
+    },
+    "tools.web.search.gemini.apiKey": {
+      label: "Gemini Search API Key",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.gemini.model": {
+      label: "Gemini Search Model",
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.grok.apiKey": {
+      label: "Grok Search API Key",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.grok.model": {
+      label: "Grok Search Model",
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.kimi.apiKey": {
+      label: "Kimi Search API Key",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.kimi.baseUrl": {
+      label: "Kimi Search Base URL",
+      tags: ["tools"],
+    },
+    "tools.web.search.kimi.model": {
+      label: "Kimi Search Model",
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.perplexity.apiKey": {
+      label: "Perplexity API Key",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      label: "Perplexity Base URL",
+      tags: ["tools"],
+    },
+    "tools.web.search.perplexity.model": {
+      label: "Perplexity Model",
+      tags: ["models", "tools"],
     },
     "tools.web.fetch.enabled": {
       label: "Enable Web Fetch Tool",
@@ -13234,6 +13185,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Control UI Allowed Origins",
       help: 'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
       placeholder: "https://control.example.com",
+      tags: ["access", "network"],
+    },
+    "gateway.controlUi.allowedNetworks": {
+      label: "Control UI Allowed Networks",
       tags: ["access", "network"],
     },
     "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": {
@@ -13340,11 +13295,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "gateway.reload.debounceMs": {
       label: "Config Reload Debounce (ms)",
       help: "Debounce window (ms) before applying config changes.",
-      tags: ["network", "reliability", "performance"],
-    },
-    "gateway.reload.deferralTimeoutMs": {
-      label: "Restart Deferral Timeout (ms)",
-      help: "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -14179,16 +14129,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Ordered fallback image models (provider/model).",
       tags: ["reliability", "models", "media"],
     },
-    "agents.defaults.imageGenerationModel.primary": {
-      label: "Image Generation Model",
-      help: "Optional image-generation model (provider/model) used by the shared image generation capability.",
-      tags: ["media"],
-    },
-    "agents.defaults.imageGenerationModel.fallbacks": {
-      label: "Image Generation Model Fallbacks",
-      help: "Ordered fallback image-generation models (provider/model).",
-      tags: ["reliability", "media"],
-    },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
       help: "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
@@ -14304,20 +14244,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: 'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
       tags: ["advanced"],
     },
-    "agents.defaults.compaction.timeoutSeconds": {
-      label: "Compaction Timeout (Seconds)",
-      help: "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
-      tags: ["performance"],
-    },
     "agents.defaults.compaction.model": {
       label: "Compaction Model Override",
       help: "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
       tags: ["models"],
-    },
-    "agents.defaults.compaction.truncateAfterCompaction": {
-      label: "Truncate After Compaction",
-      help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
-      tags: ["advanced"],
     },
     "agents.defaults.compaction.memoryFlush": {
       label: "Compaction Memory Flush",
@@ -14419,16 +14349,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Allow /config chat command to read/write config on disk (default: false).",
       tags: ["advanced"],
     },
-    "commands.mcp": {
-      label: "Allow /mcp",
-      help: "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
-      tags: ["advanced"],
-    },
-    "commands.plugins": {
-      label: "Allow /plugins",
-      help: "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
-      tags: ["advanced"],
-    },
     "commands.debug": {
       label: "Allow /debug",
       help: "Allow /debug chat command for runtime-only overrides (default: false).",
@@ -14464,16 +14384,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Command Elevated Access Rules",
       help: "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
       tags: ["access"],
-    },
-    mcp: {
-      label: "MCP",
-      help: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
-      tags: ["advanced"],
-    },
-    "mcp.servers": {
-      label: "MCP Servers",
-      help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
-      tags: ["advanced"],
     },
     "ui.seamColor": {
       label: "Accent Color",
@@ -15618,31 +15528,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
       tags: ["network", "performance", "channels"],
     },
-    "channels.telegram.silentErrorReplies": {
-      label: "Telegram Silent Error Replies",
-      help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.apiRoot": {
-      label: "Telegram API Root URL",
-      help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel": {
-      label: "Telegram Auto Topic Label",
-      help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel.enabled": {
-      label: "Telegram Auto Topic Label Enabled",
-      help: "Whether auto topic labeling is enabled. Default: true.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel.prompt": {
-      label: "Telegram Auto Topic Label Prompt",
-      help: "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
-      tags: ["network", "channels"],
-    },
     "channels.telegram.capabilities.inlineButtons": {
       label: "Telegram Inline Buttons",
       help: "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
@@ -16019,11 +15904,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
       tags: ["access", "network", "channels"],
     },
-    "channels.matrix.allowBots": {
-      label: "Matrix Allow Bot Messages",
-      help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
-      tags: ["access", "network", "channels"],
-    },
     "channels.discord.token": {
       label: "Discord Bot Token",
       help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
@@ -16225,21 +16105,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
       tags: ["access"],
     },
-    "plugins.entries.*.subagent": {
-      label: "Plugin Subagent Policy",
-      help: "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
-      tags: ["advanced"],
-    },
-    "plugins.entries.*.subagent.allowModelOverride": {
-      label: "Allow Plugin Subagent Model Override",
-      help: "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
-      tags: ["access"],
-    },
-    "plugins.entries.*.subagent.allowedModels": {
-      label: "Plugin Subagent Allowed Models",
-      help: 'Allowed override targets for trusted plugin subagent runs as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
-      tags: ["access"],
-    },
     "plugins.entries.*.apiKey": {
       label: "Plugin API Key",
       help: "Optional API key field consumed by plugins that accept direct key configuration in entry settings. Use secret/env substitution and avoid committing real credentials into config files.",
@@ -16320,20 +16185,117 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "ISO timestamp of last install/update.",
       tags: ["advanced"],
     },
+    "gateway.channelStaleEventThresholdMinutes": {
+      help: "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+      tags: ["network"],
+    },
+    "gateway.channelMaxRestartsPerHour": {
+      help: "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
+      tags: ["network", "performance"],
+    },
+    "agents.list[].thinkingDefault": {
+      help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].reasoningDefault": {
+      help: "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].fastModeDefault": {
+      help: "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+      tags: ["advanced"],
+    },
+    "browser.profiles.*.userDataDir": {
+      help: "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
+      tags: ["storage"],
+    },
+    "gateway.reload.deferralTimeoutMs": {
+      help: "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+      tags: ["network", "reliability", "performance"],
+    },
+    "tools.exec.strictInlineEval": {
+      help: "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
+      tags: ["tools"],
+    },
+    "channels.matrix.allowBots": {
+      help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
+      tags: ["access", "network", "channels"],
+    },
+    "plugins.entries.*.subagent": {
+      help: "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      tags: ["advanced"],
+    },
+    "plugins.entries.*.subagent.allowModelOverride": {
+      help: "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      tags: ["access"],
+    },
+    "plugins.entries.*.subagent.allowedModels": {
+      help: 'Allowed override targets for trusted plugin subagent runs as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+      tags: ["access"],
+    },
     "plugins.installs.*.marketplaceName": {
-      label: "Plugin Marketplace Name",
       help: "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
       tags: ["advanced"],
     },
     "plugins.installs.*.marketplaceSource": {
-      label: "Plugin Marketplace Source",
       help: "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
       tags: ["advanced"],
     },
     "plugins.installs.*.marketplacePlugin": {
-      label: "Plugin Marketplace Plugin",
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
+    },
+    "agents.defaults.imageGenerationModel.primary": {
+      help: "Optional image-generation model (provider/model) used by the shared image generation capability.",
+      tags: ["media"],
+    },
+    "agents.defaults.imageGenerationModel.fallbacks": {
+      help: "Ordered fallback image-generation models (provider/model).",
+      tags: ["reliability", "media"],
+    },
+    "agents.defaults.compaction.timeoutSeconds": {
+      help: "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+      tags: ["performance"],
+    },
+    "agents.defaults.compaction.truncateAfterCompaction": {
+      help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+      tags: ["advanced"],
+    },
+    "commands.mcp": {
+      help: "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
+      tags: ["advanced"],
+    },
+    "commands.plugins": {
+      help: "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
+      tags: ["advanced"],
+    },
+    mcp: {
+      help: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
+      tags: ["advanced"],
+    },
+    "mcp.servers": {
+      help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+      tags: ["advanced"],
+    },
+    "channels.telegram.silentErrorReplies": {
+      help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
+      tags: ["network", "channels"],
+    },
+    "channels.telegram.apiRoot": {
+      help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      tags: ["network", "channels"],
+    },
+    "channels.telegram.autoTopicLabel": {
+      help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      tags: ["network", "channels"],
+    },
+    "channels.telegram.autoTopicLabel.enabled": {
+      help: "Whether auto topic labeling is enabled. Default: true.",
+      tags: ["network", "channels"],
+    },
+    "channels.telegram.autoTopicLabel.prompt": {
+      help: "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      tags: ["network", "channels"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,
@@ -16367,31 +16329,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "storage"],
     },
-    "tools.web.search.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
     "tools.web.search.brave.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
     "tools.web.search.firecrawl.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.gemini.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.grok.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.kimi.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.perplexity.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
