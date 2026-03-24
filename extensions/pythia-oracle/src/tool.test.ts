@@ -92,8 +92,19 @@ describe("pythia-oracle helpers", () => {
   });
 
   it("parses MCP event-stream responses", async () => {
+    const encoder = new TextEncoder();
     const response = new Response(
-      'event: message\r\ndata: {"jsonrpc":"2.0","id":"call-1","result":{"structuredContent":{"response":"decoded"}}}\r\n\r\n',
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'event: message\r\ndata: {"jsonrpc":"2.0","id":"call-1","result":{"structuredContent":{"response":"de',
+            ),
+          );
+          controller.enqueue(encoder.encode('coded"}}}\r\n\r\n'));
+          controller.close();
+        },
+      }),
       {
         headers: {
           "content-type": "text/event-stream",

@@ -94,7 +94,11 @@ function tryParseSseJsonPayload(buffer: string): unknown | undefined {
     if (dataLines.length === 0) {
       continue;
     }
-    return JSON.parse(dataLines.join("\n"));
+    try {
+      return JSON.parse(dataLines.join("\n"));
+    } catch {
+      continue;
+    }
   }
   return undefined;
 }
@@ -105,31 +109,8 @@ async function readMcpJsonResponse<T>(response: Response): Promise<T> {
     return (await response.json()) as T;
   }
 
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("Pythia returned an empty event stream.");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = tryParseSseJsonPayload(buffer);
-      if (parsed !== undefined) {
-        return parsed as T;
-      }
-    }
-    buffer += decoder.decode();
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-
-  const parsed = tryParseSseJsonPayload(buffer);
+  const raw = await response.text();
+  const parsed = tryParseSseJsonPayload(raw);
   if (parsed !== undefined) {
     return parsed as T;
   }
