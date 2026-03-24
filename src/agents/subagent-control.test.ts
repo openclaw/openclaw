@@ -20,6 +20,7 @@ import {
 
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
     __testing.setDepsForTest();
   });
 
@@ -57,6 +58,18 @@ describe("sendControlledSubagentMessage", () => {
   });
 
   it("returns a structured error when the gateway send fails", async () => {
+    addSubagentRunForTests({
+      runId: "run-owned",
+      childSessionKey: "agent:main:subagent:owned",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent") {
@@ -94,6 +107,50 @@ describe("sendControlledSubagentMessage", () => {
       status: "error",
       runId: expect.any(String),
       error: "gateway unavailable",
+    });
+  });
+
+  it("does not send to a newer live run when the caller passes a stale run entry", async () => {
+    addSubagentRunForTests({
+      runId: "run-current-send",
+      childSessionKey: "agent:main:subagent:send-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current task",
+      cleanup: "keep",
+      createdAt: Date.now() - 4_000,
+      startedAt: Date.now() - 3_000,
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-stale-send",
+        childSessionKey: "agent:main:subagent:send-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "stale task",
+        cleanup: "keep",
+        createdAt: Date.now() - 9_000,
+        startedAt: Date.now() - 8_000,
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "done",
+      runId: "run-stale-send",
+      text: "stale task is already finished.",
     });
   });
 });
