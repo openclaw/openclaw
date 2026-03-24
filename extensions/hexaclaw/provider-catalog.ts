@@ -32,7 +32,7 @@ export function buildHexaclawProvider(): ModelProviderConfig {
       {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
-        reasoning: false,
+        reasoning: true,
         input: ["text", "image"],
         cost: { input: 0.36, output: 3.0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1048576,
@@ -41,7 +41,7 @@ export function buildHexaclawProvider(): ModelProviderConfig {
       {
         id: "gemini-2.5-pro",
         name: "Gemini 2.5 Pro",
-        reasoning: false,
+        reasoning: true,
         input: ["text", "image"],
         cost: { input: 1.38, output: 11.0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1048576,
@@ -71,6 +71,7 @@ export function buildHexaclawProvider(): ModelProviderConfig {
         name: "o3",
         reasoning: true,
         input: ["text", "image"],
+        // HexaClaw gateway pricing; upstream OpenAI cost may differ
         cost: { input: 2.2, output: 8.8, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 100000,
