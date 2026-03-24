@@ -72,6 +72,15 @@ struct VoiceWakeSettings: View {
                     binding: self.$state.voicePushToTalkEnabled)
                     .disabled(!voiceWakeSupported)
 
+                SettingsToggleRow(
+                    title: "Play phase-transition sounds",
+                    subtitle: """
+                    Play short system sounds when Talk Mode switches between
+                    listening, thinking, and speaking.
+                    """,
+                    binding: self.$state.talkPhaseSoundsEnabled)
+                    .disabled(!voiceWakeSupported)
+
                 if !voiceWakeSupported {
                     Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)

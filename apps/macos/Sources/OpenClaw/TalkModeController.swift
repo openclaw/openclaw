@@ -47,6 +47,7 @@ final class TalkModeController {
     }
 
     private static func playPhaseSound(_ phase: TalkModePhase, previousPhase: TalkModePhase) {
+        guard AppStateStore.shared.talkPhaseSoundsEnabled else { return }
         let soundName: String? = switch phase {
         case .thinking:
             "Tink"       // 생각 중: 짧고 가벼운 소리
