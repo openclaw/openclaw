@@ -50,8 +50,7 @@ export async function monitorWebInbox(options: {
     const msgId = (result as { key?: { id?: string } })?.key?.id;
     if (msgId) {
       sentMessageIds.add(msgId);
-      const t = setTimeout(() => sentMessageIds.delete(msgId), 120_000);
-      if (typeof t === "object" && t && "unref" in t) (t as NodeJS.Timeout).unref();
+      setTimeout(() => sentMessageIds.delete(msgId), 120_000).unref?.();
     }
     return result;
   };
