@@ -33,9 +33,19 @@ export function getConfigRawFromDb(): string | null {
   const db = resolveDb();
   try {
     const row = db.prepare("SELECT raw_json5 FROM op1_config WHERE id = 1").get() as
-      | { raw_json5: string }
+      | { raw_json5: unknown }
       | undefined;
-    return row?.raw_json5 ?? null;
+    if (!row?.raw_json5) {
+      return null;
+    }
+    // Guard: if the stored value is somehow not a string (e.g. Buffer from a
+    // previous bug), convert it rather than returning garbage that crashes JSON5.parse.
+    if (typeof row.raw_json5 !== "string") {
+      return Buffer.isBuffer(row.raw_json5)
+        ? row.raw_json5.toString("utf-8")
+        : JSON.stringify(row.raw_json5);
+    }
+    return row.raw_json5;
   } catch (err) {
     if (err instanceof Error && err.message.includes("no such table")) {
       return null;
@@ -46,6 +56,16 @@ export function getConfigRawFromDb(): string | null {
 
 /** Upserts the raw JSON5 string into op1_config (singleton row id=1). */
 export function setConfigRawInDb(raw: string): void {
+  // Defensive guard: ensure we never write a non-string (e.g. Buffer) to the DB.
+  // A Buffer passed to node:sqlite .run() gets serialized as {"0":123,"1":10,...}
+  // which corrupts the config and crashes the gateway on next read.
+  const safeRaw =
+    typeof raw === "string"
+      ? raw
+      : Buffer.isBuffer(raw)
+        ? (raw as Buffer).toString("utf-8")
+        : String(raw);
+
   const db = resolveDb();
   const now = Math.floor(Date.now() / 1000);
   db.prepare(
@@ -54,5 +74,5 @@ export function setConfigRawInDb(raw: string): void {
      ON CONFLICT (id) DO UPDATE SET
        raw_json5 = excluded.raw_json5,
        written_at = excluded.written_at`,
-  ).run(raw, now);
+  ).run(safeRaw, now);
 }
