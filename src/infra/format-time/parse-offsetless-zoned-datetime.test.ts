@@ -23,6 +23,10 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     );
   });
 
+  it("returns null for nonexistent DST gap wall-clock times", () => {
+    expect(parseOffsetlessIsoDateTimeInTimeZone("2026-03-29T02:30:00", "Europe/Oslo")).toBe(null);
+  });
+
   it("returns null for invalid input", () => {
     expect(parseOffsetlessIsoDateTimeInTimeZone("2026-03-23T23:00:00+02:00", "Europe/Oslo")).toBe(
       null,
