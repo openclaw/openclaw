@@ -87,7 +87,7 @@ describe("directive behavior", () => {
     storePath: string;
   }) {
     const text = Array.isArray(params.response) ? params.response[0]?.text : params.response?.text;
-    expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview.");
+    expect(text).toContain("Model selection saved as moonshot/kimi-k2-0905-preview.");
     assertModelSelection(params.storePath, {
       provider: "moonshot",
       model: "kimi-k2-0905-preview",
@@ -243,7 +243,7 @@ describe("directive behavior", () => {
       );
 
       const text = replyText(res);
-      expect(text).toContain("Model set to Kimi (moonshot/kimi-k2-0905-preview).");
+      expect(text).toContain("Model selection saved as Kimi (moonshot/kimi-k2-0905-preview).");
       assertModelSelection(storePath, {
         provider: "moonshot",
         model: "kimi-k2-0905-preview",
@@ -298,7 +298,7 @@ describe("directive behavior", () => {
       );
 
       let events = drainSystemEvents(MAIN_SESSION_KEY);
-      expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-5).");
+      expect(events).toContain("Model selection saved as Opus (anthropic/claude-opus-4-5).");
 
       drainSystemEvents(MAIN_SESSION_KEY);
 

@@ -619,4 +619,28 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
   });
+
+  it("notes that a saved model selection applies on the next reply cycle", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-model-note", { model: "anthropic/claude-sonnet-4-6" });
+    const details = result.details as {
+      ok?: boolean;
+      changedModel?: boolean;
+      modelActivation?: string;
+      statusText?: string;
+    };
+
+    expect(details.ok).toBe(true);
+    expect(details.changedModel).toBe(true);
+    expect(details.modelActivation).toBe("next_reply");
+    expect(details.statusText).toContain("Model selection saved.");
+    expect(details.statusText).toContain("next reply cycle");
+  });
 });

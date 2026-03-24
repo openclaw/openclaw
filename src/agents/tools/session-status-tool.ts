@@ -510,14 +510,19 @@ export function createSessionStatusTool(opts?: {
         },
         includeTranscriptUsage: true,
       });
+      const modelChangeNote = changedModel
+        ? "\nℹ️ Model selection saved. The updated selection will be used on the next reply cycle."
+        : "";
+      const finalStatusText = `${statusText}${modelChangeNote}`;
 
       return {
-        content: [{ type: "text", text: statusText }],
+        content: [{ type: "text", text: finalStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText,
+          statusText: finalStatusText,
+          modelActivation: changedModel ? "next_reply" : "current",
         },
       };
     },

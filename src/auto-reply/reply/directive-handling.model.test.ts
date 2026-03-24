@@ -600,7 +600,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     };
   }
 
-  it("shows success message when session state is available", async () => {
+  it("uses a saved-selection message when session state is available", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
     const result = await handleDirectiveOnly(
@@ -610,9 +610,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Model set to");
+    expect(result?.text).toContain("Model selection saved as");
     expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).not.toContain("failed");
+    expect(result?.text).toContain("the new selection will be used on the next reply");
   });
 
   it("shows no model message when no /model directive", async () => {
@@ -625,7 +625,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text ?? "").not.toContain("Model set to");
+    expect(result?.text ?? "").not.toContain("Model selection saved as");
     expect(result?.text ?? "").not.toContain("failed");
   });
 

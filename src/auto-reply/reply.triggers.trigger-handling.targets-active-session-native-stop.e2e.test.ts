@@ -504,7 +504,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to openai/gpt-4.1-mini");
+      expect(text).toContain("Model selection saved as openai/gpt-4.1-mini");
 
       const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.providerOverride).toBe("openai");

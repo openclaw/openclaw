@@ -12,6 +12,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
@@ -330,6 +331,13 @@ export async function handleDirectiveOnly(
     directives.fastMode !== currentFastMode;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+  const previousModelRefs = modelSelection
+    ? resolveSelectedAndActiveModel({
+        selectedProvider: provider,
+        selectedModel: model,
+        sessionEntry,
+      })
+    : null;
   if (shouldPersistSessionEntry) {
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
@@ -500,11 +508,16 @@ export async function handleDirectiveOnly(
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
-    parts.push(
-      modelSelection.isDefault
-        ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias}.`,
-    );
+    const savedLine = modelSelection.isDefault
+      ? `Model selection reset to default (${labelWithAlias}).`
+      : `Model selection saved as ${labelWithAlias}.`;
+    if (previousModelRefs && previousModelRefs.active.label !== label) {
+      parts.push(
+        `${savedLine} Active runtime was ${previousModelRefs.active.label}; the new selection will be used on the next reply.`,
+      );
+    } else {
+      parts.push(savedLine);
+    }
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }

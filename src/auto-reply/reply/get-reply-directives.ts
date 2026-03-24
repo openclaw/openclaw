@@ -457,7 +457,9 @@ export async function resolveReplyDirectives(params: {
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
-    alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
+    alias
+      ? `Model selection saved as ${alias} (${label}).`
+      : `Model selection saved as ${label}.`;
   const isModelListAlias =
     directives.hasModelDirective &&
     ["status", "list"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
