@@ -290,4 +290,71 @@ describe("Ghost reminder bug (issue #13317)", () => {
       );
     });
   });
+
+  it("does not reuse stale turn-source routing for isolated wake runs", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "-100155462274",
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-100155462274",
+      });
+      replySpy.mockResolvedValue({ text: "Restart complete" });
+      enqueueSystemEvent("Gateway restart ok", {
+        sessionKey,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100999999999",
+          threadId: 42,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "wake",
+        deps: {
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: `${sessionKey}:heartbeat`,
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
+      const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
+      expect(options?.messageThreadId).toBeUndefined();
+    });
+  });
 });

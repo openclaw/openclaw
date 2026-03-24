@@ -104,8 +104,10 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
-    payload.deliveryContext,
-    payload.threadId != null ? { threadId: payload.threadId } : undefined,
+    payload.threadId != null
+      ? { ...payload.deliveryContext, threadId: payload.threadId }
+      : payload.deliveryContext,
+    undefined,
   );
 
   if (!sessionKey) {

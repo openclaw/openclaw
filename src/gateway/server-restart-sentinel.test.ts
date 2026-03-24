@@ -161,4 +161,32 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
   });
+
+  it("prefers top-level sentinel threadId for wake routing context", async () => {
+    // Legacy or malformed sentinel JSON can still carry a nested threadId.
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+          threadId: "stale-thread",
+        } as never,
+        threadId: "fresh-thread",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: expect.objectContaining({
+          threadId: "fresh-thread",
+        }),
+      }),
+    );
+  });
 });
