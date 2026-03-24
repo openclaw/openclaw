@@ -46755,7 +46755,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Bocha Summary",
+      "help": "Whether to return original web contents. Default is true.",
       "hasChildren": false
     },
     {
