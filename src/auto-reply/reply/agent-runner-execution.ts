@@ -254,6 +254,7 @@ export async function runAgentTurnWithFallback(params: {
             blockReplyPipeline,
             directlySentBlockKeys,
             shouldSuppressDelivery: params.shouldSuppressOutboundDelivery,
+            deliveryAbortSignal: params.opts?.abortSignal,
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;

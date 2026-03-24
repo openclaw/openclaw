@@ -2,6 +2,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { logVerbose } from "../../globals.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
+import { runAbortableDelivery } from "./abortable-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -69,6 +70,7 @@ export function createBlockReplyDeliveryHandler(params: {
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
   shouldSuppressDelivery?: () => boolean;
+  deliveryAbortSignal?: AbortSignal;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     if (params.shouldSuppressDelivery?.()) {
@@ -138,13 +140,31 @@ export function createBlockReplyDeliveryHandler(params: {
       if (params.shouldSuppressDelivery?.()) {
         return;
       }
-      await params.onBlockReply(blockPayload);
+      const delivery = await runAbortableDelivery({
+        shouldAbort: params.shouldSuppressDelivery ?? (() => false),
+        outerSignal: params.deliveryAbortSignal,
+        run: async (abortSignal) => {
+          await params.onBlockReply(blockPayload, { abortSignal });
+        },
+      });
+      if (!delivery.completed) {
+        return;
+      }
     } else if (blockHasMedia) {
       // When block streaming is disabled, text-only block replies are accumulated into the
       // final response. Media cannot be reconstructed later, so send it immediately and let
       // the assistant's final text arrive through the normal final-reply path.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply({ ...blockPayload, text: undefined });
+      const delivery = await runAbortableDelivery({
+        shouldAbort: params.shouldSuppressDelivery ?? (() => false),
+        outerSignal: params.deliveryAbortSignal,
+        run: async (abortSignal) => {
+          await params.onBlockReply({ ...blockPayload, text: undefined }, { abortSignal });
+        },
+      });
+      if (!delivery.completed) {
+        return;
+      }
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };

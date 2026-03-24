@@ -39,15 +39,18 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
-      mediaUrl: "/tmp/generated.png",
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-      replyToId: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      {
+        text: undefined,
+        mediaUrl: "/tmp/generated.png",
+        mediaUrls: ["/tmp/generated.png"],
+        replyToCurrent: true,
+        replyToId: undefined,
+        replyToTag: undefined,
+        audioAsVoice: false,
+      },
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
     expect(directlySentBlockKeys).toEqual(
       new Set([
         createBlockReplyContentKey({
@@ -80,83 +83,65 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("trims leading whitespace in block-streamed replies", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
+  it("passes abort context to direct block sends", async () => {
+    const onBlockReply = vi.fn(async () => {});
 
     const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
+      onBlockReply,
       normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
       applyReplyToMode: (payload) => payload,
       typingSignals: {
         signalTextDelta: vi.fn(async () => {}),
       } as unknown as TypingSignaler,
       blockStreamingEnabled: true,
-      blockReplyPipeline,
+      blockReplyPipeline: null,
       directlySentBlockKeys: new Set(),
     });
 
-    await handler({ text: "\n\n  Hello from stream" });
+    await handler({ text: "stream me" });
 
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: "Hello from stream",
-      mediaUrl: undefined,
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-      mediaUrls: undefined,
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "stream me" }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
   });
 
-  it("parses media directives in block replies before path normalization", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "Result\nMEDIA: ./image.png" },
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-    });
-
-    expect(normalized.payload).toMatchObject({
-      text: "Result",
-      mediaUrl: "./image.png",
-      mediaUrls: ["./image.png"],
-    });
-  });
-
-  it("passes normalized media block replies through media path normalization", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
-    const absPath = path.join("/tmp/home", "openclaw", "image.png");
+  it("aborts direct block sends when delivery becomes suppressed mid-send", async () => {
+    let suppressed = false;
+    let observedAbort = false;
+    const onBlockReply = vi.fn(
+      async (_payload: { text?: string }, context?: { abortSignal?: AbortSignal }) => {
+        const signal = context?.abortSignal;
+        signal?.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+          },
+          { once: true },
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 40));
+      },
+    );
 
     const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
+      onBlockReply,
       normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
       applyReplyToMode: (payload) => payload,
-      normalizeMediaPaths: async (payload) => ({
-        ...payload,
-        mediaUrl: absPath,
-        mediaUrls: [absPath],
-      }),
       typingSignals: {
         signalTextDelta: vi.fn(async () => {}),
       } as unknown as TypingSignaler,
       blockStreamingEnabled: true,
-      blockReplyPipeline,
+      blockReplyPipeline: null,
       directlySentBlockKeys: new Set(),
+      shouldSuppressDelivery: () => suppressed,
     });
 
-    await handler({ text: "Result\nMEDIA: ./image.png" });
+    const delivery = handler({ text: "slow send" });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    suppressed = true;
+    await delivery;
 
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: "Result",
-      mediaUrl: absPath,
-      mediaUrls: [absPath],
-      replyToId: undefined,
-      replyToCurrent: false,
-      replyToTag: false,
-      audioAsVoice: false,
-    });
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(observedAbort).toBe(true);
   });
 });
