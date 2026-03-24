@@ -169,4 +169,36 @@ describe("subagent announce seam flow", () => {
       timeoutMs: 10_000,
     });
   });
+
+  it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-delete-cleanup",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "thread-bound cleanup",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:test",
+        deleteTranscript: true,
+        emitLifecycleHooks: true,
+      },
+      timeoutMs: 10_000,
+    });
+  });
 });
