@@ -413,11 +413,10 @@ export async function startGatewayServer(
   }
 
   configSnapshot = await readConfigFileSnapshot();
+  warnLegacyClawdbotEnvVars();
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
-
-  warnLegacyClawdbotEnvVars();
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
