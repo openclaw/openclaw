@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchClawHubSkillDetailMock = vi.fn();
@@ -29,7 +32,8 @@ vi.mock("../infra/archive.js", () => ({
   fileExists: fileExistsMock,
 }));
 
-const { installSkillFromClawHub, searchSkillsFromClawHub } = await import("./skills-clawhub.js");
+const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHub } =
+  await import("./skills-clawhub.js");
 
 describe("skills-clawhub", () => {
   beforeEach(() => {
@@ -92,6 +96,127 @@ describe("skills-clawhub", () => {
       slug: "agentreceipt",
       version: "1.0.0",
       targetDir: "/tmp/workspace/skills/agentreceipt",
+    });
+  });
+
+  describe("legacy tracked slugs remain updatable", () => {
+    async function createLegacyTrackedSkillFixture(slug: string) {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
+      const skillDir = path.join(workspaceDir, "skills", slug);
+      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, ".clawhub", "origin.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            registry: "https://legacy.clawhub.ai",
+            slug,
+            installedVersion: "0.9.0",
+            installedAt: 123,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, ".clawhub", "lock.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            skills: {
+              [slug]: {
+                version: "0.9.0",
+                installedAt: 123,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      return { workspaceDir, skillDir };
+    }
+
+    it("updates all tracked legacy Unicode slugs in place", async () => {
+      const slug = "re\u0430ct";
+      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: path.join(workspaceDir, "skills", slug),
+      });
+
+      try {
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+        });
+
+        expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+          slug,
+          baseUrl: "https://legacy.clawhub.ai",
+        });
+        expect(downloadClawHubSkillArchiveMock).toHaveBeenCalledWith({
+          slug,
+          version: "1.0.0",
+          baseUrl: "https://legacy.clawhub.ai",
+        });
+        expect(results).toMatchObject([
+          {
+            ok: true,
+            slug,
+            previousVersion: "0.9.0",
+            version: "1.0.0",
+            targetDir: path.join(workspaceDir, "skills", slug),
+          },
+        ]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("updates a legacy Unicode slug when requested explicitly", async () => {
+      const slug = "re\u0430ct";
+      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: path.join(workspaceDir, "skills", slug),
+      });
+
+      try {
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+          slug,
+        });
+
+        expect(results).toMatchObject([
+          {
+            ok: true,
+            slug,
+            previousVersion: "0.9.0",
+            version: "1.0.0",
+            targetDir: path.join(workspaceDir, "skills", slug),
+          },
+        ]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("still rejects an untracked Unicode slug passed to update", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
+
+      try {
+        await expect(
+          updateSkillsFromClawHub({
+            workspaceDir,
+            slug: "re\u0430ct",
+          }),
+        ).rejects.toThrow("Invalid skill slug");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
     });
   });
 
