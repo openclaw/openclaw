@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { normalizeGoogleApiBaseUrl } from "openclaw/plugin-sdk/provider-google";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -25,13 +26,12 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { DEFAULT_GOOGLE_API_BASE_URL } from "../api.js";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
 };
 
@@ -77,13 +77,18 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   return model || DEFAULT_GEMINI_MODEL;
 }
 
+function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
+  return normalizeGoogleApiBaseUrl(gemini?.baseUrl);
+}
+
 async function runGeminiSearch(params: {
   query: string;
   apiKey: string;
+  baseUrl: string;
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
+  const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
 
   return withTrustedWebSearchEndpoint(
     {
@@ -204,10 +209,12 @@ function createGeminiToolDefinition(
         searchConfig?.maxResults ??
         undefined;
       const model = resolveGeminiModel(geminiConfig);
+      const baseUrl = resolveGeminiBaseUrl(geminiConfig);
       const cacheKey = buildSearchCacheKey([
         "gemini",
         query,
         resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        baseUrl,
         model,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
@@ -219,6 +226,7 @@ function createGeminiToolDefinition(
       const result = await runGeminiSearch({
         query,
         apiKey,
+        baseUrl,
         model,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
       });
@@ -277,5 +285,6 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   resolveGeminiApiKey,
+  resolveGeminiBaseUrl,
   resolveGeminiModel,
 } as const;

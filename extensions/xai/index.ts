@@ -3,12 +3,12 @@ import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { applyXaiModelCompat, buildXaiProvider, normalizeXaiModelId } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { createGrokWebSearchProvider } from "./src/grok-web-search-provider.js";
 import {
   createXaiFastModeWrapper,
   createXaiToolCallArgumentDecodingWrapper,
   createXaiToolPayloadCompatibilityWrapper,
 } from "./stream.js";
-import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
 
@@ -62,6 +62,6 @@ export default defineSingleProviderPluginEntry({
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },
   register(api) {
-    api.registerWebSearchProvider(createXaiWebSearchProvider());
+    api.registerWebSearchProvider(createGrokWebSearchProvider());
   },
 });

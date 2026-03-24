@@ -5490,6 +5490,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               apiKey: {
                 type: ["string", "object"],
               },
+              baseUrl: {
+                type: "string",
+              },
               model: {
                 type: "string",
               },
@@ -5535,6 +5538,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
           sensitive: true,
           placeholder: "AIza...",
+        },
+        "webSearch.baseUrl": {
+          label: "Gemini Search Base URL",
+          help: 'Base URL override for Gemini web search (default: "https://generativelanguage.googleapis.com/v1beta"). Useful for compatible proxies.',
         },
         "webSearch.model": {
           label: "Gemini Search Model",
@@ -18540,6 +18547,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               apiKey: {
                 type: ["string", "object"],
               },
+              baseUrl: {
+                type: "string",
+              },
               model: {
                 type: "string",
               },
@@ -18575,6 +18585,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Grok Search API Key",
           help: "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
           sensitive: true,
+        },
+        "webSearch.baseUrl": {
+          label: "Grok Search Base URL",
+          help: 'Base URL override for Grok web search (default: "https://api.x.ai/v1"). Useful for compatible proxies.',
         },
         "webSearch.model": {
           label: "Grok Search Model",
