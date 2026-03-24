@@ -360,5 +360,5 @@ After configuring multi-agent sandbox and tools:
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Elevated Mode](/tools/elevated)
 - [Multi-Agent Routing](/concepts/multi-agent)
-- [Sandbox Configuration](/gateway/configuration-reference#agents-defaults-sandbox)
+- [Sandbox Configuration](/gateway/configuration-reference#agentsdefaultssandbox)
 - [Session Management](/concepts/session)

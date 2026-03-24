@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -128,6 +128,12 @@ function createConfiguredTelegramRoute() {
 }
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReset();

@@ -47,7 +47,7 @@ import {
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
@@ -478,7 +478,9 @@ export async function runAgentTurnWithFallback(params: {
                             if (skip) {
                               return;
                             }
-                            await params.typingSignals.signalTextDelta(text);
+                            if (text !== undefined) {
+                              await params.typingSignals.signalTextDelta(text);
+                            }
                             await onToolResult({
                               ...payload,
                               text,

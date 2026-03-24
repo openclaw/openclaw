@@ -1,3 +1,5 @@
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { setTimeout as sleep } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
@@ -31,8 +33,8 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
   };
 });
 
-const { AcpSessionManager } = await import("./manager.js");
-const { AcpRuntimeError } = await import("../runtime/errors.js");
+let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
+let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 
 const baseCfg = {
   acp: {
@@ -147,7 +149,11 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ AcpSessionManager } = await import("./manager.js"));
+    ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+    vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
@@ -240,7 +246,7 @@ describe("AcpSessionManager", () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await sleep(10);
         yield { type: "done" };
       } finally {
         inFlight -= 1;
@@ -321,7 +327,7 @@ describe("AcpSessionManager", () => {
         (error) => ({ status: "rejected" as const, error }),
       ),
       new Promise<{ status: "pending" }>((resolve) => {
-        setTimeout(() => resolve({ status: "pending" }), 100);
+        scheduleNativeTimeout(() => resolve({ status: "pending" }), 100);
       }),
     ]);
 
@@ -538,7 +544,7 @@ describe("AcpSessionManager", () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 15));
+        await sleep(15);
         yield { type: "done" as const };
       } finally {
         inFlight -= 1;
@@ -1483,7 +1489,7 @@ describe("AcpSessionManager", () => {
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       key: "model",
-      value: "openai-codex/gpt-5.3-codex",
+      value: "openai-codex/gpt-5.4",
     });
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
@@ -1740,7 +1746,7 @@ describe("AcpSessionManager", () => {
         ...readySessionMeta(),
         runtimeOptions: {
           runtimeMode: "plan",
-          model: "openai-codex/gpt-5.3-codex",
+          model: "openai-codex/gpt-5.4",
           permissionProfile: "strict",
           timeoutSeconds: 120,
         },
@@ -1764,7 +1770,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "model",
-        value: "openai-codex/gpt-5.3-codex",
+        value: "openai-codex/gpt-5.4",
       }),
     );
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
@@ -1806,7 +1812,7 @@ describe("AcpSessionManager", () => {
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         key: "model",
-        value: "gpt-5.3-codex",
+        value: "gpt-5.4",
       }),
     ).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",

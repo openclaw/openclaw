@@ -22,6 +22,10 @@ const pluginApiMocks = vi.hoisted(() => ({
 
 vi.mock("./api.js", () => {
   return {
+    PAIRING_SETUP_BOOTSTRAP_PROFILE: {
+      roles: ["node"],
+      scopes: [],
+    },
     approveDevicePairing: vi.fn(),
     clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
     definePluginEntry: vi.fn((entry) => entry),
@@ -43,6 +47,7 @@ vi.mock("./notify.js", () => ({
   registerPairingNotifierService: vi.fn(),
 }));
 
+import { approveDevicePairing, listDevicePairing } from "./api.js";
 import registerDevicePair from "./index.js";
 
 function createApi(params?: {
@@ -148,6 +153,12 @@ describe("device-pair /pair qr", () => {
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node"],
+        scopes: [],
+      },
+    });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
     expect(text).toContain("- Security: single-use bootstrap token");
@@ -369,5 +380,91 @@ describe("device-pair /pair qr", () => {
 
     expect(pluginApiMocks.clearDeviceBootstrapTokens).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ text: "Invalidated 2 unused setup codes." });
+  });
+});
+
+describe("device-pair /pair approve", () => {
+  it("rejects internal gateway callers without operator.pairing", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+
+  it("allows internal gateway callers with operator.pairing", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "victim-phone",
+        publicKey: "victim-public-key",
+        displayName: "Victim Phone",
+        platform: "ios",
+        role: "operator",
+        roles: ["operator"],
+        scopes: ["operator.pairing"],
+        approvedScopes: ["operator.pairing"],
+        tokens: {
+          operator: {
+            token: "token-1",
+            role: "operator",
+            scopes: ["operator.pairing"],
+            createdAtMs: Date.now(),
+          },
+        },
+        createdAtMs: Date.now(),
+        approvedAtMs: Date.now(),
+      },
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 });

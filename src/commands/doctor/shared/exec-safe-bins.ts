@@ -145,12 +145,12 @@ export function scanExecSafeBinTrustedDirHints(
   for (const scope of collectExecSafeBinScopes(cfg)) {
     for (const bin of scope.safeBins) {
       const resolution = resolveCommandResolutionFromArgv([bin]);
-      if (!resolution?.resolvedPath) {
+      if (!resolution?.execution.resolvedPath) {
         continue;
       }
       if (
         isTrustedSafeBinPath({
-          resolvedPath: resolution.resolvedPath,
+          resolvedPath: resolution.execution.resolvedPath,
           trustedDirs: scope.trustedSafeBinDirs,
         })
       ) {
@@ -159,7 +159,7 @@ export function scanExecSafeBinTrustedDirHints(
       hits.push({
         scopePath: scope.scopePath,
         bin,
-        resolvedPath: resolution.resolvedPath,
+        resolvedPath: resolution.execution.resolvedPath,
       });
     }
   }
@@ -210,7 +210,9 @@ export function collectExecSafeBinCoverageWarnings(params: {
       );
     }
     if (riskyHits.length > 5) {
-      lines.push(`- ${riskyHits.length - 5} more safeBins entries should not use the low-risk safeBins fast path.`);
+      lines.push(
+        `- ${riskyHits.length - 5} more safeBins entries should not use the low-risk safeBins fast path.`,
+      );
     }
   }
   lines.push(
@@ -252,9 +254,7 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   for (const scope of collectExecSafeBinScopes(next)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
     for (const hit of listRiskyConfiguredSafeBins(scope.safeBins)) {
-      warnings.push(
-        `- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`,
-      );
+      warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
     }
     const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
     if (missingBins.length === 0) {

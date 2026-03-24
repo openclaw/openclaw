@@ -110,7 +110,7 @@ export class FilterableSelectList implements Component {
     }
 
     // Escape: clear filter or cancel
-    if (matchesKey(keyData, Key.escape)) {
+    if (matchesKey(keyData, Key.escape) || matchesKey(keyData, Key.ctrl("c"))) {
       if (this.filterText) {
         this.filterText = "";
         this.input.setValue("");

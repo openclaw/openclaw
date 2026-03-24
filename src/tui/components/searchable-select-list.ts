@@ -1,8 +1,8 @@
 import {
   type Component,
   Input,
-  isKeyRelease,
   Key,
+  isKeyRelease,
   matchesKey,
   type SelectItem,
   type SelectListTheme,
@@ -362,7 +362,7 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    if (matchesKey(keyData, Key.escape)) {
+    if (matchesKey(keyData, Key.escape) || matchesKey(keyData, Key.ctrl("c"))) {
       if (this.onCancel) {
         this.onCancel();
       }

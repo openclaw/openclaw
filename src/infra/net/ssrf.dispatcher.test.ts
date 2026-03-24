@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -15,19 +16,25 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("undici", () => ({
-  Agent: agentCtor,
-  EnvHttpProxyAgent: envHttpProxyAgentCtor,
-  ProxyAgent: proxyAgentCtor,
-}));
-
 import type { PinnedHostname } from "./ssrf.js";
 
 let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
 
 beforeEach(async () => {
   vi.resetModules();
+  agentCtor.mockClear();
+  envHttpProxyAgentCtor.mockClear();
+  proxyAgentCtor.mockClear();
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: agentCtor,
+    EnvHttpProxyAgent: envHttpProxyAgentCtor,
+    ProxyAgent: proxyAgentCtor,
+  };
   ({ createPinnedDispatcher } = await import("./ssrf.js"));
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
 });
 
 describe("createPinnedDispatcher", () => {
@@ -210,8 +217,9 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
-      proxyTls: {
+      requestTls: {
         autoSelectFamily: false,
+        lookup,
       },
     });
   });

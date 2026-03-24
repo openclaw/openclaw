@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -117,12 +117,10 @@ const slackPlugin: ChannelPlugin = {
 };
 
 describe("runMessageAction media behavior", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ runMessageAction } = await import("./message-action-runner.js"));
     ({ loadWebMedia } = await import("../../media/web-media.js"));
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
   });
 

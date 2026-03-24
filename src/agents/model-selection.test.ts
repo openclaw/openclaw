@@ -201,13 +201,13 @@ describe("model-selection", () => {
           "grok-4.20-experimental-beta-0304-reasoning",
         ],
         defaultProvider: "xai",
-        expected: { provider: "xai", model: "grok-4.20-reasoning" },
+        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
-        variants: ["openai/gpt-5.3-codex", "gpt-5.3-codex"],
+        variants: ["openai/gpt-5.4", "gpt-5.4"],
         defaultProvider: "openai",
-        expected: { provider: "openai", model: "gpt-5.3-codex" },
+        expected: { provider: "openai", model: "gpt-5.4" },
       },
       {
         name: "preserves openrouter native model prefixes",
@@ -247,9 +247,9 @@ describe("model-selection", () => {
       },
       {
         name: "keeps already-suffixed codex variants unchanged",
-        variants: ["openai/gpt-5.3-codex-codex"],
+        variants: ["openai/gpt-5.4-codex-codex"],
         defaultProvider: "anthropic",
-        expected: { provider: "openai", model: "gpt-5.3-codex-codex" },
+        expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
       },
       {
         name: "normalizes gemini 3.1 flash-lite ids for google-vertex",

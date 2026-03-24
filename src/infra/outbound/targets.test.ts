@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-shared.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -12,19 +14,25 @@ import {
 } from "./targets.js";
 import type { SessionDeliveryTarget } from "./targets.js";
 import {
-  inferTelegramTestChatType,
   installResolveOutboundTargetPluginRegistryHooks,
-  parseTelegramTestMessagingTarget,
   runResolveOutboundTargetCoreTests,
-  telegramOutboundStub,
-  whatsappOutboundStub,
 } from "./targets.shared-test.js";
 
 runResolveOutboundTargetCoreTests();
 
 const telegramMessaging = {
-  parseExplicitTarget: ({ raw }: { raw: string }) => parseTelegramTestMessagingTarget(raw),
-  inferTargetChatType: ({ to }: { to: string }) => inferTelegramTestChatType(to),
+  parseExplicitTarget: ({ raw }: { raw: string }) => {
+    const target = parseTelegramTarget(raw);
+    return {
+      to: target.chatId,
+      threadId: target.messageThreadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
+  inferTargetChatType: ({ to }: { to: string }) => {
+    const target = parseTelegramTarget(to);
+    return target.chatType === "unknown" ? undefined : target.chatType;
+  },
 };
 
 const whatsappMessaging = {
@@ -64,7 +72,7 @@ beforeEach(() => {
         pluginId: "telegram",
         plugin: createOutboundTestPlugin({
           id: "telegram",
-          outbound: telegramOutboundStub,
+          outbound: telegramOutbound,
           messaging: telegramMessaging,
         }),
         source: "test",
@@ -73,7 +81,7 @@ beforeEach(() => {
         pluginId: "whatsapp",
         plugin: createOutboundTestPlugin({
           id: "whatsapp",
-          outbound: whatsappOutboundStub,
+          outbound: whatsappOutbound,
           messaging: whatsappMessaging,
         }),
         source: "test",
@@ -147,7 +155,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
       pluginId: "telegram",
       plugin: createOutboundTestPlugin({
         id: "telegram",
-        outbound: telegramOutboundStub,
+        outbound: telegramOutbound,
         messaging: telegramMessaging,
       }),
       source: "test",

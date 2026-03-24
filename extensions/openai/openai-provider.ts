@@ -46,7 +46,6 @@ const OPENAI_MODERN_MODEL_IDS = [
   "gpt-5.4-mini",
   "gpt-5.4-nano",
   "gpt-5.2",
-  "gpt-5.0",
 ] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);

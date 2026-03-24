@@ -676,6 +676,8 @@ export function resolveContextTokens(params: {
   model: string;
 }): number {
   return (
-    params.agentCfg?.contextTokens ?? lookupContextTokens(params.model) ?? DEFAULT_CONTEXT_TOKENS
+    params.agentCfg?.contextTokens ??
+    lookupContextTokens(params.model, { allowAsyncLoad: false }) ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }

@@ -11,7 +11,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const slackConfig = {
@@ -168,6 +167,31 @@ const whatsappTestPlugin = createConfiguredTestPlugin({
   },
 });
 
+const imessageTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+  }),
+  meta: {
+    id: "imessage",
+    label: "iMessage",
+    selectionLabel: "iMessage (imsg)",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test stub.",
+    aliases: ["imsg"],
+  },
+  outbound: directOutbound,
+  messaging: {
+    normalizeTarget: (raw) => raw.trim() || undefined,
+    targetResolver: {
+      looksLikeId: (raw) => raw.trim().length > 0,
+      hint: "<handle|chat_id:ID>",
+    },
+  },
+};
+
 describe("runMessageAction context isolation", () => {
   beforeEach(() => {
     setActivePluginRegistry(
@@ -190,7 +214,7 @@ describe("runMessageAction context isolation", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: imessageTestPlugin,
         },
       ]),
     );

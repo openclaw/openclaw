@@ -94,20 +94,23 @@ async function packToArchive({
   pkgDir,
   outDir,
   outName,
+  flatRoot,
 }: {
   pkgDir: string;
   outDir: string;
   outName: string;
+  flatRoot?: boolean;
 }) {
   const dest = path.join(outDir, outName);
   fs.rmSync(dest, { force: true });
+  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
   await tar.c(
     {
       gzip: true,
       file: dest,
-      cwd: path.dirname(pkgDir),
+      cwd: flatRoot ? pkgDir : path.dirname(pkgDir),
     },
-    [path.basename(pkgDir)],
+    entries,
   );
   return dest;
 }
@@ -367,12 +370,14 @@ async function installArchivePackageAndReturnResult(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex?: boolean;
+  flatRoot?: boolean;
 }) {
   const stateDir = makeTempDir();
   const archivePath = await ensureDynamicArchiveTemplate({
     outName: params.outName,
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
+    flatRoot: params.flatRoot === true,
   });
 
   const extensionsDir = path.join(stateDir, "extensions");
@@ -386,10 +391,12 @@ async function installArchivePackageAndReturnResult(params: {
 function buildDynamicArchiveTemplateKey(params: {
   packageJson: Record<string, unknown>;
   withDistIndex: boolean;
+  flatRoot: boolean;
 }): string {
   return JSON.stringify({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
+    flatRoot: params.flatRoot,
   });
 }
 
@@ -397,17 +404,19 @@ async function ensureDynamicArchiveTemplate(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex: boolean;
+  flatRoot?: boolean;
 }): Promise<string> {
   const templateKey = buildDynamicArchiveTemplateKey({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
+    flatRoot: params.flatRoot === true,
   });
   const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
   if (cachedPath) {
     return cachedPath;
   }
   const templateDir = makeTempDir();
-  const pkgDir = path.join(templateDir, "package");
+  const pkgDir = params.flatRoot ? templateDir : path.join(templateDir, "package");
   fs.mkdirSync(pkgDir, { recursive: true });
   if (params.withDistIndex) {
     fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
@@ -418,6 +427,7 @@ async function ensureDynamicArchiveTemplate(params: {
     pkgDir,
     outDir: ensureSuiteFixtureRoot(),
     outName: params.outName,
+    flatRoot: params.flatRoot,
   });
   dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
   return archivePath;
@@ -487,6 +497,7 @@ beforeAll(async () => {
       packageJson: preset.packageJson,
       outName: preset.outName,
       withDistIndex: preset.withDistIndex,
+      flatRoot: false,
     });
   }
 });
@@ -497,40 +508,48 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and preserves scoped package ids", async () => {
-    const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
+  it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
+    const stateDir = makeTempDir();
+    const archiveV1 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.1",
+      outName: "voice-call-0.0.1.tgz",
+      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
+    });
+    const archiveV2 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.2",
+      outName: "voice-call-0.0.2.tgz",
+      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
     });
 
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/voice-call" });
-  });
-
-  it("rejects installing when plugin already exists", async () => {
-    const { archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
-    });
-
+    const extensionsDir = path.join(stateDir, "extensions");
     const first = await installPluginFromArchive({
-      archivePath,
+      archivePath: archiveV1,
       extensionsDir,
     });
-    const second = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
+    expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
 
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(false);
-    if (second.ok) {
+    const duplicate = await installPluginFromArchive({
+      archivePath: archiveV1,
+      extensionsDir,
+    });
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) {
+      expect(duplicate.error).toContain("already exists");
+    }
+
+    const updated = await installPluginFromArchive({
+      archivePath: archiveV2,
+      extensionsDir,
+      mode: "update",
+    });
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) {
       return;
     }
-    expect(second.error).toContain("already exists");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
+    ) as { version?: string };
+    expect(manifest.version).toBe("0.0.2");
   });
 
   it("installs from a zip archive", async () => {
@@ -549,39 +568,24 @@ describe("installPluginFromArchive", () => {
     expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
-  it("allows updates when mode is update", async () => {
-    const stateDir = makeTempDir();
-    const archiveV1 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.1",
-      outName: "voice-call-0.0.1.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
-    });
-    const archiveV2 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.2",
-      outName: "voice-call-0.0.2.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
-    });
-
-    const extensionsDir = path.join(stateDir, "extensions");
-    const first = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
-    const second = await installPluginFromArchive({
-      archivePath: archiveV2,
-      extensionsDir,
-      mode: "update",
+  it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
+    const result = await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "@openclaw/rootless",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      outName: "rootless-plugin.tgz",
+      withDistIndex: true,
+      flatRoot: true,
     });
 
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    if (!second.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
-    ) as { version?: string };
-    expect(manifest.version).toBe("0.0.2");
+    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
   });
 
   it("rejects reserved archive package ids", async () => {
@@ -777,7 +781,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("rejects plugins whose minHostVersion is newer than the current host", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.13");
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.21");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
@@ -787,7 +791,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.14",
+        minHostVersion: ">=2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
@@ -802,7 +806,7 @@ describe("installPluginFromDir", () => {
       return;
     }
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION);
-    expect(result.error).toContain("requires OpenClaw >=2026.3.14, but this host is 2026.3.13");
+    expect(result.error).toContain("requires OpenClaw >=2026.3.22, but this host is 2026.3.21");
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
@@ -816,7 +820,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: "2026.3.14",
+        minHostVersion: "2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
@@ -846,7 +850,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.14",
+        minHostVersion: ">=2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");

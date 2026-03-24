@@ -12,6 +12,9 @@ import {
   createAccountScopedGroupAccessSection,
   createAllowFromSection,
   createLegacyCompatChannelDmPolicy,
+  createNestedChannelParsedAllowFromPrompt,
+  createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
   createNestedChannelDmPolicySetter,
@@ -19,6 +22,7 @@ import {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelDmPolicySetter,
   createTopLevelChannelGroupPolicySetter,
+  createTopLevelChannelParsedAllowFromPrompt,
   normalizeAllowFromEntries,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -656,6 +660,91 @@ describe("promptParsedAllowFromForAccount", () => {
     });
 
     expect(next.channels?.nostr?.allowFrom).toEqual(["old", "new"]);
+  });
+});
+
+describe("createPromptParsedAllowFromForAccount", () => {
+  it("supports computed default account ids and optional notes", async () => {
+    const promptAllowFrom = createPromptParsedAllowFromForAccount<OpenClawConfig>({
+      defaultAccountId: () => "work",
+      message: "msg",
+      placeholder: "placeholder",
+      parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
+      getExistingAllowFrom: ({ cfg, accountId }) =>
+        cfg.channels?.bluebubbles?.accounts?.[accountId]?.allowFrom ?? [],
+      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel: "bluebubbles",
+          accountId,
+          patch: { allowFrom },
+        }),
+    });
+
+    const prompter = createPrompter(["Alice"]);
+    const next = await promptAllowFrom({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            accounts: {
+              work: {
+                allowFrom: ["old"],
+              },
+            },
+          },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+    });
+
+    expect(next.channels?.bluebubbles?.accounts?.work?.allowFrom).toEqual(["alice"]);
+    expect(prompter.note).not.toHaveBeenCalled();
+  });
+});
+
+describe("parsed allowFrom prompt builders", () => {
+  it("builds a top-level parsed allowFrom prompt", async () => {
+    const promptAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
+      channel: "nostr",
+      defaultAccountId: DEFAULT_ACCOUNT_ID,
+      noteTitle: "Nostr allowlist",
+      noteLines: ["line"],
+      message: "msg",
+      placeholder: "placeholder",
+      parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
+    });
+
+    const prompter = createPrompter(["npub1"]);
+    const next = await promptAllowFrom({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+    });
+
+    expect(next.channels?.nostr?.allowFrom).toEqual(["npub1"]);
+    expect(prompter.note).toHaveBeenCalledWith("line", "Nostr allowlist");
+  });
+
+  it("builds a nested parsed allowFrom prompt", async () => {
+    const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
+      channel: "googlechat",
+      section: "dm",
+      defaultAccountId: DEFAULT_ACCOUNT_ID,
+      enabled: true,
+      message: "msg",
+      placeholder: "placeholder",
+      parseEntries: (raw) => ({ entries: [raw.trim()] }),
+    });
+
+    const next = await promptAllowFrom({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: createPrompter(["users/123"]) as any,
+    });
+
+    expect(next.channels?.googlechat?.enabled).toBe(true);
+    expect(next.channels?.googlechat?.dm?.allowFrom).toEqual(["users/123"]);
   });
 });
 
@@ -1725,6 +1814,46 @@ describe("normalizeAllowFromEntries", () => {
 
   it("trims and de-duplicates without a normalizer", () => {
     expect(normalizeAllowFromEntries([" alice ", "bob", "alice"])).toEqual(["alice", "bob"]);
+  });
+});
+
+describe("createStandardChannelSetupStatus", () => {
+  it("returns the shared status fields without status lines by default", async () => {
+    const status = createStandardChannelSetupStatus({
+      channelLabel: "Demo",
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs token",
+      configuredHint: "ready",
+      unconfiguredHint: "missing token",
+      configuredScore: 2,
+      unconfiguredScore: 0,
+      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+    });
+
+    expect(status.configuredHint).toBe("ready");
+    expect(status.unconfiguredHint).toBe("missing token");
+    expect(status.configuredScore).toBe(2);
+    expect(status.unconfiguredScore).toBe(0);
+    expect(await status.resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
+    expect(status.resolveStatusLines).toBeUndefined();
+  });
+
+  it("builds the default status line plus extra lines when requested", async () => {
+    const status = createStandardChannelSetupStatus({
+      channelLabel: "Demo",
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs token",
+      includeStatusLine: true,
+      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+      resolveExtraStatusLines: ({ configured }) => [`Configured: ${configured ? "yes" : "no"}`],
+    });
+
+    expect(
+      await status.resolveStatusLines?.({
+        cfg: { channels: { demo: {} } },
+        configured: true,
+      }),
+    ).toEqual(["Demo: configured", "Configured: yes"]);
   });
 });
 

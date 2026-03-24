@@ -103,7 +103,7 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
+import { loadGatewayPlugins, setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -575,7 +575,7 @@ export async function startGatewayServer(
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as Record<ChannelId, RuntimeEnv>;
+  ) as unknown as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
@@ -689,6 +689,7 @@ export async function startGatewayServer(
     chatRunState,
     chatRunBuffers,
     chatDeltaSentAt,
+    chatDeltaLastBroadcastLen,
     addChatRun,
     removeChatRun,
     chatAbortControllers,
@@ -814,6 +815,7 @@ export async function startGatewayServer(
       chatRunState,
       chatRunBuffers,
       chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
@@ -1099,6 +1101,7 @@ export async function startGatewayServer(
     chatAbortedRuns: chatRunState.abortedRuns,
     chatRunBuffers: chatRunState.buffers,
     chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
     addChatRun,
     removeChatRun,
     subscribeSessionEvents: sessionEventSubscribers.subscribe,
@@ -1123,10 +1126,10 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
   };
 
-  // Store the gateway context as a fallback for plugin subagent dispatch
-  // in non-WS paths (Telegram polling, WhatsApp, etc.) where no per-request
-  // scope is set via AsyncLocalStorage.
-  setFallbackGatewayContext(gatewayRequestContext);
+  // Register a lazy fallback for plugin subagent dispatch in non-WS paths
+  // (Telegram polling, WhatsApp, etc.) so later runtime swaps can expose the
+  // current gateway context without relying on a startup snapshot.
+  setFallbackGatewayContextResolver(() => gatewayRequestContext);
 
   attachGatewayWsHandlers({
     wss,

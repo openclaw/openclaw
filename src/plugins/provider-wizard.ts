@@ -3,7 +3,7 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -87,7 +87,6 @@ function buildProviderWizardCacheKey(params: {
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: params.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ?? "",
       OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
       OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
-      CLAWDBOT_STATE_DIR: params.env.CLAWDBOT_STATE_DIR ?? "",
       OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
       HOME: params.env.HOME ?? "",
       USERPROFILE: params.env.USERPROFILE ?? "",

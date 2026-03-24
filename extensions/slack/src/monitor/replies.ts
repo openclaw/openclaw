@@ -11,6 +11,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseSlackBlocksInput } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
+import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
@@ -188,7 +189,7 @@ export async function deliverSlackSlashReplies(params: {
   chunkMode?: ChunkMode;
 }) {
   const messages: string[] = [];
-  const chunkLimit = Math.min(params.textLimit, 4000);
+  const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
     const reply = resolveSendableOutboundReplyParts(payload);
     const text =
