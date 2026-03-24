@@ -25,7 +25,7 @@ const DEFAULT_ADAPTER: ChannelMessageAdapter = {
  * account-level `useComponentsV2` overrides (account takes precedence over
  * base channel config). Returns `true` when the field is absent (default).
  */
-function resolveUseComponentsV2(
+export function resolveUseComponentsV2(
   cfg: OpenClawConfig | undefined,
   channel: ChannelId,
   accountId?: string | null,
