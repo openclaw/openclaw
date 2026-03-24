@@ -52,7 +52,7 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
 function createSinglePluginRegistry(params: {
   pluginRoot: string;
   skills: string[];
-  format?: "openclaw" | "bundle";
+  format?: "evox" | "bundle";
 }): PluginManifestRegistry {
   return {
     diagnostics: [],

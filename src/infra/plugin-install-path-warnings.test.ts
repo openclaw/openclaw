@@ -65,13 +65,13 @@ describe("plugin install path warnings", () => {
       formatPluginInstallPathIssue({
         issue: issue!,
         pluginLabel: "Matrix",
-        defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-        repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+        defaultInstallCommand: "evox plugins install @openclaw/matrix",
+        repoInstallCommand: "evox plugins install ./extensions/matrix",
       }),
     ).toEqual([
       "Matrix is installed from a custom path that no longer exists: /tmp/openclaw-matrix-missing",
-      'Reinstall with "openclaw plugins install @openclaw/matrix".',
-      'If you are running from a repo checkout, you can also use "openclaw plugins install ./extensions/matrix".',
+      'Reinstall with "evox plugins install @openclaw/matrix".',
+      'If you are running from a repo checkout, you can also use "evox plugins install ./extensions/matrix".',
     ]);
   });
 
@@ -104,15 +104,15 @@ describe("plugin install path warnings", () => {
           path: "/tmp/matrix-plugin",
         },
         pluginLabel: "Matrix",
-        defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-        repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+        defaultInstallCommand: "evox plugins install @openclaw/matrix",
+        repoInstallCommand: "evox plugins install ./extensions/matrix",
         formatCommand: (command) => `<${command}>`,
       }),
     ).toEqual([
       "Matrix is installed from a custom path: /tmp/matrix-plugin",
       "Main updates will not automatically replace that plugin with the repo's default Matrix package.",
-      'Reinstall with "<openclaw plugins install @openclaw/matrix>" when you want to return to the standard Matrix plugin.',
-      'If you are intentionally running from a repo checkout, reinstall that checkout explicitly with "<openclaw plugins install ./extensions/matrix>" after updates.',
+      'Reinstall with "<evox plugins install @openclaw/matrix>" when you want to return to the standard Matrix plugin.',
+      'If you are intentionally running from a repo checkout, reinstall that checkout explicitly with "<evox plugins install ./extensions/matrix>" after updates.',
     ]);
   });
 });

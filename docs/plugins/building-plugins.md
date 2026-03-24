@@ -1,21 +1,21 @@
 ---
 title: "Building Plugins"
 sidebarTitle: "Getting Started"
-summary: "Create your first OpenClaw plugin in minutes"
+summary: "Create your first EVOX.sh plugin in minutes"
 read_when:
-  - You want to create a new OpenClaw plugin
+  - You want to create a new EVOX.sh plugin
   - You need a quick-start for plugin development
-  - You are adding a new channel, provider, tool, or other capability to OpenClaw
+  - You are adding a new channel, provider, tool, or other capability to EVOX.sh
 ---
 
 # Building Plugins
 
-Plugins extend OpenClaw with new capabilities: channels, model providers, speech,
+Plugins extend EVOX.sh with new capabilities: channels, model providers, speech,
 image generation, web search, agent tools, or any combination.
 
-You do not need to add your plugin to the OpenClaw repository. Publish to
+You do not need to add your plugin to the EVOX.sh repository. Publish to
 [ClawHub](/tools/clawhub) or npm and users install with
-`openclaw plugins install <package-name>`. OpenClaw tries ClawHub first and
+`evox plugins install <package-name>`. EVOX.sh tries ClawHub first and
 falls back to npm automatically.
 
 ## Prerequisites
@@ -28,7 +28,7 @@ falls back to npm automatically.
 
 <CardGroup cols={3}>
   <Card title="Channel plugin" icon="messages-square" href="/plugins/sdk-channel-plugins">
-    Connect OpenClaw to a messaging platform (Discord, IRC, etc.)
+    Connect EVOX.sh to a messaging platform (Discord, IRC, etc.)
   </Card>
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
@@ -51,7 +51,7 @@ and provider plugins have dedicated guides linked above.
       "name": "@myorg/openclaw-my-plugin",
       "version": "1.0.0",
       "type": "module",
-      "openclaw": {
+      "evox": {
         "extensions": ["./index.ts"]
       }
     }
@@ -61,7 +61,7 @@ and provider plugins have dedicated guides linked above.
     {
       "id": "my-plugin",
       "name": "My Plugin",
-      "description": "Adds a custom tool to OpenClaw",
+      "description": "Adds a custom tool to EVOX.sh",
       "configSchema": {
         "type": "object",
         "additionalProperties": false
@@ -85,7 +85,7 @@ and provider plugins have dedicated guides linked above.
     export default definePluginEntry({
       id: "my-plugin",
       name: "My Plugin",
-      description: "Adds a custom tool to OpenClaw",
+      description: "Adds a custom tool to EVOX.sh",
       register(api) {
         api.registerTool({
           name: "my_tool",
@@ -110,10 +110,10 @@ and provider plugins have dedicated guides linked above.
     **External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
 
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    evox plugins install @myorg/openclaw-my-plugin
     ```
 
-    OpenClaw checks ClawHub first, then falls back to npm.
+    EVOX.sh checks ClawHub first, then falls back to npm.
 
     **In-repo plugins:** place under `extensions/` — automatically discovered.
 
@@ -207,7 +207,7 @@ internal imports — never import your own plugin through its SDK path.
 
 ## Pre-submission checklist
 
-<Check>**package.json** has correct `openclaw` metadata</Check>
+<Check>**package.json** has correct `evox` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>

@@ -1,21 +1,21 @@
 ---
-summary: "CLI reference for `openclaw clawbot` (legacy alias namespace)"
+summary: "CLI reference for `evox clawbot` (legacy alias namespace)"
 read_when:
-  - You maintain older scripts using `openclaw clawbot ...`
+  - You maintain older scripts using `evox clawbot ...`
   - You need migration guidance to current commands
 title: "clawbot"
 ---
 
-# `openclaw clawbot`
+# `evox clawbot`
 
 Legacy alias namespace kept for backwards compatibility.
 
 Current supported alias:
 
-- `openclaw clawbot qr` (same behavior as [`openclaw qr`](/cli/qr))
+- `evox clawbot qr` (same behavior as [`evox qr`](/cli/qr))
 
 ## Migration
 
 Prefer modern top-level commands directly:
 
-- `openclaw clawbot qr` -> `openclaw qr`
+- `evox clawbot qr` -> `evox qr`

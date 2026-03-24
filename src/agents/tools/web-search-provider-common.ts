@@ -287,7 +287,7 @@ function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): 
 export function buildUnsupportedSearchFilterResponse(
   params: Record<string, unknown>,
   provider: string,
-  docs = "https://docs.openclaw.ai/tools/web",
+  docs = "https://docs.evox.sh/tools/web",
 ):
   | {
       error: string;

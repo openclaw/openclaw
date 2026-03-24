@@ -312,7 +312,7 @@ describe("applyPluginAutoEnable", () => {
         entries: [
           {
             name: "@openclaw/env-secondary",
-            openclaw: {
+            evox: {
               channel: {
                 id: "env-secondary",
                 label: "Env Secondary",
@@ -429,7 +429,7 @@ describe("applyPluginAutoEnable", () => {
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
-      // Reproduces: https://github.com/openclaw/openclaw/issues/25261
+      // Reproduces: https://github.com/sonpiaz/evox-sh/issues/25261
       // Plugin "apn-channel" declares channels: ["apn"]. Doctor must write
       // plugins.entries["apn-channel"], not plugins.entries["apn"].
       const result = applyWithApnChannelConfig();

@@ -7,7 +7,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const EXTENSIONS_DIR = resolve(REPO_ROOT, "extensions");
 const CORE_PLUGIN_ENTRY_IMPORT_RE =
-  /import\s*\{[^}]*\bdefinePluginEntry\b[^}]*\}\s*from\s*"openclaw\/plugin-sdk\/core"/;
+  /import\s*\{[^}]*\bdefinePluginEntry\b[^}]*\}\s*from\s*"evox\/plugin-sdk\/core"/;
 
 describe("plugin entry guardrails", () => {
   it("keeps bundled extension entry modules off direct definePluginEntry imports from core", () => {

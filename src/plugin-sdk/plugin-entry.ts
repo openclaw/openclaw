@@ -62,7 +62,7 @@ type DefinePluginEntryOptions = {
   register: (api: OpenClawPluginApi) => void;
 };
 
-/** Normalized object shape that OpenClaw loads from a plugin entry module. */
+/** Normalized object shape that EVOX.sh loads from a plugin entry module. */
 type DefinedPluginEntry = {
   id: string;
   name: string;

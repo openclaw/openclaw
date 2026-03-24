@@ -9,7 +9,7 @@ describe("doctor finalize config flow", () => {
       candidate: { channels: { signal: { enabled: true } } },
       pendingChanges: true,
       shouldRepair: false,
-      fixHints: ['Run "openclaw doctor --fix" to apply these changes.'],
+      fixHints: ['Run "evox doctor --fix" to apply these changes.'],
       confirm: async () => true,
       note,
     });
@@ -28,7 +28,7 @@ describe("doctor finalize config flow", () => {
       candidate: { channels: { signal: { enabled: true } } },
       pendingChanges: true,
       shouldRepair: false,
-      fixHints: ['Run "openclaw doctor --fix" to apply these changes.'],
+      fixHints: ['Run "evox doctor --fix" to apply these changes.'],
       confirm: async () => false,
       note,
     });
@@ -38,7 +38,7 @@ describe("doctor finalize config flow", () => {
       shouldWriteConfig: false,
     });
     expect(note).toHaveBeenCalledWith(
-      'Run "openclaw doctor --fix" to apply these changes.',
+      'Run "evox doctor --fix" to apply these changes.',
       "Doctor",
     );
   });

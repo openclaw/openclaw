@@ -70,7 +70,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("applies --profile before dotenv loading", async () => {
-    await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
+    await runCli(["node", "evox", "--profile", "rawdog", "status"]);
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
     expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");

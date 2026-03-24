@@ -57,7 +57,7 @@ function writePluginPackageManifest(params: {
     path.join(params.packageDir, "package.json"),
     JSON.stringify({
       name: params.packageName,
-      openclaw: { extensions: params.extensions },
+      evox: { extensions: params.extensions },
     }),
     "utf-8",
   );
@@ -353,7 +353,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     expect(legacy).toBeDefined();
-    expect(legacy?.format).toBe("openclaw");
+    expect(legacy?.format).toBe("evox");
     expect(hasDiagnosticSourceSuffix(result.diagnostics, ".claude-plugin/plugin.json")).toBe(true);
   });
 
@@ -372,7 +372,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     expect(legacy).toBeDefined();
-    expect(legacy?.format).toBe("openclaw");
+    expect(legacy?.format).toBe("evox");
     expect(hasDiagnosticSourceSuffix(result.diagnostics, ".codex-plugin/plugin.json")).toBe(true);
   });
 
@@ -487,7 +487,7 @@ describe("discoverOpenClawPlugins", () => {
       outsideManifest,
       JSON.stringify({
         name: "@openclaw/pack",
-        openclaw: { extensions: ["./entry.ts"] },
+        evox: { extensions: ["./entry.ts"] },
       }),
       "utf-8",
     );

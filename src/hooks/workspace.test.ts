@@ -165,7 +165,7 @@ describe("hooks workspace", () => {
         [
           "---",
           "name: session-memory",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
+          'metadata: {"evox":{"events":["command:new"]}}',
           "---",
         ].join("\n"),
       );
@@ -187,7 +187,7 @@ describe("hooks workspace", () => {
     fs.mkdirSync(extraHookDir, { recursive: true });
     fs.writeFileSync(
       path.join(extraHookDir, "HOOK.md"),
-      ["---", "name: shared-hook", 'metadata: {"openclaw":{"events":["command:new"]}}', "---"].join(
+      ["---", "name: shared-hook", 'metadata: {"evox":{"events":["command:new"]}}', "---"].join(
         "\n",
       ),
     );

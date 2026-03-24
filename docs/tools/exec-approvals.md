@@ -22,7 +22,7 @@ resolved by the **ask fallback** (default: deny).
 
 Exec approvals are enforced locally on the execution host:
 
-- **gateway host** → `openclaw` process on the gateway machine
+- **gateway host** → `evox` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
 Trust model note:
@@ -32,7 +32,7 @@ Trust model note:
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
 - Approved node-host runs bind canonical execution context: canonical cwd, exact argv, env
   binding when present, and pinned executable path when applicable.
-- For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind
+- For shell scripts and direct interpreter/runtime file invocations, EVOX.sh also tries to bind
   one concrete local file operand. If that bound file changes after approval but before execution,
   the run is denied instead of executing drifted content.
 - This file binding is intentionally best-effort, not a complete semantic model of every
@@ -109,7 +109,7 @@ If a prompt is required but no UI is reachable, fallback decides:
 
 ### Inline interpreter eval hardening (`tools.exec.strictInlineEval`)
 
-When `tools.exec.strictInlineEval=true`, OpenClaw treats inline code-eval forms as approval-only even if the interpreter binary itself is allowlisted.
+When `tools.exec.strictInlineEval=true`, EVOX.sh treats inline code-eval forms as approval-only even if the interpreter binary itself is allowlisted.
 
 Examples:
 
@@ -243,9 +243,9 @@ Configuration location:
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
 - `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
-- `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
-- `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
+- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `evox approvals allowlist ...`).
+- `evox security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
+- `evox doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 
 Custom profile example:
 
@@ -267,7 +267,7 @@ Custom profile example:
 }
 ```
 
-If you explicitly opt `jq` into `safeBins`, OpenClaw still rejects the `env` builtin in safe-bin
+If you explicitly opt `jq` into `safeBins`, EVOX.sh still rejects the `env` builtin in safe-bin
 mode so `jq -n env` cannot dump the host process environment without an explicit allowlist path
 or approval prompt.
 
@@ -283,7 +283,7 @@ must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 If a node does not advertise exec approvals yet, edit its local
 `~/.openclaw/exec-approvals.json` directly.
 
-CLI: `openclaw approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
+CLI: `evox approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
 
 ## Approval flow
 
@@ -304,7 +304,7 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   file snapshot.
 - Common package-manager wrapper forms that still resolve to one direct local file (for example
   `pnpm exec`, `pnpm node`, `npm exec`, `npx`) are unwrapped before binding.
-- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
+- If EVOX.sh cannot identify exactly one concrete local file for an interpreter/runtime command
   (for example package scripts, eval forms, runtime-specific loader chains, or ambiguous multi-file
   forms), approval-backed execution is denied instead of claiming semantic coverage it does not
   have.
@@ -368,7 +368,7 @@ Discord and Telegram can also act as explicit exec approval clients with channel
 - Discord: `channels.discord.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
+These clients are opt-in. If a channel does not have exec approvals enabled, EVOX.sh does not treat
 that channel as an approval surface just because the conversation happened there.
 
 Shared behavior:
@@ -380,7 +380,7 @@ Shared behavior:
 
 Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
 want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum
-topics, OpenClaw preserves the topic for the approval prompt and the post-approval follow-up.
+topics, EVOX.sh preserves the topic for the approval prompt and the post-approval follow-up.
 
 See:
 

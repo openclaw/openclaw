@@ -27,7 +27,7 @@ describe("renderSystemdUnavailableHints", () => {
   it("renders generic Linux recovery hints outside WSL", () => {
     expect(renderSystemdUnavailableHints()).toEqual([
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-      "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
+      "If you're in a container, run the gateway in the foreground instead of `evox gateway`.",
     ]);
   });
 });

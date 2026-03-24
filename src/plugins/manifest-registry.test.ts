@@ -36,7 +36,7 @@ function createPluginCandidate(params: {
   rootDir: string;
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
-  format?: "openclaw" | "bundle";
+  format?: "evox" | "bundle";
   bundleFormat?: "codex" | "claude" | "cursor";
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
@@ -270,7 +270,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins).toEqual([]);
     expect(
       registry.diagnostics.some((diag) =>
-        diag.message.includes("plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21"),
+        diag.message.includes("plugin requires EVOX.sh >=2026.3.22, but this host is 2026.3.21"),
       ),
     ).toBe(true);
   });

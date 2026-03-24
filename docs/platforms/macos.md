@@ -1,14 +1,14 @@
 ---
-summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
+summary: "EVOX.sh macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
 title: "macOS App"
 ---
 
-# OpenClaw macOS Companion (menu bar + gateway broker)
+# EVOX.sh macOS Companion (menu bar + gateway broker)
 
-The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
+The macOS app is the **menu‑bar companion** for EVOX.sh. It owns permissions,
 manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
 capabilities to the agent as a node.
 
@@ -21,12 +21,12 @@ capabilities to the agent as a node.
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
+- Installs the global CLI (`evox`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
 
 ## Local vs remote mode
 
 - **Local** (default): the app attaches to a running local Gateway if present;
-  otherwise it enables the launchd service via `openclaw gateway install`.
+  otherwise it enables the launchd service via `evox gateway install`.
 - **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
@@ -45,7 +45,7 @@ launchctl bootout gui/$UID/ai.openclaw.gateway
 Replace the label with `ai.openclaw.<profile>` when running a named profile.
 
 If the LaunchAgent isn’t installed, enable it from the app or run
-`openclaw gateway install`.
+`evox gateway install`.
 
 ## Node capabilities (mac)
 
@@ -111,14 +111,14 @@ Notes:
 
 ## Deep links
 
-The app registers the `openclaw://` URL scheme for local actions.
+The app registers the `evox://` URL scheme for local actions.
 
-### `openclaw://agent`
+### `evox://agent`
 
 Triggers a Gateway `agent` request.
 
 ```bash
-open 'openclaw://agent?message=Hello%20from%20deep%20link'
+open 'evox://agent?message=Hello%20from%20deep%20link'
 ```
 
 Query parameters:
@@ -138,14 +138,14 @@ Safety:
 
 ## Onboarding flow (typical)
 
-1. Install and launch **OpenClaw.app**.
+1. Install and launch **EVOX.sh.app**.
 2. Complete the permissions checklist (TCC prompts).
 3. Ensure **Local** mode is active and the Gateway is running.
 4. Install the CLI if you want terminal access.
 
 ## State dir placement (macOS)
 
-Avoid putting your OpenClaw state dir in iCloud or other cloud-synced folders.
+Avoid putting your EVOX.sh state dir in iCloud or other cloud-synced folders.
 Sync-backed paths can add latency and occasionally cause file-lock/sync races for
 sessions and credentials.
 
@@ -155,7 +155,7 @@ Prefer a local non-synced state path such as:
 OPENCLAW_STATE_DIR=~/.openclaw
 ```
 
-If `openclaw doctor` detects state under:
+If `evox doctor` detects state under:
 
 - `~/Library/Mobile Documents/com~apple~CloudDocs/...`
 - `~/Library/CloudStorage/...`
@@ -165,7 +165,7 @@ it will warn and recommend moving back to a local path.
 ## Build & dev workflow (native)
 
 - `cd apps/macos && swift build`
-- `swift run OpenClaw` (or Xcode)
+- `swift run EVOX.sh` (or Xcode)
 - Package app: `scripts/package-mac-app.sh`
 
 ## Debug gateway connectivity (macOS CLI)
@@ -193,7 +193,7 @@ Discovery options:
 - `--timeout <ms>`: overall discovery window (default: `2000`)
 - `--json`: structured output for diffing
 
-Tip: compare against `openclaw gateway discover --json` to see whether the
+Tip: compare against `evox gateway discover --json` to see whether the
 macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
 the Node CLI’s `dns-sd` based discovery.
 

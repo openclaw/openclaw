@@ -11,7 +11,7 @@ title: "BTW Side Questions"
 `/btw` lets you ask a quick side question about the **current session** without
 turning that question into normal conversation history.
 
-It is modeled after Claude Code's `/btw` behavior, but adapted to OpenClaw's
+It is modeled after Claude Code's `/btw` behavior, but adapted to EVOX.sh's
 Gateway and multi-channel architecture.
 
 ## What it does
@@ -22,7 +22,7 @@ When you send:
 /btw what changed?
 ```
 
-OpenClaw:
+EVOX.sh:
 
 1. snapshots the current session context,
 2. runs a separate **tool-less** model call,
@@ -56,7 +56,7 @@ It is intentionally **ephemeral**.
 
 BTW uses the current session as **background context only**.
 
-If the main run is currently active, OpenClaw snapshots the current message
+If the main run is currently active, EVOX.sh snapshots the current message
 state and includes the in-flight main prompt as background context, while
 explicitly telling the model:
 

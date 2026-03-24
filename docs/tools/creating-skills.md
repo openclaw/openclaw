@@ -51,20 +51,20 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 
   <Step title="Load the skill">
-    Start a new session so OpenClaw picks up the skill:
+    Start a new session so EVOX.sh picks up the skill:
 
     ```bash
     # From chat
     /new
 
     # Or restart the gateway
-    openclaw gateway restart
+    evox gateway restart
     ```
 
     Verify the skill loaded:
 
     ```bash
-    openclaw skills list
+    evox skills list
     ```
 
   </Step>
@@ -73,7 +73,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     Send a message that should trigger the skill:
 
     ```bash
-    openclaw agent --message "give me a greeting"
+    evox agent --message "give me a greeting"
     ```
 
     Or just chat with the agent and ask for a greeting.
@@ -97,7 +97,7 @@ The YAML frontmatter supports these fields:
 
 - **Be concise** — instruct the model on _what_ to do, not how to be an AI
 - **Safety first** — if your skill uses `exec`, ensure prompts don't allow arbitrary command injection from untrusted input
-- **Test locally** — use `openclaw agent --message "..."` to test before sharing
+- **Test locally** — use `evox agent --message "..."` to test before sharing
 - **Use ClawHub** — browse and contribute skills at [ClawHub](https://clawhub.com)
 
 ## Where skills live
@@ -106,7 +106,7 @@ The YAML frontmatter supports these fields:
 | ------------------------------- | ---------- | --------------------- |
 | `\<workspace\>/skills/`         | Highest    | Per-agent             |
 | `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
-| Bundled (shipped with OpenClaw) | Lowest     | Global                |
+| Bundled (shipped with EVOX.sh) | Lowest     | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
 
 ## Related

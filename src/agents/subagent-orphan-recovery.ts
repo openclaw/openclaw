@@ -6,7 +6,7 @@
  * that are still tracked as active in the subagent registry) and sends a
  * synthetic resume message to restart their work.
  *
- * @see https://github.com/openclaw/openclaw/issues/47711
+ * @see https://github.com/sonpiaz/evox-sh/issues/47711
  */
 
 import crypto from "node:crypto";
@@ -138,7 +138,7 @@ export async function recoverOrphanedSubagentSessions(params: {
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
-  const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
+  const configChangePattern = /openclaw\.json|evox gateway restart|config\.patch/i;
 
   try {
     const activeRuns = params.getActiveRuns();

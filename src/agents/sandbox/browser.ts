@@ -195,13 +195,13 @@ export async function ensureSandboxBrowser(params: {
       if (isHot) {
         const hint = (() => {
           if (params.cfg.scope === "session") {
-            return `openclaw sandbox recreate --browser --session ${params.scopeKey}`;
+            return `evox sandbox recreate --browser --session ${params.scopeKey}`;
           }
           if (params.cfg.scope === "agent") {
             const agentId = resolveSandboxAgentId(params.scopeKey) ?? "main";
-            return `openclaw sandbox recreate --browser --agent ${agentId}`;
+            return `evox sandbox recreate --browser --agent ${agentId}`;
           }
-          return "openclaw sandbox recreate --browser --all";
+          return "evox sandbox recreate --browser --all";
         })();
         defaultRuntime.log(
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,

@@ -49,7 +49,7 @@ describe("hooks install (e2e)", () => {
         {
           name: "@acme/hello-hooks",
           version: "0.0.0",
-          openclaw: { hooks: ["./hooks/hello-hook"] },
+          evox: { hooks: ["./hooks/hello-hook"] },
         },
         null,
         2,
@@ -63,7 +63,7 @@ describe("hooks install (e2e)", () => {
         "---",
         'name: "hello-hook"',
         'description: "Test hook"',
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        'metadata: {"evox":{"events":["command:new"]}}',
         "---",
         "",
         "# Hello Hook",

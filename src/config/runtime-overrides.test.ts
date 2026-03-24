@@ -15,7 +15,7 @@ describe("runtime overrides", () => {
 
   it("sets and applies nested overrides", () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      messages: { responsePrefix: "[evox]" },
     } as OpenClawConfig;
     setConfigOverride("messages.responsePrefix", "[debug]");
     const next = applyConfigOverrides(cfg);

@@ -34,9 +34,9 @@ function makeBrowserState(): BrowserServerState {
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
-      defaultProfile: "openclaw",
+      defaultProfile: "evox",
       profiles: {
-        openclaw: { cdpPort: 18800, color: "#FF4500" },
+        evox: { cdpPort: 18800, color: "#FF4500" },
       },
     },
     profiles: new Map(),
@@ -69,7 +69,7 @@ function setupEnsureBrowserAvailableHarness() {
 
   const state = makeBrowserState();
   const ctx = createBrowserRouteContext({ getState: () => state });
-  const profile = ctx.forProfile("openclaw");
+  const profile = ctx.forProfile("evox");
 
   return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile };
 }

@@ -107,7 +107,7 @@ import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 export default defineSetupPluginEntry(myChannelPlugin);
 ```
 
-OpenClaw loads this instead of the full entry when a channel is disabled,
+EVOX.sh loads this instead of the full entry when a channel is disabled,
 unconfigured, or when deferred loading is enabled. See
 [Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
 
@@ -137,7 +137,7 @@ register(api) {
 
 ## Plugin shapes
 
-OpenClaw classifies loaded plugins by their registration behavior:
+EVOX.sh classifies loaded plugins by their registration behavior:
 
 | Shape                 | Description                                        |
 | --------------------- | -------------------------------------------------- |
@@ -146,7 +146,7 @@ OpenClaw classifies loaded plugins by their registration behavior:
 | **hook-only**         | Only hooks, no capabilities                        |
 | **non-capability**    | Tools/commands/services but no capabilities        |
 
-Use `openclaw plugins inspect <id>` to see a plugin's shape.
+Use `evox plugins inspect <id>` to see a plugin's shape.
 
 ## Related
 

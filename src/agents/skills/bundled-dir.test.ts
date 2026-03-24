@@ -28,7 +28,7 @@ describe("resolveBundledSkillsDir", () => {
     delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
 
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "evox" }));
 
     await writeSkill({
       dir: path.join(root, "skills", "peekaboo"),

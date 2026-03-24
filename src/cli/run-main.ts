@@ -122,7 +122,7 @@ export async function runCli(argv: string[] = process.argv) {
     installUnhandledRejectionHandler();
 
     process.on("uncaughtException", (error) => {
-      console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      console.error("[evox] Uncaught exception:", formatUncaughtError(error));
       process.exit(1);
     });
 

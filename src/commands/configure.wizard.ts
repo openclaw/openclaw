@@ -104,8 +104,8 @@ async function runGatewayHealthCheck(params: {
     note(
       [
         "Docs:",
-        "https://docs.openclaw.ai/gateway/health",
-        "https://docs.openclaw.ai/gateway/troubleshooting",
+        "https://docs.evox.sh/gateway/health",
+        "https://docs.evox.sh/gateway/troubleshooting",
       ].join("\n"),
       "Health check help",
     );
@@ -195,7 +195,7 @@ async function promptWebToolsConfig(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
       "Choose a provider. Some providers need an API key, and some work key-free.",
-      "Docs: https://docs.openclaw.ai/tools/web",
+      "Docs: https://docs.evox.sh/tools/web",
     ].join("\n"),
     "Web search",
   );
@@ -221,7 +221,7 @@ async function promptWebToolsConfig(
         [
           "No web search providers are currently available under this plugin policy.",
           "Enable plugins or remove deny rules, then rerun configure.",
-          "Docs: https://docs.openclaw.ai/tools/web",
+          "Docs: https://docs.evox.sh/tools/web",
         ].join("\n"),
         "Web search",
       );
@@ -269,8 +269,8 @@ async function promptWebToolsConfig(
         note(
           [
             `${entry.label} works without an API key.`,
-            "OpenClaw enabled the plugin and selected it as your web_search provider.",
-            `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+            "EVOX.sh enabled the plugin and selected it as your web_search provider.",
+            `Docs: ${entry.docsUrl ?? "https://docs.evox.sh/tools/web"}`,
           ].join("\n"),
           "Web search",
         );
@@ -303,7 +303,7 @@ async function promptWebToolsConfig(
               "No key stored yet — web_search won't work until a key is available.",
               `Store your ${credentialLabel} here or set ${envVarNames} in the Gateway environment.`,
               `Get your API key at: ${entry.signupUrl}`,
-              "Docs: https://docs.openclaw.ai/tools/web",
+              "Docs: https://docs.evox.sh/tools/web",
             ].join("\n"),
             "Web search",
           );
@@ -343,7 +343,7 @@ export async function runConfigureWizard(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   try {
-    intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
+    intro(opts.command === "update" ? "EVOX.sh update wizard" : "EVOX.sh configure");
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
@@ -357,14 +357,14 @@ export async function runConfigureWizard(
           [
             ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
             "",
-            "Docs: https://docs.openclaw.ai/gateway/configuration",
+            "Docs: https://docs.evox.sh/gateway/configuration",
           ].join("\n"),
           "Config issues",
         );
       }
       if (!snapshot.valid) {
         outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run configure.`,
+          `Config invalid. Run \`${formatCliCommand("evox doctor")}\` to repair it, then re-run configure.`,
         );
         runtime.exit(1);
         return;
@@ -714,7 +714,7 @@ export async function runConfigureWizard(
         `Web UI: ${links.httpUrl}`,
         `Gateway WS: ${links.wsUrl}`,
         gatewayStatusLine,
-        "Docs: https://docs.openclaw.ai/web/control-ui",
+        "Docs: https://docs.evox.sh/web/control-ui",
       ].join("\n"),
       "Control UI",
     );

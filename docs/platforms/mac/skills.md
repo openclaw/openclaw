@@ -8,7 +8,7 @@ title: "Skills (macOS)"
 
 # Skills (macOS)
 
-The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills locally.
+The macOS app surfaces EVOX.sh skills via the gateway; it does not parse skills locally.
 
 ## Data source
 

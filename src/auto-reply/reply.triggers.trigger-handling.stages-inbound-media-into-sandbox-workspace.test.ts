@@ -32,7 +32,7 @@ function setupSandboxWorkspace(home: string): {
   sandboxDir: string;
 } {
   const cfg = createSandboxMediaStageConfig(home);
-  const workspaceDir = join(home, "openclaw");
+  const workspaceDir = join(home, "evox");
   const sandboxDir = join(home, "sandboxes", "session");
   vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
     workspaceDir: sandboxDir,

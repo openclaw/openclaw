@@ -82,17 +82,17 @@ Errors (stable codes):
 ## Background behavior
 
 - Android app denies `location.get` while backgrounded.
-- Keep OpenClaw open when requesting location on Android.
+- Keep EVOX.sh open when requesting location on Android.
 - Other node platforms may differ.
 
 ## Model/tooling integration
 
 - Tool surface: `nodes` tool adds `location_get` action (node required).
-- CLI: `openclaw nodes location get --node <id>`.
+- CLI: `evox nodes location get --node <id>`.
 - Agent guidelines: only call when user enabled location and understands the scope.
 
 ## UX copy (suggested)
 
 - Off: “Location sharing is disabled.”
-- While Using: “Only when OpenClaw is open.”
+- While Using: “Only when EVOX.sh is open.”
 - Precise: “Use precise GPS location. Toggle off to share approximate location.”

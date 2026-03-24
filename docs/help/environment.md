@@ -1,5 +1,5 @@
 ---
-summary: "Where OpenClaw loads environment variables and the precedence order"
+summary: "Where EVOX.sh loads environment variables and the precedence order"
 read_when:
   - You need to know which env vars are loaded, and in what order
   - You are debugging missing API keys in the Gateway
@@ -9,7 +9,7 @@ title: "Environment Variables"
 
 # Environment variables
 
-OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
+EVOX.sh pulls environment variables from multiple sources. The rule is **never override existing values**.
 
 ## Precedence (highest → lowest)
 
@@ -58,11 +58,11 @@ Env var equivalents:
 
 ## Runtime-injected env vars
 
-OpenClaw also injects context markers into spawned child processes:
+EVOX.sh also injects context markers into spawned child processes:
 
 - `OPENCLAW_SHELL=exec`: set for commands run through the `exec` tool.
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
-- `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
+- `OPENCLAW_SHELL=acp-client`: set for `evox acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
@@ -72,7 +72,7 @@ to apply context-specific rules.
 
 - `OPENCLAW_THEME=light`: force the light TUI palette when your terminal has a light background.
 - `OPENCLAW_THEME=dark`: force the dark TUI palette.
-- `COLORFGBG`: if your terminal exports it, OpenClaw uses the background color hint to auto-pick the TUI palette.
+- `COLORFGBG`: if your terminal exports it, EVOX.sh uses the background color hint to auto-pick the TUI palette.
 
 ## Env var substitution in config
 
@@ -94,7 +94,7 @@ See [Configuration: Env var substitution](/gateway/configuration-reference#env-v
 
 ## Secret refs vs `${ENV}` strings
 
-OpenClaw supports two env-driven patterns:
+EVOX.sh supports two env-driven patterns:
 
 - `${VAR}` string substitution in config values.
 - SecretRef objects (`{ source: "env", provider: "default", id: "VAR" }`) for fields that support secrets references.
@@ -105,7 +105,7 @@ Both resolve from process env at activation time. SecretRef details are document
 
 | Variable               | Purpose                                                                                                                                                                          |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_HOME`        | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running OpenClaw as a dedicated service user. |
+| `OPENCLAW_HOME`        | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running EVOX.sh as a dedicated service user. |
 | `OPENCLAW_STATE_DIR`   | Override the state directory (default `~/.openclaw`).                                                                                                                            |
 | `OPENCLAW_CONFIG_PATH` | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                             |
 
@@ -139,18 +139,18 @@ If Node.js was installed via **nvm** (not the system package manager), the built
 nvm's bundled CA store, which may be missing modern root CAs (ISRG Root X1/X2 for Let's Encrypt,
 DigiCert Global Root G2, etc.). This causes `web_fetch` to fail with `"fetch failed"` on most HTTPS sites.
 
-On Linux, OpenClaw automatically detects nvm and applies the fix in the actual startup environment:
+On Linux, EVOX.sh automatically detects nvm and applies the fix in the actual startup environment:
 
-- `openclaw gateway install` writes `NODE_EXTRA_CA_CERTS` into the systemd service environment
-- the `openclaw` CLI entrypoint re-execs itself with `NODE_EXTRA_CA_CERTS` set before Node startup
+- `evox gateway install` writes `NODE_EXTRA_CA_CERTS` into the systemd service environment
+- the `evox` CLI entrypoint re-execs itself with `NODE_EXTRA_CA_CERTS` set before Node startup
 
 **Manual fix (for older versions or direct `node ...` launches):**
 
-Export the variable before starting OpenClaw:
+Export the variable before starting EVOX.sh:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-openclaw gateway run
+evox gateway run
 ```
 
 Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads

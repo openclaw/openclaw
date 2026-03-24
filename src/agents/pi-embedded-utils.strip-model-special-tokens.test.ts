@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stripModelSpecialTokens } from "./pi-embedded-utils.js";
 
 /**
- * @see https://github.com/openclaw/openclaw/issues/40020
+ * @see https://github.com/sonpiaz/evox-sh/issues/40020
  */
 describe("stripModelSpecialTokens", () => {
   it("strips tokens and inserts space between adjacent words", () => {

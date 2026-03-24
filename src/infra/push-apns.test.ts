@@ -101,7 +101,7 @@ describe("push APNs send semantics", () => {
         alert: { title: "Wake", body: "Ping" },
         sound: "default",
       },
-      openclaw: {
+      evox: {
         kind: "push.test",
         nodeId: "ios-node-alert",
       },
@@ -138,7 +138,7 @@ describe("push APNs send semantics", () => {
       aps: {
         "content-available": 1,
       },
-      openclaw: {
+      evox: {
         kind: "node.wake",
         reason: "node.invoke",
         nodeId: "ios-node-wake",
@@ -230,7 +230,7 @@ describe("push APNs send semantics", () => {
 
     const sent = send.mock.calls[0]?.[0];
     expect(sent?.payload).toMatchObject({
-      openclaw: {
+      evox: {
         kind: "node.wake",
         reason: "node.invoke",
         nodeId: "ios-node-wake-default-reason",
@@ -319,7 +319,7 @@ describe("push APNs send semantics", () => {
       priority: "5",
       payload: {
         aps: { "content-available": 1 },
-        openclaw: {
+        evox: {
           kind: "node.wake",
           reason: "queue.retry",
           nodeId: "ios-node-relay-wake",

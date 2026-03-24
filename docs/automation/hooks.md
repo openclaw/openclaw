@@ -8,16 +8,16 @@ title: "Hooks"
 
 # Hooks
 
-Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be inspected with `openclaw hooks`, while hook-pack installation and updates now go through `openclaw plugins`.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be inspected with `evox hooks`, while hook-pack installation and updates now go through `evox plugins`.
 
 ## Getting Oriented
 
 Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
-- **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
+- **Webhooks**: external HTTP webhooks that let other systems trigger work in EVOX.sh. See [Webhook Hooks](/automation/webhook) or use `evox webhooks` for Gmail helper commands.
 
-Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks). `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
+Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks). `evox hooks list` shows both standalone hooks and plugin-managed hooks.
 
 Common uses:
 
@@ -26,7 +26,7 @@ Common uses:
 - Trigger follow-up automation when a session starts or ends
 - Write files into the agent workspace or call external APIs when events fire
 
-If you can write a small TypeScript function, you can write a hook. Managed and bundled hooks are trusted local code. Workspace hooks are discovered automatically, but OpenClaw keeps them disabled until you explicitly enable them via the CLI or config.
+If you can write a small TypeScript function, you can write a hook. Managed and bundled hooks are trusted local code. Workspace hooks are discovered automatically, but EVOX.sh keeps them disabled until you explicitly enable them via the CLI or config.
 
 ## Overview
 
@@ -35,13 +35,13 @@ The hooks system allows you to:
 - Save session context to memory when `/new` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
-- Extend OpenClaw's behavior without modifying core code
+- Extend EVOX.sh's behavior without modifying core code
 
 ## Getting Started
 
 ### Bundled Hooks
 
-OpenClaw ships with four bundled hooks that are automatically discovered:
+EVOX.sh ships with four bundled hooks that are automatically discovered:
 
 - **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
@@ -51,40 +51,40 @@ OpenClaw ships with four bundled hooks that are automatically discovered:
 List available hooks:
 
 ```bash
-openclaw hooks list
+evox hooks list
 ```
 
 Enable a hook:
 
 ```bash
-openclaw hooks enable session-memory
+evox hooks enable session-memory
 ```
 
 Check hook status:
 
 ```bash
-openclaw hooks check
+evox hooks check
 ```
 
 Get detailed information:
 
 ```bash
-openclaw hooks info session-memory
+evox hooks info session-memory
 ```
 
 ### Onboarding
 
-During onboarding (`openclaw onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
+During onboarding (`evox onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
 
 ### Trust Boundary
 
-Hooks run inside the Gateway process. Treat bundled hooks, managed hooks, and `hooks.internal.load.extraDirs` as trusted local code. Workspace hooks under `<workspace>/hooks/` are repo-local code, so OpenClaw requires an explicit enable step before loading them.
+Hooks run inside the Gateway process. Treat bundled hooks, managed hooks, and `hooks.internal.load.extraDirs` as trusted local code. Workspace hooks under `<workspace>/hooks/` are repo-local code, so EVOX.sh requires an explicit enable step before loading them.
 
 ## Hook Discovery
 
 Hooks are automatically discovered from these directories, in order of increasing override precedence:
 
-1. **Bundled hooks**: shipped with OpenClaw; located at `<openclaw>/dist/hooks/bundled/` for npm installs (or a sibling `hooks/bundled/` for compiled binaries)
+1. **Bundled hooks**: shipped with EVOX.sh; located at `<evox>/dist/hooks/bundled/` for npm installs (or a sibling `hooks/bundled/` for compiled binaries)
 2. **Plugin hooks**: hooks bundled inside installed plugins (see [Plugin hooks](/plugins/architecture#provider-runtime-hooks))
 3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces; can override bundled and plugin hooks). **Extra hook directories** configured via `hooks.internal.load.extraDirs` are also treated as managed hooks and share the same override precedence.
 4. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled; cannot override hooks from other sources)
@@ -107,14 +107,14 @@ Hook packs are standard npm packages that export one or more hooks via `openclaw
 `package.json`. Install them with:
 
 ```bash
-openclaw plugins install <path-or-spec>
+evox plugins install <path-or-spec>
 ```
 
 Npm specs are registry-only (package name + optional exact version or dist-tag).
 Git/URL/file specs and semver ranges are rejected.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+those to a prerelease, EVOX.sh stops and asks you to opt in explicitly with a
 prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 Example `package.json`:
@@ -123,7 +123,7 @@ Example `package.json`:
 {
   "name": "@acme/my-hooks",
   "version": "0.1.0",
-  "openclaw": {
+  "evox": {
     "hooks": ["./hooks/my-hook", "./hooks/other-hook"]
   }
 }
@@ -134,7 +134,7 @@ Hook packs can ship dependencies; they will be installed under `~/.openclaw/hook
 Each `openclaw.hooks` entry must stay inside the package directory after symlink
 resolution; entries that escape are rejected.
 
-Security note: `openclaw plugins install` installs hook-pack dependencies with `npm install --ignore-scripts`
+Security note: `evox plugins install` installs hook-pack dependencies with `npm install --ignore-scripts`
 (no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
 on `postinstall` builds.
 
@@ -148,9 +148,9 @@ The `HOOK.md` file contains metadata in YAML frontmatter plus Markdown documenta
 ---
 name: my-hook
 description: "Short description of what this hook does"
-homepage: https://docs.openclaw.ai/automation/hooks#my-hook
+homepage: https://docs.evox.sh/automation/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  { "evox": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
 
 # My Hook
@@ -391,7 +391,7 @@ export default handler;
 
 ### Tool Result Hooks (Plugin API)
 
-These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
+These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before EVOX.sh persists them.
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
@@ -430,7 +430,7 @@ cd ~/.openclaw/hooks/my-hook
 ---
 name: my-hook
 description: "Does something useful"
-metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+metadata: { "evox": { "emoji": "🎯", "events": ["command:new"] } }
 ---
 
 # My Custom Hook
@@ -457,10 +457,10 @@ export default handler;
 
 ```bash
 # Verify hook is discovered
-openclaw hooks list
+evox hooks list
 
 # Enable it
-openclaw hooks enable my-hook
+evox hooks enable my-hook
 
 # Restart your gateway process (menu bar app restart on macOS, or restart your dev process)
 
@@ -556,46 +556,46 @@ Note: `module` must be a workspace-relative path. Absolute paths and traversal o
 
 ```bash
 # List all hooks
-openclaw hooks list
+evox hooks list
 
 # Show only eligible hooks
-openclaw hooks list --eligible
+evox hooks list --eligible
 
 # Verbose output (show missing requirements)
-openclaw hooks list --verbose
+evox hooks list --verbose
 
 # JSON output
-openclaw hooks list --json
+evox hooks list --json
 ```
 
 ### Hook Information
 
 ```bash
 # Show detailed info about a hook
-openclaw hooks info session-memory
+evox hooks info session-memory
 
 # JSON output
-openclaw hooks info session-memory --json
+evox hooks info session-memory --json
 ```
 
 ### Check Eligibility
 
 ```bash
 # Show eligibility summary
-openclaw hooks check
+evox hooks check
 
 # JSON output
-openclaw hooks check --json
+evox hooks check --json
 ```
 
 ### Enable/Disable
 
 ```bash
 # Enable a hook
-openclaw hooks enable session-memory
+evox hooks enable session-memory
 
 # Disable a hook
-openclaw hooks disable command-logger
+evox hooks disable command-logger
 ```
 
 ## Bundled hook reference
@@ -641,7 +641,7 @@ assistant: Sure! Let's start with the endpoints...
 **Enable**:
 
 ```bash
-openclaw hooks enable session-memory
+evox hooks enable session-memory
 ```
 
 ### bootstrap-extra-files
@@ -688,7 +688,7 @@ Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TO
 **Enable**:
 
 ```bash
-openclaw hooks enable bootstrap-extra-files
+evox hooks enable bootstrap-extra-files
 ```
 
 ### command-logger
@@ -730,7 +730,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 **Enable**:
 
 ```bash
-openclaw hooks enable command-logger
+evox hooks enable command-logger
 ```
 
 ### boot-md
@@ -751,7 +751,7 @@ Internal hooks must be enabled for this to run.
 **Enable**:
 
 ```bash
-openclaw hooks enable boot-md
+evox hooks enable boot-md
 ```
 
 ## Best Practices
@@ -808,13 +808,13 @@ const handler: HookHandler = async (event) => {
 Specify exact events in metadata when possible:
 
 ```yaml
-metadata: { "openclaw": { "events": ["command:new"] } } # Specific
+metadata: { "evox": { "events": ["command:new"] } } # Specific
 ```
 
 Rather than:
 
 ```yaml
-metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
+metadata: { "evox": { "events": ["command"] } } # General - more overhead
 ```
 
 ## Debugging
@@ -835,7 +835,7 @@ Registered hook: boot-md -> gateway:startup
 List all discovered hooks:
 
 ```bash
-openclaw hooks list --verbose
+evox hooks list --verbose
 ```
 
 ### Check Registration
@@ -854,7 +854,7 @@ const handler: HookHandler = async (event) => {
 Check why a hook isn't eligible:
 
 ```bash
-openclaw hooks info my-hook
+evox hooks info my-hook
 ```
 
 Look for missing requirements in the output.
@@ -966,7 +966,7 @@ Session reset
 3. List all discovered hooks:
 
    ```bash
-   openclaw hooks list
+   evox hooks list
    ```
 
 ### Hook Not Eligible
@@ -974,7 +974,7 @@ Session reset
 Check requirements:
 
 ```bash
-openclaw hooks info my-hook
+evox hooks info my-hook
 ```
 
 Look for missing:
@@ -989,7 +989,7 @@ Look for missing:
 1. Verify hook is enabled:
 
    ```bash
-   openclaw hooks list
+   evox hooks list
    # Should show ✓ next to enabled hooks
    ```
 
@@ -1047,7 +1047,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    ---
    name: my-hook
    description: "My custom hook"
-   metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+   metadata: { "evox": { "emoji": "🎯", "events": ["command:new"] } }
    ---
 
    # My Hook
@@ -1073,7 +1073,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 4. Verify and restart your gateway process:
 
    ```bash
-   openclaw hooks list
+   evox hooks list
    # Should show: 🎯 my-hook ✓
    ```
 
@@ -1088,6 +1088,6 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 ## See Also
 
 - [CLI Reference: hooks](/cli/hooks)
-- [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
+- [Bundled Hooks README](https://github.com/sonpiaz/evox-sh/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration-reference#hooks)

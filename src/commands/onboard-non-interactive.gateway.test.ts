@@ -168,7 +168,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
-      const workspace = path.join(stateDir, "openclaw");
+      const workspace = path.join(stateDir, "evox");
 
       await runNonInteractiveSetup(
         {
@@ -203,7 +203,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("uses OPENCLAW_GATEWAY_TOKEN when --gateway-token is omitted", async () => {
     await withStateDir("state-env-token-", async (stateDir) => {
       const envToken = "tok_env_fallback_123";
-      const workspace = path.join(stateDir, "openclaw");
+      const workspace = path.join(stateDir, "evox");
       const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
 
@@ -243,7 +243,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("writes gateway token SecretRef from --gateway-token-ref-env", async () => {
     await withStateDir("state-env-token-ref-", async (stateDir) => {
       const envToken = "tok_env_ref_123";
-      const workspace = path.join(stateDir, "openclaw");
+      const workspace = path.join(stateDir, "evox");
       const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
 
@@ -287,7 +287,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("fails when --gateway-token-ref-env points to a missing env var", async () => {
     await withStateDir("state-env-token-ref-missing-", async (stateDir) => {
-      const workspace = path.join(stateDir, "openclaw");
+      const workspace = path.join(stateDir, "evox");
       const previous = process.env.MISSING_GATEWAY_TOKEN_ENV;
       delete process.env.MISSING_GATEWAY_TOKEN_ENV;
       try {
@@ -363,7 +363,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           {
             nonInteractive: true,
             mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
+            workspace: path.join(stateDir, "evox"),
             authChoice: "skip",
             skipSkills: true,
             skipHealth: false,
@@ -390,7 +390,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         {
           nonInteractive: true,
           mode: "local",
-          workspace: path.join(stateDir, "openclaw"),
+          workspace: path.join(stateDir, "evox"),
           authChoice: "skip",
           skipSkills: true,
           skipHealth: false,
@@ -442,7 +442,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
             {
               nonInteractive: true,
               mode: "local",
-              workspace: path.join(stateDir, "openclaw"),
+              workspace: path.join(stateDir, "evox"),
               authChoice: "skip",
               skipSkills: true,
               skipHealth: false,
@@ -513,7 +513,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           {
             nonInteractive: true,
             mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
+            workspace: path.join(stateDir, "evox"),
             authChoice: "skip",
             skipSkills: true,
             skipHealth: false,
@@ -547,7 +547,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.installDaemon).toBe(true);
       expect(parsed.detail).toContain("1006 abnormal closure");
       expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
-      expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
+      expect(parsed.hints).toContain("Run `evox gateway status --deep` for more detail.");
       expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
       expect(parsed.diagnostics?.service?.loaded).toBe(true);
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
@@ -566,7 +566,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 
       const port = getPseudoPort(40_000);
-      const workspace = path.join(stateDir, "openclaw");
+      const workspace = path.join(stateDir, "evox");
 
       await runNonInteractiveSetup(
         {

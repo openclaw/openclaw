@@ -52,13 +52,13 @@ describe("doctor exec safe bin helpers", () => {
             "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
         },
       ],
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'node'"),
       expect.stringContaining("agents.list.runner.tools.exec.safeBins includes 'jq'"),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      expect.stringContaining('Run "evox doctor --fix"'),
     ]);
   });
 

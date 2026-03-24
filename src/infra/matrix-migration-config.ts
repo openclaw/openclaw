@@ -231,14 +231,14 @@ export function resolveLegacyMatrixFlatStoreTarget(params: {
     return {
       warning:
         `Legacy Matrix ${params.detectedKind} detected at ${params.detectedPath}, but channels.matrix is not configured yet. ` +
-        'Configure Matrix, then rerun "openclaw doctor --fix" or restart the gateway.',
+        'Configure Matrix, then rerun "evox doctor --fix" or restart the gateway.',
     };
   }
   if (requiresExplicitMatrixDefaultAccount(params.cfg)) {
     return {
       warning:
         `Legacy Matrix ${params.detectedKind} detected at ${params.detectedPath}, but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set. ` +
-        'Set "channels.matrix.defaultAccount" to the intended target account before rerunning "openclaw doctor --fix" or restarting the gateway.',
+        'Set "channels.matrix.defaultAccount" to the intended target account before rerunning "evox doctor --fix" or restarting the gateway.',
     };
   }
 
@@ -257,7 +257,7 @@ export function resolveLegacyMatrixFlatStoreTarget(params: {
       warning:
         `Legacy Matrix ${params.detectedKind} detected at ${params.detectedPath}, but ${targetDescription} could not be resolved yet ` +
         `(need homeserver, userId, and access token for channels.matrix${accountId === DEFAULT_ACCOUNT_ID ? "" : `.accounts.${accountId}`}). ` +
-        'Start the gateway once with a working Matrix login, or rerun "openclaw doctor --fix" after cached credentials are available.',
+        'Start the gateway once with a working Matrix login, or rerun "evox doctor --fix" after cached credentials are available.',
     };
   }
 

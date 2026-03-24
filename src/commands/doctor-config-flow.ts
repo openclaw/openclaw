@@ -38,7 +38,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let fixHints: string[] = [];
-  const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const doctorFixCommand = formatCliCommand("evox doctor --fix");
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,

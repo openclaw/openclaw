@@ -97,7 +97,7 @@ export function displaySummary(
   if (mismatchCount > 0) {
     runtime.log(`\n⚠️  ${mismatchCount} runtime(s) with config mismatch detected.`);
     runtime.log(
-      `   Run '${formatCliCommand("openclaw sandbox recreate --all")}' to update all runtimes.`,
+      `   Run '${formatCliCommand("evox sandbox recreate --all")}' to update all runtimes.`,
     );
   }
 }

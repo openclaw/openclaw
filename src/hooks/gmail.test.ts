@@ -11,7 +11,7 @@ const baseConfig = {
   hooks: {
     token: "hook-token",
     gmail: {
-      account: "openclaw@gmail.com",
+      account: "evox@gmail.com",
       topic: "projects/demo/topics/gog-gmail-watch",
       pushToken: "push-token",
     },
@@ -27,7 +27,7 @@ describe("gmail hook config", () => {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "openclaw@gmail.com",
+            account: "evox@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             ...overrides,
@@ -71,7 +71,7 @@ describe("gmail hook config", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.account).toBe("openclaw@gmail.com");
+      expect(result.value.account).toBe("evox@gmail.com");
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
@@ -84,7 +84,7 @@ describe("gmail hook config", () => {
       {
         hooks: {
           gmail: {
-            account: "openclaw@gmail.com",
+            account: "evox@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
           },

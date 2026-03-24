@@ -455,7 +455,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "mcp",
       nativeName: "mcp",
-      description: "Show or set OpenClaw MCP servers.",
+      description: "Show or set EVOX.sh MCP servers.",
       textAlias: "/mcp",
       category: "management",
       args: [
@@ -556,7 +556,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "restart",
       nativeName: "restart",
-      description: "Restart OpenClaw.",
+      description: "Restart EVOX.sh.",
       textAlias: "/restart",
       category: "tools",
     }),

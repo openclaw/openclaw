@@ -3,7 +3,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_DEFAULT = "openclaw";
+const KILOCODE_FEATURE_DEFAULT = "evox";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 
 function resolveKilocodeAppHeaders(): Record<string, string> {

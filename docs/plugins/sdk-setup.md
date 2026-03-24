@@ -5,7 +5,7 @@ summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metada
 read_when:
   - You are adding a setup wizard to a plugin
   - You need to understand setup-entry.ts vs index.ts
-  - You are defining plugin config schemas or package.json openclaw metadata
+  - You are defining plugin config schemas or package.json evox metadata
 ---
 
 # Plugin Setup and Config
@@ -21,7 +21,7 @@ Reference for plugin packaging (`package.json` metadata), manifests
 
 ## Package metadata
 
-Your `package.json` needs an `openclaw` field that tells the plugin system what
+Your `package.json` needs an `evox` field that tells the plugin system what
 your plugin provides:
 
 **Channel plugin:**
@@ -31,7 +31,7 @@ your plugin provides:
   "name": "@myorg/openclaw-my-channel",
   "version": "1.0.0",
   "type": "module",
-  "openclaw": {
+  "evox": {
     "extensions": ["./index.ts"],
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -50,14 +50,14 @@ your plugin provides:
   "name": "@myorg/openclaw-my-provider",
   "version": "1.0.0",
   "type": "module",
-  "openclaw": {
+  "evox": {
     "extensions": ["./index.ts"],
     "providers": ["my-provider"]
   }
 }
 ```
 
-### `openclaw` fields
+### `evox` fields
 
 | Field        | Type       | Description                                                                                |
 | ------------ | ---------- | ------------------------------------------------------------------------------------------ |
@@ -74,7 +74,7 @@ Channel plugins can opt into deferred loading with:
 
 ```json
 {
-  "openclaw": {
+  "evox": {
     "extensions": ["./index.ts"],
     "setupEntry": "./setup-entry.ts",
     "startup": {
@@ -84,7 +84,7 @@ Channel plugins can opt into deferred loading with:
 }
 ```
 
-When enabled, OpenClaw loads only `setupEntry` during the pre-listen startup
+When enabled, EVOX.sh loads only `setupEntry` during the pre-listen startup
 phase, even for already-configured channels. The full entry loads after the
 gateway starts listening.
 
@@ -98,13 +98,13 @@ gateway starts listening.
 ## Plugin manifest
 
 Every native plugin must ship an `openclaw.plugin.json` in the package root.
-OpenClaw uses this to validate config without executing plugin code.
+EVOX.sh uses this to validate config without executing plugin code.
 
 ```json
 {
   "id": "my-plugin",
   "name": "My Plugin",
-  "description": "Adds My Plugin capabilities to OpenClaw",
+  "description": "Adds My Plugin capabilities to EVOX.sh",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -150,7 +150,7 @@ See [Plugin Manifest](/plugins/manifest) for the full schema reference.
 ## Setup entry
 
 The `setup-entry.ts` file is a lightweight alternative to `index.ts` that
-OpenClaw loads when it only needs setup surfaces (onboarding, config repair,
+EVOX.sh loads when it only needs setup surfaces (onboarding, config repair,
 disabled channel inspection).
 
 ```typescript
@@ -164,7 +164,7 @@ export default defineSetupPluginEntry(myChannelPlugin);
 This avoids loading heavy runtime code (crypto libraries, CLI registrations,
 background services) during setup flows.
 
-**When OpenClaw uses `setupEntry` instead of the full entry:**
+**When EVOX.sh uses `setupEntry` instead of the full entry:**
 
 - The channel is disabled but needs setup/onboarding surfaces
 - The channel is enabled but unconfigured
@@ -220,7 +220,7 @@ For channel-specific config, use the channel config section instead:
 ### Building channel config schemas
 
 Use `buildChannelConfigSchema` from `openclaw/plugin-sdk/core` to convert a
-Zod schema into the `ChannelConfigSchema` wrapper that OpenClaw validates:
+Zod schema into the `ChannelConfigSchema` wrapper that EVOX.sh validates:
 
 ```typescript
 import { z } from "zod";
@@ -238,7 +238,7 @@ const configSchema = buildChannelConfigSchema(accountSchema);
 
 ## Setup wizards
 
-Channel plugins can provide interactive setup wizards for `openclaw onboard`.
+Channel plugins can provide interactive setup wizards for `evox onboard`.
 The wizard is a `ChannelSetupWizard` object on the `ChannelPlugin`:
 
 ```typescript
@@ -308,15 +308,15 @@ const setupSurface = createOptionalChannelSetupSurface({
 **External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
 
 ```bash
-openclaw plugins install @myorg/openclaw-my-plugin
+evox plugins install @myorg/openclaw-my-plugin
 ```
 
-OpenClaw tries ClawHub first and falls back to npm automatically. You can also
+EVOX.sh tries ClawHub first and falls back to npm automatically. You can also
 force a specific source:
 
 ```bash
-openclaw plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
-openclaw plugins install npm:@myorg/openclaw-my-plugin       # npm only
+evox plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
+evox plugins install npm:@myorg/openclaw-my-plugin       # npm only
 ```
 
 **In-repo plugins:** place under `extensions/` and they are automatically
@@ -325,12 +325,12 @@ discovered during build.
 **Users can browse and install:**
 
 ```bash
-openclaw plugins search <query>
-openclaw plugins install <package-name>
+evox plugins search <query>
+evox plugins install <package-name>
 ```
 
 <Info>
-  For npm-sourced installs, `openclaw plugins install` runs
+  For npm-sourced installs, `evox plugins install` runs
   `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
   trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>

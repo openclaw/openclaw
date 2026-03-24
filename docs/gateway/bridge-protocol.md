@@ -15,7 +15,7 @@ should use the unified Gateway WebSocket protocol instead.
 If you are building an operator or node client, use the
 [Gateway protocol](/gateway/protocol).
 
-**Note:** Current OpenClaw builds no longer ship the TCP bridge listener; this document is kept for historical reference.
+**Note:** Current EVOX.sh builds no longer ship the TCP bridge listener; this document is kept for historical reference.
 Legacy `bridge.*` config keys are no longer part of the config schema.
 
 ## Why we have both

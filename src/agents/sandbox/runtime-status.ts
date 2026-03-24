@@ -134,7 +134,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push(`- Use main session key (direct): ${runtime.mainSessionKey}`);
   }
   lines.push(
-    `- See: ${formatCliCommand(`openclaw sandbox explain --session ${runtime.sessionKey}`)}`,
+    `- See: ${formatCliCommand(`evox sandbox explain --session ${runtime.sessionKey}`)}`,
   );
 
   return lines.join("\n");

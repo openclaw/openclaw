@@ -38,7 +38,7 @@ describe("createOpenClawCodingTools", () => {
       expect(image?.mimeType).toBe("image/png");
 
       const textPath = path.join(tmpDir, "sample.txt");
-      const contents = "Hello from openclaw read tool.";
+      const contents = "Hello from evox read tool.";
       await fs.writeFile(textPath, contents, "utf8");
 
       const textResult = await readTool?.execute("tool-2", {

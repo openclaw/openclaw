@@ -230,7 +230,7 @@ export async function configureGatewayForSetup(
         copy: {
           modeMessage: "How do you want to provide the gateway password?",
           plaintextLabel: "Enter password now",
-          plaintextHint: "Stores the password directly in OpenClaw config",
+          plaintextHint: "Stores the password directly in EVOX.sh config",
         },
       });
       if (selectedMode === "ref") {

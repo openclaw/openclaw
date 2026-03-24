@@ -1,7 +1,7 @@
 ---
-summary: "Use OpenAI via API keys or Codex subscription in OpenClaw"
+summary: "Use OpenAI via API keys or Codex subscription in EVOX.sh"
 read_when:
-  - You want to use OpenAI models in OpenClaw
+  - You want to use OpenAI models in EVOX.sh
   - You want Codex subscription auth instead of API keys
 title: "OpenAI"
 ---
@@ -10,7 +10,7 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
-OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like EVOX.sh.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -20,9 +20,9 @@ Get your API key from the OpenAI dashboard.
 ### CLI setup
 
 ```bash
-openclaw onboard --auth-choice openai-api-key
+evox onboard --auth-choice openai-api-key
 # or non-interactive
-openclaw onboard --openai-api-key "$OPENAI_API_KEY"
+evox onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 ### Config snippet
@@ -35,13 +35,13 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
-OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
-OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+OpenAI API usage. EVOX.sh forwards both through the `openai/*` Responses path.
+EVOX.sh intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
 because direct OpenAI API calls reject it in live traffic.
 
-OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+EVOX.sh does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
 API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
-requests currently reject it. Spark is treated as Codex-only in OpenClaw.
+requests currently reject it. Spark is treated as Codex-only in EVOX.sh.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -52,10 +52,10 @@ Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or AP
 
 ```bash
 # Run Codex OAuth in the wizard
-openclaw onboard --auth-choice openai-codex
+evox onboard --auth-choice openai-codex
 
 # Or run OAuth directly
-openclaw models auth login --provider openai-codex
+evox models auth login --provider openai-codex
 ```
 
 ### Config snippet (Codex subscription)
@@ -66,24 +66,24 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
-OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. EVOX.sh
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
-If your Codex account is entitled to Codex Spark, OpenClaw also supports:
+If your Codex account is entitled to Codex Spark, EVOX.sh also supports:
 
 - `openai-codex/gpt-5.3-codex-spark`
 
-OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+EVOX.sh treats Codex Spark as Codex-only. It does not expose a direct
 `openai/gpt-5.3-codex-spark` API-key path.
 
-OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+EVOX.sh also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
 discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
 separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
 ChatGPT account.
 
 ### Transport default
 
-OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
+EVOX.sh uses `pi-ai` for model streaming. For both `openai/*` and
 `openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
 fallback).
 
@@ -93,7 +93,7 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
 
-For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+For `openai/*` (Responses API), EVOX.sh also enables WebSocket warm-up by
 default (`openaiWsWarmup: true`) when WebSocket transport is used.
 
 Related OpenAI docs:
@@ -120,7 +120,7 @@ Related OpenAI docs:
 
 ### OpenAI WebSocket warm-up
 
-OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+OpenAI docs describe warm-up as optional. EVOX.sh enables it by default for
 `openai/*` to reduce first-turn latency when using WebSocket transport.
 
 ### Disable warm-up
@@ -162,7 +162,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
 ### OpenAI priority processing
 
 OpenAI's API exposes priority processing via `service_tier=priority`. In
-OpenClaw, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
+EVOX.sh, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
 pass that field through on direct `openai/*` Responses requests.
 
 ```json5
@@ -185,13 +185,13 @@ Supported values are `auto`, `default`, `flex`, and `priority`.
 
 ### OpenAI fast mode
 
-OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+EVOX.sh exposes a shared fast-mode toggle for both `openai/*` and
 `openai-codex/*` sessions:
 
 - Chat/UI: `/fast status|on|off`
 - Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-When fast mode is enabled, OpenClaw applies a low-latency OpenAI profile:
+When fast mode is enabled, EVOX.sh applies a low-latency OpenAI profile:
 
 - `reasoning.effort = "low"` when the payload does not already specify reasoning
 - `text.verbosity = "low"` when the payload does not already specify verbosity
@@ -226,7 +226,7 @@ returns the session to the configured default.
 ### OpenAI Responses server-side compaction
 
 For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
-`baseUrl` on `api.openai.com`), OpenClaw now auto-enables OpenAI server-side
+`baseUrl` on `api.openai.com`), EVOX.sh now auto-enables OpenAI server-side
 compaction payload hints:
 
 - Forces `store: true` (unless model compat sets `supportsStore: false`)

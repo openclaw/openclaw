@@ -220,7 +220,7 @@ function buildSessionPresentation(params: {
       name: "Thought level",
       category: "thought_level",
       description:
-        "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
+        "Controls how much deliberate reasoning EVOX.sh requests from the Gateway model.",
       currentValue: currentModeId,
       values: availableLevelIds,
     }),
@@ -235,7 +235,7 @@ function buildSessionPresentation(params: {
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
       name: "Tool verbosity",
       description:
-        "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
+        "Controls how much tool progress and output detail EVOX.sh keeps enabled for the session.",
       currentValue: row.verboseLevel?.trim() || "off",
       values: ["off", "on", "full"],
     }),
@@ -250,7 +250,7 @@ function buildSessionPresentation(params: {
       id: ACP_RESPONSE_USAGE_CONFIG_ID,
       name: "Usage detail",
       description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
+        "Controls how much usage information EVOX.sh attaches to responses for the session.",
       currentValue: row.responseUsage?.trim() || "off",
       values: ["off", "tokens", "full"],
     }),
@@ -1140,7 +1140,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     throw new Error(
-      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.",
+      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the EVOX.sh gateway or agent instead.",
     );
   }
 

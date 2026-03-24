@@ -45,7 +45,7 @@ function makeMoonshotConfig(home: string, storePath: string) {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
         models: {
           "anthropic/claude-opus-4-5": {},
           "moonshot/kimi-k2-0905-preview": {},
@@ -120,7 +120,7 @@ describe("directive behavior", () => {
             agents: {
               defaults: {
                 model: { primary: "minimax/MiniMax-M2.7" },
-                workspace: path.join(home, "openclaw"),
+                workspace: path.join(home, "evox"),
                 models: {
                   "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
@@ -158,7 +158,7 @@ describe("directive behavior", () => {
             agents: {
               defaults: {
                 model: { primary: "minimax/MiniMax-M2.7" },
-                workspace: path.join(home, "openclaw"),
+                workspace: path.join(home, "evox"),
                 models: {
                   "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
@@ -208,7 +208,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "evox"),
               models: {
                 "anthropic/claude-opus-4-5": {},
                 "moonshot/kimi-k2-0905-preview": { alias: "Kimi" },

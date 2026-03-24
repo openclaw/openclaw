@@ -79,12 +79,12 @@ function createPluginSdkAliasFixture(params?: {
     params?.trustedRootIndicatorMode ??
     (params?.trustedRootIndicators === false ? "none" : "bin+marker");
   const packageJson: Record<string, unknown> = {
-    name: params?.packageName ?? "openclaw",
+    name: params?.packageName ?? "evox",
     type: "module",
   };
   if (trustedRootIndicatorMode === "bin+marker") {
     packageJson.bin = {
-      openclaw: "openclaw.mjs",
+      evox: "evox.mjs",
     };
   }
   if (params?.packageExports || trustedRootIndicatorMode === "cli-entry-only") {
@@ -100,7 +100,7 @@ function createPluginSdkAliasFixture(params?: {
   }
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2), "utf-8");
   if (trustedRootIndicatorMode === "bin+marker") {
-    fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+    fs.writeFileSync(path.join(root, "evox.mjs"), "export {};\n", "utf-8");
   }
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
@@ -115,10 +115,10 @@ function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: 
   mkdirSafe(path.dirname(distFile));
   fs.writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    JSON.stringify({ name: "evox", type: "module" }, null, 2),
     "utf-8",
   );
-  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  fs.writeFileSync(path.join(root, "evox.mjs"), "export {};\n", "utf-8");
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
@@ -132,7 +132,7 @@ function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?:
   mkdirSafe(path.dirname(distFile));
   fs.writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    JSON.stringify({ name: "evox", type: "module" }, null, 2),
     "utf-8",
   );
   fs.writeFileSync(
@@ -247,7 +247,7 @@ describe("plugin sdk alias helpers", () => {
       name: "resolves plugin-sdk alias from package root when loader runs from transpiler cache path",
       buildFixture: () => createPluginSdkAliasFixture(),
       modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
-      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      argv1: (root: string) => path.join(root, "evox.mjs"),
       srcFile: "index.ts",
       distFile: "index.js",
       env: { NODE_ENV: undefined },
@@ -280,7 +280,7 @@ describe("plugin sdk alias helpers", () => {
     {
       name: "resolves extension-api alias from package root when loader runs from transpiler cache path",
       modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
-      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      argv1: (root: string) => path.join(root, "evox.mjs"),
       env: { NODE_ENV: undefined },
       expected: "src" as const,
     },
@@ -386,7 +386,7 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(resolved ?? "")).toBe(fs.realpathSync(fixture.srcFile));
   });
 
-  it("does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenClaw root", () => {
+  it("does not derive plugin-sdk subpaths from cwd fallback when package root is not an EVOX.sh root", () => {
     const fixture = createPluginSdkAliasFixture({
       packageName: "moltbot",
       trustedRootIndicators: false,
@@ -461,7 +461,7 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
-  it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
+  it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an EVOX.sh root", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",
       distFile: "channel-runtime.js",
@@ -556,7 +556,7 @@ export const syntheticRuntimeMarker = {
     {
       name: "resolves plugin runtime module from package root when loader runs from transpiler cache path",
       modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
-      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      argv1: (root: string) => path.join(root, "evox.mjs"),
       env: { NODE_ENV: undefined },
       expected: "src" as const,
     },

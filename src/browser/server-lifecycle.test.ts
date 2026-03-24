@@ -43,9 +43,9 @@ describe("ensureExtensionRelayForProfiles", () => {
 
 describe("stopKnownBrowserProfiles", () => {
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "user"]);
+    listKnownProfileNamesMock.mockReturnValue(["evox", "user"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
-      openclaw: vi.fn(async () => {}),
+      evox: vi.fn(async () => {}),
       user: vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
@@ -78,7 +78,7 @@ describe("stopKnownBrowserProfiles", () => {
     const localRuntime = {
       profile: {
         name: "deleted-local",
-        driver: "openclaw",
+        driver: "evox",
       },
       running: {
         pid: 42,
@@ -115,6 +115,6 @@ describe("stopKnownBrowserProfiles", () => {
       onWarn,
     });
 
-    expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
+    expect(onWarn).toHaveBeenCalledWith("evox browser stop failed: Error: oops");
   });
 });

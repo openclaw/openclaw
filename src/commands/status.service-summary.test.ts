@@ -20,18 +20,18 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
 }
 
 describe("readServiceStatusSummary", () => {
-  it("marks OpenClaw-managed services as installed", async () => {
+  it("marks EVOX.sh-managed services as installed", async () => {
     const summary = await readServiceStatusSummary(
       createService({
         isLoaded: vi.fn(async () => true),
-        readCommand: vi.fn(async () => ({ programArguments: ["openclaw", "gateway", "run"] })),
+        readCommand: vi.fn(async () => ({ programArguments: ["evox", "gateway", "run"] })),
         readRuntime: vi.fn(async () => ({ status: "running" })),
       }),
       "Daemon",
     );
 
     expect(summary.installed).toBe(true);
-    expect(summary.managedByOpenClaw).toBe(true);
+    expect(summary.managedByEvox).toBe(true);
     expect(summary.externallyManaged).toBe(false);
     expect(summary.loadedText).toBe("enabled");
   });
@@ -45,7 +45,7 @@ describe("readServiceStatusSummary", () => {
     );
 
     expect(summary.installed).toBe(true);
-    expect(summary.managedByOpenClaw).toBe(false);
+    expect(summary.managedByEvox).toBe(false);
     expect(summary.externallyManaged).toBe(true);
     expect(summary.loadedText).toBe("running (externally managed)");
   });
@@ -54,7 +54,7 @@ describe("readServiceStatusSummary", () => {
     const summary = await readServiceStatusSummary(createService({}), "Daemon");
 
     expect(summary.installed).toBe(false);
-    expect(summary.managedByOpenClaw).toBe(false);
+    expect(summary.managedByEvox).toBe(false);
     expect(summary.externallyManaged).toBe(false);
     expect(summary.loadedText).toBe("disabled");
   });
@@ -71,7 +71,7 @@ describe("readServiceStatusSummary", () => {
       createService({
         isLoaded,
         readCommand: vi.fn(async () => ({
-          programArguments: ["openclaw", "gateway", "run", "--port", "18789"],
+          programArguments: ["evox", "gateway", "run", "--port", "18789"],
           environment: { OPENCLAW_GATEWAY_PORT: "18789" },
         })),
         readRuntime,

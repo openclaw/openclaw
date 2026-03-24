@@ -11,11 +11,11 @@ describe("resolveCanvasHostUrl", () => {
     expect(
       resolveCanvasHostUrl({
         canvasPort: 3000,
-        hostOverride: " canvas.openclaw.ai ",
+        hostOverride: " canvas.evox.sh ",
         requestHost: "gateway.local:9000",
         localAddress: "192.168.1.10",
       }),
-    ).toBe("http://canvas.openclaw.ai:3000");
+    ).toBe("http://canvas.evox.sh:3000");
   });
 
   it("falls back from rejected loopback overrides to request hosts", () => {

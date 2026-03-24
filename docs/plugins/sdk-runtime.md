@@ -122,13 +122,13 @@ Text-to-speech synthesis.
 ```typescript
 // Standard TTS
 const clip = await api.runtime.tts.textToSpeech({
-  text: "Hello from OpenClaw",
+  text: "Hello from EVOX.sh",
   cfg: api.config,
 });
 
 // Telephony-optimized TTS
 const telephonyClip = await api.runtime.tts.textToSpeechTelephony({
-  text: "Hello from OpenClaw",
+  text: "Hello from EVOX.sh",
   cfg: api.config,
 });
 
@@ -203,7 +203,7 @@ const providers = api.runtime.webSearch.listProviders({ config: api.config });
 
 const result = await api.runtime.webSearch.search({
   config: api.config,
-  args: { query: "OpenClaw plugin SDK", count: 5 },
+  args: { query: "EVOX.sh plugin SDK", count: 5 },
 });
 ```
 

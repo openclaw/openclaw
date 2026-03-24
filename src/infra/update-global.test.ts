@@ -31,16 +31,16 @@ describe("update global helpers", () => {
     envSnapshot = captureEnv(["OPENCLAW_UPDATE_PACKAGE_SPEC"]);
     process.env.OPENCLAW_UPDATE_PACKAGE_SPEC = "file:/tmp/openclaw.tgz";
 
-    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "latest" })).toBe(
+    expect(resolveGlobalInstallSpec({ packageName: "evox", tag: "latest" })).toBe(
       "file:/tmp/openclaw.tgz",
     );
     expect(
       resolveGlobalInstallSpec({
-        packageName: "openclaw",
+        packageName: "evox",
         tag: "beta",
-        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
+        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "evox@next" },
       }),
-    ).toBe("openclaw@next");
+    ).toBe("evox@next");
   });
 
   it("resolves global roots and package roots from runner output", async () => {
@@ -60,23 +60,23 @@ describe("update global helpers", () => {
       path.join(".bun", "install", "global", "node_modules"),
     );
     await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
-      path.join("/tmp/npm-root", "openclaw"),
+      path.join("/tmp/npm-root", "evox"),
     );
   });
 
   it("maps main and explicit install specs for global installs", () => {
-    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
+    expect(resolveGlobalInstallSpec({ packageName: "evox", tag: "main" })).toBe(
       OPENCLAW_MAIN_PACKAGE_SPEC,
     );
     expect(
       resolveGlobalInstallSpec({
-        packageName: "openclaw",
+        packageName: "evox",
         tag: "github:openclaw/openclaw#feature/my-branch",
       }),
     ).toBe("github:openclaw/openclaw#feature/my-branch");
     expect(
       resolveGlobalInstallSpec({
-        packageName: "openclaw",
+        packageName: "evox",
         tag: "https://example.com/openclaw-main.tgz",
       }),
     ).toBe("https://example.com/openclaw-main.tgz");
@@ -103,10 +103,10 @@ describe("update global helpers", () => {
     const npmRoot = path.join(base, "npm-root");
     const pnpmRoot = path.join(base, "pnpm-root");
     const bunRoot = path.join(base, ".bun", "install", "global", "node_modules");
-    const pkgRoot = path.join(pnpmRoot, "openclaw");
+    const pkgRoot = path.join(pnpmRoot, "evox");
     await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
-    await fs.mkdir(path.join(bunRoot, "openclaw"), { recursive: true });
+    await fs.mkdir(path.join(npmRoot, "evox"), { recursive: true });
+    await fs.mkdir(path.join(bunRoot, "evox"), { recursive: true });
 
     envSnapshot = captureEnv(["BUN_INSTALL"]);
     process.env.BUN_INSTALL = path.join(base, ".bun");
@@ -126,45 +126,45 @@ describe("update global helpers", () => {
     );
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("npm");
 
-    await fs.rm(path.join(npmRoot, "openclaw"), { recursive: true, force: true });
-    await fs.rm(path.join(pnpmRoot, "openclaw"), { recursive: true, force: true });
+    await fs.rm(path.join(npmRoot, "evox"), { recursive: true, force: true });
+    await fs.rm(path.join(pnpmRoot, "evox"), { recursive: true, force: true });
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("bun");
   });
 
   it("builds install argv and npm fallback argv", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("npm", "evox@latest")).toEqual([
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
+      "evox@latest",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("pnpm", "evox@latest")).toEqual([
       "pnpm",
       "add",
       "-g",
-      "openclaw@latest",
+      "evox@latest",
     ]);
-    expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("bun", "evox@latest")).toEqual([
       "bun",
       "add",
       "-g",
-      "openclaw@latest",
+      "evox@latest",
     ]);
 
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
+    expect(globalInstallFallbackArgs("npm", "evox@latest")).toEqual([
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
+      "evox@latest",
       "--omit=optional",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
+    expect(globalInstallFallbackArgs("pnpm", "evox@latest")).toBeNull();
   });
 
   it("cleans only renamed package directories", async () => {
@@ -172,17 +172,17 @@ describe("update global helpers", () => {
     await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
     await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
     await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
-    await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
+    await fs.mkdir(path.join(root, "evox"), { recursive: true });
 
     await expect(
       cleanupGlobalRenameDirs({
         globalRoot: root,
-        packageName: "openclaw",
+        packageName: "evox",
       }),
     ).resolves.toEqual({
       removed: [".openclaw-123", ".openclaw-456"],
     });
-    await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(root, "evox"))).resolves.toBeDefined();
     await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
   });
 });

@@ -24,7 +24,7 @@ describe("config irc", () => {
         irc: {
           host: "irc.libera.chat",
           nick: "openclaw-bot",
-          channels: ["#openclaw"],
+          channels: ["#evox"],
         },
       },
     });

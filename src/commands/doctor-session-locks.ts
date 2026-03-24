@@ -73,7 +73,7 @@ export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; s
 
   if (staleCount > 0 && !shouldRepair) {
     lines.push(`- ${staleCount} lock file${staleCount === 1 ? " is" : "s are"} stale.`);
-    lines.push('- Run "openclaw doctor --fix" to remove stale lock files automatically.');
+    lines.push('- Run "evox doctor --fix" to remove stale lock files automatically.');
   }
   if (shouldRepair && removedCount > 0) {
     lines.push(

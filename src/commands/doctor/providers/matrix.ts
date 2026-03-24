@@ -26,7 +26,7 @@ export function formatMatrixLegacyStatePreview(
     `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
     `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
     ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
-    '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
+    '- Run "evox doctor --fix" to migrate this Matrix state now.',
   ].join("\n");
 }
 
@@ -44,7 +44,7 @@ export function formatMatrixLegacyCryptoPreview(
         `- Legacy crypto store: ${plan.legacyCryptoPath}`,
         `- New recovery key file: ${plan.recoveryKeyPath}`,
         `- Migration state file: ${plan.statePath}`,
-        '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
+        '- Run "evox doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
       ].join("\n"),
     );
   }
@@ -62,8 +62,8 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
   return formatPluginInstallPathIssue({
     issue,
     pluginLabel: "Matrix",
-    defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-    repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+    defaultInstallCommand: "evox plugins install @openclaw/matrix",
+    repoInstallCommand: "evox plugins install ./extensions/matrix",
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
 }
@@ -97,7 +97,7 @@ export async function applyMatrixDoctorRepair(params: {
       matrixSnapshotReady = false;
       warnings.push(`- Failed creating a Matrix migration snapshot before repair: ${String(err)}`);
       warnings.push(
-        '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
+        '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "evox doctor --fix".',
       );
     }
   } else if (pendingMatrixMigration) {

@@ -38,7 +38,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "evox" }, null, 2)}\n`,
       "utf8",
     );
 
@@ -54,7 +54,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "evox" }, null, 2)}\n`,
       "utf8",
     );
 
@@ -72,7 +72,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "evox" }, null, 2)}\n`,
       "utf8",
     );
 
@@ -93,7 +93,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "evox" }, null, 2)}\n`,
       "utf8",
     );
 

@@ -1,14 +1,14 @@
 ---
-summary: "End-to-end guide for running OpenClaw as a personal assistant with safety cautions"
+summary: "End-to-end guide for running EVOX.sh as a personal assistant with safety cautions"
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
 title: "Personal Assistant Setup"
 ---
 
-# Building a personal assistant with OpenClaw
+# Building a personal assistant with EVOX.sh
 
-OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
+EVOX.sh is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
@@ -26,7 +26,7 @@ Start conservative:
 
 ## Prerequisites
 
-- OpenClaw installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
+- EVOX.sh installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ## The two-phone setup (recommended)
@@ -36,23 +36,23 @@ You want this:
 ```mermaid
 flowchart TB
     A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
-    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
+    B -- linked via QR --> C["<b>Your Mac (evox)<br></b><br>AI agent"]
 ```
 
-If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
+If you link your personal WhatsApp to EVOX.sh, every message to you becomes “agent input”. That’s rarely what you want.
 
 ## 5-minute quick start
 
 1. Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
-openclaw channels login
+evox channels login
 ```
 
 2. Start the Gateway (leave it running):
 
 ```bash
-openclaw gateway --port 18789
+evox gateway --port 18789
 ```
 
 3. Put a minimal config in `~/.openclaw/openclaw.json`:
@@ -65,18 +65,18 @@ openclaw gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
+When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `evox dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
-OpenClaw reads operating instructions and “memory” from its workspace directory.
+EVOX.sh reads operating instructions and “memory” from its workspace directory.
 
-By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
+By default, EVOX.sh uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
 
-Tip: treat this folder like OpenClaw’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
+Tip: treat this folder like EVOX.sh’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
 
 ```bash
-openclaw setup
+evox setup
 ```
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
@@ -104,7 +104,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 ## The config that turns it into "an assistant"
 
-OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
+EVOX.sh defaults to a good assistant setup, but you’ll usually want to tune:
 
 - persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
@@ -133,7 +133,7 @@ Example:
   },
   routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
+      mentionPatterns: ["@openclaw", "evox"],
     },
   },
   session: {
@@ -157,13 +157,13 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
+By default, EVOX.sh runs a heartbeat every 30 minutes with the prompt:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
-- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), EVOX.sh skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), EVOX.sh suppresses outbound delivery for that heartbeat.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -190,9 +190,9 @@ Here’s the screenshot.
 MEDIA:https://example.com/screenshot.png
 ```
 
-OpenClaw extracts these and sends them as media alongside the text.
+EVOX.sh extracts these and sends them as media alongside the text.
 
-For local paths, the default allowlist is intentionally narrow: the OpenClaw temp
+For local paths, the default allowlist is intentionally narrow: the EVOX.sh temp
 root, the media cache, agent workspace paths, and sandbox-generated files. If you
 need broader local-file attachment roots, configure an explicit channel/plugin
 allowlist instead of relying on arbitrary host paths.
@@ -200,10 +200,10 @@ allowlist instead of relying on arbitrary host paths.
 ## Operations checklist
 
 ```bash
-openclaw status          # local status (creds, sessions, queued events)
-openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # adds gateway health probes (Telegram + Discord)
-openclaw health --json   # gateway health snapshot (WS)
+evox status          # local status (creds, sessions, queued events)
+evox status --all    # full diagnosis (read-only, pasteable)
+evox status --deep   # adds gateway health probes (Telegram + Discord)
+evox health --json   # gateway health snapshot (WS)
 ```
 
 Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
@@ -213,7 +213,7 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - WebChat: [WebChat](/web/webchat)
 - Gateway ops: [Gateway runbook](/gateway)
 - Cron + wakeups: [Cron jobs](/automation/cron-jobs)
-- macOS menu bar companion: [OpenClaw macOS app](/platforms/macos)
+- macOS menu bar companion: [EVOX.sh macOS app](/platforms/macos)
 - iOS node app: [iOS app](/platforms/ios)
 - Android node app: [Android app](/platforms/android)
 - Windows status: [Windows (WSL2)](/platforms/windows)

@@ -101,7 +101,7 @@ export function registerQrCli(program: Command) {
     .description("Generate an iOS pairing QR code and setup code")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.evox.sh/cli/qr")}\n`,
     )
     .option(
       "--remote",
@@ -236,7 +236,7 @@ export function registerQrCli(program: Command) {
 
         const lines: string[] = [
           theme.heading("Pairing QR"),
-          "Scan this with the OpenClaw iOS app (Onboarding -> Scan QR).",
+          "Scan this with the EVOX.sh iOS app (Onboarding -> Scan QR).",
           "",
         ];
 
@@ -252,8 +252,8 @@ export function registerQrCli(program: Command) {
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",
-          `  ${theme.command("openclaw devices list")}`,
-          `  ${theme.command("openclaw devices approve <requestId>")}`,
+          `  ${theme.command("evox devices list")}`,
+          `  ${theme.command("evox devices approve <requestId>")}`,
         );
 
         defaultRuntime.log(lines.join("\n"));

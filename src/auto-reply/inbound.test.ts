@@ -661,11 +661,11 @@ describe("mention helpers", () => {
       },
     });
     expect(regexes).toHaveLength(1);
-    expect(regexes[0]?.test("openclaw")).toBe(true);
+    expect(regexes[0]?.test("evox")).toBe(true);
   });
 
   it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
+    expect(normalizeMentionText("open\u200bclaw")).toBe("evox");
   });
 
   it("matches patterns case-insensitively", () => {
@@ -697,7 +697,7 @@ describe("mention helpers", () => {
   });
 
   it("strips safe mention patterns and ignores unsafe ones", () => {
-    const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
+    const stripped = stripMentions("evox " + "a".repeat(28) + "!", {} as MsgContext, {
       messages: {
         groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(a+)+$"] },
       },

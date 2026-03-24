@@ -1450,7 +1450,7 @@
         "advanced"
       ],
       "label": "Embedded Pi",
-      "help": "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
+      "help": "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in EVOX.sh sessions.",
       "hasChildren": true
     },
     {
@@ -5270,7 +5270,7 @@
         "advanced"
       ],
       "label": "Agent Runtime",
-      "help": "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
+      "help": "Optional runtime descriptor for this agent. Use embedded for default EVOX.sh execution or acp for external ACP harness defaults.",
       "hasChildren": true
     },
     {
@@ -5298,7 +5298,7 @@
         "advanced"
       ],
       "label": "Agent ACP Harness Agent",
-      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      "help": "Optional ACP harness agent id to use for this EVOX.sh agent (for example codex, claude).",
       "hasChildren": false
     },
     {
@@ -5358,7 +5358,7 @@
         "advanced"
       ],
       "label": "Agent Runtime Type",
-      "help": "Runtime type for this agent: \"embedded\" (default OpenClaw runtime) or \"acp\" (ACP harness defaults).",
+      "help": "Runtime type for this agent: \"embedded\" (default EVOX.sh runtime) or \"acp\" (ACP harness defaults).",
       "hasChildren": false
     },
     {
@@ -8153,7 +8153,7 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome DevTools MCP attachment.",
+      "help": "Per-profile browser driver mode. Use \"evox\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome DevTools MCP attachment.",
       "hasChildren": false
     },
     {
@@ -13076,7 +13076,7 @@
         "performance"
       ],
       "label": "Discord EventQueue Listener Timeout (ms)",
-      "help": "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+      "help": "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in EVOX.sh; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
       "hasChildren": false
     },
     {
@@ -31085,7 +31085,7 @@
         "network"
       ],
       "label": "Synology Chat",
-      "help": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+      "help": "Connect your Synology NAS Chat to EVOX.sh with full agent capabilities.",
       "hasChildren": true
     },
     {
@@ -38856,7 +38856,7 @@
         "advanced"
       ],
       "label": "Allow /mcp",
-      "help": "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
+      "help": "Allow /mcp chat command to manage EVOX.sh MCP server config under mcp.servers (default: false).",
       "hasChildren": false
     },
     {
@@ -39891,7 +39891,7 @@
         "advanced"
       ],
       "label": "Environment Variable Overrides",
-      "help": "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+      "help": "Explicit key/value environment variable overrides merged into runtime process environment for EVOX.sh. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
       "hasChildren": true
     },
     {
@@ -40969,7 +40969,7 @@
         "network"
       ],
       "label": "Gateway Node Allowlist (Extra Commands)",
-      "help": "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
+      "help": "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `evox security audit`.",
       "hasChildren": true
     },
     {
@@ -41605,7 +41605,7 @@
         "advanced"
       ],
       "label": "Hooks",
-      "help": "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
+      "help": "Inbound webhook automation surface for mapping external events into wake or agent actions in EVOX.sh. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
       "hasChildren": true
     },
     {
@@ -42926,7 +42926,7 @@
         "advanced"
       ],
       "label": "MCP",
-      "help": "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
+      "help": "Global MCP server definitions managed by EVOX.sh. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
       "hasChildren": true
     },
     {
@@ -42940,7 +42940,7 @@
         "advanced"
       ],
       "label": "MCP Servers",
-      "help": "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+      "help": "Named MCP server definitions. EVOX.sh stores them in its own config and runtime adapters decide which transports are supported at execution time.",
       "hasChildren": true
     },
     {
@@ -43113,7 +43113,7 @@
         "storage"
       ],
       "label": "Memory Backend",
-      "help": "Selects the global memory engine: \"builtin\" uses OpenClaw memory internals, while \"qmd\" uses the QMD sidecar pipeline. Keep \"builtin\" unless you intentionally operate QMD.",
+      "help": "Selects the global memory engine: \"builtin\" uses EVOX.sh memory internals, while \"qmd\" uses the QMD sidecar pipeline. Keep \"builtin\" unless you intentionally operate QMD.",
       "hasChildren": false
     },
     {
@@ -44974,7 +44974,7 @@
         "advanced"
       ],
       "label": "Metadata",
-      "help": "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
+      "help": "Metadata fields automatically maintained by EVOX.sh to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
       "hasChildren": true
     },
     {
@@ -45002,7 +45002,7 @@
         "media"
       ],
       "label": "Config Last Touched Version",
-      "help": "Auto-set when OpenClaw writes the config.",
+      "help": "Auto-set when EVOX.sh writes the config.",
       "hasChildren": false
     },
     {
@@ -45355,7 +45355,7 @@
         "models"
       ],
       "label": "Model Provider Inject num_ctx (OpenAI Compat)",
-      "help": "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+      "help": "Controls whether EVOX.sh injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
       "hasChildren": false
     },
     {
@@ -45753,7 +45753,7 @@
         "storage"
       ],
       "label": "Node Browser Proxy Allowed Profiles",
-      "help": "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to preserve the default full profile surface, including profile create/delete routes. When set, OpenClaw enforces least-privilege profile access and blocks persistent profile create/delete through the proxy.",
+      "help": "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to preserve the default full profile surface, including profile create/delete routes. When set, EVOX.sh enforces least-privilege profile access and blocks persistent profile create/delete through the proxy.",
       "hasChildren": true
     },
     {
@@ -46190,7 +46190,7 @@
         "advanced"
       ],
       "label": "Queue Owner TTL Seconds",
-      "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in OpenClaw to avoid delayed completion after each turn.",
+      "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in EVOX.sh to avoid delayed completion after each turn.",
       "hasChildren": false
     },
     {
@@ -46326,7 +46326,7 @@
         "advanced"
       ],
       "label": "@openclaw/amazon-bedrock-provider",
-      "help": "OpenClaw Amazon Bedrock provider plugin (plugin: amazon-bedrock)",
+      "help": "EVOX.sh Amazon Bedrock provider plugin (plugin: amazon-bedrock)",
       "hasChildren": true
     },
     {
@@ -46447,7 +46447,7 @@
         "advanced"
       ],
       "label": "@openclaw/anthropic-provider",
-      "help": "OpenClaw Anthropic provider plugin (plugin: anthropic)",
+      "help": "EVOX.sh Anthropic provider plugin (plugin: anthropic)",
       "hasChildren": true
     },
     {
@@ -46568,7 +46568,7 @@
         "advanced"
       ],
       "label": "@openclaw/bluebubbles",
-      "help": "OpenClaw BlueBubbles channel plugin (plugin: bluebubbles)",
+      "help": "EVOX.sh BlueBubbles channel plugin (plugin: bluebubbles)",
       "hasChildren": true
     },
     {
@@ -46689,7 +46689,7 @@
         "advanced"
       ],
       "label": "@openclaw/brave-plugin",
-      "help": "OpenClaw Brave plugin (plugin: brave)",
+      "help": "EVOX.sh Brave plugin (plugin: brave)",
       "hasChildren": true
     },
     {
@@ -46856,7 +46856,7 @@
         "advanced"
       ],
       "label": "@openclaw/byteplus-provider",
-      "help": "OpenClaw BytePlus provider plugin (plugin: byteplus)",
+      "help": "EVOX.sh BytePlus provider plugin (plugin: byteplus)",
       "hasChildren": true
     },
     {
@@ -46977,7 +46977,7 @@
         "advanced"
       ],
       "label": "@openclaw/chutes-provider",
-      "help": "OpenClaw Chutes.ai provider plugin (plugin: chutes)",
+      "help": "EVOX.sh Chutes.ai provider plugin (plugin: chutes)",
       "hasChildren": true
     },
     {
@@ -47098,7 +47098,7 @@
         "advanced"
       ],
       "label": "@openclaw/cloudflare-ai-gateway-provider",
-      "help": "OpenClaw Cloudflare AI Gateway provider plugin (plugin: cloudflare-ai-gateway)",
+      "help": "EVOX.sh Cloudflare AI Gateway provider plugin (plugin: cloudflare-ai-gateway)",
       "hasChildren": true
     },
     {
@@ -47219,7 +47219,7 @@
         "advanced"
       ],
       "label": "@openclaw/copilot-proxy",
-      "help": "OpenClaw Copilot Proxy provider plugin (plugin: copilot-proxy)",
+      "help": "EVOX.sh Copilot Proxy provider plugin (plugin: copilot-proxy)",
       "hasChildren": true
     },
     {
@@ -47340,7 +47340,7 @@
         "advanced"
       ],
       "label": "@openclaw/deepgram-provider",
-      "help": "OpenClaw Deepgram media-understanding provider (plugin: deepgram)",
+      "help": "EVOX.sh Deepgram media-understanding provider (plugin: deepgram)",
       "hasChildren": true
     },
     {
@@ -47461,7 +47461,7 @@
         "advanced"
       ],
       "label": "@openclaw/deepseek-provider",
-      "help": "OpenClaw DeepSeek provider plugin (plugin: deepseek)",
+      "help": "EVOX.sh DeepSeek provider plugin (plugin: deepseek)",
       "hasChildren": true
     },
     {
@@ -47717,7 +47717,7 @@
         "observability"
       ],
       "label": "@openclaw/diagnostics-otel",
-      "help": "OpenClaw diagnostics OpenTelemetry exporter (plugin: diagnostics-otel)",
+      "help": "EVOX.sh diagnostics OpenTelemetry exporter (plugin: diagnostics-otel)",
       "hasChildren": true
     },
     {
@@ -48296,7 +48296,7 @@
         "advanced"
       ],
       "label": "@openclaw/discord",
-      "help": "OpenClaw Discord channel plugin (plugin: discord)",
+      "help": "EVOX.sh Discord channel plugin (plugin: discord)",
       "hasChildren": true
     },
     {
@@ -48417,7 +48417,7 @@
         "advanced"
       ],
       "label": "@openclaw/duckduckgo-plugin",
-      "help": "OpenClaw DuckDuckGo plugin (plugin: duckduckgo)",
+      "help": "EVOX.sh DuckDuckGo plugin (plugin: duckduckgo)",
       "hasChildren": true
     },
     {
@@ -48581,7 +48581,7 @@
         "advanced"
       ],
       "label": "@openclaw/elevenlabs-speech",
-      "help": "OpenClaw ElevenLabs speech plugin (plugin: elevenlabs)",
+      "help": "EVOX.sh ElevenLabs speech plugin (plugin: elevenlabs)",
       "hasChildren": true
     },
     {
@@ -48702,7 +48702,7 @@
         "advanced"
       ],
       "label": "@openclaw/exa-plugin",
-      "help": "OpenClaw Exa plugin (plugin: exa)",
+      "help": "EVOX.sh Exa plugin (plugin: exa)",
       "hasChildren": true
     },
     {
@@ -48851,7 +48851,7 @@
         "advanced"
       ],
       "label": "@openclaw/fal-provider",
-      "help": "OpenClaw fal provider plugin (plugin: fal)",
+      "help": "EVOX.sh fal provider plugin (plugin: fal)",
       "hasChildren": true
     },
     {
@@ -48972,7 +48972,7 @@
         "advanced"
       ],
       "label": "@openclaw/feishu",
-      "help": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng) (plugin: feishu)",
+      "help": "EVOX.sh Feishu/Lark channel plugin (community maintained by @m1heng) (plugin: feishu)",
       "hasChildren": true
     },
     {
@@ -49093,7 +49093,7 @@
         "advanced"
       ],
       "label": "@openclaw/firecrawl-plugin",
-      "help": "OpenClaw Firecrawl plugin (plugin: firecrawl)",
+      "help": "EVOX.sh Firecrawl plugin (plugin: firecrawl)",
       "hasChildren": true
     },
     {
@@ -49256,7 +49256,7 @@
         "advanced"
       ],
       "label": "@openclaw/github-copilot-provider",
-      "help": "OpenClaw GitHub Copilot provider plugin (plugin: github-copilot)",
+      "help": "EVOX.sh GitHub Copilot provider plugin (plugin: github-copilot)",
       "hasChildren": true
     },
     {
@@ -49377,7 +49377,7 @@
         "advanced"
       ],
       "label": "@openclaw/google-plugin",
-      "help": "OpenClaw Google plugin (plugin: google)",
+      "help": "EVOX.sh Google plugin (plugin: google)",
       "hasChildren": true
     },
     {
@@ -49540,7 +49540,7 @@
         "advanced"
       ],
       "label": "@openclaw/googlechat",
-      "help": "OpenClaw Google Chat channel plugin (plugin: googlechat)",
+      "help": "EVOX.sh Google Chat channel plugin (plugin: googlechat)",
       "hasChildren": true
     },
     {
@@ -49661,7 +49661,7 @@
         "advanced"
       ],
       "label": "@openclaw/groq-provider",
-      "help": "OpenClaw Groq media-understanding provider (plugin: groq)",
+      "help": "EVOX.sh Groq media-understanding provider (plugin: groq)",
       "hasChildren": true
     },
     {
@@ -49782,7 +49782,7 @@
         "advanced"
       ],
       "label": "@openclaw/huggingface-provider",
-      "help": "OpenClaw Hugging Face provider plugin (plugin: huggingface)",
+      "help": "EVOX.sh Hugging Face provider plugin (plugin: huggingface)",
       "hasChildren": true
     },
     {
@@ -49903,7 +49903,7 @@
         "advanced"
       ],
       "label": "@openclaw/imessage",
-      "help": "OpenClaw iMessage channel plugin (plugin: imessage)",
+      "help": "EVOX.sh iMessage channel plugin (plugin: imessage)",
       "hasChildren": true
     },
     {
@@ -50024,7 +50024,7 @@
         "advanced"
       ],
       "label": "@openclaw/irc",
-      "help": "OpenClaw IRC channel plugin (plugin: irc)",
+      "help": "EVOX.sh IRC channel plugin (plugin: irc)",
       "hasChildren": true
     },
     {
@@ -50145,7 +50145,7 @@
         "advanced"
       ],
       "label": "@openclaw/kilocode-provider",
-      "help": "OpenClaw Kilo Gateway provider plugin (plugin: kilocode)",
+      "help": "EVOX.sh Kilo Gateway provider plugin (plugin: kilocode)",
       "hasChildren": true
     },
     {
@@ -50266,7 +50266,7 @@
         "advanced"
       ],
       "label": "@openclaw/kimi-provider",
-      "help": "OpenClaw Kimi provider plugin (plugin: kimi)",
+      "help": "EVOX.sh Kimi provider plugin (plugin: kimi)",
       "hasChildren": true
     },
     {
@@ -50387,7 +50387,7 @@
         "advanced"
       ],
       "label": "@openclaw/line",
-      "help": "OpenClaw LINE channel plugin (plugin: line)",
+      "help": "EVOX.sh LINE channel plugin (plugin: line)",
       "hasChildren": true
     },
     {
@@ -50820,7 +50820,7 @@
         "advanced"
       ],
       "label": "@openclaw/matrix",
-      "help": "OpenClaw Matrix channel plugin (plugin: matrix)",
+      "help": "EVOX.sh Matrix channel plugin (plugin: matrix)",
       "hasChildren": true
     },
     {
@@ -50941,7 +50941,7 @@
         "advanced"
       ],
       "label": "@openclaw/mattermost",
-      "help": "OpenClaw Mattermost channel plugin (plugin: mattermost)",
+      "help": "EVOX.sh Mattermost channel plugin (plugin: mattermost)",
       "hasChildren": true
     },
     {
@@ -51062,7 +51062,7 @@
         "advanced"
       ],
       "label": "@openclaw/memory-core",
-      "help": "OpenClaw core memory search plugin (plugin: memory-core)",
+      "help": "EVOX.sh core memory search plugin (plugin: memory-core)",
       "hasChildren": true
     },
     {
@@ -51183,7 +51183,7 @@
         "storage"
       ],
       "label": "@openclaw/memory-lancedb",
-      "help": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture (plugin: memory-lancedb)",
+      "help": "EVOX.sh LanceDB-backed long-term memory plugin with auto-recall/capture (plugin: memory-lancedb)",
       "hasChildren": true
     },
     {
@@ -51433,7 +51433,7 @@
         "advanced"
       ],
       "label": "@openclaw/microsoft-speech",
-      "help": "OpenClaw Microsoft speech plugin (plugin: microsoft)",
+      "help": "EVOX.sh Microsoft speech plugin (plugin: microsoft)",
       "hasChildren": true
     },
     {
@@ -51554,7 +51554,7 @@
         "performance"
       ],
       "label": "@openclaw/minimax-provider",
-      "help": "OpenClaw MiniMax provider and OAuth plugin (plugin: minimax)",
+      "help": "EVOX.sh MiniMax provider and OAuth plugin (plugin: minimax)",
       "hasChildren": true
     },
     {
@@ -51675,7 +51675,7 @@
         "advanced"
       ],
       "label": "@openclaw/mistral-provider",
-      "help": "OpenClaw Mistral provider plugin (plugin: mistral)",
+      "help": "EVOX.sh Mistral provider plugin (plugin: mistral)",
       "hasChildren": true
     },
     {
@@ -51796,7 +51796,7 @@
         "advanced"
       ],
       "label": "@openclaw/modelstudio-provider",
-      "help": "OpenClaw Model Studio provider plugin (plugin: modelstudio)",
+      "help": "EVOX.sh Model Studio provider plugin (plugin: modelstudio)",
       "hasChildren": true
     },
     {
@@ -51917,7 +51917,7 @@
         "advanced"
       ],
       "label": "@openclaw/moonshot-provider",
-      "help": "OpenClaw Moonshot provider plugin (plugin: moonshot)",
+      "help": "EVOX.sh Moonshot provider plugin (plugin: moonshot)",
       "hasChildren": true
     },
     {
@@ -52094,7 +52094,7 @@
         "advanced"
       ],
       "label": "@openclaw/msteams",
-      "help": "OpenClaw Microsoft Teams channel plugin (plugin: msteams)",
+      "help": "EVOX.sh Microsoft Teams channel plugin (plugin: msteams)",
       "hasChildren": true
     },
     {
@@ -52215,7 +52215,7 @@
         "advanced"
       ],
       "label": "@openclaw/nextcloud-talk",
-      "help": "OpenClaw Nextcloud Talk channel plugin (plugin: nextcloud-talk)",
+      "help": "EVOX.sh Nextcloud Talk channel plugin (plugin: nextcloud-talk)",
       "hasChildren": true
     },
     {
@@ -52336,7 +52336,7 @@
         "advanced"
       ],
       "label": "@openclaw/nostr",
-      "help": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs (plugin: nostr)",
+      "help": "EVOX.sh Nostr channel plugin for NIP-04 encrypted DMs (plugin: nostr)",
       "hasChildren": true
     },
     {
@@ -52457,7 +52457,7 @@
         "advanced"
       ],
       "label": "@openclaw/nvidia-provider",
-      "help": "OpenClaw NVIDIA provider plugin (plugin: nvidia)",
+      "help": "EVOX.sh NVIDIA provider plugin (plugin: nvidia)",
       "hasChildren": true
     },
     {
@@ -52578,7 +52578,7 @@
         "advanced"
       ],
       "label": "@openclaw/ollama-provider",
-      "help": "OpenClaw Ollama provider plugin (plugin: ollama)",
+      "help": "EVOX.sh Ollama provider plugin (plugin: ollama)",
       "hasChildren": true
     },
     {
@@ -52820,7 +52820,7 @@
         "advanced"
       ],
       "label": "@openclaw/openai-provider",
-      "help": "OpenClaw OpenAI provider plugins (plugin: openai)",
+      "help": "EVOX.sh OpenAI provider plugins (plugin: openai)",
       "hasChildren": true
     },
     {
@@ -52941,7 +52941,7 @@
         "advanced"
       ],
       "label": "@openclaw/opencode-provider",
-      "help": "OpenClaw OpenCode Zen provider plugin (plugin: opencode)",
+      "help": "EVOX.sh OpenCode Zen provider plugin (plugin: opencode)",
       "hasChildren": true
     },
     {
@@ -52955,7 +52955,7 @@
         "advanced"
       ],
       "label": "@openclaw/opencode-go-provider",
-      "help": "OpenClaw OpenCode Go provider plugin (plugin: opencode-go)",
+      "help": "EVOX.sh OpenCode Go provider plugin (plugin: opencode-go)",
       "hasChildren": true
     },
     {
@@ -53183,7 +53183,7 @@
         "advanced"
       ],
       "label": "@openclaw/openrouter-provider",
-      "help": "OpenClaw OpenRouter provider plugin (plugin: openrouter)",
+      "help": "EVOX.sh OpenRouter provider plugin (plugin: openrouter)",
       "hasChildren": true
     },
     {
@@ -53592,7 +53592,7 @@
         "advanced"
       ],
       "label": "@openclaw/perplexity-plugin",
-      "help": "OpenClaw Perplexity plugin (plugin: perplexity)",
+      "help": "EVOX.sh Perplexity plugin (plugin: perplexity)",
       "hasChildren": true
     },
     {
@@ -53890,7 +53890,7 @@
         "advanced"
       ],
       "label": "@openclaw/qianfan-provider",
-      "help": "OpenClaw Qianfan provider plugin (plugin: qianfan)",
+      "help": "EVOX.sh Qianfan provider plugin (plugin: qianfan)",
       "hasChildren": true
     },
     {
@@ -54132,7 +54132,7 @@
         "advanced"
       ],
       "label": "@openclaw/sglang-provider",
-      "help": "OpenClaw SGLang provider plugin (plugin: sglang)",
+      "help": "EVOX.sh SGLang provider plugin (plugin: sglang)",
       "hasChildren": true
     },
     {
@@ -54253,7 +54253,7 @@
         "advanced"
       ],
       "label": "@openclaw/signal",
-      "help": "OpenClaw Signal channel plugin (plugin: signal)",
+      "help": "EVOX.sh Signal channel plugin (plugin: signal)",
       "hasChildren": true
     },
     {
@@ -54374,7 +54374,7 @@
         "advanced"
       ],
       "label": "@openclaw/slack",
-      "help": "OpenClaw Slack channel plugin (plugin: slack)",
+      "help": "EVOX.sh Slack channel plugin (plugin: slack)",
       "hasChildren": true
     },
     {
@@ -54495,7 +54495,7 @@
         "advanced"
       ],
       "label": "@openclaw/synology-chat",
-      "help": "Synology Chat channel plugin for OpenClaw (plugin: synology-chat)",
+      "help": "Synology Chat channel plugin for EVOX.sh (plugin: synology-chat)",
       "hasChildren": true
     },
     {
@@ -54616,7 +54616,7 @@
         "advanced"
       ],
       "label": "@openclaw/synthetic-provider",
-      "help": "OpenClaw Synthetic provider plugin (plugin: synthetic)",
+      "help": "EVOX.sh Synthetic provider plugin (plugin: synthetic)",
       "hasChildren": true
     },
     {
@@ -54858,7 +54858,7 @@
         "advanced"
       ],
       "label": "@openclaw/tavily-plugin",
-      "help": "OpenClaw Tavily plugin (plugin: tavily)",
+      "help": "EVOX.sh Tavily plugin (plugin: tavily)",
       "hasChildren": true
     },
     {
@@ -55021,7 +55021,7 @@
         "advanced"
       ],
       "label": "@openclaw/telegram",
-      "help": "OpenClaw Telegram channel plugin (plugin: telegram)",
+      "help": "EVOX.sh Telegram channel plugin (plugin: telegram)",
       "hasChildren": true
     },
     {
@@ -55301,7 +55301,7 @@
         "advanced"
       ],
       "label": "@openclaw/tlon",
-      "help": "OpenClaw Tlon/Urbit channel plugin (plugin: tlon)",
+      "help": "EVOX.sh Tlon/Urbit channel plugin (plugin: tlon)",
       "hasChildren": true
     },
     {
@@ -55422,7 +55422,7 @@
         "advanced"
       ],
       "label": "@openclaw/together-provider",
-      "help": "OpenClaw Together provider plugin (plugin: together)",
+      "help": "EVOX.sh Together provider plugin (plugin: together)",
       "hasChildren": true
     },
     {
@@ -55543,7 +55543,7 @@
         "advanced"
       ],
       "label": "@openclaw/twitch",
-      "help": "OpenClaw Twitch channel plugin (plugin: twitch)",
+      "help": "EVOX.sh Twitch channel plugin (plugin: twitch)",
       "hasChildren": true
     },
     {
@@ -55664,7 +55664,7 @@
         "advanced"
       ],
       "label": "@openclaw/venice-provider",
-      "help": "OpenClaw Venice provider plugin (plugin: venice)",
+      "help": "EVOX.sh Venice provider plugin (plugin: venice)",
       "hasChildren": true
     },
     {
@@ -55785,7 +55785,7 @@
         "advanced"
       ],
       "label": "@openclaw/vercel-ai-gateway-provider",
-      "help": "OpenClaw Vercel AI Gateway provider plugin (plugin: vercel-ai-gateway)",
+      "help": "EVOX.sh Vercel AI Gateway provider plugin (plugin: vercel-ai-gateway)",
       "hasChildren": true
     },
     {
@@ -55906,7 +55906,7 @@
         "advanced"
       ],
       "label": "@openclaw/vllm-provider",
-      "help": "OpenClaw vLLM provider plugin (plugin: vllm)",
+      "help": "EVOX.sh vLLM provider plugin (plugin: vllm)",
       "hasChildren": true
     },
     {
@@ -56027,7 +56027,7 @@
         "advanced"
       ],
       "label": "@openclaw/voice-call",
-      "help": "OpenClaw voice-call plugin (plugin: voice-call)",
+      "help": "EVOX.sh voice-call plugin (plugin: voice-call)",
       "hasChildren": true
     },
     {
@@ -57504,7 +57504,7 @@
         "advanced"
       ],
       "label": "@openclaw/volcengine-provider",
-      "help": "OpenClaw Volcengine provider plugin (plugin: volcengine)",
+      "help": "EVOX.sh Volcengine provider plugin (plugin: volcengine)",
       "hasChildren": true
     },
     {
@@ -57625,7 +57625,7 @@
         "advanced"
       ],
       "label": "@openclaw/whatsapp",
-      "help": "OpenClaw WhatsApp channel plugin (plugin: whatsapp)",
+      "help": "EVOX.sh WhatsApp channel plugin (plugin: whatsapp)",
       "hasChildren": true
     },
     {
@@ -57746,7 +57746,7 @@
         "advanced"
       ],
       "label": "@openclaw/xai-plugin",
-      "help": "OpenClaw xAI plugin (plugin: xai)",
+      "help": "EVOX.sh xAI plugin (plugin: xai)",
       "hasChildren": true
     },
     {
@@ -57923,7 +57923,7 @@
         "advanced"
       ],
       "label": "@openclaw/xiaomi-provider",
-      "help": "OpenClaw Xiaomi provider plugin (plugin: xiaomi)",
+      "help": "EVOX.sh Xiaomi provider plugin (plugin: xiaomi)",
       "hasChildren": true
     },
     {
@@ -58044,7 +58044,7 @@
         "advanced"
       ],
       "label": "@openclaw/zai-provider",
-      "help": "OpenClaw Z.AI provider plugin (plugin: zai)",
+      "help": "EVOX.sh Z.AI provider plugin (plugin: zai)",
       "hasChildren": true
     },
     {
@@ -58165,7 +58165,7 @@
         "advanced"
       ],
       "label": "@openclaw/zalo",
-      "help": "OpenClaw Zalo channel plugin (plugin: zalo)",
+      "help": "EVOX.sh Zalo channel plugin (plugin: zalo)",
       "hasChildren": true
     },
     {
@@ -58286,7 +58286,7 @@
         "advanced"
       ],
       "label": "@openclaw/zalouser",
-      "help": "OpenClaw Zalo Personal Account plugin via native zca-js integration (plugin: zalouser)",
+      "help": "EVOX.sh Zalo Personal Account plugin via native zca-js integration (plugin: zalouser)",
       "hasChildren": true
     },
     {
@@ -58407,7 +58407,7 @@
         "advanced"
       ],
       "label": "Plugin Install Records",
-      "help": "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
+      "help": "CLI-managed install metadata (used by `evox plugins update` to locate install sources).",
       "hasChildren": true
     },
     {
@@ -59351,7 +59351,7 @@
         "storage"
       ],
       "label": "Session Parent Fork Max Tokens",
-      "help": "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
+      "help": "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, EVOX.sh starts a fresh thread session instead of forking; set 0 to disable this protection.",
       "hasChildren": false
     },
     {
@@ -65310,7 +65310,7 @@
         "advanced"
       ],
       "label": "Updates",
-      "help": "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
+      "help": "Update-channel and startup-check behavior for keeping EVOX.sh runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
       "hasChildren": true
     },
     {
@@ -65614,7 +65614,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Version",
-      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
+      "help": "EVOX.sh version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
       "hasChildren": false
     }
   ]

@@ -19,7 +19,7 @@ export function loadEmbeddedPiMcpConfig(params: {
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
 
   return {
-    // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
+    // EVOX.sh config is the owner-managed layer, so it overrides bundle defaults.
     mcpServers: {
       ...bundleMcp.config.mcpServers,
       ...configuredMcp,

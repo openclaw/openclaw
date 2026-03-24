@@ -1,28 +1,28 @@
 ---
 title: "Building Channel Plugins"
 sidebarTitle: "Channel Plugins"
-summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
+summary: "Step-by-step guide to building a messaging channel plugin for EVOX.sh"
 read_when:
   - You are building a new messaging channel plugin
-  - You want to connect OpenClaw to a messaging platform
+  - You want to connect EVOX.sh to a messaging platform
   - You need to understand the ChannelPlugin adapter surface
 ---
 
 # Building Channel Plugins
 
-This guide walks through building a channel plugin that connects OpenClaw to a
+This guide walks through building a channel plugin that connects EVOX.sh to a
 messaging platform. By the end you will have a working channel with DM security,
 pairing, reply threading, and outbound messaging.
 
 <Info>
-  If you have not built any OpenClaw plugin before, read
+  If you have not built any EVOX.sh plugin before, read
   [Getting Started](/plugins/building-plugins) first for the basic package
   structure and manifest setup.
 </Info>
 
 ## How channel plugins work
 
-Channel plugins do not need their own send/edit/react tools. OpenClaw keeps one
+Channel plugins do not need their own send/edit/react tools. EVOX.sh keeps one
 shared `message` tool in core. Your plugin owns:
 
 - **Config** — account resolution and setup wizard
@@ -47,13 +47,13 @@ dispatch.
       "name": "@myorg/openclaw-acme-chat",
       "version": "1.0.0",
       "type": "module",
-      "openclaw": {
+      "evox": {
         "extensions": ["./index.ts"],
         "setupEntry": "./setup-entry.ts",
         "channel": {
           "id": "acme-chat",
           "label": "Acme Chat",
-          "blurb": "Connect OpenClaw to Acme Chat."
+          "blurb": "Connect EVOX.sh to Acme Chat."
         }
       }
     }
@@ -244,7 +244,7 @@ dispatch.
     export default defineSetupPluginEntry(acmeChatPlugin);
     ```
 
-    OpenClaw loads this instead of the full entry when the channel is disabled
+    EVOX.sh loads this instead of the full entry when the channel is disabled
     or unconfigured. It avoids pulling in heavy runtime code during setup flows.
     See [Setup and Config](/plugins/sdk-setup#setup-entry) for details.
 
@@ -252,7 +252,7 @@ dispatch.
 
   <Step title="Handle inbound messages">
     Your plugin needs to receive messages from the platform and forward them to
-    OpenClaw. The typical pattern is a webhook that verifies the request and
+    EVOX.sh. The typical pattern is a webhook that verifies the request and
     dispatches it through your channel's inbound handler:
 
     ```typescript
@@ -263,7 +263,7 @@ dispatch.
         handler: async (req, res) => {
           const event = parseWebhookPayload(req);
 
-          // Your inbound handler dispatches the message to OpenClaw.
+          // Your inbound handler dispatches the message to EVOX.sh.
           // The exact wiring depends on your platform SDK —
           // see a real example in extensions/msteams or extensions/googlechat.
           await handleAcmeChatInbound(api, event);

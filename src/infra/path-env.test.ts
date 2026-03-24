@@ -79,7 +79,7 @@ describe("ensureOpenClawCliOnPath", () => {
   function setupAppCliRoot(name: string) {
     const tmp = abs(`/tmp/openclaw-path/${name}`);
     const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "openclaw");
+    const appCli = path.join(appBinDir, "evox");
     setDir(tmp);
     setDir(appBinDir);
     setExe(appCli);
@@ -97,7 +97,7 @@ describe("ensureOpenClawCliOnPath", () => {
     return (process.env.PATH ?? "").split(path.delimiter);
   }
 
-  it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
+  it("prepends the bundled app bin dir when a sibling evox exists", () => {
     const { tmp, appBinDir, appCli } = setupAppCliRoot("case-bundled");
     process.env.PATH = "/usr/bin";
     delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
@@ -162,7 +162,7 @@ describe("ensureOpenClawCliOnPath", () => {
     ({ envValue, allowProjectLocalBin }) => {
       const { tmp, appCli } = setupAppCliRoot("case-project-local");
       const localBinDir = path.join(tmp, "node_modules", ".bin");
-      const localCli = path.join(localBinDir, "openclaw");
+      const localCli = path.join(localBinDir, "evox");
       setDir(path.join(tmp, "node_modules"));
       setDir(localBinDir);
       setExe(localCli);

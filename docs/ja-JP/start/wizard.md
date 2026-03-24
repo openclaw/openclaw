@@ -16,14 +16,14 @@ x-i18n:
 
 # オンボーディングウィザード（CLI）
 
-CLIオンボーディングウィザードは、macOS、Linux、Windows（WSL2経由）でOpenClawをセットアップする際の推奨パスです。ローカルGatewayまたはリモートGateway接続に加えて、ワークスペースのデフォルト設定、チャンネル、Skillsを構成します。
+CLIオンボーディングウィザードは、macOS、Linux、Windows（WSL2経由）でEVOX.shをセットアップする際の推奨パスです。ローカルGatewayまたはリモートGateway接続に加えて、ワークスペースのデフォルト設定、チャンネル、Skillsを構成します。
 
 ```bash
-openclaw onboard
+evox onboard
 ```
 
 <Info>
-最速で初回チャットを開始する方法：Control UI を開きます（チャンネル設定は不要）。`openclaw dashboard` を実行してブラウザでチャットできます。ドキュメント：[Dashboard](/web/dashboard)。
+最速で初回チャットを開始する方法：Control UI を開きます（チャンネル設定は不要）。`evox dashboard` を実行してブラウザでチャットできます。ドキュメント：[Dashboard](/web/dashboard)。
 </Info>
 
 ## クイックスタート vs 詳細設定
@@ -58,8 +58,8 @@ openclaw onboard
 ## よく使うフォローアップコマンド
 
 ```bash
-openclaw configure
-openclaw agents add <name>
+evox configure
+evox agents add <name>
 ```
 
 <Note>
@@ -67,11 +67,11 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-推奨：エージェントが `web_search` を使用できるように、Brave Search APIキーを設定してください（`web_fetch` はキーなしで動作します）。最も簡単な方法：`openclaw configure --section web` を実行すると `plugins.entries.brave.config.webSearch.apiKey` に保存されます。旧 `tools.web.search.apiKey` パスは互換用に引き続き読み込まれますが、新しい設定では使用しないでください。ドキュメント：[Webツール](/tools/web)。
+推奨：エージェントが `web_search` を使用できるように、Brave Search APIキーを設定してください（`web_fetch` はキーなしで動作します）。最も簡単な方法：`evox configure --section web` を実行すると `plugins.entries.brave.config.webSearch.apiKey` に保存されます。旧 `tools.web.search.apiKey` パスは互換用に引き続き読み込まれますが、新しい設定では使用しないでください。ドキュメント：[Webツール](/tools/web)。
 </Tip>
 
 ## 関連ドキュメント
 
-- CLIコマンドリファレンス：[`openclaw onboard`](/cli/onboard)
+- CLIコマンドリファレンス：[`evox onboard`](/cli/onboard)
 - macOSアプリのオンボーディング：[オンボーディング](/start/onboarding)
 - エージェント初回起動の手順：[エージェントブートストラップ](/start/bootstrapping)

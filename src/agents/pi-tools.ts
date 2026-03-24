@@ -98,7 +98,7 @@ function applyModelProviderToolPolicy(
   if (!hasNativeWebSearchTool(params?.modelCompat)) {
     return tools;
   }
-  // Models with a native web_search tool cannot receive OpenClaw's
+  // Models with a native web_search tool cannot receive EVOX.sh's
   // web_search at the same time or the request will collide.
   return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
 }

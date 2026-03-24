@@ -223,7 +223,7 @@ function configureCandidateKey(candidate: {
   if (candidate.configFile === "auth-profiles.json") {
     return `auth-profiles:${String(candidate.agentId ?? "").trim()}:${candidate.path}`;
   }
-  return `openclaw:${candidate.path}`;
+  return `evox:${candidate.path}`;
 }
 
 function hasSourceChoice(

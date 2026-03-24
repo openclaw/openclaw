@@ -315,7 +315,7 @@ describe("doctor config flow", () => {
       );
       expect(warning?.[0]).toContain("Legacy sync store:");
       expect(warning?.[0]).toContain(
-        'Run "openclaw doctor --fix" to migrate this Matrix state now.',
+        'Run "evox doctor --fix" to migrate this Matrix state now.',
       );
     } finally {
       noteSpy.mockRestore();

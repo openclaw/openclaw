@@ -1,6 +1,6 @@
 # Generated Docs Artifacts
 
-These baseline artifacts are generated from the repo-owned OpenClaw config schema and bundled channel/plugin metadata.
+These baseline artifacts are generated from the repo-owned EVOX.sh config schema and bundled channel/plugin metadata.
 
 - Do not edit `config-baseline.json` by hand.
 - Do not edit `config-baseline.jsonl` by hand.

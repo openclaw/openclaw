@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `evox plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
 title: "plugins"
 ---
 
-# `openclaw plugins`
+# `evox plugins`
 
 Manage Gateway plugins/extensions, hook packs, and compatible bundles.
 
@@ -20,45 +20,45 @@ Related:
 ## Commands
 
 ```bash
-openclaw plugins list
-openclaw plugins install <path-or-spec>
-openclaw plugins inspect <id>
-openclaw plugins enable <id>
-openclaw plugins disable <id>
-openclaw plugins uninstall <id>
-openclaw plugins doctor
-openclaw plugins update <id>
-openclaw plugins update --all
-openclaw plugins marketplace list <marketplace>
+evox plugins list
+evox plugins install <path-or-spec>
+evox plugins inspect <id>
+evox plugins enable <id>
+evox plugins disable <id>
+evox plugins uninstall <id>
+evox plugins doctor
+evox plugins update <id>
+evox plugins update --all
+evox plugins marketplace list <marketplace>
 ```
 
-Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
+Bundled plugins ship with EVOX.sh but start disabled. Use `plugins enable` to
 activate them.
 
-Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON
+Native EVOX.sh plugins must ship `openclaw.plugin.json` with an inline JSON
 Schema (`configSchema`, even if empty). Compatible bundles use their own bundle
 manifests instead.
 
-`plugins list` shows `Format: openclaw` or `Format: bundle`. Verbose list/info
+`plugins list` shows `Format: evox` or `Format: bundle`. Verbose list/info
 output also shows the bundle subtype (`codex`, `claude`, or `cursor`) plus detected bundle
 capabilities.
 
 ### Install
 
 ```bash
-openclaw plugins install <package>                      # ClawHub first, then npm
-openclaw plugins install clawhub:<package>              # ClawHub only
-openclaw plugins install <package> --pin                # pin version
-openclaw plugins install <path>                         # local path
-openclaw plugins install <plugin>@<marketplace>         # marketplace
-openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
+evox plugins install <package>                      # ClawHub first, then npm
+evox plugins install clawhub:<package>              # ClawHub only
+evox plugins install <package> --pin                # pin version
+evox plugins install <path>                         # local path
+evox plugins install <plugin>@<marketplace>         # marketplace
+evox plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 ```
 
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
 
 `plugins install` is also the install surface for hook packs that expose
-`openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook
+`openclaw.hooks` in `package.json`. Use `evox hooks` for filtered hook
 visibility and per-hook enablement, not package installation.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
@@ -66,11 +66,11 @@ Npm specs are **registry-only** (package name + optional **exact version** or
 installs run with `--ignore-scripts` for safety.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+those to a prerelease, EVOX.sh stops and asks you to opt in explicitly with a
 prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as
 `@1.2.3-beta.4`.
 
-If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw
+If a bare install spec matches a bundled plugin id (for example `diffs`), EVOX.sh
 installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
@@ -81,18 +81,18 @@ Claude marketplace installs are also supported.
 ClawHub installs use an explicit `clawhub:<package>` locator:
 
 ```bash
-openclaw plugins install clawhub:openclaw-codex-app-server
-openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
+evox plugins install clawhub:openclaw-codex-app-server
+evox plugins install clawhub:openclaw-codex-app-server@1.2.3
 ```
 
-OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls
+EVOX.sh now also prefers ClawHub for bare npm-safe plugin specs. It only falls
 back to npm if ClawHub does not have that package or version:
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+evox plugins install openclaw-codex-app-server
 ```
 
-OpenClaw downloads the package archive from ClawHub, checks the advertised
+EVOX.sh downloads the package archive from ClawHub, checks the advertised
 plugin API / minimum gateway compatibility, then installs it through the normal
 archive path. Recorded installs keep their ClawHub source metadata for later
 updates.
@@ -101,16 +101,16 @@ Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
 local registry cache at `~/.claude/plugins/known_marketplaces.json`:
 
 ```bash
-openclaw plugins marketplace list <marketplace-name>
-openclaw plugins install <plugin-name>@<marketplace-name>
+evox plugins marketplace list <marketplace-name>
+evox plugins install <plugin-name>@<marketplace-name>
 ```
 
 Use `--marketplace` when you want to pass the marketplace source explicitly:
 
 ```bash
-openclaw plugins install <plugin-name> --marketplace <marketplace-name>
-openclaw plugins install <plugin-name> --marketplace <owner/repo>
-openclaw plugins install <plugin-name> --marketplace ./my-marketplace
+evox plugins install <plugin-name> --marketplace <marketplace-name>
+evox plugins install <plugin-name> --marketplace <owner/repo>
+evox plugins install <plugin-name> --marketplace ./my-marketplace
 ```
 
 Marketplace sources can be:
@@ -121,13 +121,13 @@ Marketplace sources can be:
 - a git URL
 
 For remote marketplaces loaded from GitHub or git, plugin entries must stay
-inside the cloned marketplace repo. OpenClaw accepts relative path sources from
+inside the cloned marketplace repo. EVOX.sh accepts relative path sources from
 that repo and rejects external git, GitHub, URL/archive, and absolute-path
 plugin sources from remote manifests.
 
-For local paths and archives, OpenClaw auto-detects:
+For local paths and archives, EVOX.sh auto-detects:
 
-- native OpenClaw plugins (`openclaw.plugin.json`)
+- native EVOX.sh plugins (`openclaw.plugin.json`)
 - Codex-compatible bundles (`.codex-plugin/plugin.json`)
 - Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude
   component layout)
@@ -142,7 +142,7 @@ diagnostics/info but are not yet wired into runtime execution.
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 
 ```bash
-openclaw plugins install -l ./my-plugin
+evox plugins install -l ./my-plugin
 ```
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
@@ -151,9 +151,9 @@ Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
 ### Uninstall
 
 ```bash
-openclaw plugins uninstall <id>
-openclaw plugins uninstall <id> --dry-run
-openclaw plugins uninstall <id> --keep-files
+evox plugins uninstall <id>
+evox plugins uninstall <id> --dry-run
+evox plugins uninstall <id> --keep-files
 ```
 
 `uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
@@ -169,33 +169,33 @@ state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
 ### Update
 
 ```bash
-openclaw plugins update <id-or-npm-spec>
-openclaw plugins update --all
-openclaw plugins update <id-or-npm-spec> --dry-run
-openclaw plugins update @openclaw/voice-call@beta
+evox plugins update <id-or-npm-spec>
+evox plugins update --all
+evox plugins update <id-or-npm-spec> --dry-run
+evox plugins update @openclaw/voice-call@beta
 ```
 
 Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
 installs in `hooks.internal.installs`.
 
-When you pass a plugin id, OpenClaw reuses the recorded install spec for that
+When you pass a plugin id, EVOX.sh reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
 versions continue to be used on later `update <id>` runs.
 
 For npm installs, you can also pass an explicit npm package spec with a dist-tag
-or exact version. OpenClaw resolves that package name back to the tracked plugin
+or exact version. EVOX.sh resolves that package name back to the tracked plugin
 record, updates that installed plugin, and records the new npm spec for future
 id-based updates.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
+EVOX.sh prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ### Inspect
 
 ```bash
-openclaw plugins inspect <id>
-openclaw plugins inspect <id> --json
+evox plugins inspect <id>
+evox plugins inspect <id> --json
 ```
 
 Deep introspection for a single plugin. Shows identity, load status, source,

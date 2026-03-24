@@ -220,7 +220,7 @@ function parseArgs(args: string[]): AcpServerOptions {
 }
 
 function printHelp(): void {
-  console.log(`Usage: openclaw acp [options]
+  console.log(`Usage: evox acp [options]
 
 Gateway-backed ACP server for IDE integration.
 

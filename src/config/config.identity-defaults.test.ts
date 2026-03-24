@@ -91,7 +91,7 @@ describe("config identity defaults", () => {
     await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         messages: {
-          messagePrefix: "[openclaw]",
+          messagePrefix: "[evox]",
           responsePrefix: "🦞",
         },
         channels: {

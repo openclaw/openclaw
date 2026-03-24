@@ -1,14 +1,14 @@
 ---
-summary: "Use Xiaomi MiMo models with OpenClaw"
+summary: "Use Xiaomi MiMo models with EVOX.sh"
 read_when:
-  - You want Xiaomi MiMo models in OpenClaw
+  - You want Xiaomi MiMo models in EVOX.sh
   - You need XIAOMI_API_KEY setup
 title: "Xiaomi MiMo"
 ---
 
 # Xiaomi MiMo
 
-Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw uses the Xiaomi
+Xiaomi MiMo is the API platform for **MiMo** models. EVOX.sh uses the Xiaomi
 OpenAI-compatible endpoint with API-key authentication. Create your API key in the
 [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys), then configure the
 bundled `xiaomi` provider with that key.
@@ -25,9 +25,9 @@ bundled `xiaomi` provider with that key.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice xiaomi-api-key
+evox onboard --auth-choice xiaomi-api-key
 # or non-interactive
-openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+evox onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 ```
 
 ## Config snippet

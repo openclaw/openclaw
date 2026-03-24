@@ -82,7 +82,7 @@ describe("gateway e2e", () => {
       const token = nextGatewayId("test-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-      const workspaceDir = path.join(tempHome, "openclaw");
+      const workspaceDir = path.join(tempHome, "evox");
       await fs.mkdir(workspaceDir, { recursive: true });
 
       const configDir = path.join(tempHome, ".openclaw");

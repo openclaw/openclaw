@@ -28,7 +28,7 @@ async function runOpenAiMessageChannelRequest(params?: { messageChannelHeader?: 
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: "openclaw",
+          model: "evox",
           messages: [{ role: "user", content: "hi" }],
         }),
       });

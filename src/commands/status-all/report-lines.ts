@@ -134,7 +134,7 @@ export async function buildStatusAllReportLines(params: {
   });
 
   const lines: string[] = [];
-  lines.push(heading("OpenClaw status --all"));
+  lines.push(heading("EVOX.sh status --all"));
   lines.push("");
   lines.push(heading("Overview"));
   lines.push(overview.trimEnd());

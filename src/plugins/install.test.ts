@@ -42,7 +42,7 @@ const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
     packageJson: {
       name: "@evil/..",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
     } as Record<string, unknown>,
   },
   {
@@ -51,7 +51,7 @@ const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
     packageJson: {
       name: "@evil/.",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
     } as Record<string, unknown>,
   },
   {
@@ -318,7 +318,7 @@ function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude
     JSON.stringify({
       name: "@openclaw/native-dual",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
       dependencies: { "left-pad": "1.3.0" },
     }),
     "utf-8",
@@ -353,7 +353,7 @@ async function expectArchiveInstallReservedSegmentRejection(params: {
     packageJson: {
       name: params.packageName,
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
     },
     outName: params.outName,
     withDistIndex: true,
@@ -456,7 +456,7 @@ beforeAll(async () => {
     JSON.stringify({
       name: "@openclaw/test-plugin",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
       dependencies: { "left-pad": "1.3.0" },
     }),
     "utf-8",
@@ -474,7 +474,7 @@ beforeAll(async () => {
     JSON.stringify({
       name: "@openclaw/cognee-openclaw",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      evox: { extensions: ["./dist/index.js"] },
     }),
     "utf-8",
   );
@@ -573,7 +573,7 @@ describe("installPluginFromArchive", () => {
       packageJson: {
         name: "@openclaw/rootless",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        evox: { extensions: ["./dist/index.js"] },
       },
       outName: "rootless-plugin.tgz",
       withDistIndex: true,
@@ -653,7 +653,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "dangerous-plugin",
         version: "1.0.0",
-        openclaw: { extensions: ["index.js"] },
+        evox: { extensions: ["index.js"] },
       }),
     );
     fs.writeFileSync(
@@ -676,7 +676,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "hidden-entry-plugin",
         version: "1.0.0",
-        openclaw: { extensions: [".hidden/index.js"] },
+        evox: { extensions: [".hidden/index.js"] },
       }),
     );
     fs.writeFileSync(
@@ -703,7 +703,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "scan-fail-plugin",
         version: "1.0.0",
-        openclaw: { extensions: ["index.js"] },
+        evox: { extensions: ["index.js"] },
       }),
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};");
@@ -747,7 +747,7 @@ describe("installPluginFromDir", () => {
   it("strips workspace devDependencies before npm install", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
       devDependencies: {
-        openclaw: "workspace:*",
+        evox: "workspace:*",
         vitest: "^3.0.0",
       },
     });
@@ -785,7 +785,7 @@ describe("installPluginFromDir", () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
+      evox?: { install?: Record<string, unknown> };
     };
     manifest.openclaw = {
       ...manifest.openclaw,
@@ -806,7 +806,7 @@ describe("installPluginFromDir", () => {
       return;
     }
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION);
-    expect(result.error).toContain("requires OpenClaw >=2026.3.22, but this host is 2026.3.21");
+    expect(result.error).toContain("requires EVOX.sh >=2026.3.22, but this host is 2026.3.21");
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
@@ -814,7 +814,7 @@ describe("installPluginFromDir", () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
+      evox?: { install?: Record<string, unknown> };
     };
     manifest.openclaw = {
       ...manifest.openclaw,
@@ -844,7 +844,7 @@ describe("installPluginFromDir", () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      openclaw?: { install?: Record<string, unknown> };
+      evox?: { install?: Record<string, unknown> };
     };
     manifest.openclaw = {
       ...manifest.openclaw,

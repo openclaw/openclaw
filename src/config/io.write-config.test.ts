@@ -182,10 +182,10 @@ describe("config io write", () => {
       } satisfies OpenClawConfig;
 
       await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
-        "openclaw config set channels.telegram.allowFrom '[\"*\"]'",
+        "evox config set channels.telegram.allowFrom '[\"*\"]'",
       );
       await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
-        'openclaw config set channels.telegram.dmPolicy "pairing"',
+        'evox config set channels.telegram.dmPolicy "pairing"',
       );
     });
   });

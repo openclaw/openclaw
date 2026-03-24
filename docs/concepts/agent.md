@@ -7,13 +7,13 @@ title: "Agent Runtime"
 
 # Agent Runtime
 
-OpenClaw runs a single embedded agent runtime.
+EVOX.sh runs a single embedded agent runtime.
 
 ## Workspace (required)
 
-OpenClaw uses a single agent workspace directory (`agents.defaults.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
+EVOX.sh uses a single agent workspace directory (`agents.defaults.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
 
-Recommended: use `openclaw setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.
+Recommended: use `evox setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
@@ -23,7 +23,7 @@ per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 
 ## Bootstrap files (injected)
 
-Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
+Inside `agents.defaults.workspace`, EVOX.sh expects these user-editable files:
 
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
@@ -32,11 +32,11 @@ Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
 - `IDENTITY.md` — agent name/vibe/emoji
 - `USER.md` — user profile + preferred address
 
-On the first turn of a new session, OpenClaw injects the contents of these files directly into the agent context.
+On the first turn of a new session, EVOX.sh injects the contents of these files directly into the agent context.
 
 Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
-If a file is missing, OpenClaw injects a single “missing file” marker line (and `openclaw setup` will create a safe default template).
+If a file is missing, EVOX.sh injects a single “missing file” marker line (and `evox setup` will create a safe default template).
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
 
@@ -55,7 +55,7 @@ guidance for how _you_ want them used.
 
 ## Skills
 
-OpenClaw loads skills from three locations (workspace wins on name conflict):
+EVOX.sh loads skills from three locations (workspace wins on name conflict):
 
 - Bundled (shipped with the install)
 - Managed/local: `~/.openclaw/skills`
@@ -67,7 +67,7 @@ Skills can be gated by config/env (see `skills` in [Gateway configuration](/gate
 
 The embedded agent runtime is built on the Pi agent core (models, tools, and
 prompt pipeline). Session management, discovery, tool wiring, and channel
-delivery are OpenClaw-owned layers on top of that core.
+delivery are EVOX.sh-owned layers on top of that core.
 
 ## Sessions
 
@@ -75,7 +75,7 @@ Session transcripts are stored as JSONL at:
 
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-The session ID is stable and chosen by OpenClaw.
+The session ID is stable and chosen by EVOX.sh.
 Legacy session folders from other tools are not read.
 
 ## Steering while streaming
@@ -108,7 +108,7 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 
 - Use `provider/model` when configuring models.
 - If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, EVOX.sh treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ## Configuration (minimal)
 

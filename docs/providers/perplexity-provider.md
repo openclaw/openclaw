@@ -25,13 +25,13 @@ This page covers the Perplexity **provider** setup. For the Perplexity
 1. Set the API key:
 
 ```bash
-openclaw configure --section web
+evox configure --section web
 ```
 
 Or set it directly:
 
 ```bash
-openclaw config set plugins.entries.perplexity.config.webSearch.apiKey "pplx-xxxxxxxxxxxx"
+evox config set plugins.entries.perplexity.config.webSearch.apiKey "pplx-xxxxxxxxxxxx"
 ```
 
 2. The agent will automatically use Perplexity for web searches when configured.

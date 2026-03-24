@@ -46,7 +46,7 @@ function makeCfg(
     agents: {
       defaults: {
         model: "anthropic/claude-sonnet-4-5",
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "evox"),
       },
     },
     session: { store: storePath, mainKey: "main" },
@@ -163,7 +163,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
               agents: {
                 defaults: {
                   ...cfgOverrides.agents?.defaults,
-                  workspace: path.join(home, "openclaw"),
+                  workspace: path.join(home, "evox"),
                 },
               },
             } satisfies Partial<OpenClawConfig>);
@@ -181,7 +181,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-sonnet-4-5",
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "evox"),
               subagents: { model: "ollama/llama3.2:3b" },
             },
           },

@@ -181,10 +181,10 @@ const OPENAI_RATE_LIMIT_MESSAGE =
 const ANTHROPIC_OVERLOADED_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
-// https://github.com/openclaw/openclaw/issues/23440
+// https://github.com/sonpiaz/evox-sh/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
-// Internal OpenClaw compatibility marker, not a provider API contract.
+// Internal EVOX.sh compatibility marker, not a provider API contract.
 const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 are cooling down";
 // SDK/transport compatibility marker, not a provider API contract.
 const CONNECTION_ERROR_MESSAGE = "Connection error.";

@@ -66,7 +66,7 @@ describe("bundled plugin metadata", () => {
     writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
       name: "@openclaw/alpha",
       version: "0.0.1",
-      openclaw: {
+      evox: {
         extensions: ["./index.ts"],
       },
     });

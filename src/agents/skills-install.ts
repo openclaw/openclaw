@@ -72,12 +72,12 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
       );
     } else if (summary.warn > 0) {
       warnings.push(
-        `Skill "${skillName}" has ${summary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+        `Skill "${skillName}" has ${summary.warn} suspicious code pattern(s). Run "evox security audit --deep" for details.`,
       );
     }
   } catch (err) {
     warnings.push(
-      `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "evox security audit --deep" after install.`,
     );
   }
 

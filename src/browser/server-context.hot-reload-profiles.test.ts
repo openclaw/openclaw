@@ -12,7 +12,7 @@ function buildConfig() {
       enabled: true,
       color: "#FF4500",
       headless: true,
-      defaultProfile: "openclaw",
+      defaultProfile: "evox",
       profiles: { ...cfgProfiles },
     },
   };
@@ -51,13 +51,13 @@ describe("server-context hot-reload profiles", () => {
       await import("./resolved-config-refresh.js"));
     vi.clearAllMocks();
     cfgProfiles = {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      evox: { cdpPort: 18800, color: "#FF4500" },
     };
     cachedConfig = null; // Clear simulated cache
   });
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
-    // Start with only openclaw profile
+    // Start with only evox profile
     // 1. Prime the cache by calling loadConfig() first
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -142,7 +142,7 @@ describe("server-context hot-reload profiles", () => {
     const after = resolveBrowserProfileWithHotReload({
       current: state,
       refreshConfigFromDisk: true,
-      name: "openclaw",
+      name: "evox",
     });
     expect(after?.cdpPort).toBe(19999);
     expect(state.resolved.profiles.openclaw?.cdpPort).toBe(19999);
@@ -172,7 +172,7 @@ describe("server-context hot-reload profiles", () => {
   it("marks existing runtime state for reconcile when profile invariants change", async () => {
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    const openclawProfile = resolveProfile(resolved, "openclaw");
+    const openclawProfile = resolveProfile(resolved, "evox");
     expect(openclawProfile).toBeTruthy();
     const state: BrowserServerState = {
       server: null,
@@ -180,7 +180,7 @@ describe("server-context hot-reload profiles", () => {
       resolved,
       profiles: new Map([
         [
-          "openclaw",
+          "evox",
           {
             profile: openclawProfile!,
             running: { pid: 123 } as never,
@@ -200,7 +200,7 @@ describe("server-context hot-reload profiles", () => {
       mode: "cached",
     });
 
-    const runtime = state.profiles.get("openclaw");
+    const runtime = state.profiles.get("evox");
     expect(runtime).toBeTruthy();
     expect(runtime?.profile.cdpPort).toBe(19999);
     expect(runtime?.lastTargetId).toBeNull();

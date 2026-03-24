@@ -14,7 +14,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(warnings).toEqual([
@@ -36,7 +36,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "evox doctor --fix",
     });
 
     expect(warnings).toEqual([

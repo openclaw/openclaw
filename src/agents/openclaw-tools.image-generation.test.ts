@@ -35,7 +35,7 @@ function stubImageGenerationProviders() {
   ]);
 }
 
-describe("openclaw tools image generation registration", () => {
+describe("evox tools image generation registration", () => {
   beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEYS", "");
