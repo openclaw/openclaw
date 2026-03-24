@@ -479,4 +479,120 @@ describe("resolveAndPersistSessionFile", () => {
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
+
+  it("rotates transcript path when session id changes", async () => {
+    const previousSessionId = "old-session-id";
+    const nextSessionId = "new-session-id";
+    const sessionKey = "agent:sre:main";
+    const previousSessionFile = resolveSessionTranscriptPathInDir(
+      previousSessionId,
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: previousSessionId,
+          updatedAt: Date.now(),
+          sessionFile: previousSessionFile,
+        },
+      }),
+      "utf-8",
+    );
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      nextSessionId,
+      fixture.sessionsDir(),
+    );
+    const result = await resolveAndPersistSessionFile({
+      sessionId: nextSessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+      fallbackSessionFile,
+    });
+
+    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionEntry.sessionFile).toBe(result.sessionFile);
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionId).toBe(nextSessionId);
+    expect(saved[sessionKey]?.sessionFile).toBe(result.sessionFile);
+  });
+
+  it("derives a fresh transcript path when session id changes without fallback", async () => {
+    const previousSessionId = "old-session-id";
+    const nextSessionId = "new-session-id";
+    const sessionKey = "agent:sre:main";
+    const previousSessionFile = resolveSessionTranscriptPathInDir(
+      previousSessionId,
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: previousSessionId,
+          updatedAt: Date.now(),
+          sessionFile: previousSessionFile,
+        },
+      }),
+      "utf-8",
+    );
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId: nextSessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+      sessionsDir: fixture.sessionsDir(),
+    });
+
+    expect(result.sessionFile).toBe(
+      resolveSessionTranscriptPathInDir(nextSessionId, fixture.sessionsDir()),
+    );
+    expect(result.sessionFile).not.toBe(previousSessionFile);
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionId).toBe(nextSessionId);
+    expect(saved[sessionKey]?.sessionFile).toBe(result.sessionFile);
+  });
+
+  it("rotates away from persisted transcript paths when the stored session id is empty", async () => {
+    const nextSessionId = "new-session-id";
+    const sessionKey = "agent:sre:main";
+    const previousSessionFile = resolveSessionTranscriptPathInDir(
+      "old-session-id",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "",
+          updatedAt: Date.now(),
+          sessionFile: previousSessionFile,
+        },
+      }),
+      "utf-8",
+    );
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId: nextSessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+      sessionsDir: fixture.sessionsDir(),
+    });
+
+    expect(result.sessionFile).toBe(
+      resolveSessionTranscriptPathInDir(nextSessionId, fixture.sessionsDir()),
+    );
+    expect(result.sessionFile).not.toBe(previousSessionFile);
+    expect(result.sessionEntry.sessionId).toBe(nextSessionId);
+  });
 });

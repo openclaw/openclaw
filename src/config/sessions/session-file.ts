@@ -16,11 +16,19 @@ export async function resolveAndPersistSessionFile(params: {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const baseEntry = params.sessionEntry ??
     sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
+  const reusePersistedSessionFile =
+    sessionId.trim().length > 0 && baseEntry.sessionId === sessionId;
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const entryForResolve =
-    !baseEntry.sessionFile && fallbackSessionFile
-      ? { ...baseEntry, sessionFile: fallbackSessionFile }
-      : baseEntry;
+  let entryForResolve = baseEntry;
+  // A new session ID must rotate off any stale persisted transcript path,
+  // while same-session recovery can still seed a missing path from fallback.
+  if (!reusePersistedSessionFile) {
+    // New session: clear old path, optionally seed from fallback.
+    entryForResolve = { ...baseEntry, sessionFile: fallbackSessionFile || undefined };
+  } else if (!baseEntry.sessionFile && fallbackSessionFile) {
+    // Same session: seed a missing path from fallback.
+    entryForResolve = { ...baseEntry, sessionFile: fallbackSessionFile };
+  }
   const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
     agentId: params.agentId,
     sessionsDir: params.sessionsDir,
