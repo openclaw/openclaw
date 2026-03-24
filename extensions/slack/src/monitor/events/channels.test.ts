@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 let registerSlackChannelEvents: typeof import("./channels.js").registerSlackChannelEvents;
@@ -32,11 +32,14 @@ function createChannelContext(params?: {
 }
 
 describe("registerSlackChannelEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    enqueueSystemEventMock.mockClear();
     ({ registerSlackChannelEvents } = await import("./channels.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    enqueueSystemEventMock.mockClear();
   });
 
   it("does not track mismatched events", async () => {
