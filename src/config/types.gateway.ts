@@ -390,6 +390,15 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewaySessionsListConfig = {
+  /**
+   * Maximum number of transcript usage fallbacks to hydrate in parallel while
+   * servicing gateway sessions.list.
+   * Default: 1 (preserves the current serial behavior).
+   */
+  fallbackConcurrency?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -432,6 +441,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** sessions.list performance settings. */
+  sessionsList?: GatewaySessionsListConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

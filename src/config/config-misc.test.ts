@@ -225,6 +225,33 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.sessionsList.fallbackConcurrency", () => {
+  it("accepts positive integer concurrency", () => {
+    const res = validateConfigObject({
+      gateway: {
+        sessionsList: {
+          fallbackConcurrency: 4,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects zero or negative values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        sessionsList: {
+          fallbackConcurrency: 0,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.sessionsList.fallbackConcurrency");
+    }
+  });
+});
+
 describe("gateway.channelHealthCheckMinutes", () => {
   it("accepts zero to disable monitor", () => {
     const res = validateConfigObject({
