@@ -73,6 +73,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Explicit agent identity persisted for session consumers that do not parse the session key. */
+  agentId?: string;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

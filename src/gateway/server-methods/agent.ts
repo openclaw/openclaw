@@ -452,6 +452,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       const nextEntryPatch: SessionEntry = {
+        agentId: sessionAgent,
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,

@@ -476,6 +476,7 @@ export async function spawnSubagentDirect(
   };
 
   const initialChildSessionPatch: Record<string, unknown> = {
+    agentId: targetAgentId,
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
