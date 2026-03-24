@@ -21,7 +21,6 @@ const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js"));
   ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
   ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
