@@ -3,12 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
-import {
-  wrapFetchWithPayment,
-  x402Client,
-  x402HTTPClient,
-  decodePaymentResponseHeader,
-} from "@x402/fetch";
+import { wrapFetchWithPayment, x402Client, decodePaymentResponseHeader } from "@x402/fetch";
 import { privateKeyToAccount } from "viem/accounts";
 import { jsonResult, readStringParam, ToolInputError } from "../../../src/agents/tools/common.js";
 import { resolveStorePath } from "../../../src/config/sessions/paths.js";
@@ -25,6 +20,8 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const DEFAULT_WALLET_ENV_VAR = "PYTHIA_BASE_PRIVATE_KEY";
 const BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+const MCP_PAYMENT_META_KEY = "x402/payment";
+const MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response";
 
 type PythiaPluginConfig = {
   url: string;
@@ -93,6 +90,7 @@ type ToolCallResponse = {
     structuredContent?: unknown;
     content?: ToolCallContentItem[];
     isError?: boolean;
+    _meta?: Record<string, unknown>;
   };
   error?: {
     message?: string;
@@ -698,40 +696,63 @@ async function callOracleTool(params: {
   query: string;
   context?: string;
   agentId: string;
-  extraHeaders?: Record<string, string>;
+  paymentPayload?: unknown;
 }): Promise<Response> {
+  const toolParams: Record<string, unknown> = {
+    name: "consult_oracle",
+    arguments: {
+      query: params.query,
+      ...(params.context ? { context: params.context } : {}),
+      agent_id: params.agentId,
+    },
+  };
+  if (params.paymentPayload !== undefined) {
+    toolParams._meta = {
+      [MCP_PAYMENT_META_KEY]: params.paymentPayload,
+    };
+  }
   return await params.fetchImpl(params.url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       "Mcp-Session-Id": params.sessionId,
-      ...(params.extraHeaders ?? {}),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: randomUUID(),
       method: "tools/call",
-      params: {
-        name: "consult_oracle",
-        arguments: {
-          query: params.query,
-          ...(params.context ? { context: params.context } : {}),
-          agent_id: params.agentId,
-        },
-      },
+      params: toolParams,
     }),
   });
+}
+
+function extractPaymentResponseFromToolResult(
+  response: ToolCallResponse,
+): Record<string, unknown> | undefined {
+  const meta = response.result?._meta;
+  if (!meta || typeof meta !== "object") {
+    return undefined;
+  }
+  const paymentResponse = meta[MCP_PAYMENT_RESPONSE_META_KEY];
+  return paymentResponse && typeof paymentResponse === "object"
+    ? (paymentResponse as Record<string, unknown>)
+    : undefined;
 }
 
 async function maybeRecordPaidResponse(params: {
   statePath: string;
   req: PaymentRequirementLike;
   expectedPriceUsd?: number;
-  response: Response;
+  response?: Response;
+  toolResult?: ToolCallResponse;
+  forceRecord?: boolean;
 }): Promise<void> {
-  const paymentResponse = params.response.headers.get("PAYMENT-RESPONSE");
-  if (!paymentResponse) {
+  const paymentResponseHeader = params.response?.headers.get("PAYMENT-RESPONSE");
+  const paymentResponseMeta = params.toolResult
+    ? extractPaymentResponseFromToolResult(params.toolResult)
+    : undefined;
+  if (!paymentResponseHeader && !paymentResponseMeta && !params.forceRecord) {
     return;
   }
 
@@ -746,14 +767,21 @@ async function maybeRecordPaidResponse(params: {
   }
 
   let transaction: string | undefined;
-  try {
-    const decoded = decodePaymentResponseHeader(paymentResponse);
+  if (paymentResponseMeta) {
     transaction =
-      typeof decoded.transaction === "string" && decoded.transaction.trim()
-        ? decoded.transaction.trim()
+      typeof paymentResponseMeta.transaction === "string" && paymentResponseMeta.transaction.trim()
+        ? paymentResponseMeta.transaction.trim()
         : undefined;
-  } catch {
-    transaction = undefined;
+  } else if (paymentResponseHeader) {
+    try {
+      const decoded = decodePaymentResponseHeader(paymentResponseHeader);
+      transaction =
+        typeof decoded.transaction === "string" && decoded.transaction.trim()
+          ? decoded.transaction.trim()
+          : undefined;
+    } catch {
+      transaction = undefined;
+    }
   }
 
   nextState.history = [
@@ -861,7 +889,6 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
               });
       const fetchImpl =
         paymentClient === undefined ? fetch : wrapFetchWithPayment(fetch, paymentClient);
-      const paymentHttpClient = paymentClient ? new x402HTTPClient(paymentClient) : undefined;
 
       const sessionId = await openMcpSession({
         fetchImpl,
@@ -897,13 +924,12 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
       let responseBody = await readMcpJsonResponse<ToolCallResponse>(toolResponse);
       const paymentRequired = parseX402PaymentRequired(extractToolErrorText(responseBody));
       if (paymentRequired) {
-        if (!paymentClient || !paymentHttpClient) {
+        if (!paymentClient) {
           throw new Error(
             `${config.serviceName} requires x402 payment of ${describePaymentRequirement({ req: paymentRequired.accepts[0]!, fallbackUsd: config.expectedPriceUsd })}, but ${config.walletPrivateKeyEnvVar} is not configured.`,
           );
         }
         const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
-        const paymentHeaders = paymentHttpClient.encodePaymentSignatureHeader(paymentPayload);
         const paidToolResponse = await callOracleTool({
           fetchImpl: fetch,
           url: config.url,
@@ -911,7 +937,7 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
           query,
           context,
           agentId,
-          extraHeaders: paymentHeaders,
+          paymentPayload,
         });
         if (!paidToolResponse.ok) {
           parseToolCallHttpError({
@@ -919,6 +945,15 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
             walletEnvVar: config.walletPrivateKeyEnvVar,
             serviceName: config.serviceName,
           });
+        }
+        responseBody = await readMcpJsonResponse<ToolCallResponse>(paidToolResponse);
+        const paymentRequiredAfterRetry = parseX402PaymentRequired(
+          extractToolErrorText(responseBody),
+        );
+        if (paymentRequiredAfterRetry) {
+          throw new Error(
+            `${config.serviceName} still requires x402 payment of ${describePaymentRequirement({ req: paymentRequiredAfterRetry.accepts[0]!, fallbackUsd: config.expectedPriceUsd })} after an automatic payment attempt.`,
+          );
         }
         await maybeRecordPaidResponse({
           statePath,
@@ -934,16 +969,9 @@ export function createPythiaOracleTool(api: OpenClawPluginApi, ctx: OpenClawPlug
           },
           expectedPriceUsd: config.expectedPriceUsd,
           response: paidToolResponse,
+          toolResult: responseBody,
+          forceRecord: true,
         });
-        responseBody = await readMcpJsonResponse<ToolCallResponse>(paidToolResponse);
-        const paymentRequiredAfterRetry = parseX402PaymentRequired(
-          extractToolErrorText(responseBody),
-        );
-        if (paymentRequiredAfterRetry) {
-          throw new Error(
-            `${config.serviceName} still requires x402 payment of ${describePaymentRequirement({ req: paymentRequiredAfterRetry.accepts[0]!, fallbackUsd: config.expectedPriceUsd })} after an automatic payment attempt.`,
-          );
-        }
       }
       return jsonResult(extractOraclePayload(responseBody));
     },
@@ -961,6 +989,7 @@ export const __testing = {
   loadPaymentState,
   savePaymentState,
   maybeRecordPaidResponse,
+  extractPaymentResponseFromToolResult,
   extractOraclePayload,
   parseX402PaymentRequired,
   extractToolErrorText,

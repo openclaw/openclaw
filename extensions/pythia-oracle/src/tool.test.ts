@@ -123,6 +123,91 @@ describe("pythia-oracle helpers", () => {
     expect(state.history?.[0]?.transaction).toBe("0xtxhash");
   });
 
+  it("extracts MCP payment settlement metadata from tool results", () => {
+    expect(
+      __testing.extractPaymentResponseFromToolResult({
+        result: {
+          _meta: {
+            "x402/payment-response": {
+              success: true,
+              transaction: "0xmeta",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      success: true,
+      transaction: "0xmeta",
+    });
+  });
+
+  it("records MCP payment settlements from tool-result metadata", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pythia-oracle-"));
+    tempDirs.push(dir);
+    const statePath = path.join(dir, "payments.json");
+
+    await __testing.maybeRecordPaidResponse({
+      statePath,
+      req: {
+        scheme: "exact",
+        network: "eip155:8453",
+        asset: "USDC",
+        amount: "25000",
+        payTo: "0xabc",
+        maxTimeoutSeconds: 300,
+        extra: {},
+      },
+      expectedPriceUsd: 0.025,
+      toolResult: {
+        result: {
+          _meta: {
+            "x402/payment-response": {
+              success: true,
+              transaction: "0xmeta",
+            },
+          },
+        },
+      },
+    });
+
+    const state = await __testing.loadPaymentState(statePath);
+    const dayKey = new Date().toISOString().slice(0, 10);
+    expect(state.dailySpendUsd?.[dayKey]).toBeCloseTo(0.025, 6);
+    expect(state.history?.[0]?.transaction).toBe("0xmeta");
+  });
+
+  it("records successful paid retries even without settlement metadata", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pythia-oracle-"));
+    tempDirs.push(dir);
+    const statePath = path.join(dir, "payments.json");
+
+    await __testing.maybeRecordPaidResponse({
+      statePath,
+      req: {
+        scheme: "exact",
+        network: "eip155:8453",
+        asset: "USDC",
+        amount: "25000",
+        payTo: "0xabc",
+        maxTimeoutSeconds: 300,
+        extra: {},
+      },
+      expectedPriceUsd: 0.025,
+      toolResult: {
+        result: {
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
+      forceRecord: true,
+    });
+
+    const state = await __testing.loadPaymentState(statePath);
+    const dayKey = new Date().toISOString().slice(0, 10);
+    expect(state.dailySpendUsd?.[dayKey]).toBeCloseTo(0.025, 6);
+    expect(state.history?.[0]?.transaction).toBeUndefined();
+  });
+
   it("extracts structured oracle payloads from MCP responses", () => {
     expect(
       __testing.extractOraclePayload({
