@@ -69,11 +69,9 @@ function resolveProviderFromContext(
         accountId: ctx.AccountId,
         allowFrom: resolvedAllowFrom.allowFrom,
       });
-      if (allowFrom.length === 0) {
-        return null;
-      }
       return {
         providerId: plugin.id,
+        allowFrom,
         hadResolutionError: resolvedAllowFrom.hadResolutionError,
       };
     })
@@ -82,11 +80,16 @@ function resolveProviderFromContext(
         value,
       ): value is {
         providerId: ChannelId;
+        allowFrom: string[];
         hadResolutionError: boolean;
       } => Boolean(value),
     );
-  if (configured.length === 1) {
-    return configured[0];
+  const inferred = configured.filter((entry) => entry.allowFrom.length > 0);
+  if (inferred.length === 1) {
+    return {
+      providerId: inferred[0].providerId,
+      hadResolutionError: inferred[0].hadResolutionError,
+    };
   }
   return {
     providerId: undefined,
@@ -450,6 +453,9 @@ export function resolveCommandAuthorization(params: {
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
+  const commandsAllowFromConfigured = Boolean(
+    cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
+  );
 
   // Check if commands.allowFrom is configured (separate command authorization)
   const commandsAllowFromList = resolveCommandsAllowFromList({
@@ -565,10 +571,12 @@ export function resolveCommandAuthorization(params: {
   // If commands.allowFrom is configured, use it for command authorization
   // Otherwise, fall back to existing behavior (channel allowFrom + owner checks)
   let isAuthorizedSender: boolean;
-  if (commandsAllowFromList !== null) {
+  if (commandsAllowFromList !== null || (providerResolutionError && commandsAllowFromConfigured)) {
     // commands.allowFrom is configured - use it for authorization
-    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
-    const matchedCommandsAllowFrom = commandsAllowFromList.length
+    const commandsAllowAll =
+      !providerResolutionError &&
+      Boolean(commandsAllowFromList?.some((entry) => entry.trim() === "*"));
+    const matchedCommandsAllowFrom = commandsAllowFromList?.length
       ? senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
       : undefined;
     isAuthorizedSender =
