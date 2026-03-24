@@ -1,14 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
+
+const loadJsonFile = vi.fn();
+const saveJsonFile = vi.fn();
+
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile,
+  saveJsonFile,
+}));
+
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir: () => "/tmp/openclaw-state",
+}));
+
+let deriveCopilotApiBaseUrlFromToken: typeof import("./token.js").deriveCopilotApiBaseUrlFromToken;
+let resolveCopilotApiToken: typeof import("./token.js").resolveCopilotApiToken;
 
 describe("github-copilot token", () => {
-  const loadJsonFile = vi.fn();
-  const saveJsonFile = vi.fn();
   const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadJsonFile.mockClear();
     saveJsonFile.mockClear();
+    ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
   });
 
   it("derives baseUrl from token", async () => {
@@ -54,8 +68,6 @@ describe("github-copilot token", () => {
         expires_at: Math.floor(Date.now() / 1000) + 3600,
       }),
     });
-
-    const { resolveCopilotApiToken } = await import("./token.js");
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
