@@ -101,13 +101,21 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
-  // Record timestamp BEFORE populating the map so that any disk writes
-  // that occur during or after map population are detected as stale on
-  // the next resolveRuntimeAuthProfileStore() call (mtime will be >= this timestamp).
-  // Note: writes between the upstream disk read and this point are NOT caught —
-  // that is an inherent limitation of mtime-based invalidation without holding a
-  // file lock across the entire prepare→activate sequence.
-  runtimeSnapshotsLoadedAtMs = Date.now();
+  // Capture the earliest mtime across all auth store files represented by entries.
+  // This ensures that any file update that landed before this call is detected as stale
+  // (mtime > runtimeSnapshotsLoadedAtMs) on the next resolveRuntimeAuthProfileStore() check.
+  // We read mtime here (at activation time) rather than at load time to close the window
+  // between prepareSecretsRuntimeSnapshot's disk reads and this function call.
+  let earliestMtime = Date.now();
+  for (const entry of entries) {
+    const authPath = resolveAuthStorePath(entry.agentDir);
+    const mtime = readAuthStoreMtimeMs(authPath);
+    if (mtime !== null && mtime < earliestMtime) {
+      earliestMtime = mtime;
+    }
+  }
+  runtimeSnapshotsLoadedAtMs = earliestMtime;
+
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
     runtimeAuthStoreSnapshots.set(
