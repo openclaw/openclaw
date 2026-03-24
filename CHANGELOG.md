@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - ModelStudio/Qwen: add standard (pay-as-you-go) DashScope endpoints for China and global Qwen API keys alongside the existing Coding Plan endpoints, and relabel the provider group to `Qwen (Alibaba Cloud Model Studio)`. (#43878)
 - UI/clarity: consolidate button primitives (`btn--icon`, `btn--ghost`, `btn--xs`), refine the Knot theme to a black-and-red palette with WCAG 2.1 AA contrast, add config icons for Diagnostics/CLI/Secrets/ACP/MCP sections, replace the roundness slider with discrete stops, and improve accessibility with aria-labels across usage filters. (#53272) Thanks @BunsDev.
+- CSP/Control UI: compute SHA-256 hashes for inline `<script>` blocks in the served `index.html` and include them in the `script-src` CSP directive, keeping inline scripts blocked by default while allowing explicitly hashed bootstrap code. (#53307) Thanks @BunsDev.
 
 ### Fixes
 
