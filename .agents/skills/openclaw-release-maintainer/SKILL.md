@@ -72,8 +72,19 @@ pnpm test:install:smoke
 For a non-root smoke path:
 
 ```bash
-OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
+  OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 ```
+
+After npm publish, run:
+
+```bash
+node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
+```
+
+- This verifies the published registry install path in a fresh temp prefix.
+- For stable correction releases like `YYYY.M.D-N`, it also verifies the
+  upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
+  silently leave existing global installs on the old base stable payload.
 
 ## Check all relevant release builds
 
@@ -138,9 +149,10 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
   build, signing, notarization, packaged mac artifact generation, and
   stable-feed `appcast.xml` artifact generation.
-- After a successful real private mac publish, the agent must download
-  `macos-release-<tag>` from that run and upload the packaged mac assets to the
-  existing GitHub release in `openclaw/openclaw`.
+- Real private mac publish uploads the packaged `.zip`, `.dmg`, and
+  `.dSYM.zip` assets to the existing GitHub release in `openclaw/openclaw`
+  automatically when `OPENCLAW_PUBLIC_REPO_RELEASE_TOKEN` is present in the
+  private repo `mac-release` environment.
 - For stable releases, the agent must also download the signed
   `macos-appcast-<tag>` artifact from the successful private mac workflow and
   then update `appcast.xml` on `main`.
@@ -210,9 +222,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 15. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish and wait for success.
-16. Download `macos-release-<tag>` from the successful private mac run and
-    upload the `.zip`, `.dmg`, and `.dSYM.zip` artifacts to the existing
-    GitHub release in `openclaw/openclaw`.
+16. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+    and `.dSYM.zip` artifacts to the existing GitHub release in
+    `openclaw/openclaw`.
 17. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
 18. For beta releases, publish the mac assets but expect no shared production

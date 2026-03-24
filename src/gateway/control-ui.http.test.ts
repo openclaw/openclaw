@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -127,6 +128,27 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+      },
+    });
+  });
+
+  it("includes CSP hash for inline scripts in index.html", async () => {
+    const scriptContent = "(function(){ var x = 1; })();";
+    const html = `<html><head><script>${scriptContent}</script></head><body></body></html>\n`;
+    const expectedHash = createHash("sha256").update(scriptContent, "utf8").digest("base64");
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, setHeader } = makeMockHttpResponse();
+        handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+        });
+        const cspCalls = setHeader.mock.calls.filter(
+          (call) => call[0] === "Content-Security-Policy",
+        );
+        const lastCsp = String(cspCalls[cspCalls.length - 1]?.[1] ?? "");
+        expect(lastCsp).toContain(`'sha256-${expectedHash}'`);
+        expect(lastCsp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
       },
     });
   });

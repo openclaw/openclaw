@@ -93,7 +93,12 @@ describe("exec approvals shell analysis", () => {
       }
 
       const planned = resolvePlannedSegmentArgv(segment);
-      expect(planned).toEqual([segment.resolution?.resolvedPath, "-lc", "echo hi"]);
+      expect(planned).toEqual([
+        segment.resolution?.execution.resolvedRealPath ??
+          segment.resolution?.execution.resolvedPath,
+        "-lc",
+        "echo hi",
+      ]);
       expect(planned?.[0]).not.toBe(busybox);
     });
   });
