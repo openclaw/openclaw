@@ -1,6 +1,6 @@
 import {
   getActivePluginRegistryVersion,
-  requireActivePluginRegistry,
+  requireActivePluginChannelRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
@@ -34,7 +34,7 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
 function resolveCachedChannelPlugins(): CachedChannelPlugins {
-  const registry = requireActivePluginRegistry();
+  const registry = requireActivePluginChannelRegistry();
   const registryVersion = getActivePluginRegistryVersion();
   const cached = cachedChannelPlugins;
   if (cached.registryVersion === registryVersion) {
