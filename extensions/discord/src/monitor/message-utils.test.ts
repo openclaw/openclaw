@@ -729,6 +729,7 @@ describe("resolveDiscordMessageText", () => {
             title: "Test",
             fields: [
               { name: "  ", value: "val" },
+              { name: "Real", value: "   " },
               { name: "Real", value: "data" },
             ],
           },
