@@ -112,6 +112,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaType?: string;
     mediaPaths?: string[];
     mediaTypes?: string[];
+    replyToBody?: string;
+    replyToMediaPath?: string;
+    replyToMediaType?: string;
     commandAuthorized: boolean;
     wasMentioned?: boolean;
   };
@@ -212,6 +215,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPaths: entry.mediaPaths,
       MediaUrls: entry.mediaPaths,
       MediaTypes: entry.mediaTypes,
+      ReplyToBody: entry.replyToBody,
+      ReplyToMediaPath: entry.replyToMediaPath,
+      ReplyToMediaType: entry.replyToMediaType,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
@@ -745,6 +751,38 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    // Download first attachment from quoted (reply-target) message, if any.
+    let replyToBody: string | undefined;
+    let replyToMediaPath: string | undefined;
+    let replyToMediaType: string | undefined;
+    const quote = dataMessage.quote;
+    if (quote) {
+      replyToBody = quote.text?.trim() || undefined;
+      const quoteAttachments = quote.attachments ?? [];
+      if (!deps.ignoreAttachments && quoteAttachments.length > 0) {
+        const firstQuoteAttachment = quoteAttachments.find((a) => a?.id);
+        if (firstQuoteAttachment) {
+          try {
+            const fetched = await deps.fetchAttachment({
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              attachment: firstQuoteAttachment,
+              sender: senderRecipient,
+              groupId,
+              maxBytes: deps.mediaMaxBytes,
+            });
+            if (fetched) {
+              replyToMediaPath = fetched.path;
+              replyToMediaType =
+                fetched.contentType ?? firstQuoteAttachment.contentType ?? undefined;
+            }
+          } catch (err) {
+            logVerbose(`quoted attachment fetch failed: ${String(err)}`);
+          }
+        }
+      }
+    }
+
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
     if (!bodyText) {
       return;
@@ -794,6 +832,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+      replyToBody,
+      replyToMediaPath,
+      replyToMediaType,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
     });
