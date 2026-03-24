@@ -100,7 +100,7 @@ describe("resolveNpmRunner", () => {
       args: [],
       shell: false,
       env: {
-        PATH: `/tmp${path.delimiter}/usr/bin:/bin`,
+        PATH: `/tmp${path.posix.delimiter}/usr/bin:/bin`,
       },
     });
   });

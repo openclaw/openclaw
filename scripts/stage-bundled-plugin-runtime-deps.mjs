@@ -91,7 +91,10 @@ export function resolveNpmRunner(params = {}) {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? env.ComSpec ?? "cmd.exe";
-  const pathImpl = platform === "win32" ? path.win32 : path;
+  // Use explicit win32 vs posix so unit tests that simulate darwin/linux behave the same on
+  // Windows hosts (Node's default `path` module follows the host OS, not params.platform).
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const pathDelimiter = platform === "win32" ? path.win32.delimiter : path.posix.delimiter;
   const nodeDir = pathImpl.dirname(execPath);
   const npmToolchain = resolveToolchainNpmRunner({
     comSpec,
@@ -127,7 +130,7 @@ export function resolveNpmRunner(params = {}) {
       ...env,
       [pathKey]:
         typeof currentPath === "string" && currentPath.length > 0
-          ? `${nodeDir}${path.delimiter}${currentPath}`
+          ? `${nodeDir}${pathDelimiter}${currentPath}`
           : nodeDir,
     },
   };
