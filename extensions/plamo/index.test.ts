@@ -67,10 +67,10 @@ describe("plamo provider plugin", () => {
     expect(catalog.provider.baseUrl).toBe("https://api.platform.preferredai.jp/v1");
     expect(catalog.provider.models).toMatchObject([
       {
-        id: "plamo-2.2-prime",
+        id: "plamo-3.0-prime-beta",
         cost: { input: 0.375, output: 1.5625, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32_768,
-        maxTokens: 8_192,
+        contextWindow: 65_536,
+        maxTokens: 16_384,
       },
     ]);
   });
@@ -107,7 +107,7 @@ describe("plamo provider plugin", () => {
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "plamo",
-      modelId: "plamo-2.2-prime",
+      modelId: "plamo-3.0-prime-beta",
       streamFn: baseFn as never,
       extraParams: {},
     } as never);
@@ -120,7 +120,7 @@ describe("plamo provider plugin", () => {
         {
           api: "openai-completions",
           provider: "plamo",
-          id: "plamo-2.2-prime",
+          id: "plamo-3.0-prime-beta",
         } as never,
         { messages: [] } as never,
         {} as never,

@@ -10,6 +10,8 @@ import {
 
 export { PLAMO_DEFAULT_MODEL_REF };
 
+const PLAMO_DEFAULT_ACP_BACKEND = "acpx";
+
 const plamoPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: PLAMO_DEFAULT_MODEL_REF,
   resolveParams: (_cfg: OpenClawConfig) => ({
@@ -26,5 +28,15 @@ export function applyPlamoProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyPlamoConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return plamoPresetAppliers.applyConfig(cfg);
+  const next = plamoPresetAppliers.applyConfig(cfg);
+  if (next.acp?.backend || next.plugins?.entries?.acpx?.enabled === false) {
+    return next;
+  }
+  return {
+    ...next,
+    acp: {
+      ...next.acp,
+      backend: PLAMO_DEFAULT_ACP_BACKEND,
+    },
+  };
 }

@@ -1,18 +1,18 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const PLAMO_BASE_URL = "https://api.platform.preferredai.jp/v1";
-export const PLAMO_DEFAULT_MODEL_ID = "plamo-2.2-prime";
+export const PLAMO_DEFAULT_MODEL_ID = "plamo-3.0-prime-beta";
 export const PLAMO_DEFAULT_MODEL_REF = `plamo/${PLAMO_DEFAULT_MODEL_ID}`;
-export const PLAMO_DEFAULT_CONTEXT_WINDOW = 32_768;
-export const PLAMO_DEFAULT_MAX_TOKENS = 8_192;
+export const PLAMO_DEFAULT_CONTEXT_WINDOW = 65_536;
+export const PLAMO_DEFAULT_MAX_TOKENS = 16_384;
 export const PLAMO_PRICE_USD_PER_1M_INPUT = 0.375;
 export const PLAMO_PRICE_USD_PER_1M_OUTPUT = 1.5625;
 
 const PLAMO_MODEL_CATALOG = [
   {
     id: PLAMO_DEFAULT_MODEL_ID,
-    name: "PLaMo 2.2 Prime",
-    reasoning: false,
+    name: "PLaMo 3.0 Prime Beta",
+    reasoning: true,
     input: ["text"],
     // Converted from JPY pricing using a fixed 1 USD = 160 JPY assumption.
     cost: {
