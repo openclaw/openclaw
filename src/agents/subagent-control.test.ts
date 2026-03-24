@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
   killSubagentRunAdmin,
@@ -15,6 +16,10 @@ import {
 } from "./subagent-registry.js";
 
 describe("sendControlledSubagentMessage", () => {
+  afterEach(() => {
+    __testing.setDepsForTest();
+  });
+
   it("rejects runs controlled by another session", async () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
@@ -45,6 +50,47 @@ describe("sendControlledSubagentMessage", () => {
     expect(result).toEqual({
       status: "forbidden",
       error: "Subagents can only control runs spawned from their own session.",
+    });
+  });
+
+  it("returns a structured error when the gateway send fails", async () => {
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent") {
+          throw new Error("gateway unavailable");
+        }
+        return {} as T;
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-owned",
+        childSessionKey: "agent:main:subagent:owned",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "continue work",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      runId: expect.any(String),
+      error: "gateway unavailable",
     });
   });
 });
