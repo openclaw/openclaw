@@ -132,118 +132,181 @@
 }
 
 /* ===========================================
-   Update Toast
+   Update Modal
    =========================================== */
 
-@keyframes update-toast-in {
+@keyframes update-overlay-in {
   from {
     opacity: 0;
-    transform: translateY(-12px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
-@keyframes update-toast-out {
+@keyframes update-card-in {
   from {
-    opacity: 1;
-    transform: translateY(0);
+    opacity: 0;
+    transform: scale(0.92) translateY(-8px);
   }
   to {
-    opacity: 0;
-    transform: translateY(-12px);
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 
-.update-toast-overlay {
+@keyframes update-icon-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes update-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.update-modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   z-index: 999;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding-top: 80px;
-  background: rgba(0, 0, 0, 0.35);
-  animation: update-toast-in 0.25s ease-out both;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: update-overlay-in 0.2s ease-out both;
 }
 
-.update-toast-overlay--closing {
-  animation: update-toast-out 0.2s ease-in both;
-}
-
-.update-toast {
-  background: var(--bg-raised, var(--bg-secondary, #1e1e2e));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: 12px;
-  padding: 20px 24px;
-  min-width: 300px;
-  max-width: 380px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+.update-modal {
+  background: var(--bg-raised, var(--bg-secondary, #1a1a2e));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  border-radius: 16px;
+  padding: 28px 32px 24px;
+  width: 340px;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
   text-align: center;
+  animation: update-card-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 0.05s;
 }
 
-.update-toast__title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary, #e0e0e0);
-  margin: 0 0 4px;
-}
-
-.update-toast__version {
-  font-size: 12px;
-  color: var(--text-secondary, #888);
-  margin: 0 0 16px;
-}
-
-.update-toast__actions {
-  display: flex;
-  gap: 8px;
+.update-modal__icon {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.12);
+  margin-bottom: 16px;
+  animation: update-icon-pulse 2s ease-in-out infinite;
 }
 
-.update-toast__btn-update {
-  padding: 8px 20px;
-  border-radius: 8px;
-  border: none;
-  background: var(--accent, #6366f1);
-  color: #fff;
-  font-size: 13px;
+.update-modal__icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--accent, #818cf8);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-modal__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #e4e4e7);
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.update-modal__meta {
+  font-size: 12px;
+  color: var(--text-secondary, #71717a);
+  margin: 0 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-modal__tag {
+  display: inline-block;
+  font-size: 11px;
   font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.15s;
+  color: var(--accent, #818cf8);
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin-bottom: 20px;
 }
 
-.update-toast__btn-update:hover:not(:disabled) {
-  opacity: 0.85;
+.update-modal__actions {
+  display: flex;
+  gap: 10px;
 }
 
-.update-toast__btn-update:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.update-toast__btn-dismiss {
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  background: transparent;
-  color: var(--text-secondary, #888);
+.update-modal__btn {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition:
-    background 0.15s,
-    color 0.15s;
+    background 0.2s,
+    transform 0.15s,
+    box-shadow 0.2s;
 }
 
-.update-toast__btn-dismiss:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-primary, #e0e0e0);
+.update-modal__btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.update-modal__btn--dismiss {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: transparent;
+  color: var(--text-secondary, #a1a1aa);
+}
+
+.update-modal__btn--dismiss:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #e4e4e7);
+}
+
+.update-modal__btn--update {
+  border: none;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+}
+
+.update-modal__btn--update:hover:not(:disabled) {
+  background: var(--accent-hover, #5558e6);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+}
+
+.update-modal__btn--update:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.update-modal__spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: update-spinner 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
 }
 
 /* ===========================================

@@ -572,26 +572,30 @@ export function renderApp(state: AppViewState) {
           state.updateAvailable &&
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
           !isUpdateBannerDismissed(state.updateAvailable)
-            ? html`<div class="update-toast-overlay" role="dialog" aria-label="Update available"
+            ? html`<div class="update-modal-overlay" role="dialog" aria-label="Update available"
                 @click=${(e: Event) => {
-                  if ((e.target as HTMLElement).classList.contains("update-toast-overlay")) {
+                  if ((e.target as HTMLElement).classList.contains("update-modal-overlay")) {
                     dismissUpdateBanner(state.updateAvailable);
                     state.updateAvailable = null;
                   }
                 }}>
-                <div class="update-toast">
-                  <p class="update-toast__title">Update available</p>
-                  <p class="update-toast__version">v${state.updateAvailable.latestVersion} — running v${state.updateAvailable.currentVersion}</p>
-                  <div class="update-toast__actions">
+                <div class="update-modal">
+                  <div class="update-modal__icon">
+                    <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                  </div>
+                  <p class="update-modal__title">New version available</p>
+                  <p class="update-modal__meta">v${state.updateAvailable.latestVersion} → v${state.updateAvailable.currentVersion}</p>
+                  <span class="update-modal__tag">Ready to install</span>
+                  <div class="update-modal__actions">
                     <button
-                      class="update-toast__btn-dismiss"
+                      class="update-modal__btn update-modal__btn--dismiss"
                       @click=${() => {
                         dismissUpdateBanner(state.updateAvailable);
                         state.updateAvailable = null;
                       }}
                     >Later</button>
                     <button
-                      class="update-toast__btn-update"
+                      class="update-modal__btn update-modal__btn--update"
                       ?disabled=${state.updateRunning || !state.connected}
                       @click=${async () => {
                         await runUpdate(state);
@@ -600,7 +604,13 @@ export function renderApp(state: AppViewState) {
                           state.updateAvailable = null;
                         }
                       }}
-                    >${state.updateRunning ? "Updating…" : "Update"}</button>
+                    >${
+                      state.updateRunning
+                        ? html`
+                            <span class="update-modal__spinner"></span>Updating
+                          `
+                        : "Update now"
+                    }</button>
                   </div>
                 </div>
               </div>`
