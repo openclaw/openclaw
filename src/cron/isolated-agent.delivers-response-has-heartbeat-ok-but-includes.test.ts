@@ -162,8 +162,6 @@ describe("runCronIsolatedAgentTurn", () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
-      vi.mocked(runSubagentAnnounceFlow).mockClear();
-      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
       mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
 
       const cfg = makeCfg(home, storePath);
@@ -216,10 +214,6 @@ describe("runCronIsolatedAgentTurn", () => {
           heartbeat: { ackMaxChars: 0 },
         },
       };
-
-      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
-      vi.mocked(runSubagentAnnounceFlow).mockClear();
-      vi.mocked(callGateway).mockClear();
 
       const deleteRes = await runCronIsolatedAgentTurn({
         cfg,

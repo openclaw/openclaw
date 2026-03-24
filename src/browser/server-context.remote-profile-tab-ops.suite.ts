@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";

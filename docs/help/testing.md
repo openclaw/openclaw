@@ -61,7 +61,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test:e2e`
 - Config: `vitest.e2e.config.ts`
-- Files: `src/**/*.e2e.test.ts`
+- Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
   - Uses Vitest `vmForks` for faster file startup.
   - Uses adaptive workers (CI: 2-4, local: 4-8).
@@ -76,6 +76,23 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E: OpenShell backend smoke
+
+- Command: `pnpm test:e2e:openshell`
+- File: `test/openshell-sandbox.e2e.test.ts`
+- Scope:
+  - Starts an isolated OpenShell gateway on the host via Docker
+  - Creates a sandbox from a temporary local Dockerfile
+  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
+- Expectations:
+  - Opt-in only; not part of the default `pnpm test:e2e` run
+  - Requires a local `openshell` CLI plus a working Docker daemon
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+- Useful overrides:
+  - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
+  - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
 ### Live (real providers + real models)
 
@@ -92,6 +109,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Prefer running narrowed subsets instead of “everything”
   - Live runs will source `~/.profile` to pick up missing API keys
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
+- Progress/heartbeat output:
+  - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
+  - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
+  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ## Which suite should I run?
 

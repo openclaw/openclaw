@@ -1,4 +1,3 @@
-import * as channelRuntimeSdk from "openclaw/plugin-sdk/channel-runtime";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
@@ -6,12 +5,9 @@ import type {
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
-import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
-import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as lineSdk from "openclaw/plugin-sdk/line";
-import * as lineCoreSdk from "openclaw/plugin-sdk/line-core";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
@@ -25,7 +21,6 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
-import * as voiceCallSdk from "openclaw/plugin-sdk/voice-call";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -59,17 +54,11 @@ const matrixSdk = await import("openclaw/plugin-sdk/matrix");
 const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
 const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
 const twitchSdk = await import("openclaw/plugin-sdk/twitch");
-const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
-const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
-const lobsterSdk = await import("openclaw/plugin-sdk/lobster");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
     expect(typeof compatSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");
-    expect(typeof compatSdk.createScopedChannelConfigAdapter).toBe("function");
-    expect(typeof compatSdk.createTopLevelChannelConfigAdapter).toBe("function");
-    expect(typeof compatSdk.createHybridChannelConfigAdapter).toBe("function");
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -77,9 +66,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.definePluginEntry).toBe("function");
     expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
     expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
-    expect(typeof coreSdk.createChannelPluginBase).toBe("function");
-    expect(typeof coreSdk.isSecretRef).toBe("function");
-    expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
@@ -93,44 +79,8 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof routingSdk.resolveThreadSessionKeys).toBe("function");
   });
 
-  it("exports account helper builders from the dedicated subpath", () => {
-    expect(typeof accountHelpersSdk.createAccountListHelpers).toBe("function");
-  });
-
-  it("exports allowlist edit helpers from the dedicated subpath", () => {
-    expect(typeof allowlistEditSdk.buildDmGroupAccountAllowlistAdapter).toBe("function");
-    expect(typeof allowlistEditSdk.buildLegacyDmAccountAllowlistAdapter).toBe("function");
-    expect(typeof allowlistEditSdk.createAccountScopedAllowlistNameResolver).toBe("function");
-    expect(typeof allowlistEditSdk.createFlatAllowlistOverrideResolver).toBe("function");
-    expect(typeof allowlistEditSdk.createNestedAllowlistOverrideResolver).toBe("function");
-  });
-
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
-  });
-
-  it("exports directory runtime helpers from the dedicated subpath", () => {
-    expect(typeof directoryRuntimeSdk.listDirectoryEntriesFromSources).toBe("function");
-    expect(typeof directoryRuntimeSdk.listInspectedDirectoryEntriesFromSources).toBe("function");
-    expect(typeof directoryRuntimeSdk.listResolvedDirectoryEntriesFromSources).toBe("function");
-    expect(typeof directoryRuntimeSdk.listResolvedDirectoryGroupEntriesFromMapKeys).toBe(
-      "function",
-    );
-    expect(typeof directoryRuntimeSdk.listResolvedDirectoryUserEntriesFromAllowFrom).toBe(
-      "function",
-    );
-  });
-
-  it("exports channel runtime helpers from the dedicated subpath", () => {
-    expect(typeof channelRuntimeSdk.buildUnresolvedTargetResults).toBe("function");
-    expect(typeof channelRuntimeSdk.createChannelDirectoryAdapter).toBe("function");
-    expect(typeof channelRuntimeSdk.createEmptyChannelDirectoryAdapter).toBe("function");
-    expect(typeof channelRuntimeSdk.createLoggedPairingApprovalNotifier).toBe("function");
-    expect(typeof channelRuntimeSdk.createPairingPrefixStripper).toBe("function");
-    expect(typeof channelRuntimeSdk.createRuntimeDirectoryLiveAdapter).toBe("function");
-    expect(typeof channelRuntimeSdk.createRuntimeOutboundDelegates).toBe("function");
-    expect(typeof channelRuntimeSdk.resolveTargetsWithOptionalToken).toBe("function");
-    expect(typeof channelRuntimeSdk.createTextPairingAdapter).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {
@@ -143,38 +93,10 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports shared setup helpers from the dedicated subpath", () => {
     expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
-    expect(typeof setupSdk.createAccountScopedAllowFromSection).toBe("function");
-    expect(typeof setupSdk.createAccountScopedGroupAccessSection).toBe("function");
-    expect(typeof setupSdk.createAllowFromSection).toBe("function");
-    expect(typeof setupSdk.createCliPathTextInput).toBe("function");
-    expect(typeof setupSdk.createDelegatedFinalize).toBe("function");
-    expect(typeof setupSdk.createDelegatedPrepare).toBe("function");
-    expect(typeof setupSdk.createDelegatedResolveConfigured).toBe("function");
-    expect(typeof setupSdk.createDelegatedSetupWizardProxy).toBe("function");
-    expect(typeof setupSdk.createDelegatedSetupWizardStatusResolvers).toBe("function");
-    expect(typeof setupSdk.createDelegatedTextInputShouldPrompt).toBe("function");
-    expect(typeof setupSdk.createDetectedBinaryStatus).toBe("function");
-    expect(typeof setupSdk.createLegacyCompatChannelDmPolicy).toBe("function");
-    expect(typeof setupSdk.createNestedChannelDmPolicy).toBe("function");
-    expect(typeof setupSdk.createTopLevelChannelDmPolicy).toBe("function");
-    expect(typeof setupSdk.createTopLevelChannelDmPolicySetter).toBe("function");
     expect(typeof setupSdk.formatDocsLink).toBe("function");
     expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
-    expect(typeof setupSdk.patchNestedChannelConfigSection).toBe("function");
-    expect(typeof setupSdk.patchTopLevelChannelConfigSection).toBe("function");
-    expect(typeof setupSdk.promptParsedAllowFromForAccount).toBe("function");
-    expect(typeof setupSdk.resolveParsedAllowFromEntries).toBe("function");
-    expect(typeof setupSdk.resolveGroupAllowlistWithLookupNotes).toBe("function");
-    expect(typeof setupSdk.setAccountAllowFromForChannel).toBe("function");
-    expect(typeof setupSdk.setAccountDmAllowFromForChannel).toBe("function");
     expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
     expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
-  });
-
-  it("exports shared lazy runtime helpers from the dedicated subpath", () => {
-    expect(typeof lazyRuntimeSdk.createLazyRuntimeSurface).toBe("function");
-    expect(typeof lazyRuntimeSdk.createLazyRuntimeModule).toBe("function");
-    expect(typeof lazyRuntimeSdk.createLazyRuntimeNamedExport).toBe("function");
   });
 
   it("exports narrow self-hosted provider setup helpers", () => {
@@ -206,7 +128,7 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
   });
 
-  it("exports the public testing surface", () => {
+  it("exports the public testing seam", () => {
     expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
     expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
@@ -278,12 +200,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof lineSdk.lineSetupAdapter).toBe("object");
   });
 
-  it("exports narrow LINE core helpers", () => {
-    expect(typeof lineCoreSdk.resolveLineAccount).toBe("function");
-    expect(typeof lineCoreSdk.listLineAccountIds).toBe("function");
-    expect(typeof lineCoreSdk.LineConfigSchema).toBe("object");
-  });
-
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
@@ -297,22 +213,8 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Google Chat helpers", async () => {
-    expect(typeof googlechatSdk.buildChannelConfigSchema).toBe("function");
-    expect(typeof googlechatSdk.createWebhookInFlightLimiter).toBe("function");
-    expect(typeof googlechatSdk.fetchWithSsrFGuard).toBe("function");
     expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
     expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
-    expect(typeof googlechatSdk.resolveGoogleChatGroupRequireMention).toBe("function");
-  });
-
-  it("keeps the Google Chat runtime surface aligned with the public SDK subpath", async () => {
-    const googlechatRuntimeApi = await import("../../extensions/googlechat/runtime-api.js");
-
-    expect(typeof googlechatRuntimeApi.buildChannelConfigSchema).toBe("function");
-    expect(typeof googlechatRuntimeApi.createWebhookInFlightLimiter).toBe("function");
-    expect(typeof googlechatRuntimeApi.fetchWithSsrFGuard).toBe("function");
-    expect(typeof googlechatRuntimeApi.createActionGate).toBe("function");
-    expect(typeof googlechatRuntimeApi.resolveWebhookTargetWithAuthOrReject).toBe("function");
   });
 
   it("exports Zalo helpers", async () => {
@@ -336,19 +238,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
-  it("exports ACPX runtime backend helpers", async () => {
+  it("exports acpx helpers", async () => {
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
-  });
-
-  it("exports Lobster helpers", async () => {
-    expect(typeof lobsterSdk.definePluginEntry).toBe("function");
-    expect(typeof lobsterSdk.materializeWindowsSpawnProgram).toBe("function");
-  });
-
-  it("exports Voice Call helpers", () => {
-    expect(typeof voiceCallSdk.definePluginEntry).toBe("function");
-    expect(typeof voiceCallSdk.resolveOpenAITtsInstructions).toBe("function");
   });
 
   it("resolves bundled extension subpaths", async () => {

@@ -51,6 +51,7 @@ describe("feishu plugin register", () => {
       registerChannel,
       on: vi.fn(),
       config: {},
+      registrationMode: "full",
     } as unknown as OpenClawPluginApi;
 
     plugin.register(api);

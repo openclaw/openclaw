@@ -444,9 +444,8 @@ describe("resolveGroupRequireMention", () => {
         discord: {
           guilds: {
             "145": {
-              requireMention: false,
               channels: {
-                general: { allow: true },
+                "123": { requireMention: false },
               },
             },
           },
@@ -499,7 +498,7 @@ describe("resolveGroupRequireMention", () => {
       channels: {
         line: {
           groups: {
-            "room:r123": { requireMention: false },
+            r123: { requireMention: false },
           },
         },
       },

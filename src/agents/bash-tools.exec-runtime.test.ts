@@ -10,7 +10,11 @@ vi.mock("../infra/system-events.js", () => ({
 
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
+import {
+  buildExecExitOutcome,
+  emitExecSystemEvent,
+  formatExecFailureReason,
+} from "./bash-tools.exec-runtime.js";
 
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
@@ -60,5 +64,78 @@ describe("emitExecSystemEvent", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatExecFailureReason", () => {
+  it("formats timeout guidance with the configured timeout", () => {
+    expect(
+      formatExecFailureReason({
+        failureKind: "overall-timeout",
+        exitSignal: "SIGKILL",
+        timeoutSec: 45,
+      }),
+    ).toContain("45 seconds");
+  });
+
+  it("formats shell failures without timeout-specific guidance", () => {
+    expect(
+      formatExecFailureReason({
+        failureKind: "shell-command-not-found",
+        exitSignal: null,
+        timeoutSec: 45,
+      }),
+    ).toBe("Command not found");
+  });
+});
+
+describe("buildExecExitOutcome", () => {
+  it("keeps non-zero normal exits in the completed path", () => {
+    expect(
+      buildExecExitOutcome({
+        exit: {
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 123,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        },
+        aggregated: "done",
+        durationMs: 123,
+        timeoutSec: 30,
+      }),
+    ).toMatchObject({
+      status: "completed",
+      exitCode: 1,
+      aggregated: "done\n\n(Command exited with code 1)",
+    });
+  });
+
+  it("classifies timed out exits as failures with a reason", () => {
+    expect(
+      buildExecExitOutcome({
+        exit: {
+          reason: "overall-timeout",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 123,
+          stdout: "",
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut: false,
+        },
+        aggregated: "",
+        durationMs: 123,
+        timeoutSec: 30,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      failureKind: "overall-timeout",
+      timedOut: true,
+      reason: expect.stringContaining("30 seconds"),
+    });
   });
 });

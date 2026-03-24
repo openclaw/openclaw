@@ -1,6 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
 import type { RunningChrome } from "./chrome.js";

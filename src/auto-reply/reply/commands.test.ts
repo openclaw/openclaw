@@ -2,27 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
-import {
-  addSubagentRunForTests,
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import * as internalHooks from "../../hooks/internal-hooks.js";
-import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
-import { resetBashChatCommandForTests } from "./bash-command.js";
-import { handleCompactCommand } from "./commands-compact.js";
-import { buildCommandsPaginationKeyboard } from "./commands-info.js";
-import { extractMessageText } from "./commands-subagents.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
-import { parseConfigCommand } from "./config-commands.js";
-import { parseDebugCommand } from "./debug-commands.js";
-import { parseInlineDirectives } from "./directive-handling.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -100,13 +84,12 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: vi.fn(),
 }));
 
-const callGatewayMock = vi.fn();
+const callGatewayMock = vi.hoisted(() => vi.fn());
 vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
+  callGateway: callGatewayMock,
 }));
 
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
@@ -122,6 +105,26 @@ vi.mock("./commands-context-report.js", () => ({
   },
 }));
 
+vi.resetModules();
+
+const { addSubagentRunForTests, listSubagentRunsForRequester, resetSubagentRegistryForTests } =
+  await import("../../agents/subagent-registry.js");
+const { setDefaultChannelPluginRegistryForTests } =
+  await import("../../commands/channel-test-helpers.js");
+const internalHooks = await import("../../hooks/internal-hooks.js");
+const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
+const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
+  await import("../../agents/pi-embedded.js");
+const { resetBashChatCommandForTests } = await import("./bash-command.js");
+const { handleCompactCommand } = await import("./commands-compact.js");
+const { buildCommandsPaginationKeyboard } = await import("./commands-info.js");
+const { extractMessageText } = await import("./commands-subagents.js");
+const { buildCommandTestParams } = await import("./commands.test-harness.js");
+const { parseConfigCommand } = await import("./config-commands.js");
+const { parseDebugCommand } = await import("./debug-commands.js");
+const { parseInlineDirectives } = await import("./directive-handling.js");
+const { buildCommandContext, handleCommands } = await import("./commands.js");
+
 let testWorkspaceDir = os.tmpdir();
 
 beforeAll(async () => {
@@ -132,6 +135,57 @@ beforeAll(async () => {
 afterAll(async () => {
   await fs.rm(testWorkspaceDir, { recursive: true, force: true });
 });
+
+beforeEach(() => {
+  setDefaultChannelPluginRegistryForTests();
+  readConfigFileSnapshotMock.mockImplementation(async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      return { valid: false, parsed: null };
+    }
+    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    return { valid: true, parsed };
+  });
+  validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+    ok: true,
+    config,
+  }));
+  writeConfigFileMock.mockImplementation(async (config: unknown) => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      return;
+    }
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  });
+  readChannelAllowFromStoreMock.mockResolvedValue([]);
+  addChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
+  removeChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
+});
+
+async function withTempConfigPath<T>(
+  initialConfig: Record<string, unknown>,
+  run: (configPath: string) => Promise<T>,
+): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-config-"));
+  const configPath = path.join(dir, "openclaw.json");
+  const previous = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
+  try {
+    return await run(configPath);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previous;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T> {
+  return JSON.parse(await fs.readFile(filePath, "utf-8")) as T;
+}
 
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
@@ -271,6 +325,24 @@ describe("/approve command", () => {
     vi.clearAllMocks();
   });
 
+  function createTelegramApproveCfg(
+    execApprovals: {
+      enabled: true;
+      approvers: string[];
+      target: "dm";
+    } | null = { enabled: true, approvers: ["123"], target: "dm" },
+  ): OpenClawConfig {
+    return {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          ...(execApprovals ? { execApprovals } : {}),
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   it("rejects invalid usage", async () => {
     const cfg = {
       commands: { text: true },
@@ -303,15 +375,7 @@ describe("/approve command", () => {
   });
 
   it("accepts Telegram command mentions for /approve", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createTelegramApproveCfg();
     const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
       BotUsername: "bot",
       Provider: "telegram",
@@ -332,90 +396,71 @@ describe("/approve command", () => {
     );
   });
 
-  it("rejects Telegram /approve mentions targeting a different bot", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+  it("rejects unauthorized or invalid Telegram /approve variants", async () => {
+    for (const testCase of [
+      {
+        name: "different bot mention",
+        cfg: createTelegramApproveCfg(),
+        commandBody: "/approve@otherbot abc12345 allow-once",
+        ctx: {
+          BotUsername: "bot",
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
         },
+        setup: undefined,
+        expectedText: "targets a different Telegram bot",
+        expectGatewayCalls: 0,
       },
-    } as OpenClawConfig;
-    const params = buildParams("/approve@otherbot abc12345 allow-once", cfg, {
-      BotUsername: "bot",
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("targets a different Telegram bot");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("surfaces unknown or expired approval id errors", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+      {
+        name: "unknown approval id",
+        cfg: createTelegramApproveCfg(),
+        commandBody: "/approve abc12345 allow-once",
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
         },
+        setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
+        expectedText: "unknown or expired approval id",
+        expectGatewayCalls: 1,
       },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("unknown or expired approval id");
-  });
-
-  it("rejects Telegram /approve when telegram exec approvals are disabled", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Telegram exec approvals are not enabled");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects Telegram /approve from non-approvers", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["999"], target: "dm" },
+      {
+        name: "telegram approvals disabled",
+        cfg: createTelegramApproveCfg(null),
+        commandBody: "/approve abc12345 allow-once",
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
         },
+        setup: undefined,
+        expectedText: "Telegram exec approvals are not enabled",
+        expectGatewayCalls: 0,
       },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
+      {
+        name: "non approver",
+        cfg: createTelegramApproveCfg({ enabled: true, approvers: ["999"], target: "dm" }),
+        commandBody: "/approve abc12345 allow-once",
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
+        },
+        setup: undefined,
+        expectedText: "not authorized to approve",
+        expectGatewayCalls: 0,
+      },
+    ] as const) {
+      callGatewayMock.mockReset();
+      testCase.setup?.();
+      const params = buildParams(testCase.commandBody, testCase.cfg, testCase.ctx);
 
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("not authorized to approve");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectGatewayCalls);
+    }
   });
 
   it("rejects gateway clients without approvals scope", async () => {
@@ -547,6 +592,7 @@ describe("/compact command", () => {
       expect.objectContaining({
         sessionId: "session-1",
         sessionKey: "agent:main:main",
+        allowGatewaySubagentBinding: true,
         trigger: "manual",
         customInstructions: "focus on decisions",
         messageChannel: "whatsapp",
@@ -682,226 +728,274 @@ describe("extractMessageText", () => {
   });
 });
 
-describe("handleCommands /config owner gating", () => {
-  it("blocks /config show from authorized non-owner senders", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/config show", cfg);
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-  });
+describe("handleCommands owner gating for privileged show commands", () => {
+  it("enforces owner gating for /config show and /debug show", async () => {
+    const cases = [
+      {
+        name: "/config show blocks authorized non-owner senders",
+        build: () => {
+          const params = buildParams("/config show", {
+            commands: { config: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = false;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply).toBeUndefined();
+        },
+      },
+      {
+        name: "/config show stays available for owners",
+        build: () => {
+          readConfigFileSnapshotMock.mockResolvedValueOnce({
+            valid: true,
+            parsed: { messages: { ackReaction: ":)" } },
+          });
+          const params = buildParams("/config show messages.ackReaction", {
+            commands: { config: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = true;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Config messages.ackReaction");
+        },
+      },
+      {
+        name: "/debug show blocks authorized non-owner senders",
+        build: () => {
+          const params = buildParams("/debug show", {
+            commands: { debug: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = false;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply).toBeUndefined();
+        },
+      },
+      {
+        name: "/debug show stays available for owners",
+        build: () => {
+          const params = buildParams("/debug show", {
+            commands: { debug: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = true;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Debug overrides");
+        },
+      },
+    ] as const;
 
-  it("keeps /config show working for owners", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: { messages: { ackreaction: ":)" } },
-    });
-    const params = buildParams("/config show messages.ackReaction", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config messages.ackreaction");
+    for (const testCase of cases) {
+      const result = await handleCommands(testCase.build());
+      testCase.assert(result);
+    }
   });
 });
 
 describe("handleCommands /config configWrites gating", () => {
-  it("blocks /config set when channel config writes are disabled", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
-    } as OpenClawConfig;
-    const params = buildParams('/config set messages.ackReaction=":)"', cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config writes are disabled");
-  });
-
-  it("blocks /config set when the target account disables writes", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            work: { configWrites: false, enabled: true },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildPolicyParams(
-      "/config set channels.telegram.accounts.work.enabled=false",
-      cfg,
+  it("blocks disallowed /config set writes", async () => {
+    const cases = [
       {
-        AccountId: "default",
-        Provider: "telegram",
-        Surface: "telegram",
+        name: "channel config writes disabled",
+        params: (() => {
+          const params = buildParams('/config set messages.ackReaction=":)"', {
+            commands: { config: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = true;
+          return params;
+        })(),
+        expectedText: "Config writes are disabled",
       },
-    );
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
-  });
-
-  it("blocks ambiguous channel-root /config writes from channel commands", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { telegram: { configWrites: true } },
-    } as OpenClawConfig;
-    const params = buildPolicyParams('/config set channels.telegram={"enabled":false}', cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-    });
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain(
-      "cannot replace channels, channel roots, or accounts collections",
-    );
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
-  });
-
-  it("blocks /config set from gateway clients without operator.admin", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-    } as OpenClawConfig;
-    const params = buildParams('/config set messages.ackReaction=":)"', cfg, {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      GatewayClientScopes: ["operator.write"],
-    });
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("requires operator.admin");
-  });
-
-  it("keeps /config show available to gateway operator.write clients", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: { messages: { ackreaction: ":)" } },
-    });
-    const params = buildParams("/config show messages.ackReaction", cfg, {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      GatewayClientScopes: ["operator.write"],
-    });
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config messages.ackreaction");
-  });
-
-  it("keeps /config set working for gateway operator.admin clients", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: { messages: { ackReaction: ":)" } },
-    });
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
-    const params = buildParams('/config set messages.ackReaction=":D"', cfg, {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      GatewayClientScopes: ["operator.write", "operator.admin"],
-    });
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(writeConfigFileMock).toHaveBeenCalledOnce();
-    expect(result.reply?.text).toContain("Config updated");
-  });
-
-  it("keeps /config set working for gateway operator.admin on protected account paths", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: {
-        channels: {
-          telegram: {
-            accounts: {
-              work: { enabled: true, configWrites: false },
+      {
+        name: "target account disables writes",
+        params: (() => {
+          const params = buildPolicyParams(
+            "/config set channels.telegram.accounts.work.enabled=false",
+            {
+              commands: { config: true, text: true },
+              channels: {
+                telegram: {
+                  configWrites: true,
+                  accounts: {
+                    work: { configWrites: false, enabled: true },
+                  },
+                },
+              },
+            } as OpenClawConfig,
+            {
+              AccountId: "default",
+              Provider: "telegram",
+              Surface: "telegram",
             },
-          },
-        },
+          );
+          params.command.senderIsOwner = true;
+          return params;
+        })(),
+        expectedText: "channels.telegram.accounts.work.configWrites=true",
       },
-    });
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
-    const params = buildParams(
-      "/config set channels.telegram.accounts.work.enabled=false",
       {
-        commands: { config: true, text: true },
-        channels: {
-          telegram: {
-            accounts: {
-              work: { enabled: true, configWrites: false },
+        name: "ambiguous channel-root write",
+        params: (() => {
+          const params = buildPolicyParams(
+            '/config set channels.telegram={"enabled":false}',
+            {
+              commands: { config: true, text: true },
+              channels: { telegram: { configWrites: true } },
+            } as OpenClawConfig,
+            {
+              Provider: "telegram",
+              Surface: "telegram",
             },
-          },
-        },
-      } as OpenClawConfig,
-      {
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        GatewayClientScopes: ["operator.write", "operator.admin"],
+          );
+          params.command.senderIsOwner = true;
+          return params;
+        })(),
+        expectedText: "cannot replace channels, channel roots, or accounts collections",
       },
-    );
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config updated");
-    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
-    expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
-  });
-});
+    ] as const;
 
-describe("handleCommands /debug owner gating", () => {
-  it("blocks /debug show from authorized non-owner senders", async () => {
-    const cfg = {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/debug show", cfg);
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
+    for (const testCase of cases) {
+      const previousWriteCount = writeConfigFileMock.mock.calls.length;
+      const result = await handleCommands(testCase.params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+      expect(writeConfigFileMock.mock.calls.length, testCase.name).toBe(previousWriteCount);
+    }
   });
 
-  it("keeps /debug show working for owners", async () => {
-    const cfg = {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+  it("enforces gateway client permissions for /config commands", async () => {
+    const baseCfg = {
+      commands: { config: true, text: true },
     } as OpenClawConfig;
-    const params = buildParams("/debug show", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Debug overrides");
+    const cases = [
+      {
+        name: "blocks /config set from gateway clients without operator.admin",
+        run: async () => {
+          const params = buildParams('/config set messages.ackReaction=":)"', baseCfg, {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            GatewayClientScopes: ["operator.write"],
+          });
+          params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+          params.command.senderIsOwner = true;
+          const result = await handleCommands(params);
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("requires operator.admin");
+        },
+      },
+      {
+        name: "keeps /config show available to gateway operator.write clients",
+        run: async () => {
+          readConfigFileSnapshotMock.mockResolvedValueOnce({
+            valid: true,
+            parsed: { messages: { ackReaction: ":)" } },
+          });
+          const params = buildParams("/config show messages.ackReaction", baseCfg, {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            GatewayClientScopes: ["operator.write"],
+          });
+          params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+          params.command.senderIsOwner = false;
+          const result = await handleCommands(params);
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Config messages.ackReaction");
+        },
+      },
+      {
+        name: "keeps /config set working for gateway operator.admin clients",
+        run: async () => {
+          await withTempConfigPath({ messages: { ackReaction: ":)" } }, async (configPath) => {
+            readConfigFileSnapshotMock.mockResolvedValueOnce({
+              valid: true,
+              parsed: { messages: { ackReaction: ":)" } },
+            });
+            validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+              ok: true,
+              config,
+            }));
+            const params = buildParams('/config set messages.ackReaction=":D"', baseCfg, {
+              Provider: INTERNAL_MESSAGE_CHANNEL,
+              Surface: INTERNAL_MESSAGE_CHANNEL,
+              GatewayClientScopes: ["operator.write", "operator.admin"],
+            });
+            params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+            params.command.senderIsOwner = true;
+            const result = await handleCommands(params);
+            expect(result.shouldContinue).toBe(false);
+            expect(result.reply?.text).toContain("Config updated");
+            const written = await readJsonFile<OpenClawConfig>(configPath);
+            expect(written.messages?.ackReaction).toBe(":D");
+          });
+        },
+      },
+      {
+        name: "keeps /config set working for gateway operator.admin on protected account paths",
+        run: async () => {
+          const initialConfig = {
+            channels: {
+              telegram: {
+                accounts: {
+                  work: { enabled: true, configWrites: false },
+                },
+              },
+            },
+          };
+          await withTempConfigPath(initialConfig, async (configPath) => {
+            readConfigFileSnapshotMock.mockResolvedValueOnce({
+              valid: true,
+              parsed: structuredClone(initialConfig),
+            });
+            validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+              ok: true,
+              config,
+            }));
+            const params = buildParams(
+              "/config set channels.telegram.accounts.work.enabled=false",
+              {
+                commands: { config: true, text: true },
+                channels: {
+                  telegram: {
+                    accounts: {
+                      work: { enabled: true, configWrites: false },
+                    },
+                  },
+                },
+              } as OpenClawConfig,
+              {
+                Provider: INTERNAL_MESSAGE_CHANNEL,
+                Surface: INTERNAL_MESSAGE_CHANNEL,
+                GatewayClientScopes: ["operator.write", "operator.admin"],
+              },
+            );
+            params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+            params.command.senderIsOwner = true;
+            const result = await handleCommands(params);
+            expect(result.shouldContinue).toBe(false);
+            expect(result.reply?.text).toContain("Config updated");
+            const written = await readJsonFile<OpenClawConfig>(configPath);
+            expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
+          });
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run();
+    }
   });
 });
 
@@ -940,7 +1034,7 @@ function buildPolicyParams(
     ctx,
     cfg,
     isGroup: false,
-    triggerBodyNormalized: commandBody.trim().toLowerCase(),
+    triggerBodyNormalized: commandBody.trim(),
     commandAuthorized: true,
   });
 
@@ -967,6 +1061,7 @@ function buildPolicyParams(
 describe("handleCommands /allowlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setDefaultChannelPluginRegistryForTests();
   });
 
   it("lists config + store allowFrom entries", async () => {
@@ -985,74 +1080,92 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("Paired allowFrom (store): 456");
   });
 
-  it("adds entries to config and pairing store", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: {
-        channels: { telegram: { allowFrom: ["123"] } },
-      },
-    });
+  it("adds allowlist entries to config and pairing stores", async () => {
     validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
       ok: true,
       config,
     }));
-    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
-      changed: true,
-      allowFrom: ["123", "789"],
-    });
+    const cases = [
+      {
+        name: "default account",
+        run: async () => {
+          await withTempConfigPath(
+            {
+              channels: { telegram: { allowFrom: ["123"] } },
+            },
+            async (configPath) => {
+              readConfigFileSnapshotMock.mockResolvedValueOnce({
+                valid: true,
+                parsed: {
+                  channels: { telegram: { allowFrom: ["123"] } },
+                },
+              });
+              addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+                changed: true,
+                allowFrom: ["123", "789"],
+              });
 
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
-    const params = buildPolicyParams("/allowlist add dm 789", cfg);
-    const result = await handleCommands(params);
+              const params = buildPolicyParams("/allowlist add dm 789", {
+                commands: { text: true, config: true },
+                channels: { telegram: { allowFrom: ["123"] } },
+              } as OpenClawConfig);
+              const result = await handleCommands(params);
 
-    expect(result.shouldContinue).toBe(false);
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: { telegram: { allowFrom: ["123", "789"] } },
-      }),
-    );
-    expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
-      channel: "telegram",
-      entry: "789",
-      accountId: "default",
-    });
-    expect(result.reply?.text).toContain("DM allowlist added");
-  });
-
-  it("writes store entries to the selected account scope", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: {
-        channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+              expect(result.shouldContinue).toBe(false);
+              const written = await readJsonFile<OpenClawConfig>(configPath);
+              expect(written.channels?.telegram?.allowFrom, "default account").toEqual([
+                "123",
+                "789",
+              ]);
+              expect(addChannelAllowFromStoreEntryMock, "default account").toHaveBeenCalledWith({
+                channel: "telegram",
+                entry: "789",
+                accountId: "default",
+              });
+              expect(result.reply?.text, "default account").toContain("DM allowlist added");
+            },
+          );
+        },
       },
-    });
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
-    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
-      changed: true,
-      allowFrom: ["123", "789"],
-    });
+      {
+        name: "selected account scope",
+        run: async () => {
+          readConfigFileSnapshotMock.mockResolvedValueOnce({
+            valid: true,
+            parsed: {
+              channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+            },
+          });
+          addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+            changed: true,
+            allowFrom: ["123", "789"],
+          });
 
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
-    } as OpenClawConfig;
-    const params = buildPolicyParams("/allowlist add dm --account work 789", cfg, {
-      AccountId: "work",
-    });
-    const result = await handleCommands(params);
+          const params = buildPolicyParams(
+            "/allowlist add dm --account work 789",
+            {
+              commands: { text: true, config: true },
+              channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+            } as OpenClawConfig,
+            {
+              AccountId: "work",
+            },
+          );
+          const result = await handleCommands(params);
 
-    expect(result.shouldContinue).toBe(false);
-    expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
-      channel: "telegram",
-      entry: "789",
-      accountId: "work",
-    });
+          expect(result.shouldContinue, "selected account scope").toBe(false);
+          expect(addChannelAllowFromStoreEntryMock, "selected account scope").toHaveBeenCalledWith({
+            channel: "telegram",
+            entry: "789",
+            accountId: "work",
+          });
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run();
+    }
   });
 
   it("blocks config-targeted /allowlist edits when the target account disables writes", async () => {
@@ -1068,6 +1181,10 @@ describe("handleCommands /allowlist", () => {
         },
       },
     } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
     const params = buildPolicyParams("/allowlist add dm --account work --config 789", cfg, {
       AccountId: "default",
       Provider: "telegram",
@@ -1147,22 +1264,7 @@ describe("handleCommands /allowlist", () => {
     }));
 
     for (const testCase of cases) {
-      const previousWriteCount = writeConfigFileMock.mock.calls.length;
-      readConfigFileSnapshotMock.mockResolvedValueOnce({
-        valid: true,
-        parsed: {
-          channels: {
-            [testCase.provider]: {
-              allowFrom: testCase.initialAllowFrom,
-              dm: { allowFrom: testCase.initialAllowFrom },
-              configWrites: true,
-            },
-          },
-        },
-      });
-
-      const cfg = {
-        commands: { text: true, config: true },
+      const initialConfig = {
         channels: {
           [testCase.provider]: {
             allowFrom: testCase.initialAllowFrom,
@@ -1170,21 +1272,37 @@ describe("handleCommands /allowlist", () => {
             configWrites: true,
           },
         },
-      } as OpenClawConfig;
+      };
+      await withTempConfigPath(initialConfig, async (configPath) => {
+        readConfigFileSnapshotMock.mockResolvedValueOnce({
+          valid: true,
+          parsed: structuredClone(initialConfig),
+        });
 
-      const params = buildPolicyParams(`/allowlist remove dm ${testCase.removeId}`, cfg, {
-        Provider: testCase.provider,
-        Surface: testCase.provider,
+        const cfg = {
+          commands: { text: true, config: true },
+          channels: {
+            [testCase.provider]: {
+              allowFrom: testCase.initialAllowFrom,
+              dm: { allowFrom: testCase.initialAllowFrom },
+              configWrites: true,
+            },
+          },
+        } as OpenClawConfig;
+
+        const params = buildPolicyParams(`/allowlist remove dm ${testCase.removeId}`, cfg, {
+          Provider: testCase.provider,
+          Surface: testCase.provider,
+        });
+        const result = await handleCommands(params);
+
+        expect(result.shouldContinue).toBe(false);
+        const written = await readJsonFile<OpenClawConfig>(configPath);
+        const channelConfig = written.channels?.[testCase.provider];
+        expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
+        expect(channelConfig?.dm?.allowFrom).toBeUndefined();
+        expect(result.reply?.text).toContain(`channels.${testCase.provider}.allowFrom`);
       });
-      const result = await handleCommands(params);
-
-      expect(result.shouldContinue).toBe(false);
-      expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount + 1);
-      const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
-      const channelConfig = written.channels?.[testCase.provider];
-      expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
-      expect(channelConfig?.dm?.allowFrom).toBeUndefined();
-      expect(result.reply?.text).toContain(`channels.${testCase.provider}.allowFrom`);
     }
   });
 });
