@@ -1,7 +1,22 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { createOllamaEmbeddingProvider } from "./embeddings-ollama.js";
+
+let createOllamaEmbeddingProvider: typeof import("./embeddings-ollama.js").createOllamaEmbeddingProvider;
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
+  vi.resetModules();
+  ({ createOllamaEmbeddingProvider } = await import("./embeddings-ollama.js"));
+});
+
+afterEach(() => {
+  vi.doUnmock("undici");
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.resetAllMocks();
+});
 
 describe("embeddings-ollama", () => {
   it("calls /api/embeddings and returns normalized vectors", async () => {

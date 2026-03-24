@@ -77,7 +77,7 @@ export const createMSTeamsTestPluginBase = (): Pick<
     meta: {
       ...base.meta,
       selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Bot Framework; enterprise support.",
+      blurb: "Teams SDK; enterprise support.",
       aliases: ["teams"],
     },
   };

@@ -1,7 +1,7 @@
 export type NodeHostBrowserProxyConfig = {
   /** Enable the browser proxy on the node host (default: true). */
   enabled?: boolean;
-  /** Optional allowlist of profile names exposed via the proxy. */
+  /** Optional allowlist of profile names exposed via the proxy; when set, create/delete profile routes are blocked on the proxy surface. */
   allowProfiles?: string[];
 };
 

@@ -3,7 +3,10 @@ import { __testing as braveTesting } from "../../../extensions/brave/src/brave-w
 import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
 import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
 import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
-import { buildUnsupportedSearchFilterResponse } from "../../plugin-sdk/provider-web-search.js";
+import {
+  buildUnsupportedSearchFilterResponse,
+  mergeScopedSearchConfig,
+} from "../../plugin-sdk/provider-web-search.js";
 import { withEnv } from "../../test-utils/env.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -223,6 +226,40 @@ describe("web_search unsupported filter response", () => {
   });
 });
 
+describe("web_search scoped config merge", () => {
+  it("returns the original config when no plugin config exists", () => {
+    const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
+    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toBe(searchConfig);
+  });
+
+  it("merges plugin config into the scoped provider object", () => {
+    expect(
+      mergeScopedSearchConfig({ provider: "grok", grok: { model: "old-model" } }, "grok", {
+        model: "new-model",
+        apiKey: "xai-test-key",
+      }),
+    ).toEqual({
+      provider: "grok",
+      grok: { model: "new-model", apiKey: "xai-test-key" },
+    });
+  });
+
+  it("can mirror the plugin apiKey to the top level config", () => {
+    expect(
+      mergeScopedSearchConfig(
+        { provider: "brave", brave: { count: 5 } },
+        "brave",
+        { apiKey: "brave-test-key" },
+        { mirrorApiKeyToTopLevel: true },
+      ),
+    ).toEqual({
+      provider: "brave",
+      apiKey: "brave-test-key",
+      brave: { count: 5, apiKey: "brave-test-key" },
+    });
+  });
+});
+
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
     expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
@@ -302,6 +339,15 @@ describe("web_search grok config resolution", () => {
 
   it("uses config model when provided", () => {
     expect(resolveGrokModel({ model: "grok-4-fast" })).toBe("grok-4-fast");
+  });
+
+  it("normalizes deprecated grok 4.20 beta ids to GA ids", () => {
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-reasoning" })).toBe(
+      "grok-4.20-reasoning",
+    );
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-non-reasoning" })).toBe(
+      "grok-4.20-non-reasoning",
+    );
   });
 
   it("falls back to default model", () => {

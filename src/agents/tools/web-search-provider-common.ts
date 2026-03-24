@@ -92,6 +92,45 @@ export async function withTrustedWebSearchEndpoint<T>(
   );
 }
 
+export async function postTrustedWebToolsJson<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    apiKey: string;
+    body: Record<string, unknown>;
+    errorLabel: string;
+    maxErrorBytes?: number;
+  },
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+      },
+    },
+    async ({ response }) => {
+      if (!response.ok) {
+        const detail = await readResponseText(response, {
+          maxBytes: params.maxErrorBytes ?? 64_000,
+        });
+        throw new Error(
+          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
+        );
+      }
+      return await parseResponse(response);
+    },
+  );
+}
+
 export async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;

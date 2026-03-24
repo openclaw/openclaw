@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseMemoryTraceSummaryLines } from "./test-parallel-memory.mjs";
+import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test-report-utils.mjs";
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
+import { matchesHotspotSummaryLane } from "./test-update-memory-hotspots-utils.mjs";
 
 function parseArgs(argv) {
   const args = {
     config: "vitest.unit.config.ts",
     out: unitMemoryHotspotManifestPath,
     lane: "unit-fast",
+    lanePrefixes: [],
     logs: [],
     minDeltaKb: 256 * 1024,
     limit: 64,
@@ -26,6 +29,14 @@ function parseArgs(argv) {
     }
     if (arg === "--lane") {
       args.lane = argv[i + 1] ?? args.lane;
+      i += 1;
+      continue;
+    }
+    if (arg === "--lane-prefix") {
+      const lanePrefix = argv[i + 1];
+      if (typeof lanePrefix === "string" && lanePrefix.length > 0) {
+        args.lanePrefixes.push(lanePrefix);
+      }
       i += 1;
       continue;
     }
@@ -61,6 +72,7 @@ function mergeHotspotEntry(aggregated, file, value) {
   if (!(Number.isFinite(value?.deltaKb) && value.deltaKb > 0)) {
     return;
   }
+  const normalizedFile = normalizeTrackedRepoPath(file);
   const normalizeSourceLabel = (source) => {
     const separator = source.lastIndexOf(":");
     if (separator === -1) {
@@ -75,9 +87,9 @@ function mergeHotspotEntry(aggregated, file, value) {
         .filter((source) => typeof source === "string" && source.length > 0)
         .map(normalizeSourceLabel)
     : [];
-  const previous = aggregated.get(file);
+  const previous = aggregated.get(normalizedFile);
   if (!previous) {
-    aggregated.set(file, {
+    aggregated.set(normalizedFile, {
       deltaKb: Math.round(value.deltaKb),
       sources: [...new Set(nextSources)],
     });
@@ -99,18 +111,16 @@ if (opts.logs.length === 0) {
 }
 
 const aggregated = new Map();
-try {
-  const existing = JSON.parse(fs.readFileSync(opts.out, "utf8"));
+const existing = tryReadJsonFile(opts.out, null);
+if (existing) {
   for (const [file, value] of Object.entries(existing.files ?? {})) {
     mergeHotspotEntry(aggregated, file, value);
   }
-} catch {
-  // Start from scratch when the output file does not exist yet.
 }
 for (const logPath of opts.logs) {
   const text = fs.readFileSync(logPath, "utf8");
-  const summaries = parseMemoryTraceSummaryLines(text).filter(
-    (summary) => summary.lane === opts.lane,
+  const summaries = parseMemoryTraceSummaryLines(text).filter((summary) =>
+    matchesHotspotSummaryLane(summary.lane, opts.lane, opts.lanePrefixes),
   );
   for (const summary of summaries) {
     for (const record of summary.top) {
@@ -142,11 +152,14 @@ const output = {
   config: opts.config,
   generatedAt: new Date().toISOString(),
   defaultMinDeltaKb: opts.minDeltaKb,
-  lane: opts.lane,
+  lane:
+    opts.lanePrefixes.length === 0
+      ? opts.lane
+      : [opts.lane, ...opts.lanePrefixes.map((prefix) => String(prefix).concat("*"))].join(", "),
   files,
 };
 
-fs.writeFileSync(opts.out, `${JSON.stringify(output, null, 2)}\n`);
+writeJsonFile(opts.out, output);
 console.log(
   `[test-update-memory-hotspots] wrote ${String(Object.keys(files).length)} hotspots to ${opts.out}`,
 );

@@ -23,6 +23,7 @@ export {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
+  postTrustedWebToolsJson,
   throwWebSearchApiError,
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
@@ -30,6 +31,7 @@ export {
 export {
   getScopedCredentialValue,
   getTopLevelCredentialValue,
+  mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,

@@ -7,6 +7,10 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
 import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
+import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
   MIN_CHUNK_RATIO,
@@ -38,6 +42,10 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
+const MAX_FILE_OPS_SECTION_CHARS = 2_000;
+const MAX_FILE_OPS_LIST_CHARS = 900;
+const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
@@ -58,6 +66,9 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+const compactionSafeguardDeps = {
+  summarizeInStages,
+};
 
 type ToolFailure = {
   toolCallId: string;
@@ -179,10 +190,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function isRealConversationMessage(message: AgentMessage): boolean {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
-}
-
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -194,17 +201,85 @@ function computeFileLists(fileOps: FileOperations): {
 }
 
 function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections: string[] = [];
-  if (readFiles.length > 0) {
-    sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+  function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
+    if (files.length === 0 || maxChars <= 0) {
+      return "";
+    }
+    const openTag = `<${tag}>\n`;
+    const closeTag = `\n</${tag}>`;
+    const lines: string[] = [];
+    let usedChars = openTag.length + closeTag.length;
+
+    for (let i = 0; i < files.length; i++) {
+      const line = `${files[i]}\n`;
+      const remaining = files.length - i - 1;
+      const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
+      const projected = usedChars + line.length + overflowLine.length;
+      if (projected > maxChars) {
+        const overflow = `...and ${files.length - i} more\n`;
+        if (usedChars + overflow.length <= maxChars) {
+          lines.push(overflow);
+        }
+        break;
+      }
+      lines.push(line);
+      usedChars += line.length;
+    }
+
+    return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
   }
-  if (modifiedFiles.length > 0) {
-    sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+
+  const sections: string[] = [];
+  const readSection = formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS);
+  const modifiedSection = formatBoundedFileList(
+    "modified-files",
+    modifiedFiles,
+    MAX_FILE_OPS_LIST_CHARS,
+  );
+  if (readSection) {
+    sections.push(readSection);
+  }
+  if (modifiedSection) {
+    sections.push(modifiedSection);
   }
   if (sections.length === 0) {
     return "";
   }
-  return `\n\n${sections.join("\n\n")}`;
+  const combined = `\n\n${sections.join("\n\n")}`;
+  return capCompactionSummary(combined, MAX_FILE_OPS_SECTION_CHARS);
+}
+
+function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
+  if (maxChars <= 0 || summary.length <= maxChars) {
+    return summary;
+  }
+  const marker = SUMMARY_TRUNCATED_MARKER;
+  const budget = Math.max(0, maxChars - marker.length);
+  if (budget <= 0) {
+    // Marker cannot fit; keep body prefix instead of a partial marker fragment.
+    return summary.slice(0, maxChars);
+  }
+  return `${summary.slice(0, budget)}${marker}`;
+}
+
+function capCompactionSummaryPreservingSuffix(
+  summaryBody: string,
+  suffix: string,
+  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
+): string {
+  if (!suffix) {
+    return capCompactionSummary(summaryBody, maxChars);
+  }
+  if (maxChars <= 0) {
+    return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
+  }
+  if (suffix.length >= maxChars) {
+    // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
+    return suffix.slice(-maxChars);
+  }
+  const bodyBudget = Math.max(0, maxChars - suffix.length);
+  const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+  return `${cappedBody}${suffix}`;
 }
 
 function extractMessageText(message: AgentMessage): string {
@@ -702,8 +777,12 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
-    const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
+    const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
+      isRealConversationMessage(message, messages, index),
+    );
+    const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
+      isRealConversationMessage(message, messages, index),
+    );
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -830,7 +909,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await summarizeInStages({
+                droppedSummary = await compactionSafeguardDeps.summarizeInStages({
                   messages: pruned.droppedMessagesList,
                   model,
                   apiKey,
@@ -887,6 +966,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
       let summary = "";
+      let lastHistorySummary = "";
+      let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -894,10 +975,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
+        let splitTurnSection = "";
+        let historySummary = "";
         try {
-          const historySummary =
+          historySummary =
             messagesToSummarize.length > 0
-              ? await summarizeInStages({
+              ? await compactionSafeguardDeps.summarizeInStages({
                   messages: messagesToSummarize,
                   model,
                   apiKey,
@@ -913,7 +996,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await summarizeInStages({
+            const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
               messages: turnPrefixMessages,
               model,
               apiKey,
@@ -928,7 +1011,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               summarizationInstructions,
               previousSummary: undefined,
             });
-            const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
               : splitTurnSection;
@@ -951,6 +1034,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           throw attemptError;
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
+        lastHistorySummary = historySummary;
+        lastSplitTurnSection = splitTurnSection;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -983,14 +1068,31 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      summary = appendSummarySection(summary, toolFailureSection);
-      summary = appendSummarySection(summary, fileOpsSummary);
-
-      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
+      // Cap the main history body first, then append split-turn context, preserved
+      // turns, diagnostics, and workspace rules so they survive truncation.
+      // Truncation keeps the prefix (slice(0, budget)), so sections at the end
+      // of the body would be dropped first—split-turn, preserved turns, tool
+      // failures, and file ops must be in the suffix.
+      const reservedSuffix = appendSummarySection(
+        appendSummarySection(
+          appendSummarySection(
+            appendSummarySection("", lastSplitTurnSection),
+            preservedTurnsSection,
+          ),
+          toolFailureSection,
+        ),
+        fileOpsSummary,
+      );
       const workspaceContext = await readWorkspaceContextForSummary();
-      if (workspaceContext) {
-        summary = appendSummarySection(summary, workspaceContext);
-      }
+      const fullReservedSuffix = appendSummarySection(reservedSuffix, workspaceContext);
+      // Ensure leading separator so suffix does not merge with body (e.g. when body
+      // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
+      const normalizedSuffix =
+        fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
+          ? `\n\n${fullReservedSuffix}`
+          : fullReservedSuffix;
+      const bodyToCap = lastHistorySummary || summary;
+      summary = capCompactionSummaryPreservingSuffix(bodyToCap, normalizedSuffix ?? "");
 
       return {
         compaction: {
@@ -1012,6 +1114,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 }
 
 export const __testing = {
+  setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
+    compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
+  },
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,
@@ -1023,10 +1128,19 @@ export const __testing = {
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  MAX_FILE_OPS_LIST_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } as const;
