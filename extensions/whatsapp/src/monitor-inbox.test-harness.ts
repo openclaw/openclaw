@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { monitorWebInbox } from "./inbound.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -129,16 +128,20 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./session.js", () => ({
-  createWaSocket: vi.fn().mockImplementation(async () => {
-    if (!sessionState.sock) {
-      throw new Error("mock WhatsApp socket not initialized");
-    }
-    return sessionState.sock;
-  }),
-  waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-  getStatusCode: vi.fn(() => 500),
-}));
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn().mockImplementation(async () => {
+      if (!sessionState.sock) {
+        throw new Error("mock WhatsApp socket not initialized");
+      }
+      return sessionState.sock;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    getStatusCode: vi.fn(() => 500),
+  };
+});
 
 export function getSock(): MockSock {
   if (!sessionState.sock) {
@@ -147,7 +150,16 @@ export function getSock(): MockSock {
   return sessionState.sock;
 }
 
-export type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
+type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+let monitorWebInbox: MonitorWebInbox;
+
+export function getMonitorWebInbox(): MonitorWebInbox {
+  if (!monitorWebInbox) {
+    throw new Error("monitorWebInbox not initialized");
+  }
+  return monitorWebInbox;
+}
 
 export async function settleInboundWork() {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -158,11 +170,15 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
     () => {
       expect(onMessage).toHaveBeenCalledTimes(count);
     },
-    { timeout: 2_000, interval: 5 },
+    // Channel-suite workers can be saturated under no-isolate CI runs.
+    { timeout: 5_000, interval: 5 },
   );
 }
 
 export async function startInboxMonitor(onMessage: InboxOnMessage) {
+  if (!monitorWebInbox) {
+    ({ monitorWebInbox } = await import("./inbound.js"));
+  }
   const listener = await monitorWebInbox({
     verbose: false,
     onMessage,
@@ -221,6 +237,8 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {
+    vi.useRealTimers();
+    vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
@@ -229,7 +247,9 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       code: "PAIRCODE",
       created: true,
     });
-    const { resetWebInboundDedupe } = await import("./inbound.js");
+    const inboundModule = await import("./inbound.js");
+    monitorWebInbox = inboundModule.monitorWebInbox;
+    const { resetWebInboundDedupe } = inboundModule;
     resetWebInboundDedupe();
     if (createAuthDir) {
       authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));

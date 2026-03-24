@@ -1,58 +1,84 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildTokenChannelStatusSummary,
-  probeTelegram,
-  type ChannelPlugin as TelegramChannelPlugin,
-} from "../../extensions/telegram/runtime-api.js";
-import {
-  listTelegramAccountIds,
-  resolveTelegramAccount,
-} from "../../extensions/telegram/src/accounts.js";
-import { adaptScopedAccountAccessor } from "../plugin-sdk/channel-config-helpers.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin as TelegramChannelPlugin } from "../../extensions/telegram/runtime-api.js";
 import type { HealthSummary } from "./health.js";
-import { getHealthSnapshot } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+let buildTokenChannelStatusSummary: typeof import("../../extensions/telegram/runtime-api.js").buildTokenChannelStatusSummary;
+let probeTelegram: typeof import("../../extensions/telegram/runtime-api.js").probeTelegram;
+let listTelegramAccountIds: typeof import("../../extensions/telegram/src/accounts.js").listTelegramAccountIds;
+let resolveTelegramAccount: typeof import("../../extensions/telegram/src/accounts.js").resolveTelegramAccount;
+let adaptScopedAccountAccessor: typeof import("../plugin-sdk/channel-config-helpers.js").adaptScopedAccountAccessor;
+let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
+let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
+let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
+let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
+
+async function loadFreshHealthModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => testConfig,
+    };
+  });
+  vi.doMock("../config/sessions.js", () => ({
+    resolveStorePath: () => "/tmp/sessions.json",
+    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: () => testStore,
+    saveSessionStore: vi.fn().mockResolvedValue(undefined),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+    updateLastRoute: vi.fn().mockResolvedValue(undefined),
+  }));
+  vi.doMock("../../extensions/telegram/src/fetch.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../extensions/telegram/src/fetch.js")>();
+    return {
+      ...actual,
+      resolveTelegramFetch: () => fetch,
+    };
+  });
+  vi.doMock("../../extensions/whatsapp/src/auth-store.js", () => ({
+    webAuthExists: vi.fn(async () => true),
+    getWebAuthAgeMs: vi.fn(() => 1234),
+    readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
+    logWebSelfId: vi.fn(),
+    logoutWeb: vi.fn(),
+  }));
+
+  const [
+    telegramRuntime,
+    telegramAccounts,
+    channelHelpers,
+    pluginsRuntime,
+    channelTestUtils,
+    health,
+  ] = await Promise.all([
+    import("../../extensions/telegram/runtime-api.js"),
+    import("../../extensions/telegram/src/accounts.js"),
+    import("../plugin-sdk/channel-config-helpers.js"),
+    import("../plugins/runtime.js"),
+    import("../test-utils/channel-plugins.js"),
+    import("./health.js"),
+  ]);
+
   return {
-    ...actual,
-    loadConfig: () => testConfig,
+    buildTokenChannelStatusSummary: telegramRuntime.buildTokenChannelStatusSummary,
+    probeTelegram: telegramRuntime.probeTelegram,
+    listTelegramAccountIds: telegramAccounts.listTelegramAccountIds,
+    resolveTelegramAccount: telegramAccounts.resolveTelegramAccount,
+    adaptScopedAccountAccessor: channelHelpers.adaptScopedAccountAccessor,
+    setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
+    createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
+    createTestRegistry: channelTestUtils.createTestRegistry,
+    getHealthSnapshot: health.getHealthSnapshot,
   };
-});
-
-vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
-  resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
-  loadSessionStore: () => testStore,
-  saveSessionStore: vi.fn().mockResolvedValue(undefined),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-  updateLastRoute: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../../extensions/telegram/src/fetch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../extensions/telegram/src/fetch.js")>();
-  return {
-    ...actual,
-    resolveTelegramFetch: () => fetch,
-  };
-});
-
-vi.mock("../../extensions/whatsapp/src/auth-store.js", () => ({
-  webAuthExists: vi.fn(async () => true),
-  getWebAuthAgeMs: vi.fn(() => 1234),
-  readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
-  logWebSelfId: vi.fn(),
-  logoutWeb: vi.fn(),
-}));
+}
 
 function stubTelegramFetchOk(calls: string[]) {
   vi.stubGlobal(
@@ -118,31 +144,49 @@ async function runSuccessfulTelegramProbe(
   return { calls, telegram };
 }
 
-const telegramHealthPlugin: Pick<
+function createTelegramHealthPlugin(): Pick<
   TelegramChannelPlugin,
   "id" | "meta" | "capabilities" | "config" | "status"
-> = {
-  ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-  config: {
-    listAccountIds: (cfg) => listTelegramAccountIds(cfg),
-    resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
-    isConfigured: (account) => Boolean(account.token?.trim()),
-  },
-  status: {
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
-    probeAccount: async ({ account, timeoutMs }) =>
-      await probeTelegram(account.token, timeoutMs, {
-        proxyUrl: account.config.proxy,
-        network: account.config.network,
-        accountId: account.accountId,
-      }),
-  },
-};
+> {
+  return {
+    ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+    config: {
+      listAccountIds: (cfg) => listTelegramAccountIds(cfg),
+      resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
+      isConfigured: (account) => Boolean(account.token?.trim()),
+    },
+    status: {
+      buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+      probeAccount: async ({ account, timeoutMs }) =>
+        await probeTelegram(account.token, timeoutMs, {
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+          accountId: account.accountId,
+        }),
+    },
+  };
+}
 
 describe("getHealthSnapshot", () => {
+  beforeAll(async () => {
+    ({
+      buildTokenChannelStatusSummary,
+      probeTelegram,
+      listTelegramAccountIds,
+      resolveTelegramAccount,
+      adaptScopedAccountAccessor,
+      setActivePluginRegistry,
+      createChannelTestPluginBase,
+      createTestRegistry,
+      getHealthSnapshot,
+    } = await loadFreshHealthModulesForTest());
+  });
+
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramHealthPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "telegram", plugin: createTelegramHealthPlugin(), source: "test" },
+      ]),
     );
   });
 

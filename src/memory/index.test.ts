@@ -432,6 +432,30 @@ describe("memory index", () => {
     await statusManager.close?.();
   });
 
+  it("does not cache builtin status-only managers across repeated requests", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-status-${randomUUID()}.sqlite`),
+    });
+
+    const first = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    const second = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    const firstManager = requireManager(first, "first status manager missing");
+    const secondManager = requireManager(second, "second status manager missing");
+    expect(secondManager).not.toBe(firstManager);
+
+    await firstManager.close?.();
+    await secondManager.close?.();
+  });
+
   it("reindexes sessions when source config adds sessions to an existing index", async () => {
     const stateDir = sourceChangeStateDir;
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");

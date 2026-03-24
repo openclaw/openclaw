@@ -114,8 +114,12 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -240,6 +244,17 @@ if [ -f "$MODEL_CATALOG_SRC" ]; then
   cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
 else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+fi
+
+echo "📦 Copying Control UI assets"
+CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
+CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
+if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
+  rm -rf "$CONTROL_UI_DEST"
+  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
+else
+  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+  exit 1
 fi
 
 echo "📦 Copying OpenClawKit resources"

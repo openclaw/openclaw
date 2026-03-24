@@ -1,16 +1,25 @@
 import { MessageFlags } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  clearDiscordComponentEntries,
-  registerDiscordComponentEntries,
-  resolveDiscordComponentEntry,
-  resolveDiscordModalEntry,
-} from "./components-registry.js";
-import {
-  buildDiscordComponentMessage,
-  buildDiscordComponentMessageFlags,
-  readDiscordComponentSpec,
-} from "./components.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
+let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
+let resolveDiscordComponentEntry: typeof import("./components-registry.js").resolveDiscordComponentEntry;
+let resolveDiscordModalEntry: typeof import("./components-registry.js").resolveDiscordModalEntry;
+let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
+let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
+let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({
+    clearDiscordComponentEntries,
+    registerDiscordComponentEntries,
+    resolveDiscordComponentEntry,
+    resolveDiscordModalEntry,
+  } = await import("./components-registry.js"));
+  ({ buildDiscordComponentMessage, buildDiscordComponentMessageFlags, readDiscordComponentSpec } =
+    await import("./components.js"));
+});
 
 describe("discord components", () => {
   it("builds v2 containers with modal trigger", () => {

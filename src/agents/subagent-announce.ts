@@ -47,6 +47,7 @@ import {
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
@@ -78,6 +79,13 @@ type SubagentOutputSnapshot = {
   latestRawText?: string;
   assistantFragments: string[];
   toolCallCount: number;
+};
+
+type AgentWaitResult = {
+  status?: string;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 };
 
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
@@ -391,7 +399,12 @@ async function readSubagentOutput(
     params: { sessionKey, limit: 100 },
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  return selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+  if (selected?.trim()) {
+    return selected;
+  }
+  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+  return latestAssistant?.trim() ? latestAssistant : undefined;
 }
 
 async function readLatestSubagentOutputWithRetry(params: {
@@ -410,6 +423,49 @@ async function readLatestSubagentOutputWithRetry(params: {
     await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
   }
   return result;
+}
+
+async function waitForSubagentRunOutcome(
+  runId: string,
+  timeoutMs: number,
+): Promise<AgentWaitResult> {
+  const waitMs = Math.max(0, Math.floor(timeoutMs));
+  return await callGateway<AgentWaitResult>({
+    method: "agent.wait",
+    params: {
+      runId,
+      timeoutMs: waitMs,
+    },
+    timeoutMs: waitMs + 2000,
+  });
+}
+
+function applySubagentWaitOutcome(params: {
+  wait: AgentWaitResult | undefined;
+  outcome: SubagentRunOutcome | undefined;
+  startedAt?: number;
+  endedAt?: number;
+}) {
+  const next = {
+    outcome: params.outcome,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+  };
+  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  if (params.wait?.status === "timeout") {
+    next.outcome = { status: "timeout" };
+  } else if (params.wait?.status === "error") {
+    next.outcome = { status: "error", error: waitError };
+  } else if (params.wait?.status === "ok") {
+    next.outcome = { status: "ok" };
+  }
+  if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
+    next.startedAt = params.wait.startedAt;
+  }
+  if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
+    next.endedAt = params.wait.endedAt;
+  }
+  return next;
 }
 
 export async function captureSubagentCompletionReply(
@@ -774,7 +830,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
   signal?: AbortSignal;
-}): Promise<"steered" | "queued" | "none"> {
+}): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
     return "none";
   }
@@ -807,7 +863,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    enqueueAnnounce({
+    const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
@@ -824,7 +880,7 @@ async function maybeQueueSubagentAnnounce(params: {
       settings: queueSettings,
       send: sendAnnounce,
     });
-    return "queued";
+    return didQueue ? "queued" : "dropped";
   }
 
   return "none";
@@ -1288,34 +1344,16 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!reply && params.waitForCompletion !== false) {
-      const waitMs = settleTimeoutMs;
-      const wait = await callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
-        method: "agent.wait",
-        params: {
-          runId: params.childRunId,
-          timeoutMs: waitMs,
-        },
-        timeoutMs: waitMs + 2000,
+      const wait = await waitForSubagentRunOutcome(params.childRunId, settleTimeoutMs);
+      const applied = applySubagentWaitOutcome({
+        wait,
+        outcome,
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
       });
-      const waitError = typeof wait?.error === "string" ? wait.error : undefined;
-      if (wait?.status === "timeout") {
-        outcome = { status: "timeout" };
-      } else if (wait?.status === "error") {
-        outcome = { status: "error", error: waitError };
-      } else if (wait?.status === "ok") {
-        outcome = { status: "ok" };
-      }
-      if (typeof wait?.startedAt === "number" && !params.startedAt) {
-        params.startedAt = wait.startedAt;
-      }
-      if (typeof wait?.endedAt === "number" && !params.endedAt) {
-        params.endedAt = wait.endedAt;
-      }
+      outcome = applied.outcome;
+      params.startedAt = applied.startedAt;
+      params.endedAt = applied.endedAt;
     }
 
     if (!outcome) {
@@ -1416,14 +1454,26 @@ export async function runSubagentAnnounceFlow(params: {
         reply = fallbackReply;
       }
 
-      if (
-        !expectsCompletionMessage &&
-        !reply?.trim() &&
-        childSessionId &&
-        isEmbeddedPiRunActive(childSessionId)
-      ) {
-        shouldDeleteChildSession = false;
-        return false;
+      // A worker can finish just after the first wait request timed out.
+      // If we already have real completion content, do one cached recheck so
+      // the final completion event prefers the authoritative terminal state.
+      // This is best-effort; if the recheck fails, keep the known timeout
+      // outcome instead of dropping the announcement entirely.
+      if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
+        try {
+          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+          const applied = applySubagentWaitOutcome({
+            wait: rechecked,
+            outcome,
+            startedAt: params.startedAt,
+            endedAt: params.endedAt,
+          });
+          outcome = applied.outcome;
+          params.startedAt = applied.startedAt;
+          params.endedAt = applied.endedAt;
+        } catch {
+          // Best-effort recheck; keep the existing timeout outcome on failure.
+        }
       }
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
@@ -1433,6 +1483,10 @@ export async function runSubagentAnnounceFlow(params: {
           return true;
         }
       }
+    }
+
+    if (!outcome) {
+      outcome = { status: "unknown" };
     }
 
     // Build status label
@@ -1576,7 +1630,7 @@ export async function runSubagentAnnounceFlow(params: {
           params: {
             key: params.childSessionKey,
             deleteTranscript: true,
-            emitLifecycleHooks: false,
+            emitLifecycleHooks: params.spawnMode === "session",
           },
           timeoutMs: 10_000,
         });

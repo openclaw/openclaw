@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 95,
+            "line": 98,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 847,
+            "line": 961,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 856,
+            "line": 970,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2413,7 +2413,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 727,
+            "line": 841,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2629,7 +2629,7 @@
           "exportName": "resolveCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 303,
+            "line": 461,
             "path": "src/auto-reply/command-auth.ts"
           }
         },
@@ -3144,7 +3144,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 158,
+            "line": 155,
             "path": "src/channels/registry.ts"
           }
         },
@@ -4300,7 +4300,7 @@
           "exportName": "applyProviderConfigWithDefaultModel",
           "kind": "function",
           "source": {
-            "line": 125,
+            "line": 134,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4309,7 +4309,7 @@
           "exportName": "applyProviderConfigWithDefaultModelPreset",
           "kind": "function",
           "source": {
-            "line": 146,
+            "line": 155,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4327,7 +4327,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 224,
+            "line": 233,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4336,7 +4336,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 266,
+            "line": 275,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4345,7 +4345,7 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 298,
+            "line": 307,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4372,7 +4372,7 @@
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 207,
+            "line": 216,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4381,7 +4381,7 @@
           "exportName": "createDefaultModelsPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 249,
+            "line": 258,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4390,7 +4390,7 @@
           "exportName": "createModelCatalogPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 321,
+            "line": 330,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4480,7 +4480,7 @@
           "exportName": "ProviderOnboardPresetAppliers",
           "kind": "type",
           "source": {
-            "line": 171,
+            "line": 180,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         }

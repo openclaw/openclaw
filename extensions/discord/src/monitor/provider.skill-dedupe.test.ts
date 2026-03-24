@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { __testing } from "./provider.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let __testing: typeof import("./provider.js").__testing;
 
 describe("resolveThreadBindingsEnabled", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ __testing } = await import("./provider.js"));
+  });
+
   it("defaults to enabled when unset", () => {
     expect(
       __testing.resolveThreadBindingsEnabled({

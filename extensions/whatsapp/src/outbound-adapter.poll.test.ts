@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -19,9 +19,14 @@ vi.mock("./send.js", async (importOriginal) => {
   };
 });
 
-import { whatsappOutbound } from "./outbound-adapter.js";
+let whatsappOutbound: typeof import("./outbound-adapter.js").whatsappOutbound;
 
 describe("whatsappOutbound sendPoll", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ whatsappOutbound } = await import("./outbound-adapter.js"));
+  });
+
   it("threads cfg through poll send options", async () => {
     const cfg = { marker: "resolved-cfg" } as OpenClawConfig;
     const poll = {

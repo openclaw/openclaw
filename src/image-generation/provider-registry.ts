@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry, getActivePluginRegistryKey } from "../plugins/runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
@@ -9,7 +10,10 @@ const UNSAFE_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
 function normalizeImageGenerationProviderId(id: string | undefined): string | undefined {
   const normalized = normalizeProviderId(id ?? "");
-  return normalized || undefined;
+  if (!normalized || isBlockedObjectKey(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function isSafeImageGenerationProviderId(id: string | undefined): id is string {

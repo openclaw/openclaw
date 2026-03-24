@@ -1,5 +1,5 @@
 import type { Message } from "@grammyjs/types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -168,6 +168,11 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveMedia } = await import("./delivery.js"));
+  });
+
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();

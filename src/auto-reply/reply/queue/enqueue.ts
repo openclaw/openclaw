@@ -1,7 +1,7 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { normalizeFollowupRun } from "../agent-runner-utils.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -60,6 +60,8 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const normalizedRun = normalizeFollowupRun(run);
   const queue = getFollowupQueue(key, settings);
@@ -95,10 +97,13 @@ export function enqueueFollowupRun(
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
   // Use the cached callback to restart the drain now.
-  if (!queue.draining) {
+  if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
   return true;

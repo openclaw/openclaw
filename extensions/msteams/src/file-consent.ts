@@ -8,6 +8,8 @@
  * - Parsing fileConsent/invoke activities
  */
 
+import { buildUserAgent } from "./user-agent.js";
+
 export interface FileConsentCardParams {
   filename: string;
   description?: string;
@@ -114,6 +116,7 @@ export async function uploadToConsentUrl(params: {
   const res = await fetchFn(params.url, {
     method: "PUT",
     headers: {
+      "User-Agent": buildUserAgent(),
       "Content-Type": params.contentType ?? "application/octet-stream",
       "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
     },
