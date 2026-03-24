@@ -198,7 +198,6 @@ function createContext(overrides?: {
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
