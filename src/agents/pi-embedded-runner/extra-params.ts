@@ -143,7 +143,7 @@ export function resolvePreparedExtraParams(params: {
       : undefined;
   const merged = {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
-    ...(override ?? {}),
+    ...override,
   };
   return (
     providerRuntimeDeps.prepareProviderExtraParams({
