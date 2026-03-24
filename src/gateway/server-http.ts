@@ -34,6 +34,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleOpenAiEmbeddingsHttpRequest } from "./embeddings-http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -55,6 +56,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -772,6 +774,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -811,6 +814,30 @@ export function createGatewayHttpServer(opts: {
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
+        },
+        {
+          name: "models",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiModelsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
+        },
+        {
+          name: "embeddings",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiEmbeddingsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
         },
         {
           name: "tools-invoke",
