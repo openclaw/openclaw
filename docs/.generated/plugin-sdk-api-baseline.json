@@ -997,7 +997,7 @@
           "exportName": "DmPolicySchema",
           "kind": "const",
           "source": {
-            "line": 337,
+            "line": 338,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1006,7 +1006,7 @@
           "exportName": "GroupPolicySchema",
           "kind": "const",
           "source": {
-            "line": 335,
+            "line": 336,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1015,7 +1015,7 @@
           "exportName": "MarkdownConfigSchema",
           "kind": "const",
           "source": {
-            "line": 371,
+            "line": 372,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -4453,7 +4453,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 65,
+            "line": 66,
             "path": "src/config/types.models.ts"
           }
         },

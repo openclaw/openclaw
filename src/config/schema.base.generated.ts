@@ -1280,6 +1280,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         additionalProperties: false,
                       },
+                      options: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
+                      },
                     },
                     required: ["id", "name"],
                     additionalProperties: false,
