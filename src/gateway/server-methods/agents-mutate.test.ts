@@ -435,7 +435,7 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfigReturn = {};
+    mocks.resolveAgentIdsByExactWorkspacePath.mockReturnValue([]);
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
     mocks.resolveAgentIdsByExactWorkspacePath.mockReturnValue(["test-agent"]);
