@@ -98,7 +98,7 @@ vi.mock("../infra/provider-usage.js", () => ({
   formatUsageSummaryLine: () => null,
 }));
 
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 async function loadFreshOpenClawToolsForSessionStatusTest() {
   vi.resetModules();
@@ -172,8 +172,17 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
     }),
     formatUsageSummaryLine: () => null,
   }));
-  await import("./test-helpers/fast-core-tools.js");
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+  vi.doMock("../auto-reply/group-activation.js", () => ({
+    normalizeGroupActivation: (value: unknown) => value ?? "always",
+  }));
+  vi.doMock("../auto-reply/reply/queue.js", () => ({
+    getFollowupQueueDepth: () => 0,
+    resolveQueueSettings: () => ({ mode: "interrupt" }),
+  }));
+  vi.doMock("../auto-reply/status.js", () => ({
+    buildStatusMessage: () => "OpenClaw\n🧠 Model: GPT-5.4",
+  }));
+  ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
 function resetSessionStore(store: Record<string, unknown>) {
@@ -235,14 +244,12 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
 }
 
 function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
-  const tool = createOpenClawTools({
+  const tool = createSessionStatusTool({
     agentSessionKey,
     sandboxed: options?.sandboxed,
-  }).find((candidate) => candidate.name === "session_status");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing session_status tool");
-  }
+    config: mockConfig as never,
+  });
+  expect(tool.name).toBe("session_status");
   return tool;
 }
 
