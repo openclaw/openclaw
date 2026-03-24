@@ -15607,7 +15607,167 @@
       "hasChildren": false
     },
     {
+      "path": "channels.feishu.accounts.*.dms.*.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.feishu.accounts.*.dms.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.allow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.allow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.alsoAllow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.alsoAllow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.deny",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.tools.deny.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.allow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.allow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.alsoAllow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.alsoAllow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.deny",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.accounts.*.dms.*.toolsBySender.*.deny.*",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -16574,7 +16734,167 @@
       "hasChildren": false
     },
     {
+      "path": "channels.feishu.dms.*.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.feishu.dms.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.tools",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.allow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.allow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.alsoAllow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.alsoAllow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.deny",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.tools.deny.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.allow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.allow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.alsoAllow",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.alsoAllow.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.deny",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.dms.*.toolsBySender.*.deny.*",
       "kind": "channel",
       "type": "string",
       "required": false,
