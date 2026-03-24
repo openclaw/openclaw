@@ -370,7 +370,7 @@ export function createPinnedDispatcher(
   }
 
   const proxyUrl = policy.proxyUrl.trim();
-  const requestTls = withPinnedLookup(lookup, policy.proxyTls);
+  const requestTls = withPinnedLookup(pinned.lookup, policy.proxyTls);
   if (!requestTls) {
     return new ProxyAgent(proxyUrl);
   }
