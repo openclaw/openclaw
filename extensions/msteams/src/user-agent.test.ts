@@ -10,10 +10,11 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import { getMSTeamsRuntime } from "./runtime.js";
-import { buildUserAgent } from "./user-agent.js";
+import { buildUserAgent, resetUserAgentCache } from "./user-agent.js";
 
 describe("buildUserAgent", () => {
   beforeEach(() => {
+    resetUserAgentCache();
     vi.mocked(getMSTeamsRuntime).mockReturnValue(mockRuntime as never);
   });
 
@@ -21,19 +22,24 @@ describe("buildUserAgent", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns OpenClaw/<version> format", () => {
-    expect(buildUserAgent()).toBe("OpenClaw/2026.3.19");
+  it("returns teams.ts[apps]/<sdk> OpenClaw/<version> format", () => {
+    const ua = buildUserAgent();
+    expect(ua).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
   });
 
   it("reflects the runtime version", () => {
     vi.mocked(getMSTeamsRuntime).mockReturnValue({ version: "1.2.3" } as never);
-    expect(buildUserAgent()).toBe("OpenClaw/1.2.3");
+    const ua = buildUserAgent();
+    expect(ua).toMatch(/OpenClaw\/1\.2\.3$/);
   });
 
   it("returns OpenClaw/unknown when runtime is not initialized", () => {
     vi.mocked(getMSTeamsRuntime).mockImplementation(() => {
       throw new Error("MSTeams runtime not initialized");
     });
-    expect(buildUserAgent()).toBe("OpenClaw/unknown");
+    const ua = buildUserAgent();
+    expect(ua).toMatch(/OpenClaw\/unknown$/);
+    // SDK version should still be present
+    expect(ua).toMatch(/^teams\.ts\[apps\]\//);
   });
 });

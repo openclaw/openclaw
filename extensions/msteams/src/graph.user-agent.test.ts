@@ -5,9 +5,11 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import { fetchGraphJson } from "./graph.js";
+import { resetUserAgentCache } from "./user-agent.js";
 
 describe("fetchGraphJson User-Agent", () => {
   afterEach(() => {
+    resetUserAgentCache();
     vi.restoreAllMocks();
   });
 
@@ -22,7 +24,7 @@ describe("fetchGraphJson User-Agent", () => {
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [, init] = mockFetch.mock.calls[0];
-    expect(init.headers).toHaveProperty("User-Agent", "OpenClaw/2026.3.19");
+    expect(init.headers["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
     expect(init.headers).toHaveProperty("Authorization", "Bearer test-token");
 
     vi.unstubAllGlobals();

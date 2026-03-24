@@ -1,15 +1,45 @@
+import { createRequire } from "node:module";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-/**
- * Build the OpenClaw User-Agent string for outbound HTTP requests.
- * Format: "OpenClaw/<version>" (e.g. "OpenClaw/2026.2.25").
- */
-export function buildUserAgent(): string {
-  let version: string;
+let cachedUserAgent: string | undefined;
+
+function resolveTeamsSdkVersion(): string {
   try {
-    version = getMSTeamsRuntime().version;
+    const require = createRequire(import.meta.url);
+    const pkg = require("@microsoft/teams.apps/package.json") as { version?: string };
+    return pkg.version ?? "unknown";
   } catch {
-    version = "unknown";
+    return "unknown";
   }
-  return `OpenClaw/${version}`;
+}
+
+function resolveOpenClawVersion(): string {
+  try {
+    return getMSTeamsRuntime().version;
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Build a combined User-Agent string that preserves the Teams SDK identity
+ * and appends the OpenClaw version.
+ *
+ * Format: "teams.ts[apps]/<sdk-version> OpenClaw/<openclaw-version>"
+ * Example: "teams.ts[apps]/2.0.5 OpenClaw/2026.3.22"
+ *
+ * This lets the Teams backend track SDK usage while also identifying the
+ * host application.
+ */
+/** Reset the cached User-Agent (for testing). */
+export function resetUserAgentCache(): void {
+  cachedUserAgent = undefined;
+}
+
+export function buildUserAgent(): string {
+  if (cachedUserAgent) {
+    return cachedUserAgent;
+  }
+  cachedUserAgent = `teams.ts[apps]/${resolveTeamsSdkVersion()} OpenClaw/${resolveOpenClawVersion()}`;
+  return cachedUserAgent;
 }
