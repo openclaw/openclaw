@@ -3,6 +3,7 @@ import {
   parseScQcOutput,
   parseScQueryExOutput,
   parseWindowsServiceRegistryParameters,
+  probeWindowsService,
   resolveWindowsServiceName,
 } from "./windows-service.js";
 
@@ -51,5 +52,13 @@ HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\OpenClawGateway\\Parame
     expect(resolveWindowsServiceName({ OPENCLAW_WINDOWS_SERVICE_NAME: "CustomSvc" })).toBe(
       "CustomSvc",
     );
+  });
+
+  it("probes the configured service name", async () => {
+    const probe = await probeWindowsService({
+      OPENCLAW_WINDOWS_SERVICE_NAME: "DefinitelyMissingServiceName",
+    });
+
+    expect(probe).toBeNull();
   });
 });

@@ -40,6 +40,7 @@ import {
   uninstallSystemdService,
 } from "./systemd.js";
 import {
+  probeWindowsService,
   isWindowsServiceInstalled,
   readWindowsServiceCommand,
   readWindowsServiceRuntime,
@@ -162,8 +163,9 @@ async function useWindowsService(env: GatewayServiceEnv): Promise<boolean> {
 async function readWindowsCommandOrScheduledTask(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  if (await useWindowsService(env)) {
-    return await readWindowsServiceCommand(env);
+  const probe = await probeWindowsService(env).catch(() => null);
+  if (probe) {
+    return await readWindowsServiceCommand(env, probe);
   }
   return await readScheduledTaskCommand(env);
 }
@@ -171,7 +173,7 @@ async function readWindowsCommandOrScheduledTask(
 async function readWindowsRuntimeOrScheduledTask(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  if (await useWindowsService(env)) {
+  if (await probeWindowsService(env).catch(() => null)) {
     return await readWindowsServiceRuntime(env);
   }
   return await readScheduledTaskRuntime(env);
@@ -179,7 +181,7 @@ async function readWindowsRuntimeOrScheduledTask(
 
 async function stopWindowsRuntimeOrScheduledTask(args: GatewayServiceControlArgs): Promise<void> {
   const env = args.env ?? (process.env as GatewayServiceEnv);
-  if (await useWindowsService(env)) {
+  if (await probeWindowsService(env).catch(() => null)) {
     await stopWindowsService({ ...args, env });
     return;
   }
@@ -190,7 +192,7 @@ async function restartWindowsRuntimeOrScheduledTask(
   args: GatewayServiceControlArgs,
 ): Promise<GatewayServiceRestartResult> {
   const env = args.env ?? (process.env as GatewayServiceEnv);
-  if (await useWindowsService(env)) {
+  if (await probeWindowsService(env).catch(() => null)) {
     return await restartWindowsService({ ...args, env });
   }
   return await restartScheduledTask({ ...args, env });
@@ -199,7 +201,7 @@ async function restartWindowsRuntimeOrScheduledTask(
 async function uninstallWindowsRuntimeOrScheduledTask(
   args: GatewayServiceManageArgs,
 ): Promise<void> {
-  if (await useWindowsService(args.env)) {
+  if (await probeWindowsService(args.env).catch(() => null)) {
     await uninstallWindowsService(args);
     return;
   }

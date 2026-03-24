@@ -22,6 +22,11 @@ type CommandResult = {
   stderr: string;
 };
 
+export type WindowsServiceProbe = {
+  serviceName: string;
+  qc: CommandResult;
+};
+
 function runWindowsCommand(command: string, args: string[]): CommandResult {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -187,17 +192,29 @@ function buildWindowsServiceCommandConfig(
 }
 
 export async function isWindowsServiceInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const effectiveEnv = args.env ?? (process.env as GatewayServiceEnv);
-  const serviceName = resolveWindowsServiceName(effectiveEnv);
-  const result = readScQc(serviceName);
-  return result.code === 0;
+  return (await probeWindowsService(args.env)) !== null;
+}
+
+export async function probeWindowsService(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+): Promise<WindowsServiceProbe | null> {
+  const serviceName = resolveWindowsServiceName(env);
+  const qc = readScQc(serviceName);
+  if (qc.code !== 0) {
+    return null;
+  }
+  return { serviceName, qc };
 }
 
 export async function readWindowsServiceCommand(
   env: GatewayServiceEnv,
+  probe?: WindowsServiceProbe,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const serviceName = resolveWindowsServiceName(env);
-  const qc = readScQc(serviceName);
+  const detected = probe ?? (await probeWindowsService(env));
+  if (!detected) {
+    return null;
+  }
+  const { serviceName, qc } = detected;
   if (qc.code !== 0) {
     return null;
   }
@@ -239,18 +256,23 @@ export async function readWindowsServiceRuntime(
   };
 }
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-function waitForServiceState(serviceName: string, matcher: (state?: string) => boolean): boolean {
+async function waitForServiceState(
+  serviceName: string,
+  matcher: (state?: string) => boolean,
+): Promise<boolean> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const query = parseScQueryExOutput(readScQueryEx(serviceName).stdout);
     if (matcher(query.state)) {
       return true;
     }
-    sleepSync(250);
+    await sleep(250);
   }
   return false;
 }
@@ -266,7 +288,7 @@ export async function stopWindowsService({
   if (result.code !== 0 && !/service has not been started/i.test(detail)) {
     throw new Error(`sc stop failed: ${detail || "unknown error"}`.trim());
   }
-  waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
+  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
   stdout.write(`Stopped Windows service: ${serviceName}\n`);
 }
 
@@ -281,13 +303,13 @@ export async function restartWindowsService({
   if (stopResult.code !== 0 && !/service has not been started/i.test(stopDetail)) {
     throw new Error(`sc stop failed: ${stopDetail || "unknown error"}`.trim());
   }
-  waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
+  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("stopped") ?? false);
   const startResult = runWindowsCommand("sc.exe", ["start", serviceName]);
   if (startResult.code !== 0) {
     const detail = (startResult.stderr || startResult.stdout).trim();
     throw new Error(`sc start failed: ${detail || "unknown error"}`.trim());
   }
-  waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("running") ?? false);
+  await waitForServiceState(serviceName, (state) => state?.toLowerCase().includes("running") ?? false);
   stdout.write(`Restarted Windows service: ${serviceName}\n`);
   return { outcome: "completed" };
 }
