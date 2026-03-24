@@ -989,6 +989,50 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
     }
 
+    @Test func compactTriggerIgnoresConcurrentAndImmediateRepeatRequests() async throws {
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "before compact", timestamp: 1),
+            ])
+        let after = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "after compact", timestamp: 2),
+            ])
+        let gate = AsyncGate()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [before, after],
+            compactSessionHook: { _ in
+                await gate.wait()
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run {
+            vm.input = "/compact"
+            vm.send()
+            vm.input = "/compact"
+            vm.send()
+        }
+
+        try await waitUntil("single compact request issued") {
+            await transport.compactSessionKeys() == ["main"]
+        }
+        #expect(await MainActor.run { vm.errorText } == nil)
+
+        await gate.open()
+        try await waitUntil("history reloaded after compact") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "after compact" }
+        }
+
+        await MainActor.run {
+            vm.input = "/compact"
+            vm.send()
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.compactSessionKeys() == ["main"])
+        #expect(await MainActor.run { vm.errorText } == "Please wait before compacting this session again.")
+    }
+
     @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
