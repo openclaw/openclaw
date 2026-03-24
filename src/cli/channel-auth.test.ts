@@ -7,10 +7,10 @@ const mocks = vi.hoisted(() => ({
   getChannelPluginCatalogEntry: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
   getChannelPlugin: vi.fn(),
+  listChannelPlugins: vi.fn(),
   normalizeChannelId: vi.fn(),
   loadConfig: vi.fn(),
   writeConfigFile: vi.fn(),
-  resolveMessageChannelSelection: vi.fn(),
   setVerbose: vi.fn(),
   createClackPrompter: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
@@ -35,16 +35,13 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: mocks.listChannelPlugins,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
   writeConfigFile: mocks.writeConfigFile,
-}));
-
-vi.mock("../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
 }));
 
 vi.mock("../globals.js", () => ({
@@ -67,7 +64,10 @@ describe("channel-auth", () => {
     id: "whatsapp",
     auth: { login: mocks.login },
     gateway: { logoutAccount: mocks.logoutAccount },
-    config: { resolveAccount: mocks.resolveAccount },
+    config: {
+      listAccountIds: vi.fn().mockReturnValue(["default"]),
+      resolveAccount: mocks.resolveAccount,
+    },
   };
 
   beforeEach(() => {
@@ -75,18 +75,15 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockReturnValue("whatsapp");
     mocks.getChannelPlugin.mockReturnValue(plugin);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
-    mocks.loadConfig.mockReturnValue({ channels: {} });
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {} } });
     mocks.writeConfigFile.mockResolvedValue(undefined);
-    mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "whatsapp",
-      configured: ["whatsapp"],
-    });
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default-account");
     mocks.createClackPrompter.mockReturnValue({} as object);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
-      cfg: { channels: {} },
+      cfg: { channels: { whatsapp: {} } },
       installed: true,
       pluginId: "whatsapp",
     });
@@ -106,7 +103,7 @@ describe("channel-auth", () => {
     expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: { channels: {} },
+        cfg: { channels: { whatsapp: {} } },
         accountId: "acct-1",
         runtime,
         verbose: true,
@@ -115,10 +112,9 @@ describe("channel-auth", () => {
     );
   });
 
-  it("auto-picks the single configured channel when opts are empty", async () => {
+  it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({ cfg: { channels: {} } });
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -127,12 +123,49 @@ describe("channel-auth", () => {
     );
   });
 
-  it("propagates channel ambiguity when channel is omitted", async () => {
-    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+  it("ignores configured channels that do not support login when channel is omitted", async () => {
+    const telegramPlugin = {
+      id: "telegram",
+      auth: {},
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, telegram: {} } });
+    mocks.listChannelPlugins.mockReturnValue([telegramPlugin, plugin]);
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
+  it("propagates auth-channel ambiguity when multiple configured channels support login", async () => {
+    const zaloPlugin = {
+      id: "zalouser",
+      auth: { login: vi.fn() },
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalouser: {} } });
+    mocks.listChannelPlugins.mockReturnValue([plugin, zaloPlugin]);
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "whatsapp"
+        ? plugin
+        : value === "zalouser"
+          ? (zaloPlugin as typeof plugin)
+          : undefined,
     );
 
-    await expect(runChannelLogin({}, runtime)).rejects.toThrow("Channel is required");
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow(
+      "multiple configured channels support login: whatsapp, zalouser",
+    );
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
@@ -199,16 +232,16 @@ describe("channel-auth", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith({ channels: {} });
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith({ channels: { whatsapp: {} } });
     expect(mocks.login).toHaveBeenCalled();
   });
 
   it("runs logout with resolved account and explicit account id", async () => {
     await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
 
-    expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: {} }, "acct-2");
+    expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: { whatsapp: {} } }, "acct-2");
     expect(mocks.logoutAccount).toHaveBeenCalledWith({
-      cfg: { channels: {} },
+      cfg: { channels: { whatsapp: {} } },
       accountId: "acct-2",
       account: { id: "resolved-account" },
       runtime,
