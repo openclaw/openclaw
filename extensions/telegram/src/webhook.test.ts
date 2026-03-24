@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { startTelegramWebhook } from "./webhook.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -94,6 +93,13 @@ vi.mock("grammy", async (importOriginal) => {
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
+
+let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ startTelegramWebhook } = await import("./webhook.js"));
+});
 
 async function fetchWithTimeout(
   input: string,
@@ -448,12 +454,23 @@ describe("startTelegramWebhook", () => {
         expect(setWebhookSpy).toHaveBeenCalledWith(
           expect.any(String),
           expect.objectContaining({
-            certificate: expect.objectContaining({
+            certificate: expect.anything(),
+          }),
+        );
+        const certificate = setWebhookSpy.mock.calls[0]?.[1]?.certificate as
+          | { path?: string; fileData?: string; filename?: string }
+          | undefined;
+        expect(certificate).toBeDefined();
+        if (certificate && "path" in certificate && typeof certificate.path === "string") {
+          expect(certificate.path).toBe("/path/to/cert.pem");
+        } else {
+          expect(certificate).toEqual(
+            expect.objectContaining({
               fileData: "/path/to/cert.pem",
               filename: "cert.pem",
             }),
-          }),
-        );
+          );
+        }
       },
     );
   });
