@@ -400,4 +400,35 @@ describe("subagent registry seam flow", () => {
       }),
     );
   });
+
+  it("deletes killed delete-mode runs and notifies deleted cleanup", async () => {
+    mod.registerSubagentRun({
+      runId: "run-killed-delete",
+      childSessionKey: "agent:main:subagent:killed-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill and delete",
+      cleanup: "delete",
+      workspaceDir: "/tmp/killed-delete-workspace",
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete",
+      reason: "manual kill",
+    });
+
+    expect(updated).toBe(1);
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-killed-delete"),
+    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:subagent:killed-delete",
+        reason: "deleted",
+        workspaceDir: "/tmp/killed-delete-workspace",
+      });
+    });
+  });
 });

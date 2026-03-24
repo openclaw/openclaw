@@ -1654,6 +1654,12 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
       const cfg = loadConfig();
       ensureRuntimePluginsLoaded({
         config: cfg,
