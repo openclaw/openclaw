@@ -1032,10 +1032,21 @@ export function isFailoverErrorMessage(raw: string): boolean {
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
+  if (!msg) {
     return false;
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "");
+  // Standard error stop: check errorMessage for known transient patterns.
+  if (msg.stopReason === "error") {
+    return isFailoverErrorMessage(msg.errorMessage ?? "");
+  }
+  // Provider-side abort: ZAI/GLM-5 (and similar OpenAI-compat providers) resolve
+  // the stream with stopReason="aborted" and errorMessage="Request was aborted."
+  // instead of rejecting — so promptError is never set and the normal promptError
+  // handling path in run.ts is bypassed. Treat as transient so fallback triggers. (#16)
+  if (msg.stopReason === "aborted") {
+    return isFailoverErrorMessage(msg.errorMessage ?? "");
+  }
+  return false;
 }
 
 export type SubagentOutcome = "completed" | "aborted" | "interrupted" | "timeout" | "failed";

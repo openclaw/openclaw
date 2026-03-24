@@ -56,6 +56,11 @@ const ERROR_PATTERNS = {
     // set aborted=true and skip the promptError block entirely. Treat as transient
     // so the fallback chain can retry on another model/profile.
     /^aborted$/i,
+    // Provider-side abort surfaced via stopReason="aborted" (not "error") with
+    // errorMessage "Request was aborted." — ZAI/GLM-5 resolves the stream with
+    // this stop reason instead of rejecting, so promptError is never set.
+    // isFailoverAssistantError must match this to trigger fallback. (#16)
+    /\brequest was aborted\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
