@@ -45703,6 +45703,25 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.options",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.models.*.options.*",
+      "kind": "core",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.reasoning",
       "kind": "core",
       "type": "boolean",
