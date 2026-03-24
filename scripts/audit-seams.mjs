@@ -8,11 +8,29 @@ import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
+const extensionsRoot = path.join(repoRoot, "extensions");
+const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
+const MAX_SCAN_BYTES = 2 * 1024 * 1024;
 const compareStrings = (left, right) => left.localeCompare(right);
+const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
+
+Audit repo seam inventory and emit JSON to stdout.
+
+Sections:
+  duplicatedSeamFamilies       Plugin SDK seam families imported from multiple production files
+  overlapFiles                 Production files that touch multiple seam families
+  optionalClusterStaticLeaks   Optional extension/plugin clusters referenced from the static graph
+  missingPackages              Workspace packages whose deps are not mirrored at the root
+  seamTestInventory            High-signal seam candidates with nearby-test gap signals
+
+Notes:
+  - Output is JSON only.
+  - For clean redirected JSON through package scripts, prefer:
+      pnpm --silent audit:seams > seam-inventory.json
+`;
 
 async function collectWorkspacePackagePaths() {
-  const extensionsRoot = path.join(repoRoot, "extensions");
   const entries = await fs.readdir(extensionsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -25,15 +43,45 @@ function normalizePath(filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
+async function readScannableText(filePath, maxBytes = MAX_SCAN_BYTES) {
+  const stat = await fs.stat(filePath);
+  if (stat.size <= maxBytes) {
+    return fs.readFile(filePath, "utf8");
+  }
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function redactNpmSpec(npmSpec) {
+  if (typeof npmSpec !== "string") {
+    return npmSpec ?? null;
+  }
+  return npmSpec
+    .replace(/(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, "$1***:***@")
+    .replace(/(https?:\/\/)([^/\s:@]+)@/gi, "$1***@");
+}
+
 function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
 
-function isProductionLikeFile(relativePath) {
+function isTestLikePath(relativePath) {
   return (
-    !/(^|\/)(__tests__|fixtures)\//.test(relativePath) &&
-    !/\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
+    /(^|\/)(__tests__|fixtures|test-utils|test-fixtures)\//.test(relativePath) ||
+    /(?:^|\/)[^/]*(?:[.-](?:test|spec))(?:[.-][^/]+)?\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(
+      relativePath,
+    )
   );
+}
+
+function isProductionLikeFile(relativePath) {
+  return !isTestLikePath(relativePath);
 }
 
 async function walkCodeFiles(rootDir) {
@@ -59,6 +107,41 @@ async function walkCodeFiles(rootDir) {
       out.push(fullPath);
     }
   }
+  await walk(rootDir);
+  return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+}
+
+async function walkAllCodeFiles(rootDir, options = {}) {
+  const out = [];
+  const includeTests = options.includeTests === true;
+
+  async function walk(dir) {
+    let entries = [];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === "dist" || entry.name === "node_modules") {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !isCodeFile(entry.name)) {
+        continue;
+      }
+      const relativePath = normalizePath(fullPath);
+      if (!includeTests && !isProductionLikeFile(relativePath)) {
+        continue;
+      }
+      out.push(fullPath);
+    }
+  }
+
   await walk(rootDir);
   return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 }
@@ -253,14 +336,21 @@ function buildDuplicatedSeamFamilies(inventory) {
         return [
           family,
           {
-            count: entries.length,
+            count: files.length,
+            importCount: entries.length,
             files,
             imports: entries,
           },
         ];
       })
       .filter(([, value]) => value.files.length > 1)
-      .toSorted((left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0])),
+      .toSorted((left, right) => {
+        return (
+          right[1].count - left[1].count ||
+          right[1].importCount - left[1].importCount ||
+          left[0].localeCompare(right[0])
+        );
+      }),
   );
 
   return duplicated;
@@ -338,6 +428,13 @@ function packageClusterMeta(relativePackagePath) {
 }
 
 function classifyMissingPackageCluster(params) {
+  if (params.hasStaticLeak) {
+    return {
+      decision: "required",
+      reason:
+        "Cluster already appears in the static graph in this audit run, so treating it as optional would be misleading.",
+    };
+  }
   if (optionalBundledClusterSet.has(params.cluster)) {
     if (params.cluster === "ui") {
       return {
@@ -366,7 +463,7 @@ function classifyMissingPackageCluster(params) {
   };
 }
 
-async function buildMissingPackages() {
+async function buildMissingPackages(params = {}) {
   const rootPackage = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
   const rootDeps = new Set([
     ...Object.keys(rootPackage.dependencies ?? {}),
@@ -409,6 +506,7 @@ async function buildMissingPackages() {
     const classification = classifyMissingPackageCluster({
       cluster: meta.cluster,
       pluginSdkEntries,
+      hasStaticLeak: params.staticLeakClusters?.has(meta.cluster) === true,
     });
     output.push({
       cluster: meta.cluster,
@@ -416,7 +514,7 @@ async function buildMissingPackages() {
       decisionReason: classification.reason,
       packageName: pkg.name ?? meta.packageName,
       packagePath: relativePackagePath,
-      npmSpec: pkg.openclaw?.install?.npmSpec ?? null,
+      npmSpec: redactNpmSpec(pkg.openclaw?.install?.npmSpec),
       private: pkg.private === true,
       pluginSdkReachability:
         pluginSdkEntries.length > 0 ? { staticEntryPoints: pluginSdkEntries } : undefined,
@@ -429,14 +527,260 @@ async function buildMissingPackages() {
   });
 }
 
+function stemFromRelativePath(relativePath) {
+  return relativePath.replace(/\.(m|c)?[jt]sx?$/, "");
+}
+
+function describeSeamKinds(relativePath, source) {
+  const seamKinds = [];
+  const isReplyDeliveryPath =
+    /reply-delivery|reply-dispatcher|deliver-reply|reply\/.*delivery|monitor\/(?:replies|deliver|native-command)|outbound\/deliver|outbound\/message/.test(
+      relativePath,
+    );
+  const isChannelMediaAdapterPath =
+    (relativePath.startsWith("extensions/") &&
+      /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
+        relativePath,
+      )) ||
+    /^src\/channels\/plugins\/outbound\/[^/]+\.ts$/.test(relativePath);
+  if (
+    relativePath.startsWith("src/agents/tools/") &&
+    source.includes("details") &&
+    source.includes("media") &&
+    /details\s*:\s*{[\s\S]*\bmedia\b\s*:/.test(source)
+  ) {
+    seamKinds.push("tool-result-media");
+  }
+  if (
+    isReplyDeliveryPath &&
+    /\bmediaUrl\b|\bmediaUrls\b|resolveSendableOutboundReplyParts/.test(source)
+  ) {
+    seamKinds.push("reply-delivery-media");
+  }
+  if (
+    isChannelMediaAdapterPath &&
+    (/sendMedia\b/.test(source) || /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source))
+  ) {
+    seamKinds.push("channel-media-adapter");
+  }
+  if (
+    isReplyDeliveryPath &&
+    /blockStreamingEnabled|directlySentBlockKeys/.test(source) &&
+    /\bmediaUrl\b|\bmediaUrls\b/.test(source)
+  ) {
+    seamKinds.push("streaming-media-handoff");
+  }
+  return [...new Set(seamKinds)].toSorted(compareStrings);
+}
+
+async function buildTestIndex(testFiles) {
+  return Promise.all(
+    testFiles.map(async (filePath) => {
+      const relativePath = normalizePath(filePath);
+      const stem = stemFromRelativePath(relativePath)
+        .replace(/\.test$/, "")
+        .replace(/\.spec$/, "");
+      const baseName = path.basename(stem);
+      const source = await readScannableText(filePath);
+      return {
+        filePath,
+        relativePath,
+        stem,
+        baseName,
+        source,
+      };
+    }),
+  );
+}
+
+function splitNameTokens(name) {
+  return name
+    .split(/[^a-zA-Z0-9]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasExecutableImportReference(source, importPath) {
+  const escapedImportPath = escapeForRegExp(importPath);
+  const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
+  const patterns = [
+    new RegExp(String.raw`\bfrom\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\bimport\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\brequire\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]\s*\)`),
+    new RegExp(String.raw`\bimport\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]\s*\)`),
+  ];
+  return patterns.some((pattern) => pattern.test(source));
+}
+
+function hasModuleMockReference(source, importPath) {
+  const escapedImportPath = escapeForRegExp(importPath);
+  const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
+  const patterns = [
+    new RegExp(String.raw`\bvi\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+    new RegExp(String.raw`\bjest\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
+  ];
+  return patterns.some((pattern) => pattern.test(source));
+}
+
+function matchQualityRank(quality) {
+  switch (quality) {
+    case "exact-stem":
+      return 0;
+    case "path-nearby":
+      return 1;
+    case "direct-import":
+      return 2;
+    case "dir-token":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function findRelatedTests(relativePath, testIndex) {
+  const stem = stemFromRelativePath(relativePath);
+  const baseName = path.basename(stem);
+  const dirName = path.dirname(relativePath);
+  const normalizedDir = dirName.split(path.sep).join("/");
+  const baseTokens = new Set(splitNameTokens(baseName).filter((token) => token.length >= 7));
+
+  const matches = testIndex.flatMap((entry) => {
+    if (entry.stem === stem) {
+      return [{ file: entry.relativePath, matchQuality: "exact-stem" }];
+    }
+    if (entry.stem.startsWith(`${stem}.`)) {
+      return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
+    }
+    const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const importPath =
+      path.posix.relative(entryDir, stem) === path.basename(stem)
+        ? `./${path.basename(stem)}`
+        : path.posix.relative(entryDir, stem).startsWith(".")
+          ? path.posix.relative(entryDir, stem)
+          : `./${path.posix.relative(entryDir, stem)}`;
+    if (
+      hasExecutableImportReference(entry.source, importPath) &&
+      !hasModuleMockReference(entry.source, importPath)
+    ) {
+      return [{ file: entry.relativePath, matchQuality: "direct-import" }];
+    }
+    if (entryDir === normalizedDir && baseTokens.size > 0) {
+      const entryTokens = splitNameTokens(entry.baseName);
+      const sharedToken = entryTokens.find((token) => baseTokens.has(token));
+      if (sharedToken) {
+        return [{ file: entry.relativePath, matchQuality: "dir-token" }];
+      }
+    }
+    return [];
+  });
+
+  const byFile = new Map();
+  for (const match of matches) {
+    const existing = byFile.get(match.file);
+    if (
+      !existing ||
+      matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)
+    ) {
+      byFile.set(match.file, match);
+    }
+  }
+
+  return [...byFile.values()].toSorted((left, right) => {
+    return (
+      matchQualityRank(left.matchQuality) - matchQualityRank(right.matchQuality) ||
+      left.file.localeCompare(right.file)
+    );
+  });
+}
+
+function determineSeamTestStatus(seamKinds, relatedTestMatches) {
+  if (relatedTestMatches.length === 0) {
+    return {
+      status: "gap",
+      reason: "No nearby test file references this seam candidate.",
+    };
+  }
+
+  const bestMatch = relatedTestMatches[0]?.matchQuality ?? "unknown";
+  if (
+    seamKinds.includes("reply-delivery-media") ||
+    seamKinds.includes("streaming-media-handoff") ||
+    seamKinds.includes("tool-result-media")
+  ) {
+    return {
+      status: "partial",
+      reason: `Nearby tests exist (best match: ${bestMatch}), but this inventory does not prove cross-layer seam coverage end to end.`,
+    };
+  }
+  return {
+    status: "heuristic-nearby",
+    reason: `Nearby tests exist (best match: ${bestMatch}), but this remains a filename/path heuristic rather than proof of seam assertions.`,
+  };
+}
+
+async function buildSeamTestInventory() {
+  const productionFiles = [
+    ...(await walkCodeFiles(srcRoot)),
+    ...(await walkCodeFiles(extensionsRoot)),
+  ].toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  const testFiles = [
+    ...(await walkAllCodeFiles(srcRoot, { includeTests: true })),
+    ...(await walkAllCodeFiles(extensionsRoot, { includeTests: true })),
+    ...(await walkAllCodeFiles(testRoot, { includeTests: true })),
+  ]
+    .filter((filePath) => /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(filePath))
+    .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  const testIndex = await buildTestIndex(testFiles);
+  const inventory = [];
+
+  for (const filePath of productionFiles) {
+    const relativePath = normalizePath(filePath);
+    const source = await readScannableText(filePath);
+    const seamKinds = describeSeamKinds(relativePath, source);
+    if (seamKinds.length === 0) {
+      continue;
+    }
+    const relatedTestMatches = findRelatedTests(relativePath, testIndex);
+    const status = determineSeamTestStatus(seamKinds, relatedTestMatches);
+    inventory.push({
+      file: relativePath,
+      seamKinds,
+      relatedTests: relatedTestMatches.map((entry) => entry.file),
+      relatedTestMatches,
+      status: status.status,
+      reason: status.reason,
+    });
+  }
+
+  return inventory.toSorted((left, right) => {
+    return (
+      left.status.localeCompare(right.status) ||
+      left.file.localeCompare(right.file) ||
+      left.seamKinds.join(",").localeCompare(right.seamKinds.join(","))
+    );
+  });
+}
+
+const args = new Set(process.argv.slice(2));
+if (args.has("--help") || args.has("-h")) {
+  process.stdout.write(`${HELP_TEXT}\n`);
+  process.exit(0);
+}
+
 await collectWorkspacePackagePaths();
 const inventory = await collectCorePluginSdkImports();
 const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
+const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
 const result = {
   duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
   overlapFiles: buildOverlapFiles(inventory),
   optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-  missingPackages: await buildMissingPackages(),
+  missingPackages: await buildMissingPackages({ staticLeakClusters }),
+  seamTestInventory: await buildSeamTestInventory(),
 };
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
