@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { shortenHomePath } from "../utils.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -77,6 +80,15 @@ export type PluginInspectReport = {
   httpRouteCount: number;
   bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
+  runtimeSnapshot?: {
+    source: string;
+    summary: string[];
+    notices: Array<{
+      severity: "info" | "warn" | "error";
+      message: string;
+    }>;
+    raw: Record<string, unknown>;
+  };
   policy: {
     allowPromptInjection?: boolean;
     allowModelOverride?: boolean;
@@ -86,6 +98,138 @@ export type PluginInspectReport = {
   usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
 };
+
+const OPENVIKING_RUNTIME_STATUS_PATH = "memory/openviking/_status.json";
+
+function toBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function toStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function buildOpenVikingRuntimeSnapshot(
+  workspaceDir: string,
+): PluginInspectReport["runtimeSnapshot"] {
+  const source = path.join(workspaceDir, OPENVIKING_RUNTIME_STATUS_PATH);
+  if (!fs.existsSync(source)) {
+    return undefined;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(source, "utf8")) as unknown;
+  } catch (error) {
+    return {
+      source: shortenHomePath(source),
+      summary: ["Snapshot: unreadable"],
+      notices: [
+        {
+          severity: "error",
+          message: `failed to parse runtime snapshot: ${String(error)}`,
+        },
+      ],
+      raw: {},
+    };
+  }
+  if (!isPlainRecord(raw)) {
+    return {
+      source: shortenHomePath(source),
+      summary: ["Snapshot: unreadable"],
+      notices: [
+        {
+          severity: "error",
+          message: "runtime snapshot is not a JSON object",
+        },
+      ],
+      raw: {},
+    };
+  }
+
+  const updatedAt = toStringValue(raw.updatedAt);
+  const targetUri = toStringValue(raw.targetUri);
+  const query = toStringValue(raw.query);
+  const resultCount = toNumber(raw.resultCount);
+  const retrievalOk = toBoolean(raw.retrievalOk);
+  const retrievalError = toStringValue(raw.retrievalError);
+  const writebackEnabled = toBoolean(raw.writebackEnabled);
+  const writebackMode = toStringValue(raw.writebackMode);
+  const writebackError = toStringValue(raw.writebackError);
+  const writebackDigest = toStringValue(raw.writebackDigest);
+  const writebackOutcomes = Array.isArray(raw.writebackOutcomes)
+    ? raw.writebackOutcomes.filter((entry): entry is string => typeof entry === "string")
+    : [];
+
+  const summary: string[] = [];
+  if (updatedAt) {
+    summary.push(`Updated: ${updatedAt}`);
+  }
+  if (targetUri) {
+    summary.push(`Target URI: ${targetUri}`);
+  }
+  if (typeof resultCount === "number") {
+    summary.push(`Results: ${resultCount}`);
+  }
+  if (retrievalOk != null) {
+    summary.push(`Retrieval: ${retrievalOk ? "ok" : "failed"}`);
+  }
+  if (query) {
+    summary.push(`Query: ${query}`);
+  }
+  if (writebackEnabled != null) {
+    summary.push(`Writeback: ${writebackEnabled ? (writebackMode ?? "enabled") : "disabled"}`);
+  }
+  if (writebackOutcomes.length > 0) {
+    summary.push(`Writeback outputs: ${writebackOutcomes.join(", ")}`);
+  }
+  if (writebackDigest) {
+    summary.push(`Writeback digest: ${writebackDigest}`);
+  }
+
+  const notices: NonNullable<PluginInspectReport["runtimeSnapshot"]>["notices"] = [];
+  if (retrievalOk === false) {
+    notices.push({
+      severity: "error",
+      message: retrievalError
+        ? `retrieval failed: ${retrievalError}`
+        : "retrieval failed without an error message",
+    });
+  }
+  if (writebackEnabled && writebackError) {
+    notices.push({
+      severity: "error",
+      message: `writeback failed: ${writebackError}`,
+    });
+  }
+
+  return {
+    source: shortenHomePath(source),
+    summary,
+    notices,
+    raw,
+  };
+}
+
+function buildPluginRuntimeSnapshot(params: {
+  plugin: PluginRegistry["plugins"][number];
+  workspaceDir?: string;
+}): PluginInspectReport["runtimeSnapshot"] {
+  if (!params.workspaceDir) {
+    return undefined;
+  }
+  if (params.plugin.id === "openviking") {
+    return buildOpenVikingRuntimeSnapshot(params.workspaceDir);
+  }
+  return undefined;
+}
 
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart">,
@@ -223,6 +367,10 @@ export function buildPluginInspectReport(params: {
       optional: entry.optional,
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
+  const runtimeSnapshot = buildPluginRuntimeSnapshot({
+    plugin,
+    workspaceDir: report.workspaceDir,
+  });
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const capabilityCount = capabilities.length;
   const shape = deriveInspectShape({
@@ -304,6 +452,7 @@ export function buildPluginInspectReport(params: {
     httpRouteCount: plugin.httpRoutes,
     bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
+    runtimeSnapshot,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,

@@ -202,6 +202,11 @@ Deep introspection for a single plugin. Shows identity, load status, source,
 registered capabilities, hooks, tools, commands, services, gateway methods,
 HTTP routes, policy flags, diagnostics, and install metadata.
 
+Plugins that emit runtime snapshots can also surface the latest runtime state in
+`inspect`. The bundled OpenViking context-engine reports its last retrieval and
+writeback snapshot from `memory/openviking/_status.json`, including the latest
+target URI, result count, writeback mode, and any runtime notices.
+
 Each plugin is classified by what it actually registers at runtime:
 
 - **plain-capability** — one capability type (e.g. a provider-only plugin)
@@ -215,3 +220,14 @@ The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.
 
 `info` is an alias for `inspect`.
+
+### Doctor
+
+```bash
+openclaw plugins doctor
+```
+
+`doctor` reports plugin load failures, plugin diagnostics, compatibility
+warnings, and runtime notices surfaced by plugins that publish status
+snapshots. For OpenViking this includes failed retrievals or writeback errors
+captured in its latest runtime snapshot.

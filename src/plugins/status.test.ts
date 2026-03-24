@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
@@ -176,6 +179,100 @@ describe("buildPluginStatusReport", () => {
     });
     expect(inspect?.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },
+    ]);
+  });
+
+  it("includes OpenViking runtime snapshot details in inspect reports", () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openviking-status-"));
+    fs.mkdirSync(path.join(workspaceDir, "memory/openviking"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceDir, "memory/openviking/_status.json"),
+      `${JSON.stringify(
+        {
+          updatedAt: "2026-03-24T10:00:00.000Z",
+          query: "Feishu fix",
+          resultCount: 4,
+          targetUri: "viking://resources/openclaw",
+          retrievalOk: false,
+          retrievalError: "timeout",
+          writebackEnabled: true,
+          writebackMode: "hybrid",
+          writebackError: "session commit failed",
+          writebackDigest: "abc123",
+          writebackOutcomes: ["workspace:memory/openviking/2026-03-24.md"],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "openviking",
+          name: "OpenViking",
+          description: "Context engine",
+          source: "/tmp/openviking/index.ts",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          kind: "context-engine",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: true,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "openviking", workspaceDir });
+
+    expect(inspect?.runtimeSnapshot?.summary).toEqual([
+      "Updated: 2026-03-24T10:00:00.000Z",
+      "Target URI: viking://resources/openclaw",
+      "Results: 4",
+      "Retrieval: failed",
+      "Query: Feishu fix",
+      "Writeback: hybrid",
+      "Writeback outputs: workspace:memory/openviking/2026-03-24.md",
+      "Writeback digest: abc123",
+    ]);
+    expect(inspect?.runtimeSnapshot?.notices).toEqual([
+      {
+        severity: "error",
+        message: "retrieval failed: timeout",
+      },
+      {
+        severity: "error",
+        message: "writeback failed: session commit failed",
+      },
     ]);
   });
 
