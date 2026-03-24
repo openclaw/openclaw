@@ -47,7 +47,28 @@ def build_parser() -> argparse.ArgumentParser:
   return parser
 
 
+def build_message_diag(message) -> dict[str, object | None]:
+  reply = getattr(message, "reply_to", None)
+  direct_topic = getattr(getattr(message, "direct_messages_topic", None), "topic_id", None)
+  return {
+    "message_id": getattr(message, "id", None),
+    "sender_id": getattr(message, "sender_id", None),
+    "thread_anchor": resolve_thread_anchor(message),
+    "reply_to_msg_id": getattr(reply, "reply_to_msg_id", None),
+    "reply_to_top_id": getattr(reply, "reply_to_top_id", None),
+    "forum_topic": getattr(reply, "forum_topic", None),
+    "direct_messages_topic_id": direct_topic,
+    "text": ((getattr(message, "message", "") or "").strip())[:160],
+  }
+
+
 def resolve_thread_anchor(message) -> int | None:
+  # Telegram DM threads can arrive either as normal reply metadata or as
+  # direct-messages-topic metadata. Prefer explicit topic ids when present so
+  # private-topic replies match the same way as the dedicated probe harness.
+  direct_topic = getattr(getattr(message, "direct_messages_topic", None), "topic_id", None)
+  if direct_topic is not None:
+    return int(direct_topic)
   reply = getattr(message, "reply_to", None)
   if not reply:
     return None
@@ -58,6 +79,26 @@ def resolve_thread_anchor(message) -> int | None:
   if reply_id is not None:
     return int(reply_id)
   return None
+
+
+def resolve_match_reason(message, *, sender_id: int, contains: str, thread_anchor: int) -> tuple[bool, str]:
+  message_sender_id = int(getattr(message, "sender_id", 0) or 0)
+  if sender_id > 0 and message_sender_id != sender_id:
+    return False, f"sender_mismatch:{message_sender_id}!={sender_id}"
+
+  text = (getattr(message, "message", "") or "").strip()
+  if not text:
+    return False, "empty_text"
+
+  if contains not in text:
+    return False, "text_mismatch"
+
+  if thread_anchor > 0:
+    anchor = resolve_thread_anchor(message)
+    if anchor != thread_anchor:
+      return False, f"thread_mismatch:{anchor}"
+
+  return True, "matched"
 
 
 async def run() -> int:
@@ -71,29 +112,37 @@ async def run() -> int:
   client = TelegramClient(str(session_path), args.api_id, args.api_hash)
   await client.start()
   try:
+    ignored_recent: list[dict[str, object | None]] = []
     while time.time() < deadline:
       messages = await client.get_messages(chat_entity, limit=80)
       for message in messages:
         if message.id <= args.after_id:
           continue
-        if args.sender_id > 0:
-          sender_id = int(getattr(message, "sender_id", 0) or 0)
-          if sender_id != args.sender_id:
-            continue
+
+        matched, reason = resolve_match_reason(
+          message,
+          sender_id=args.sender_id,
+          contains=args.contains,
+          thread_anchor=args.thread_anchor,
+        )
+        if not matched:
+          diag = build_message_diag(message)
+          diag["ignored_reason"] = reason
+          ignored_recent.append(diag)
+          ignored_recent = ignored_recent[-10:]
+          continue
+
         text = (getattr(message, "message", "") or "").strip()
-        if not text:
-          continue
-        if args.contains not in text:
-          continue
-        if args.thread_anchor > 0:
-          anchor = resolve_thread_anchor(message)
-          if anchor != args.thread_anchor:
-            continue
         payload = {
           "chat_id": int(getattr(message, "chat_id", 0) or 0),
           "message_id": message.id,
           "sender_id": int(getattr(message, "sender_id", 0) or 0),
           "thread_anchor": resolve_thread_anchor(message),
+          "direct_messages_topic_id": getattr(
+            getattr(message, "direct_messages_topic", None),
+            "topic_id",
+            None,
+          ),
           "text": text,
         }
         print(json.dumps(payload, ensure_ascii=True))
@@ -107,6 +156,7 @@ async def run() -> int:
           "contains": args.contains,
           "after_id": args.after_id,
           "thread_anchor": args.thread_anchor or None,
+          "ignored_recent": ignored_recent,
         },
         ensure_ascii=True,
       ),
