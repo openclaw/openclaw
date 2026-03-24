@@ -93,6 +93,9 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 
+// In-memory store for business connection mappings (chat_id <-> business_connection_id)
+const businessConnectionMap = new Map<number, string>();
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -126,6 +129,24 @@ export const registerTelegramHandlers = ({
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
+
+  // Configure API transformer to inject business_connection_id for outbound messages
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    // Check if this is a known business chat and method supports business_connection_id
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "chat_id" in payload &&
+      typeof payload.chat_id === "number" &&
+      method !== "sendChatAction" // sendChatAction doesn't support business_connection_id
+    ) {
+      const businessConnectionId = businessConnectionMap.get(payload.chat_id);
+      if (businessConnectionId && !("business_connection_id" in payload)) {
+        (payload as Record<string, unknown>).business_connection_id = businessConnectionId;
+      }
+    }
+    return prev(method, payload, signal);
+  });
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
@@ -1707,6 +1728,70 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
     }
   };
+
+  // Handle business connections — tracks chat_id <-> business_connection_id mapping
+  bot.on("business_connection", async (ctx) => {
+    try {
+      const businessConnection = ctx.businessConnection;
+      if (!businessConnection) {
+        return;
+      }
+      const { id: businessConnectionId, user } = businessConnection;
+      const chatId = user?.id;
+      if (!chatId || !businessConnectionId) {
+        return;
+      }
+      businessConnectionMap.set(chatId, businessConnectionId);
+      logVerbose(
+        `[telegram] Business connection established: ${businessConnectionId} for chat ${chatId}`,
+      );
+      runtime.log?.(
+        warn(
+          `[telegram] Business connection established: ${businessConnectionId} for chat ${chatId}`,
+        ),
+      );
+    } catch (err) {
+      runtime.error?.(danger(`[telegram] Business connection handler failed: ${String(err)}`));
+    }
+  });
+
+  // Handle business messages — private chats via Telegram Business accounts
+  bot.on("business_message", async (ctx) => {
+    try {
+      const businessMsg = ctx.businessMessage;
+      if (!businessMsg) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      // Track the business_connection_id from the message
+      const businessConnectionId = (businessMsg as unknown as { business_connection_id?: string })
+        .business_connection_id;
+      if (businessConnectionId) {
+        businessConnectionMap.set(businessMsg.chat.id, businessConnectionId);
+      }
+
+      // Business messages are always private chats
+      await handleInboundMessageLike({
+        ctxForDedupe: ctx,
+        ctx: buildSyntheticContext(ctx, businessMsg),
+        msg: businessMsg,
+        chatId: businessMsg.chat.id,
+        isGroup: false,
+        isForum: false,
+        senderId: businessMsg.from?.id != null ? String(businessMsg.from.id) : "",
+        senderUsername: businessMsg.from?.username ?? "",
+        requireConfiguredGroup: false,
+        sendOversizeWarning: true,
+        oversizeLogMessage: "business message media exceeds size limit",
+        errorMessage: "business_message handler failed",
+      });
+    } catch (err) {
+      runtime.error?.(danger(`[telegram] Business message handler failed: ${String(err)}`));
+    }
+  });
 
   bot.on("message", async (ctx) => {
     const msg = ctx.message;
