@@ -53,7 +53,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-import { compareOpenClawVersions } from "./version.js";
+import { compareOpenClawVersions, isSameOpenClawStableFamily } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -62,6 +62,7 @@ export { MissingEnvVarError } from "./env-substitution.js";
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
+  "DEEPSEEK_API_KEY",
   "ANTHROPIC_OAUTH_TOKEN",
   "GEMINI_API_KEY",
   "ZAI_API_KEY",
@@ -619,6 +620,9 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
+    return;
+  }
+  if (isSameOpenClawStableFamily(VERSION, touched)) {
     return;
   }
   const cmp = compareOpenClawVersions(VERSION, touched);

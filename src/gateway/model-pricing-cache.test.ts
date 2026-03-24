@@ -201,4 +201,45 @@ describe("model-pricing-cache", () => {
       cacheWrite: 0,
     });
   });
+
+  it("does not recurse forever for native openrouter auto refs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/auto" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "openrouter/auto",
+                pricing: {
+                  prompt: "0.000001",
+                  completion: "0.000002",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+
+    await expect(refreshGatewayModelPricingCache({ config, fetchImpl })).resolves.toBeUndefined();
+    expect(
+      getCachedGatewayModelPricing({ provider: "openrouter", model: "openrouter/auto" }),
+    ).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
 });

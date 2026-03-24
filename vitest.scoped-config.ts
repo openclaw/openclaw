@@ -1,6 +1,32 @@
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
 
+function normalizePathPattern(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+function relativizeScopedPattern(value: string, dir: string): string {
+  const normalizedValue = normalizePathPattern(value);
+  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
+  if (!normalizedDir) {
+    return normalizedValue;
+  }
+  if (normalizedValue === normalizedDir) {
+    return ".";
+  }
+  const prefix = `${normalizedDir}/`;
+  return normalizedValue.startsWith(prefix)
+    ? normalizedValue.slice(prefix.length)
+    : normalizedValue;
+}
+
+function relativizeScopedPatterns(values: string[], dir?: string): string[] {
+  if (!dir) {
+    return values.map(normalizePathPattern);
+  }
+  return values.map((value) => relativizeScopedPattern(value, dir));
+}
+
 export function resolveVitestIsolation(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -15,6 +41,7 @@ export function createScopedVitestConfig(
   include: string[],
   options?: {
     dir?: string;
+    env?: Record<string, string | undefined>;
     exclude?: string[];
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
@@ -32,15 +59,21 @@ export function createScopedVitestConfig(
         };
       }
     ).test ?? {};
-  const exclude = [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])];
+  const scopedDir = options?.dir;
+  const exclude = relativizeScopedPatterns(
+    [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])],
+    scopedDir,
+  );
+  const isolate = resolveVitestIsolation(options?.env);
 
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
-      isolate: resolveVitestIsolation(),
-      ...(options?.dir ? { dir: options.dir } : {}),
-      include,
+      isolate,
+      runner: "./test/non-isolated-runner.ts",
+      ...(scopedDir ? { dir: scopedDir } : {}),
+      include: relativizeScopedPatterns(include, scopedDir),
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
       ...(options?.passWithNoTests !== undefined
