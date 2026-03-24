@@ -531,6 +531,95 @@ describe("killControlledSubagentRun", () => {
     expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
   });
+
+  it("does not kill a stale child row while cascading descendants from an ended current parent", async () => {
+    const parentSessionKey = "agent:main:subagent:kill-parent";
+    const childSessionKey = `${parentSessionKey}:subagent:child`;
+    const leafSessionKey = `${childSessionKey}:subagent:leaf`;
+
+    addSubagentRunForTests({
+      runId: "run-parent-current",
+      childSessionKey: parentSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current parent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 8_000,
+      startedAt: Date.now() - 7_000,
+      endedAt: Date.now() - 6_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-child-stale",
+      childSessionKey,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "stale child task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-current",
+      childSessionKey,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "current child task",
+      cleanup: "keep",
+      createdAt: Date.now() - 3_000,
+      startedAt: Date.now() - 2_000,
+      endedAt: Date.now() - 1_500,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-leaf-active",
+      childSessionKey: leafSessionKey,
+      controllerSessionKey: childSessionKey,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "leaf task",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    });
+
+    const result = await killControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-parent-current",
+        childSessionKey: parentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "current parent task",
+        cleanup: "keep",
+        createdAt: Date.now() - 8_000,
+        startedAt: Date.now() - 7_000,
+        endedAt: Date.now() - 6_000,
+        outcome: { status: "ok" },
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      runId: "run-parent-current",
+      sessionKey: parentSessionKey,
+      label: "current parent task",
+      cascadeKilled: 1,
+      cascadeLabels: ["leaf task"],
+      text: "killed 1 descendant of current parent task.",
+    });
+    expect(getSubagentRunByChildSessionKey(leafSessionKey)?.endedAt).toBeTypeOf("number");
+  });
 });
 
 describe("killAllControlledSubagentRuns", () => {
