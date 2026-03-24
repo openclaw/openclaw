@@ -41,6 +41,9 @@
     },
     "release": {
       "publishToNpm": true
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
     }
   }
 }
