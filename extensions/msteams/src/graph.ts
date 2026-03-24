@@ -180,7 +180,8 @@ export async function fetchChannelMessage(params: {
 }
 
 /**
- * Fetch replies in a channel thread (up to `top` messages, default 50).
+ * Fetch all replies in a channel thread, paginating through results.
+ * Uses `top` as page size (default 50) and follows `@odata.nextLink`.
  */
 export async function fetchThreadReplies(params: {
   token: string;
@@ -189,17 +190,30 @@ export async function fetchThreadReplies(params: {
   messageId: string;
   top?: number;
 }): Promise<GraphThreadMessage[]> {
-  const limit = params.top ?? 50;
-  const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies?$top=${limit}&$orderby=${encodeURIComponent("createdDateTime asc")}`;
+  const pageSize = params.top ?? 50;
+  const basePath = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies`;
+  type ReplyPage = GraphResponse<GraphThreadMessage> & { "@odata.nextLink"?: string };
+
+  const allReplies: GraphThreadMessage[] = [];
+  let nextPath: string | null =
+    `${basePath}?$top=${pageSize}&$orderby=${encodeURIComponent("createdDateTime asc")}`;
+
   try {
-    const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
-      token: params.token,
-      path,
-    });
-    return res.value ?? [];
+    while (nextPath) {
+      const pagePath = nextPath;
+      const page: ReplyPage = await fetchGraphJson<ReplyPage>({
+        token: params.token,
+        path: pagePath,
+      });
+      allReplies.push(...(page.value ?? []));
+
+      const rawNext = page["@odata.nextLink"];
+      nextPath = rawNext ? rawNext.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "") : null;
+    }
   } catch {
-    return [];
+    // Return whatever we collected so far
   }
+  return allReplies;
 }
 
 /**
