@@ -18,11 +18,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-  type SessionPatchHookEvent,
-} from "../../hooks/internal-hooks.js";
+import { triggerInternalHook, type SessionPatchHookEvent } from "../../hooks/internal-hooks.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
