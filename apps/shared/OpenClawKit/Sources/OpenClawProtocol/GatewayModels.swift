@@ -2852,6 +2852,24 @@ public struct SkillsBinsResult: Codable, Sendable {
     }
 }
 
+public struct HiveSyncParams: Codable, Sendable {
+    public let manifest: [String: AnyCodable]?
+    public let manifestpath: String?
+
+    public init(
+        manifest: [String: AnyCodable]?,
+        manifestpath: String?)
+    {
+        self.manifest = manifest
+        self.manifestpath = manifestpath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case manifest
+        case manifestpath = "manifestPath"
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
