@@ -67,9 +67,9 @@ type TelegramSendOpts = {
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
   plainText?: string;
-  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
-  /** Send video as video note (voice bubble) instead of regular video. Defaults to false. */
+  /** Send video as video note instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
