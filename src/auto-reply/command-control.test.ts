@@ -487,7 +487,6 @@ describe("resolveCommandAuthorization", () => {
 
       expect(deniedAuth.isAuthorizedSender).toBe(false);
     });
-
     it("fails closed when provider inference hits unresolved SecretRef allowlists", () => {
       setActivePluginRegistry(
         createTestRegistry([
@@ -538,6 +537,97 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(false);
     });
 
+    it("preserves provider resolution errors when inferred fallback allowFrom is empty", () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "telegram",
+                outbound: { deliveryMode: "direct" },
+              }),
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+                resolveAllowFrom: () => {
+                  throw new Error("channels.telegram.botToken: unresolved SecretRef");
+                },
+                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+              },
+            },
+            source: "test",
+          },
+        ]),
+      );
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          SenderId: "123",
+        } as MsgContext,
+        cfg: {
+          commands: {
+            allowFrom: {
+              telegram: ["123"],
+            },
+          },
+          channels: {
+            telegram: {},
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(auth.providerId).toBeUndefined();
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("fails closed for global commands.allowFrom when inference errors drop every provider", () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "slack",
+                outbound: { deliveryMode: "direct" },
+              }),
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+                resolveAllowFrom: () => {
+                  throw new Error("channels.slack.token: unresolved SecretRef");
+                },
+                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+              },
+            },
+            source: "test",
+          },
+        ]),
+      );
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          SenderId: "123",
+        } as MsgContext,
+        cfg: {
+          commands: {
+            allowFrom: {
+              "*": ["123"],
+            },
+          },
+          channels: {
+            slack: {},
+          },
+        } as OpenClawConfig,
+        commandAuthorized: false,
+      });
+
+      expect(auth.providerId).toBeUndefined();
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
     it("does not let an unrelated provider resolution error poison inferred commands.allowFrom", () => {
       setActivePluginRegistry(
         createTestRegistry([

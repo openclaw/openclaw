@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("node:fs/promises", async () => {
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
+  stage: vi.fn(),
   install: vi.fn(),
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
@@ -72,6 +74,7 @@ vi.mock("../daemon/service-audit.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     readCommand: mocks.readCommand,
+    stage: mocks.stage,
     install: mocks.install,
   }),
 }));
@@ -97,6 +100,9 @@ import {
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 
+const originalStdinIsTTY = process.stdin.isTTY;
+const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
@@ -104,12 +110,19 @@ function makeDoctorIo() {
 function makeDoctorPrompts() {
   return {
     confirm: vi.fn().mockResolvedValue(true),
-    confirmRepair: vi.fn().mockResolvedValue(true),
-    confirmAggressive: vi.fn().mockResolvedValue(true),
-    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+    confirmAutoFix: vi.fn().mockResolvedValue(true),
+    confirmAggressiveAutoFix: vi.fn().mockResolvedValue(true),
+    confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
     select: vi.fn().mockResolvedValue("node"),
     shouldRepair: false,
     shouldForce: false,
+    repairMode: {
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    },
   };
 }
 
@@ -162,6 +175,18 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
   });
 
+  afterEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
+    });
+    if (originalUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    }
+  });
+
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
     setupGatewayTokenRepairScenario();
 
@@ -193,6 +218,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }),
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -231,6 +257,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         }),
       );
+      expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
   });
@@ -276,6 +303,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -312,6 +340,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -347,7 +376,113 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+
+    await maybeRepairGatewayServiceConfig(
+      { gateway: {} },
+      "local",
+      makeDoctorIo(),
+      createDoctorPrompter({
+        runtime: makeDoctorIo(),
+        options: {
+          repair: true,
+          nonInteractive: true,
+        },
+      }),
+    );
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("stages service config repairs during non-interactive update repairs", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+
+    await maybeRepairGatewayServiceConfig(
+      { gateway: {} },
+      "local",
+      makeDoctorIo(),
+      createDoctorPrompter({
+        runtime: makeDoctorIo(),
+        options: {
+          repair: true,
+          nonInteractive: true,
+        },
+      }),
+    );
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.stage).toHaveBeenCalledTimes(1);
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("treats SecretRef-managed gateway token as non-persisted service state", async () => {
@@ -393,6 +528,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         config: cfg,
       }),
     );
+    expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -435,7 +571,46 @@ describe("maybeRepairGatewayServiceConfig", () => {
             }),
           }),
         );
+        expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("does not persist embedded service tokens during non-interactive update repairs", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        setupGatewayTokenRepairScenario();
+
+        const cfg: OpenClawConfig = {
+          gateway: {},
+        };
+
+        await maybeRepairGatewayServiceConfig(
+          cfg,
+          "local",
+          makeDoctorIo(),
+          createDoctorPrompter({
+            runtime: makeDoctorIo(),
+            options: {
+              repair: true,
+              nonInteractive: true,
+            },
+          }),
+        );
+
+        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.stage).toHaveBeenCalledTimes(1);
+        expect(mocks.install).not.toHaveBeenCalled();
       },
     );
   });
@@ -478,6 +653,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
             config: cfg,
           }),
         );
+        expect(mocks.stage).not.toHaveBeenCalled();
       },
     );
   });
@@ -513,12 +689,19 @@ describe("maybeScanExtraGatewayServices", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const prompter = {
       confirm: vi.fn(),
-      confirmRepair: vi.fn(),
-      confirmAggressive: vi.fn(),
-      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+      confirmAutoFix: vi.fn(),
+      confirmAggressiveAutoFix: vi.fn(),
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
       select: vi.fn(),
       shouldRepair: false,
       shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
     };
 
     await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);

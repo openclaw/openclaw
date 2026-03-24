@@ -10,6 +10,27 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
+vi.mock("@mariozechner/clipboard", () => ({
+  availableFormats: () => [],
+  getText: async () => "",
+  setText: async () => {},
+  hasText: () => false,
+  getImageBinary: async () => [],
+  getImageBase64: async () => "",
+  setImageBinary: async () => {},
+  setImageBase64: async () => {},
+  hasImage: () => false,
+  getHtml: async () => "",
+  setHtml: async () => {},
+  hasHtml: () => false,
+  getRtf: async () => "",
+  setRtf: async () => {},
+  hasRtf: () => false,
+  clear: async () => {},
+  watch: () => {},
+  callThreadsafeFunction: () => {},
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
