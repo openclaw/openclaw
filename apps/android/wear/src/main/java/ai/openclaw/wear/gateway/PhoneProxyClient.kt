@@ -53,6 +53,8 @@ internal data class ProxyMessageEvent(
 internal data class ProxyHandshake(
   val ready: Boolean,
   val statusText: String?,
+  val gatewayConfig: WearGatewayConfig? = null,
+  val tlsFingerprintSha256: String? = null,
 )
 
 internal data class ProxyNodeSelection(
@@ -155,13 +157,18 @@ class PhoneProxyClient internal constructor(
   private val scope: CoroutineScope,
   private val messageTransport: ProxyMessageTransport,
   private val nodeFinder: ProxyNodeFinder,
-  ) : GatewayClientInterface {
-  constructor(context: Context) : this(
+  private val onGatewayConfigSynced: (WearGatewayConfig, String?) -> Unit = { _, _ -> },
+) : GatewayClientInterface {
+  constructor(
+    context: Context,
+    onGatewayConfigSynced: (WearGatewayConfig, String?) -> Unit = { _, _ -> },
+  ) : this(
     stringResolver = context::getString,
     formattedStringResolver = { id, args -> context.getString(id, *args) },
     scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     messageTransport = WearableMessageTransport(Wearable.getMessageClient(context)),
     nodeFinder = WearableNodeFinder(Wearable.getNodeClient(context)),
+    onGatewayConfigSynced = onGatewayConfigSynced,
   )
 
   private data class PendingProbe(
@@ -192,6 +199,7 @@ class PhoneProxyClient internal constructor(
   override val events: SharedFlow<GatewayEvent> = eventQueue.events
 
   fun connect() {
+    messageTransport.removeListener(messageListener)
     messageTransport.addListener(messageListener)
     reconnectJob?.cancel()
     livenessJob?.cancel()
@@ -309,6 +317,12 @@ class PhoneProxyClient internal constructor(
         val error = root["error"] as? JsonObject
         val code = (error?.get("code") as? JsonPrimitive)?.content ?: "UNKNOWN"
         val message = (error?.get("message") as? JsonPrimitive)?.content ?: "Request failed"
+        if (code == "PROXY_ERROR") {
+          handleTransportFailure(
+            statusText = stringResolver(R.string.wear_status_phone_gateway_unavailable),
+            generation = connectionGeneration,
+          )
+        }
         pendingRequests.remove(id)?.completeExceptionally(Exception("$code: $message"))
       }
     } catch (e: Throwable) {
@@ -334,6 +348,9 @@ class PhoneProxyClient internal constructor(
 
   private fun handlePong(sourceNodeId: String, data: String) {
     val handshake = parseProxyHandshake(data)
+    handshake.gatewayConfig?.let { syncedConfig ->
+      onGatewayConfigSynced(syncedConfig, handshake.tlsFingerprintSha256)
+    }
     val probe =
       synchronized(probeLock) {
         pendingProbe?.takeIf {
@@ -539,7 +556,33 @@ class PhoneProxyClient internal constructor(
       val root = json.parseToJsonElement(data) as? JsonObject
       val ready = (root?.get("ready") as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
       val statusText = (root?.get("statusText") as? JsonPrimitive)?.content
-      ProxyHandshake(ready = ready ?: true, statusText = statusText)
+      val gatewayConfigObj = root?.get("gatewayConfig") as? JsonObject
+      val host = (gatewayConfigObj?.get("host") as? JsonPrimitive)?.content?.trim().orEmpty()
+      val port = (gatewayConfigObj?.get("port") as? JsonPrimitive)?.content?.toIntOrNull()
+      val useTls = (gatewayConfigObj?.get("useTls") as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
+      val token = (gatewayConfigObj?.get("token") as? JsonPrimitive)?.content.orEmpty()
+      val bootstrapToken = (gatewayConfigObj?.get("bootstrapToken") as? JsonPrimitive)?.content.orEmpty()
+      val password = (gatewayConfigObj?.get("password") as? JsonPrimitive)?.content.orEmpty()
+      val tlsFingerprintSha256 = (gatewayConfigObj?.get("tlsFingerprintSha256") as? JsonPrimitive)?.content
+      val gatewayConfig =
+        if (host.isNotEmpty() && port != null && port in 1..65535) {
+          WearGatewayConfig(
+            host = host,
+            port = port,
+            token = token,
+            bootstrapToken = bootstrapToken,
+            password = password,
+            useTls = useTls,
+          )
+        } else {
+          null
+        }
+      ProxyHandshake(
+        ready = ready ?: true,
+        statusText = statusText,
+        gatewayConfig = gatewayConfig,
+        tlsFingerprintSha256 = tlsFingerprintSha256?.trim()?.takeIf { it.isNotEmpty() },
+      )
     } catch (_: Throwable) {
       ProxyHandshake(ready = true, statusText = null)
     }

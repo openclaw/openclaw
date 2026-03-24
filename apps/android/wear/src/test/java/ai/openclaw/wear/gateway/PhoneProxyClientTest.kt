@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -79,7 +80,7 @@ class PhoneProxyClientTest {
     val messageTransport = FakeProxyMessageTransport()
     val client = connectedProxyClient(scope, messageTransport)
 
-    val requestDeferred = async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    val requestDeferred = scope.async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
     runCurrent()
 
     val rpcMessage = messageTransport.sentMessages().last()
@@ -265,7 +266,7 @@ class PhoneProxyClientTest {
     )
     runCurrent()
 
-    val requestDeferred = async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    val requestDeferred = scope.async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
     runCurrent()
     val rpcMessage = messageTransport.sentMessages().last()
     assertEquals("good-node", rpcMessage.first)
@@ -286,6 +287,109 @@ class PhoneProxyClientTest {
     runCurrent()
 
     assertEquals("""{"ok":true}""", requestDeferred.await())
+    scope.cancel()
+  }
+
+  @Test
+  fun `proxy error responses drop the phone connection immediately`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val client = connectedProxyClient(scope, messageTransport)
+
+    val requestDeferred = scope.async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    runCurrent()
+    val rpcMessage = messageTransport.sentMessages().last()
+    val requestId =
+      kotlinx.serialization.json.Json
+        .parseToJsonElement(String(rpcMessage.third))
+        .jsonObject["id"]!!
+        .jsonPrimitive
+        .content
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/rpc-response",
+        sourceNodeId = "phone-node",
+        data =
+          """{"id":"$requestId","ok":false,"error":{"code":"PROXY_ERROR","message":"Gateway disconnected"}}"""
+            .toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertFalse(client.connected.value)
+    assertEquals("Phone reachable, gateway unavailable", client.statusText.value)
+    try {
+      requestDeferred.await()
+      fail("Expected proxy error request to fail")
+    } catch (e: Throwable) {
+      assertEquals("PROXY_ERROR: Gateway disconnected", e.message)
+    }
+    scope.cancel()
+  }
+
+  @Test
+  fun `proxy handshake syncs direct fallback config from phone`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val syncedConfigs = mutableListOf<Pair<WearGatewayConfig, String?>>()
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "phone-node",
+            displayName = "Pixel",
+            isNearby = true,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+        onGatewayConfigSynced = { config, fingerprint ->
+          syncedConfigs += config to fingerprint
+        },
+      )
+
+    client.connect()
+    runCurrent()
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "phone-node",
+        data =
+          """
+          {
+            "ready": false,
+            "statusText": "Gateway unavailable",
+            "gatewayConfig": {
+              "host": "gateway.example",
+              "port": 443,
+              "useTls": true,
+              "token": "token-1",
+              "bootstrapToken": "bootstrap-1",
+              "password": "password-1",
+              "tlsFingerprintSha256": "sha256:abcd"
+            }
+          }
+          """.trimIndent().toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals(1, syncedConfigs.size)
+    val (config, fingerprint) = syncedConfigs.single()
+    assertEquals("gateway.example", config.host)
+    assertEquals(443, config.port)
+    assertEquals("token-1", config.token)
+    assertEquals("bootstrap-1", config.bootstrapToken)
+    assertEquals("password-1", config.password)
+    assertTrue(config.useTls)
+    assertEquals("sha256:abcd", fingerprint)
     scope.cancel()
   }
 

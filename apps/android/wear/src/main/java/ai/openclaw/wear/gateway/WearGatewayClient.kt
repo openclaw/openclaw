@@ -63,15 +63,14 @@ interface GatewayClientInterface {
  * Direct WebSocket gateway client using the real gateway protocol
  * (type: req/res/event framing with connect.challenge nonce).
  */
-class WearGatewayClient(private val context: Context) : GatewayClientInterface {
+class WearGatewayClient internal constructor(
+  private val context: Context,
+  private val tlsPinStore: WearGatewayTlsPinStore = SharedPrefsWearGatewayTlsPinStore(context.applicationContext),
+) : GatewayClientInterface {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
-  private val httpClient =
-    OkHttpClient.Builder()
-      .readTimeout(0, TimeUnit.MILLISECONDS)
-      .pingInterval(30, TimeUnit.SECONDS)
-      .build()
+  private var httpClient = buildHttpClient()
 
   private var ws: WebSocket? = null
   private var config: WearGatewayConfig = WearGatewayConfig()
@@ -98,6 +97,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       _statusText.value = context.getString(R.string.wear_status_no_gateway_configured)
       return
     }
+    replaceHttpClient()
     _statusText.value = context.getString(R.string.wear_status_connecting)
     doConnect()
   }
@@ -117,8 +117,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
 
   fun shutdown() {
     disconnect()
-    httpClient.dispatcher.executorService.shutdown()
-    httpClient.connectionPool.evictAll()
+    closeHttpClient(httpClient)
   }
 
   override suspend fun request(method: String, paramsJson: String?, timeoutMs: Long): String {
@@ -307,6 +306,34 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       }
     }
   }
+
+  private fun buildHttpClient(): OkHttpClient {
+    val builder =
+      OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+    val tlsParams = resolveWearGatewayTlsParams(config, tlsPinStore)
+    if (tlsParams != null) {
+      val tlsConfig =
+        buildWearGatewayTlsConfig(tlsParams) { fingerprint ->
+          tlsPinStore.save(tlsParams.stableId, fingerprint)
+        }
+      builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
+      builder.hostnameVerifier(tlsConfig.hostnameVerifier)
+    }
+    return builder.build()
+  }
+
+  private fun replaceHttpClient() {
+    val previous = httpClient
+    httpClient = buildHttpClient()
+    closeHttpClient(previous)
+  }
+
+  private fun closeHttpClient(client: OkHttpClient) {
+    client.dispatcher.executorService.shutdown()
+    client.connectionPool.evictAll()
+  }
 }
 
 internal fun buildWearConnectParams(
@@ -319,6 +346,10 @@ internal fun buildWearConnectParams(
       config.token.isNotBlank() ->
         buildJsonObject {
           put("token", JsonPrimitive(config.token))
+        }
+      config.bootstrapToken.isNotBlank() ->
+        buildJsonObject {
+          put("bootstrapToken", JsonPrimitive(config.bootstrapToken))
         }
       config.password.isNotBlank() ->
         buildJsonObject {
