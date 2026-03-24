@@ -12,11 +12,7 @@ import type { EmbeddingConfig } from "./embedding.js";
 import { embed } from "./embedding.js";
 import { generateEpisode, MIN_MESSAGES_FOR_EPISODE } from "./episode-generator.js";
 import type { ExtractionConfig } from "./episode-generator.js";
-import {
-  formatEpisodeDetail,
-  formatMemoryDashboard,
-  formatRecallResults,
-} from "./format.js";
+import { formatEpisodeDetail, formatMemoryDashboard, formatRecallResults } from "./format.js";
 import type { Mem0Client } from "./mem0-client.js";
 
 type CommandDeps = {
@@ -33,6 +29,7 @@ function parseFlags(args: string): {
   sessions: boolean;
   all: boolean;
   discard: boolean;
+  fast: boolean;
   remaining: string;
 } {
   const flags = {
@@ -40,6 +37,7 @@ function parseFlags(args: string): {
     sessions: false,
     all: false,
     discard: false,
+    fast: false,
   };
 
   const words = args.split(/\s+/);
@@ -54,6 +52,8 @@ function parseFlags(args: string): {
       flags.all = true;
     } else if (word === "--discard") {
       flags.discard = true;
+    } else if (word === "--fast") {
+      flags.fast = true;
     } else {
       remaining.push(word);
     }
@@ -308,14 +308,16 @@ export function registerCommands(api: OpenClawPluginApi, deps: CommandDeps): voi
   });
 
   // =========================================================================
-  // /reset-all — reset all active sessions (triggers episode capture for each)
+  // /reset-all — reset all active sessions
+  //   --fast    skip hooks/episode capture, exclude crons, run in parallel
+  //   --discard skip episode capture (but still runs hooks sequentially)
   // =========================================================================
   api.registerCommand({
     name: "reset-all",
     description: "Reset all active agent sessions",
     acceptsArgs: true,
     handler: async (ctx) => {
-      const { discard } = parseFlags(ctx.args ?? "");
+      const { discard, fast } = parseFlags(ctx.args ?? "");
 
       try {
         // Access gateway internals via globalThis symbols (same process).
@@ -345,39 +347,63 @@ export function registerCommands(api: OpenClawPluginApi, deps: CommandDeps): voi
           });
         });
 
-        const keys = sessions
-          .map((s) => s.key)
-          .filter((k) => k && k !== "global" && k !== "unknown");
+        let keys = sessions.map((s) => s.key).filter((k) => k && k !== "global" && k !== "unknown");
+
+        // --fast: exclude cron sessions (they should persist across resets)
+        if (fast) {
+          keys = keys.filter((k) => !k.includes(":cron:"));
+        }
 
         if (keys.length === 0) {
           return { text: "No active sessions to reset." };
         }
 
-        // Reset each session — triggers before_reset hooks (episode capture)
+        const resetOne = (key: string, reason: "new" | "reset") =>
+          new Promise<void>((resolve, reject) => {
+            handlers["sessions.reset"]({
+              params: { key, reason },
+              respond: (ok: boolean, _result: unknown, error: unknown) => {
+                if (ok) resolve();
+                else reject(new Error(String(error ?? "reset failed")));
+              },
+            });
+          });
+
         let resetCount = 0;
         let errorCount = 0;
-        const reason = discard ? "reset" : "new";
 
-        for (const key of keys) {
+        if (fast) {
+          // --fast: suppress before_reset hooks and run all resets in parallel
+          const skipKey = Symbol.for("openclaw.skipBeforeResetHook");
+          (globalThis as Record<symbol, unknown>)[skipKey] = true;
           try {
-            await new Promise<void>((resolve, reject) => {
-              handlers["sessions.reset"]({
-                params: { key, reason },
-                respond: (ok: boolean, _result: unknown, error: unknown) => {
-                  if (ok) resolve();
-                  else reject(new Error(String(error ?? "reset failed")));
-                },
-              });
-            });
-            resetCount++;
-          } catch {
-            errorCount++;
+            const results = await Promise.allSettled(keys.map((key) => resetOne(key, "reset")));
+            for (const r of results) {
+              if (r.status === "fulfilled") resetCount++;
+              else errorCount++;
+            }
+          } finally {
+            (globalThis as Record<symbol, unknown>)[skipKey] = false;
+          }
+        } else {
+          // Normal: sequential resets with episode capture
+          const reason = discard ? "reset" : "new";
+          for (const key of keys) {
+            try {
+              await resetOne(key, reason);
+              resetCount++;
+            } catch {
+              errorCount++;
+            }
           }
         }
 
-        const summary = discard
-          ? `Reset ${resetCount}/${keys.length} sessions (discarded, no episodes).`
-          : `Reset ${resetCount}/${keys.length} sessions (episodes captured).`;
+        const modeLabel = fast
+          ? "fast, no episodes, crons preserved"
+          : discard
+            ? "discarded, no episodes"
+            : "episodes captured";
+        const summary = `Reset ${resetCount}/${keys.length} sessions (${modeLabel}).`;
 
         return {
           text: errorCount > 0 ? `${summary}\n${errorCount} failed.` : summary,

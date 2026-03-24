@@ -22,13 +22,13 @@ A running Mem0 REST API server. You can set one up with:
 
 The plugin expects these REST endpoints:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/memories/search?query=...&user_id=...&limit=...` | Search memories |
-| POST | `/memories` | Store a memory (`{ content, user_id, metadata }`) |
-| GET | `/memories?user_id=...` | List all memories |
-| DELETE | `/memories/:id` | Delete a memory |
+| Method | Path                                               | Description                                       |
+| ------ | -------------------------------------------------- | ------------------------------------------------- |
+| GET    | `/health`                                          | Health check                                      |
+| GET    | `/memories/search?query=...&user_id=...&limit=...` | Search memories                                   |
+| POST   | `/memories`                                        | Store a memory (`{ content, user_id, metadata }`) |
+| GET    | `/memories?user_id=...`                            | List all memories                                 |
+| DELETE | `/memories/:id`                                    | Delete a memory                                   |
 
 ## Installation
 
@@ -74,20 +74,21 @@ The plugin expects these REST endpoints:
    ```
 
    You should see in the logs:
+
    ```
    [memory-mem0] Plugin registered (autoRecall=true, autoCapture=true)
    ```
 
 ## Configuration
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `baseUrl` | string | `http://127.0.0.1:8420` | Mem0 REST API base URL |
-| `userId` | string | `openclaw` | User ID for memory partitioning |
-| `autoCapture` | boolean | `true` | Store conversation context after agent execution |
-| `autoRecall` | boolean | `true` | Inject relevant memories before agent execution |
-| `recallLimit` | number | `5` | Max memories to inject per query |
-| `recallThreshold` | number | `0.4` | Min relevance score for auto-recall (0.0 - 1.0) |
+| Option            | Type    | Default                 | Description                                      |
+| ----------------- | ------- | ----------------------- | ------------------------------------------------ |
+| `baseUrl`         | string  | `http://127.0.0.1:8420` | Mem0 REST API base URL                           |
+| `userId`          | string  | `openclaw`              | User ID for memory partitioning                  |
+| `autoCapture`     | boolean | `true`                  | Store conversation context after agent execution |
+| `autoRecall`      | boolean | `true`                  | Inject relevant memories before agent execution  |
+| `recallLimit`     | number  | `5`                     | Max memories to inject per query                 |
+| `recallThreshold` | number  | `0.4`                   | Min relevance score for auto-recall (0.0 - 1.0)  |
 
 ## Agent Tools
 
@@ -95,27 +96,27 @@ The plugin expects these REST endpoints:
 
 Search long-term memory for relevant facts.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | yes | Search query |
-| `limit` | number | no | Max results (default: 5, max: 20) |
+| Parameter | Type   | Required | Description                       |
+| --------- | ------ | -------- | --------------------------------- |
+| `query`   | string | yes      | Search query                      |
+| `limit`   | number | no       | Max results (default: 5, max: 20) |
 
 ### memory_store
 
 Store a new fact in long-term memory.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `content` | string | yes | Fact or context to remember |
-| `agent_id` | string | no | Agent ID stored in metadata |
+| Parameter  | Type   | Required | Description                 |
+| ---------- | ------ | -------- | --------------------------- |
+| `content`  | string | yes      | Fact or context to remember |
+| `agent_id` | string | no       | Agent ID stored in metadata |
 
 ### memory_forget
 
 Delete a specific memory by ID.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `id` | string | yes | Memory ID to delete |
+| Parameter | Type   | Required | Description         |
+| --------- | ------ | -------- | ------------------- |
+| `id`      | string | yes      | Memory ID to delete |
 
 ## CLI Commands
 

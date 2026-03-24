@@ -89,9 +89,7 @@ export function formatRecallResults(
     parts.push("**Past Sessions**");
     for (const { episode, similarity } of episodes) {
       const pct = Math.round(similarity * 100);
-      parts.push(
-        `- [${pct}%] ${relativeTime(episode.endedAt)}: ${episode.summary.slice(0, 150)}`,
-      );
+      parts.push(`- [${pct}%] ${relativeTime(episode.endedAt)}: ${episode.summary.slice(0, 150)}`);
     }
   }
 
@@ -122,12 +120,8 @@ export function formatMemoryDashboard(params: {
   }
 
   lines.push("");
-  lines.push(
-    `Episode DB: ${params.dbHealthy ? "healthy" : "degraded"}`,
-  );
-  lines.push(
-    `Mem0: ${params.mem0Healthy ? "healthy" : "degraded"}`,
-  );
+  lines.push(`Episode DB: ${params.dbHealthy ? "healthy" : "degraded"}`);
+  lines.push(`Mem0: ${params.mem0Healthy ? "healthy" : "degraded"}`);
 
   return lines.join("\n");
 }

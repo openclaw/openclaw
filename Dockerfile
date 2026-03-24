@@ -143,6 +143,10 @@ COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
+# Create a src/plugin-sdk symlink so bundled extension .ts re-exports resolve
+# against the compiled plugin-sdk modules (source tree is absent at runtime).
+RUN ln -s /app/dist/plugin-sdk /app/src/plugin-sdk 2>/dev/null; \
+    mkdir -p /app/src && ln -sf /app/dist/plugin-sdk /app/src/plugin-sdk
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 

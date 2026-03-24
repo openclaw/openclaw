@@ -11,10 +11,7 @@ import type { EpisodesConfig } from "./config.js";
 import type { EpisodeDb } from "./db.js";
 import type { EmbeddingConfig } from "./embedding.js";
 import { embed } from "./embedding.js";
-import {
-  generateEpisode,
-  MIN_MESSAGES_FOR_EPISODE,
-} from "./episode-generator.js";
+import { generateEpisode, MIN_MESSAGES_FOR_EPISODE } from "./episode-generator.js";
 import type { ExtractionConfig } from "./episode-generator.js";
 import { formatEpisodeContext } from "./format.js";
 
@@ -60,11 +57,15 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps): void {
   // transcript is lost.
   // =========================================================================
   api.on("before_reset", async (event, ctx) => {
+    // --fast resets set this flag to skip episode capture entirely
+    const skipKey = Symbol.for("openclaw.skipBeforeResetHook");
+    if ((globalThis as Record<symbol, unknown>)[skipKey]) {
+      return;
+    }
+
     const messages = event.messages ? extractMessages(event.messages) : [];
     if (messages.length < MIN_MESSAGES_FOR_EPISODE) {
-      api.logger.info?.(
-        `memory-episodes: skipping episode (only ${messages.length} messages)`,
-      );
+      api.logger.info?.(`memory-episodes: skipping episode (only ${messages.length} messages)`);
       return;
     }
 

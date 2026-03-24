@@ -238,13 +238,7 @@ export class EpisodeDb {
         AND 1 - (summary_embedding <=> $1::vector) >= $4
       ORDER BY similarity DESC
       LIMIT $5`,
-      [
-        toPgVector(params.embedding),
-        params.userId,
-        cutoff,
-        params.threshold,
-        params.maxResults,
-      ],
+      [toPgVector(params.embedding), params.userId, cutoff, params.threshold, params.maxResults],
     );
 
     return result.rows.map((row: Record<string, unknown>) => ({

@@ -66,6 +66,33 @@ services:
     networks:
       - memory_net
 
+  # -- Pull models from HuggingFace (bypasses Cloudflare R2) --
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # Pull models from HuggingFace to avoid Cloudflare R2 connectivity issues.
+        # Then copy them to the expected names for mem0 compatibility.
+        for model in nomic-embed-text; do
+          if ollama show "$$model" > /dev/null 2>&1; then
+            echo "Model $$model already exists, skipping."
+          else
+            echo "Pulling $$model from HuggingFace..."
+            ollama pull "hf.co/nomic-ai/$${model}-v1-GGUF" && \
+            ollama cp "hf.co/nomic-ai/$${model}-v1-GGUF" "$$model"
+            echo "Model $$model ready."
+          fi
+        done
+    restart: "no"
+    networks:
+      - memory_net
+
   # -- Mem0 REST API server --
   mem0:
     build:
@@ -84,11 +111,23 @@ services:
       HISTORY_DB_PATH: /app/history/history.db
     volumes:
       - mem0_history:/app/history
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8000/health'')"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       qdrant:
         condition: service_healthy
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     networks:
       - memory_net
 

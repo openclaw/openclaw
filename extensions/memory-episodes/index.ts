@@ -48,9 +48,7 @@ const episodesPlugin = {
     // Register CLI subcommands
     api.registerCli(
       ({ program }) => {
-        const episodes = program
-          .command("episodes")
-          .description("Episode memory plugin commands");
+        const episodes = program.command("episodes").description("Episode memory plugin commands");
 
         episodes
           .command("stats")

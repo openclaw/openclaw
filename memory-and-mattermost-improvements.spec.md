@@ -2,11 +2,11 @@
 
 This document rewrites the original three specs to align with the selected architecture:
 
-* OpenClaw Gateway is the source of truth for sessions.
-* Long-term memory uses the official `@mem0/openclaw-mem0` plugin in open-source mode.
-* OpenClaw file-based memory is disabled.
-* Mid-term memory remains a custom episodic store in Postgres + pgvector.
-* Mattermost work is split into Mattermost-side setup and OpenClaw-side implementation.
+- OpenClaw Gateway is the source of truth for sessions.
+- Long-term memory uses the official `@mem0/openclaw-mem0` plugin in open-source mode.
+- OpenClaw file-based memory is disabled.
+- Mid-term memory remains a custom episodic store in Postgres + pgvector.
+- Mattermost work is split into Mattermost-side setup and OpenClaw-side implementation.
 
 ---
 
@@ -20,25 +20,25 @@ It does **not** define canonical session storage. OpenClaw Gateway owns sessions
 
 This spec is intentionally split into two parts:
 
-* **Part A — Mattermost-side work:** slash command registration, bot plumbing, callback routing.
-* **Part B — OpenClaw-side work:** command handlers, session finalization hooks, retrieval, and memory orchestration.
+- **Part A — Mattermost-side work:** slash command registration, bot plumbing, callback routing.
+- **Part B — OpenClaw-side work:** command handlers, session finalization hooks, retrieval, and memory orchestration.
 
 ## 2. Architecture Decisions
 
 ### Source of Truth
 
-* **Sessions:** OpenClaw Gateway
-* **Long-term memory:** official Mem0 OpenClaw plugin + Qdrant
-* **Mid-term memory:** custom episode store in Postgres + pgvector
-* **Mattermost commands:** thin control surface over OpenClaw/plugin behavior
+- **Sessions:** OpenClaw Gateway
+- **Long-term memory:** official Mem0 OpenClaw plugin + Qdrant
+- **Mid-term memory:** custom episode store in Postgres + pgvector
+- **Mattermost commands:** thin control surface over OpenClaw/plugin behavior
 
 ### Explicit Non-Goals
 
 This system does **not**:
 
-* maintain a parallel canonical `sessions` table
-* use `MEMORY.md` or daily Markdown memory files
-* introduce a user-facing `/prune` command
+- maintain a parallel canonical `sessions` table
+- use `MEMORY.md` or daily Markdown memory files
+- introduce a user-facing `/prune` command
 
 ## 3. Session Model
 
@@ -46,10 +46,10 @@ A session is the active OpenClaw conversation state for a given user/channel/age
 
 Mattermost must treat the OpenClaw session as canonical and only store **derived metadata** where necessary, such as:
 
-* last finalized episode id
-* last session-finalization timestamp
-* command audit events
-* pending confirmation state for destructive commands like `/forget --all`
+- last finalized episode id
+- last session-finalization timestamp
+- command audit events
+- pending confirmation state for destructive commands like `/forget --all`
 
 ## 4. User-Facing Commands
 
@@ -57,18 +57,18 @@ Mattermost must treat the OpenClaw session as canonical and only store **derived
 
 These commands should remain OpenClaw-native:
 
-* `/new`
-* `/reset`
-* `/compact`
+- `/new`
+- `/reset`
+- `/compact`
 
 ### Add Custom Commands
 
 These commands should be implemented as OpenClaw plugin auto-reply commands:
 
-* `/recall`
-* `/forget`
-* `/memory`
-* optional `/clear`
+- `/recall`
+- `/forget`
+- `/memory`
+- optional `/clear`
 
 ### Command Semantics
 
@@ -81,19 +81,18 @@ Behavior:
 1. Resolve the current OpenClaw session.
 2. If none exists, reply: `No active session to clear.`
 3. Finalize the session:
+   - generate/store episode record
+   - allow Mem0 long-term extraction for final exchange if needed
+   - mark any command-level pending state as closed
 
-   * generate/store episode record
-   * allow Mem0 long-term extraction for final exchange if needed
-   * mark any command-level pending state as closed
 4. Clear working context using the OpenClaw session-reset path.
 5. Reply:
-
-   * `✓ Session finalized. Mid-term episode stored. Next message starts fresh.`
+   - `✓ Session finalized. Mid-term episode stored. Next message starts fresh.`
 
 Flags:
 
-* `--discard`: do not create an episode and do not write explicit memory artifacts for this session
-* `--quiet`: suppress normal confirmation message
+- `--discard`: do not create an episode and do not write explicit memory artifacts for this session
+- `--quiet`: suppress normal confirmation message
 
 #### `/recall [query]`
 
@@ -101,21 +100,21 @@ Purpose: explicitly inspect memory.
 
 Default behavior:
 
-* search long-term memory via Mem0 tools
-* search episode store via episode retrieval service
-* display grouped results
+- search long-term memory via Mem0 tools
+- search episode store via episode retrieval service
+- display grouped results
 
 Flags:
 
-* `--long-term`
-* `--sessions`
-* `--all`
+- `--long-term`
+- `--sessions`
+- `--all`
 
 Result format:
 
-* group by Long-Term Facts and Past Sessions
-* include identifiers for deletion where applicable
-* paginate when needed
+- group by Long-Term Facts and Past Sessions
+- include identifiers for deletion where applicable
+- paginate when needed
 
 #### `/forget [query|id]`
 
@@ -127,16 +126,16 @@ Behavior:
 2. Present candidate results.
 3. Require confirmation for destructive deletion.
 4. Delete from the appropriate backend:
+   - Mem0 for long-term facts
+   - Postgres episode store for episodes
 
-   * Mem0 for long-term facts
-   * Postgres episode store for episodes
 5. Write audit log entry.
 
 Flags:
 
-* `--all` deletes all long-term memories for this user and all their episodes; requires double confirmation
-* `--long-term`
-* `--sessions`
+- `--all` deletes all long-term memories for this user and all their episodes; requires double confirmation
+- `--long-term`
+- `--sessions`
 
 #### `/memory`
 
@@ -144,12 +143,12 @@ Purpose: show a memory dashboard.
 
 Shows:
 
-* whether an active OpenClaw session exists
-* recent episode count
-* long-term memory count
-* last episode timestamp
-* top categories if available
-* health/degraded status of Mem0/Qdrant and episode DB
+- whether an active OpenClaw session exists
+- recent episode count
+- long-term memory count
+- last episode timestamp
+- top categories if available
+- health/degraded status of Mem0/Qdrant and episode DB
 
 ## 5. Retrieval Policy
 
@@ -158,9 +157,9 @@ On each normal user message:
 1. OpenClaw loads the active session.
 2. Mem0 plugin auto-recall injects relevant long-term memories.
 3. Custom episode retriever fetches:
+   - the most recent relevant episode
+   - up to N semantically relevant episodes
 
-   * the most recent relevant episode
-   * up to N semantically relevant episodes
 4. Episode context is injected as a compact structured block.
 5. OpenClaw builds the final prompt and continues normally.
 
@@ -168,10 +167,10 @@ On each normal user message:
 
 ### v1 Defaults
 
-* **Long-term memory scope:** per user
-* **Episode scope:** per user, optionally filtered by channel
-* **Shared channel memory:** disabled in v1
-* **Cross-agent sharing:** disabled in v1 unless explicitly enabled later
+- **Long-term memory scope:** per user
+- **Episode scope:** per user, optionally filtered by channel
+- **Shared channel memory:** disabled in v1
+- **Cross-agent sharing:** disabled in v1 unless explicitly enabled later
 
 ### Rationale
 
@@ -185,9 +184,9 @@ This section covers what must be configured in Mattermost or in the Mattermost c
 
 Mattermost must have:
 
-* a bot or integration user connected to OpenClaw
-* permission to register slash commands if using native commands
-* a reachable callback URL to the OpenClaw Gateway
+- a bot or integration user connected to OpenClaw
+- permission to register slash commands if using native commands
+- a reachable callback URL to the OpenClaw Gateway
 
 ### 7.2 Native Command Registration Strategy
 
@@ -199,10 +198,10 @@ Enable OpenClaw native Mattermost commands for built-ins and optionally plugin c
 
 Use this for:
 
-* `/new`
-* `/reset`
-* built-in `oc_*` commands
-* potentially custom plugin commands if exposed via native command plumbing
+- `/new`
+- `/reset`
+- built-in `oc_*` commands
+- potentially custom plugin commands if exposed via native command plumbing
 
 #### Mode 2 — Register Mattermost-native commands that call OpenClaw endpoints
 
@@ -210,41 +209,41 @@ Use Mattermost slash commands that POST to OpenClaw HTTP endpoints or command ca
 
 Use this when:
 
-* you want custom UX or naming
-* you want stricter routing than plain text chat commands
-* you want command execution outside the AI loop
+- you want custom UX or naming
+- you want stricter routing than plain text chat commands
+- you want command execution outside the AI loop
 
 ### 7.3 Recommended v1 Split
 
 Mattermost-side commands:
 
-* `/recall`
-* `/forget`
-* `/memory`
-* optional `/clear`
+- `/recall`
+- `/forget`
+- `/memory`
+- optional `/clear`
 
 Native OpenClaw / text commands retained:
 
-* `/new`
-* `/reset`
-* `/compact`
+- `/new`
+- `/reset`
+- `/compact`
 
 ### 7.4 Callback Contract
 
 Mattermost command payload should include at minimum:
 
-* mattermost user id
-* channel id
-* team id
-* command name
-* raw text args
-* request id / trace id
+- mattermost user id
+- channel id
+- team id
+- command name
+- raw text args
+- request id / trace id
 
 OpenClaw must map this payload to:
 
-* stable `userId` for Mem0
-* active Gateway session lookup key
-* agent identity if needed
+- stable `userId` for Mem0
+- active Gateway session lookup key
+- agent identity if needed
 
 ## 8. Part B — OpenClaw-Side Work
 
@@ -254,27 +253,27 @@ This section covers the code and plugin work inside OpenClaw.
 
 Create one custom plugin responsible for:
 
-* registering `/recall`, `/forget`, `/memory`, optional `/clear`
-* exposing any needed HTTP routes for Mattermost callbacks
-* querying the episode store
-* formatting episode context
-* coordinating with the Mem0 plugin tools or APIs
-* running finalization hooks on `/new` and `/clear`
+- registering `/recall`, `/forget`, `/memory`, optional `/clear`
+- exposing any needed HTTP routes for Mattermost callbacks
+- querying the episode store
+- formatting episode context
+- coordinating with the Mem0 plugin tools or APIs
+- running finalization hooks on `/new` and `/clear`
 
 ### 8.2 Hooks
 
 Register plugin hooks for:
 
-* `command:new` to finalize the previous session episode before reset
-* prompt-build hook to prepend episode context
-* optional background cleanup for episode retention
+- `command:new` to finalize the previous session episode before reset
+- prompt-build hook to prepend episode context
+- optional background cleanup for episode retention
 
 ### 8.3 Context Injection
 
 Use a prompt hook to inject:
 
-* recent/semantic episode summaries
-* pending tasks from the latest episode
+- recent/semantic episode summaries
+- pending tasks from the latest episode
 
 Do not re-implement long-term recall inside this plugin if Mem0 auto-recall already covers it.
 
@@ -282,14 +281,14 @@ Do not re-implement long-term recall inside this plugin if Mem0 auto-recall alre
 
 If episode retrieval fails:
 
-* continue without episode context
-* log warning
-* surface a lightweight status note only for explicit commands
+- continue without episode context
+- log warning
+- surface a lightweight status note only for explicit commands
 
 If Mem0/Qdrant fails:
 
-* plugin commands using long-term memory should degrade cleanly
-* regular chat still works
+- plugin commands using long-term memory should degrade cleanly
+- regular chat still works
 
 ## 9. Configuration
 
@@ -338,8 +337,8 @@ This is the narrative layer: what happened, what was decided, what remains pendi
 
 It complements long-term memory:
 
-* **episodes** = narrative, temporal, session-shaped
-* **long-term memories** = durable atomic facts
+- **episodes** = narrative, temporal, session-shaped
+- **long-term memories** = durable atomic facts
 
 ## 2. Source of Truth
 
@@ -385,10 +384,10 @@ Use Postgres + pgvector.
 
 ### Required Design Rules
 
-* embedding dimension must match the chosen model exactly
-* v1 standardizes on `all-MiniLM-L6-v2` with dimension **384**
-* `source_session_id` must be treated as idempotency key candidate
-* no foreign key to a custom `sessions` table
+- embedding dimension must match the chosen model exactly
+- v1 standardizes on `all-MiniLM-L6-v2` with dimension **384**
+- `source_session_id` must be treated as idempotency key candidate
+- no foreign key to a custom `sessions` table
 
 ### Schema
 
@@ -438,10 +437,10 @@ CREATE INDEX idx_episodes_embedding
 
 Episodes are generated when an OpenClaw session is finalized via:
 
-* `/new`
-* `/clear`
-* idle timeout
-* explicit administrative finalization hook
+- `/new`
+- `/clear`
+- idle timeout
+- explicit administrative finalization hook
 
 ### Pipeline
 
@@ -491,9 +490,9 @@ Used at the start of a new or resumed session.
 
 Rules:
 
-* include the most recent episode for this user
-* if channel is known, prefer the most recent episode from the same channel
-* include pending tasks prominently
+- include the most recent episode for this user
+- if channel is known, prefer the most recent episode from the same channel
+- include pending tasks prominently
 
 #### B. Semantic Retrieval
 
@@ -501,16 +500,16 @@ Used during prompt construction.
 
 Rules:
 
-* search by summary embedding
-* filter by `user_id`
-* optionally bias toward same `channel_id`
-* default max age: 30 days
-* default max results: 3
+- search by summary embedding
+- filter by `user_id`
+- optionally bias toward same `channel_id`
+- default max age: 30 days
+- default max results: 3
 
 ### Safe Querying Rules
 
-* no SQL string interpolation for age filters or channel filters
-* all dynamic values must be parameterized
+- no SQL string interpolation for age filters or channel filters
+- all dynamic values must be parameterized
 
 ### Example Retrieval Shape
 
@@ -543,9 +542,9 @@ Example:
 
 ### v1 Policy
 
-* keep all episodes for 30 days
-* delete after 90 days by default
-* make retention configurable
+- keep all episodes for 30 days
+- delete after 90 days by default
+- make retention configurable
 
 ### Precondition for Deletion
 
@@ -555,10 +554,10 @@ Episode deletion is allowed only after its source session has had a chance to fl
 
 ### v1 Defaults
 
-* episodes are user-scoped
-* same-channel episodes may be preferred for ranking
-* no shared channel-wide episode pool in v1
-* no cross-agent retrieval in v1
+- episodes are user-scoped
+- same-channel episodes may be preferred for ranking
+- no shared channel-wide episode pool in v1
+- no cross-agent retrieval in v1
 
 ## 11. Operations
 
@@ -570,11 +569,11 @@ If embedding model changes, all episode summaries must be re-embedded and the pg
 
 Log:
 
-* episode generation success/failure
-* source session id
-* extraction latency
-* embedding latency
-* row upsert result
+- episode generation success/failure
+- source session id
+- extraction latency
+- embedding latency
+- row upsert result
 
 ## 12. Configuration
 
@@ -626,9 +625,9 @@ This spec intentionally does **not** describe a bespoke Mem0 integration from sc
 
 ## 2. Source of Truth
 
-* **Canonical long-term memory behavior:** `@mem0/openclaw-mem0`
-* **Vector backend:** Qdrant
-* **File-based OpenClaw memory:** disabled
+- **Canonical long-term memory behavior:** `@mem0/openclaw-mem0`
+- **Vector backend:** Qdrant
+- **File-based OpenClaw memory:** disabled
 
 ## 3. OpenClaw Alignment
 
@@ -706,22 +705,22 @@ Never hardcode a shared value.
 
 ### Scope Types
 
-* **User scope** = durable long-term memory across sessions
-* **Session scope** = plugin-managed short-term/session memory via Mem0 `runId`
+- **User scope** = durable long-term memory across sessions
+- **Session scope** = plugin-managed short-term/session memory via Mem0 `runId`
 
 ### v1 Policy
 
-* enable per-user long-term memory
-* allow plugin session memory to operate normally
-* do not create a shared channel long-term namespace in v1
+- enable per-user long-term memory
+- allow plugin session memory to operate normally
+- do not create a shared channel long-term namespace in v1
 
 ## 6. What the Plugin Provides
 
 The plugin provides:
 
-* auto-recall before agent response
-* auto-capture after agent response
-* tools for explicit memory operations
+- auto-recall before agent response
+- auto-capture after agent response
+- tools for explicit memory operations
 
 This means the agent can both automatically benefit from memory and handle explicit memory commands through tools or plugin command wrappers.
 
@@ -729,38 +728,38 @@ This means the agent can both automatically benefit from memory and handle expli
 
 Available tools:
 
-* `memory_search`
-* `memory_list`
-* `memory_store`
-* `memory_get`
-* `memory_forget`
+- `memory_search`
+- `memory_list`
+- `memory_store`
+- `memory_get`
+- `memory_forget`
 
 ### Command Mapping
 
 Recommended mapping for your custom UX:
 
-* `/recall` → `memory_search` and/or `memory_list`
-* `/forget` → `memory_forget`
-* `/memory` → counts + categories + health, optionally backed by `memory_list`
-* explicit “remember X” flows → `memory_store`
+- `/recall` → `memory_search` and/or `memory_list`
+- `/forget` → `memory_forget`
+- `/memory` → counts + categories + health, optionally backed by `memory_list`
+- explicit “remember X” flows → `memory_store`
 
 ## 8. What Gets Stored
 
 Long-term memory should capture durable facts such as:
 
-* project architecture
-* stable code conventions
-* user preferences
-* team/org information
-* decisions that remain relevant across sessions
-* environment and setup details
+- project architecture
+- stable code conventions
+- user preferences
+- team/org information
+- decisions that remain relevant across sessions
+- environment and setup details
 
 It should avoid:
 
-* transient debugging state
-* temporary blockers
-* superseded ephemeral details
-* secrets or sensitive tokens
+- transient debugging state
+- temporary blockers
+- superseded ephemeral details
+- secrets or sensitive tokens
 
 ## 9. Security
 
@@ -768,17 +767,17 @@ It should avoid:
 
 Reject or sanitize:
 
-* passwords
-* API keys
-* bearer tokens
-* private secrets
-* highly sensitive identifiers unless explicitly approved
+- passwords
+- API keys
+- bearer tokens
+- private secrets
+- highly sensitive identifiers unless explicitly approved
 
 ### Isolation
 
-* all long-term memories are scoped by `userId`
-* administrative deletion paths must be auditable
-* `/forget --all` must require confirmation
+- all long-term memories are scoped by `userId`
+- administrative deletion paths must be auditable
+- `/forget --all` must require confirmation
 
 ## 10. Retrieval Policy
 
@@ -794,8 +793,8 @@ For `/recall` and `/memory`, the custom command layer may call Mem0 tools or a t
 
 Episodes and long-term facts are complementary.
 
-* Episodes answer: what happened and what remains pending?
-* Long-term memories answer: what remains true across sessions?
+- Episodes answer: what happened and what remains pending?
+- Long-term memories answer: what remains true across sessions?
 
 Neither should try to replace the other.
 
@@ -803,16 +802,16 @@ Neither should try to replace the other.
 
 ### v1 Guidance
 
-* start with the official plugin defaults or a minimal open-source configuration
-* benchmark before introducing custom graph memory or custom extraction sidecars
-* keep the architecture plugin-first, not fork-first
+- start with the official plugin defaults or a minimal open-source configuration
+- benchmark before introducing custom graph memory or custom extraction sidecars
+- keep the architecture plugin-first, not fork-first
 
 ## 13. Optional v2 Enhancements
 
-* metadata categorization for memory dashboard
-* project-scoped shared memory
-* graph memory
-* confidence scoring / reinforcement
+- metadata categorization for memory dashboard
+- project-scoped shared memory
+- graph memory
+- confidence scoring / reinforcement
 
 ## 14. Configuration
 
@@ -856,25 +855,25 @@ openclaw:
 
 ## Keep Native
 
-* OpenClaw session ownership
-* `/new`
-* `/reset`
-* `/compact`
+- OpenClaw session ownership
+- `/new`
+- `/reset`
+- `/compact`
 
 ## Build Custom
 
-* episode store
-* episode retrieval/injection plugin
-* `/recall`
-* `/forget`
-* `/memory`
-* optional `/clear`
+- episode store
+- episode retrieval/injection plugin
+- `/recall`
+- `/forget`
+- `/memory`
+- optional `/clear`
 
 ## Disable
 
-* file-based OpenClaw memory (`MEMORY.md`, daily memory files, file-memory plugin)
+- file-based OpenClaw memory (`MEMORY.md`, daily memory files, file-memory plugin)
 
 ## Mattermost Split
 
-* Mattermost-side: slash command registration, callback delivery, bot setup
-* OpenClaw-side: plugin commands, hooks, retrieval orchestration, Mem0 + episode coordination
+- Mattermost-side: slash command registration, callback delivery, bot setup
+- OpenClaw-side: plugin commands, hooks, retrieval orchestration, Mem0 + episode coordination

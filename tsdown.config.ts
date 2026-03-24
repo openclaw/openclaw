@@ -171,6 +171,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "infra/agent-events": "src/infra/agent-events.ts",
     "telegram/audit": "extensions/telegram/src/audit.ts",
     "telegram/token": "extensions/telegram/src/token.ts",
     "line/accounts": "src/line/accounts.ts",

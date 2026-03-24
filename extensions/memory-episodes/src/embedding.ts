@@ -33,9 +33,7 @@ export async function embed(text: string, config: EmbeddingConfig): Promise<numb
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(
-      `Ollama embedding error ${response.status}: ${body.slice(0, 200)}`,
-    );
+    throw new Error(`Ollama embedding error ${response.status}: ${body.slice(0, 200)}`);
   }
 
   const data = (await response.json()) as OllamaEmbedResponse;
