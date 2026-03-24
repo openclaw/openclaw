@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  _resetInFlightTracking,
   ackDelivery,
   failDelivery,
   isDeliveryInFlight,
@@ -281,6 +282,12 @@ export function startDeliveryRecoveryTimer(opts: {
 }): { stop: () => void } {
   const intervalMs = opts.checkIntervalMs ?? 30_000;
   const startupGraceMs = opts.startupGraceMs ?? 5_000;
+
+  // Clear stale in-flight IDs from a previous lifecycle.  The gateway run-loop
+  // can restart in-process (SIGUSR1) without a full process exit, so module-level
+  // state survives.  Any IDs still marked in-flight from the old lifecycle would
+  // permanently suppress recovery for those entries.
+  _resetInFlightTracking();
 
   let stopped = false;
   let sweepInFlight = false;
