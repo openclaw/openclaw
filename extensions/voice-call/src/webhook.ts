@@ -440,6 +440,9 @@ export class VoiceCallWebhookServer {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
     }
+    this.silenceFiller?.dispose();
+    this.silenceFiller = null;
+    this.callStreamSids.clear();
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
