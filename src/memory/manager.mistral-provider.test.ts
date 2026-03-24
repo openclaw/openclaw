@@ -28,6 +28,7 @@ vi.mock("./sqlite-vec.js", () => ({
 type MemoryIndexModule = typeof import("./index.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 function createProvider(id: string): EmbeddingProvider {
   return {
@@ -69,7 +70,8 @@ describe("memory manager mistral provider wiring", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ getMemorySearchManager } = await import("./index.js"));
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
@@ -82,6 +84,7 @@ describe("memory manager mistral provider wiring", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";

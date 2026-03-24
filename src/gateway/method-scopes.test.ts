@@ -11,6 +11,11 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
+    ["sessions.create", ["operator.write"]],
+    ["sessions.send", ["operator.write"]],
+    ["sessions.abort", ["operator.write"]],
+    ["sessions.messages.subscribe", ["operator.read"]],
+    ["sessions.messages.unsubscribe", ["operator.read"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],

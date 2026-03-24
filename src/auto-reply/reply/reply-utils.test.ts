@@ -560,6 +560,20 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
+  it("does not start typing for media-only deltas", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined);
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
   it("handles tool-start typing before and after active text mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
@@ -671,6 +685,39 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ text: "Second paragraph" });
 
     await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("keeps buffering newline-style chunks until minChars is reached", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 25,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("force flushes buffered newline-style chunks even below minChars", async () => {
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 100,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+    await coalescer.flush({ force: true });
+
     expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
     coalescer.stop();
   });

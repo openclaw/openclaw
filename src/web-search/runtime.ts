@@ -5,10 +5,10 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "../plugins/web-search-providers.js";
+import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -61,18 +61,26 @@ function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
-function hasProviderCredential(
-  providerId: string,
+function providerRequiresCredential(
+  provider: Pick<PluginWebSearchProviderEntry, "requiresCredential">,
+): boolean {
+  return provider.requiresCredential !== false;
+}
+
+function hasEntryCredential(
+  provider: Pick<
+    PluginWebSearchProviderEntry,
+    | "credentialPath"
+    | "envVars"
+    | "getConfiguredCredentialValue"
+    | "getCredentialValue"
+    | "requiresCredential"
+  >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
 ): boolean {
-  const providers = resolvePluginWebSearchProviders({
-    config,
-    bundledAllowlistCompat: true,
-  });
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    return false;
+  if (!providerRequiresCredential(provider)) {
+    return true;
   }
   const rawValue =
     provider.getConfiguredCredentialValue?.(config) ??
@@ -95,17 +103,27 @@ export function listWebSearchProviders(params?: {
   });
 }
 
+export function listConfiguredWebSearchProviders(params?: {
+  config?: OpenClawConfig;
+}): PluginWebSearchProviderEntry[] {
+  return resolvePluginWebSearchProviders({
+    config: params?.config,
+    bundledAllowlistCompat: true,
+  });
+}
+
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
   providers?: PluginWebSearchProviderEntry[];
 }): string {
-  const providers =
+  const providers = sortWebSearchProvidersForAutoDetect(
     params.providers ??
-    resolvePluginWebSearchProviders({
-      config: params.config,
-      bundledAllowlistCompat: true,
-    });
+      resolveBundledPluginWebSearchProviders({
+        config: params.config,
+        bundledAllowlistCompat: true,
+      }),
+  );
   const raw =
     params.search && "provider" in params.search && typeof params.search.provider === "string"
       ? params.search.provider.trim().toLowerCase()
@@ -119,14 +137,25 @@ export function resolveWebSearchProviderId(params: {
   }
 
   if (!raw) {
+    let keylessFallbackProviderId = "";
     for (const provider of providers) {
-      if (!hasProviderCredential(provider.id, params.config, params.search)) {
+      if (!providerRequiresCredential(provider)) {
+        keylessFallbackProviderId ||= provider.id;
+        continue;
+      }
+      if (!hasEntryCredential(provider, params.config, params.search)) {
         continue;
       }
       logVerbose(
         `web_search: no provider configured, auto-detected "${provider.id}" from available API keys`,
       );
       return provider.id;
+    }
+    if (keylessFallbackProviderId) {
+      logVerbose(
+        `web_search: no provider configured and no credentials found, falling back to keyless provider "${keylessFallbackProviderId}"`,
+      );
+      return keylessFallbackProviderId;
     }
   }
 
@@ -141,16 +170,16 @@ export function resolveWebSearchDefinition(
     return null;
   }
 
-  const providers = (
+  const providers = sortWebSearchProvidersForAutoDetect(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
         })
-      : resolvePluginWebSearchProviders({
+      : resolveBundledPluginWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
-        })
+        }),
   ).filter(Boolean);
   if (providers.length === 0) {
     return null;

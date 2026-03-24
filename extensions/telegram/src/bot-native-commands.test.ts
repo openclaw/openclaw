@@ -1,4 +1,3 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
@@ -17,8 +16,8 @@ const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
   return {
     ...actual,
     listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
@@ -28,36 +27,51 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
 
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 import {
-  createCommandBot,
   createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
+  deliverReplies as registeredDeliverReplies,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-
-const EMPTY_REPLY_COUNTS = {
-  block: 0,
-  final: 0,
-  tool: 0,
-} as const;
 
 function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<Parameters<typeof registerTelegramNativeCommands>[0]> = {},
 ) {
+  const dispatchResult: Awaited<
+    ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  > = {
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  };
   const telegramDeps: TelegramBotDeps = {
-    loadConfig: vi.fn(() => ({})),
-    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
-    readChannelAllowFromStore: vi.fn(async () => []),
-    enqueueSystemEvent: vi.fn(),
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
-      queuedFinal: false,
-      counts: EMPTY_REPLY_COUNTS,
-    })),
+    loadConfig: vi.fn(() => cfg) as TelegramBotDeps["loadConfig"],
+    resolveStorePath: vi.fn(
+      (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    ) as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(
+      async () => [],
+    ) as TelegramBotDeps["readChannelAllowFromStore"],
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })) as TelegramBotDeps["upsertChannelPairingRequest"],
+    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async () => dispatchResult,
+    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })) as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
-    wasSentByBot: vi.fn(() => false),
+    wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };
   return createNativeCommandTestParamsBase(cfg, {
     telegramDeps,
@@ -65,12 +79,22 @@ function createNativeCommandTestParams(
   });
 }
 
+function resolveDeliverRepliesCalls() {
+  return deliveryMocks.deliverReplies.mock.calls.length > 0
+    ? deliveryMocks.deliverReplies.mock.calls
+    : registeredDeliverReplies.mock.calls;
+}
+
 describe("registerTelegramNativeCommands", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     skillCommandMocks.listSkillCommandsForAgents.mockClear();
     skillCommandMocks.listSkillCommandsForAgents.mockReturnValue([]);
     deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    registeredDeliverReplies.mockClear();
+    registeredDeliverReplies.mockResolvedValue({ delivered: true });
     resetPluginCommandMocks();
   });
 
@@ -251,9 +275,12 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+        mediaLocalRoots: expect.arrayContaining([
+          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
+        ]),
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
@@ -261,6 +288,13 @@ describe("registerTelegramNativeCommands", () => {
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          silentErrorReplies: true,
+        },
+      },
+    };
 
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
       {
@@ -278,20 +312,17 @@ describe("registerTelegramNativeCommands", () => {
     } as never);
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        {
-          bot: {
-            api: {
-              setMyCommands: vi.fn().mockResolvedValue(undefined),
-              sendMessage: vi.fn().mockResolvedValue(undefined),
-            },
-            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-              commandHandlers.set(name, cb);
-            }),
-          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        },
-      ),
+      ...createNativeCommandTestParams(cfg, {
+        bot: {
+          api: {
+            setMyCommands: vi.fn().mockResolvedValue(undefined),
+            sendMessage: vi.fn().mockResolvedValue(undefined),
+          },
+          command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+            commandHandlers.set(name, cb);
+          }),
+        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      }),
       telegramCfg: { silentErrorReplies: true } as TelegramAccountConfig,
     });
 
@@ -299,7 +330,8 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
         silent: true,
         replies: [expect.objectContaining({ isError: true })],

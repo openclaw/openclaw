@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -110,8 +110,15 @@ vi.mock("../logger.js", async (importOriginal) => {
   };
 });
 
-const { GatewayClient } = await import("./client.js");
-type GatewayClientInstance = InstanceType<typeof GatewayClient>;
+type GatewayClientModule = typeof import("./client.js");
+type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
+
+let GatewayClient: GatewayClientModule["GatewayClient"];
+
+async function loadGatewayClientModule() {
+  vi.resetModules();
+  ({ GatewayClient } = await import("./client.js"));
+}
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -153,12 +160,22 @@ function expectSecurityConnectError(
   }
 }
 
+beforeEach(async () => {
+  await loadGatewayClientModule();
+});
+
 describe("GatewayClient security checks", () => {
   const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
 
   beforeEach(() => {
     envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     wsInstances.length = 0;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {

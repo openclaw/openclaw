@@ -140,7 +140,7 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
-  const webMedia = await import("../../../extensions/whatsapp/src/media.js");
+  const webMedia = await import("../../media/web-media.js");
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");
@@ -265,7 +265,7 @@ describe("resolvePdfModelConfigForTool", () => {
   it("returns null without any auth", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
@@ -276,7 +276,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             pdfModel: { primary: "anthropic/claude-opus-4-6" },
           },
         },
@@ -292,7 +292,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -307,7 +307,7 @@ describe("resolvePdfModelConfigForTool", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
-      const cfg = withDefaultModel("openai/gpt-5.2");
+      const cfg = withDefaultModel("openai/gpt-5.4");
       const config = resolvePdfModelConfigForTool({ cfg, agentDir });
       expect(config).not.toBeNull();
       // Should prefer anthropic for native PDF
@@ -351,7 +351,7 @@ describe("createPdfTool", () => {
   it("returns null without any auth configured", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(createPdfTool({ config: cfg, agentDir })).toBeNull();
     });
