@@ -231,4 +231,60 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       expectedWorkspaceDir: "/tmp/requester-workspace",
     });
   });
+
+  it("deletes the provisional child session when a non-thread subagent start fails", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: {
+      method?: string;
+      params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
+    }) => {
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        throw new Error("spawn startup failed");
+      }
+      if (request.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "fail after provisional session creation",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "acct-1",
+        agentTo: "user-1",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "spawn startup failed",
+    });
+    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+
+    const deleteCall = hoisted.callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "sessions.delete",
+    )?.[0] as
+      | {
+          params?: {
+            key?: string;
+            deleteTranscript?: boolean;
+            emitLifecycleHooks?: boolean;
+          };
+        }
+      | undefined;
+
+    expect(deleteCall?.params).toMatchObject({
+      key: result.childSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+  });
 });
