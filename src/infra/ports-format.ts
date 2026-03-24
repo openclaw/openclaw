@@ -19,12 +19,39 @@ export function classifyPortListener(listener: PortListener, port: number): Port
   return "unknown";
 }
 
+function isLoopbackAddress(address: string): boolean {
+  // Check if address is loopback (127.0.0.1 or ::1 or localhost variants)
+  return (
+    address.includes("127.0.0.1") ||
+    address.includes("::1") ||
+    address.includes("[::1]") ||
+    address.startsWith("localhost:")
+  );
+}
+
+function isDualStackLoopback(listeners: PortListener[]): boolean {
+  // Check if all listeners are from the same PID on loopback addresses
+  if (listeners.length === 0) {
+    return false;
+  }
+
+  const pids = new Set(listeners.map((l) => l.pid).filter((pid) => pid !== undefined));
+  const allLoopback = listeners.every((l) => l.address && isLoopbackAddress(l.address));
+
+  // Dual-stack loopback: single PID, all loopback addresses
+  return pids.size === 1 && allLoopback;
+}
+
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
   }
   const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
   const hints: string[] = [];
+
+  // Check if this is a dual-stack loopback listener (IPv4 + IPv6 from same PID)
+  const dualStackLoopback = isDualStackLoopback(listeners);
+
   if (kinds.has("gateway")) {
     hints.push(
       `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`,
@@ -38,11 +65,19 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (kinds.has("unknown")) {
     hints.push("Another process is listening on this port.");
   }
-  if (listeners.length > 1) {
+
+  // Only warn about multiple listeners if they're NOT from the same PID on loopback
+  if (listeners.length > 1 && !dualStackLoopback) {
     hints.push(
       "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
     );
   }
+
+  // Add informational note for dual-stack loopback (not a warning)
+  if (dualStackLoopback && listeners.length > 1) {
+    hints.push("(Dual-stack loopback listener detected on both IPv4 and IPv6)");
+  }
+
   return hints;
 }
 

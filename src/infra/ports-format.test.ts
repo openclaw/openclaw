@@ -84,4 +84,60 @@ describe("ports-format", () => {
     expect(lines).toContain("- pid 123 alice: ssh -N -L 18789:127.0.0.1:18789");
     expect(lines.some((line) => line.includes("SSH tunnel"))).toBe(true);
   });
+
+  it("recognizes dual-stack loopback listeners and avoids false warning", () => {
+    // Issue #53398: Same PID listening on both 127.0.0.1 and ::1 should not warn
+    const hints = buildPortHints(
+      [
+        {
+          pid: 685632,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "127.0.0.1:18789",
+        },
+        {
+          pid: 685632,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "[::1]:18789",
+        },
+      ],
+      18789,
+    );
+
+    // Should have gateway hint
+    expect(hints.some((h) => h.includes("Gateway already running locally"))).toBe(true);
+
+    // Should NOT have the "Multiple listeners detected" warning
+    expect(
+      hints.some((h) => h.includes("Multiple listeners detected; ensure only one gateway")),
+    ).toBe(false);
+
+    // Should have informational dual-stack note
+    expect(hints.some((h) => h.includes("Dual-stack loopback"))).toBe(true);
+  });
+
+  it("still warns about multiple listeners from different PIDs", () => {
+    const hints = buildPortHints(
+      [
+        {
+          pid: 123,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "127.0.0.1:18789",
+        },
+        {
+          pid: 456,
+          commandLine: "node dist/index.js openclaw gateway",
+          address: "127.0.0.1:18789",
+        },
+      ],
+      18789,
+    );
+
+    // Should still warn about multiple listeners (different PIDs)
+    expect(
+      hints.some((h) => h.includes("Multiple listeners detected; ensure only one gateway")),
+    ).toBe(true);
+
+    // Should NOT have dual-stack note (different PIDs)
+    expect(hints.some((h) => h.includes("Dual-stack loopback"))).toBe(false);
+  });
 });
