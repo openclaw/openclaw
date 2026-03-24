@@ -287,6 +287,11 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
