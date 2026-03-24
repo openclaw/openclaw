@@ -114,7 +114,7 @@ function installProdDependencies() {
     process.exit(1);
   }
   // 仅安装生产依赖（--prod），加快安装速度
-  runCommand('pnpm install --prod', '生产依赖安装失败，请检查网络或package.json！');
+  runCommand('pnpm install --production', '生产依赖安装失败，请检查网络或package.json！');
   logger.success('生产依赖安装完成！');
 }
 
