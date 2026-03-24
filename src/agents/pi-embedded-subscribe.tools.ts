@@ -366,18 +366,6 @@ function normalizeMessageToolTarget(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function resolveMessageToolTarget(
-  args: Record<string, unknown>,
-  currentChannelId?: string,
-): string | undefined {
-  return (
-    normalizeMessageToolTarget(args.target) ??
-    normalizeMessageToolTarget(args.to) ??
-    normalizeMessageToolTarget(args.channelId) ??
-    normalizeMessageToolTarget(currentChannelId)
-  );
-}
-
 type ExtractMessagingToolSendOptions = {
   currentChannelProvider?: string;
   currentChannelId?: string;
@@ -409,7 +397,14 @@ export function extractMessagingToolSends(
     const providerHint = providerRaw || channelRaw || options?.currentChannelProvider;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
-    const resolvedTarget = resolveMessageToolTarget(args, options?.currentChannelId);
+    // Keep dedupe target parsing string-only: reject numeric target/to/channelId values
+    const resolvedTarget =
+      normalizeMessageToolTarget(args.target) ??
+      normalizeMessageToolTarget(args.to) ??
+      normalizeMessageToolTarget(args.channelId) ??
+      (options?.currentChannelId
+        ? normalizeMessageToolTarget(options.currentChannelId)
+        : undefined);
     if (!resolvedTarget) {
       return [];
     }
