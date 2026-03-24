@@ -94,8 +94,10 @@ describe("plugin-sdk exports", () => {
       "buildOpenAIImageGenerationProvider",
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
+      "normalizeAccountId",
       "onDiagnosticEvent",
       "registerContextEngine",
+      "resolvePreferredOpenClawTmpDir",
     ]);
   });
 
