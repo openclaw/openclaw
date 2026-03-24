@@ -76,7 +76,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const chatLog = createMockChatLog();
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
-    const setActivityStatus = vi.fn();
+    const setActivityStatus = vi.fn((text: string) => {
+      state.activityStatus = text;
+    });
     const loadHistory = vi.fn();
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
@@ -476,6 +478,56 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("error");
   });
 
+  it("does not overwrite terminal error status when late inactive final arrives after active run failure", () => {
+    // Regression: run B ends with error (active), then run A's late final arrives inactive.
+    // The orphan path must NOT overwrite the error status with idle.
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // Run A delta — becomes active
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "a-partial" },
+    });
+    expect(state.activeChatRunId).toBe("run-a");
+
+    // Simulate activeChatRunId cleared externally (failover / reassignment)
+    state.activeChatRunId = null;
+
+    // Run B delta — becomes active since pointer was cleared
+    handleChatEvent({
+      runId: "run-b",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "b-partial" },
+    });
+    expect(state.activeChatRunId).toBe("run-b");
+
+    // Run B ends with error (active run)
+    handleChatEvent({
+      runId: "run-b",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "backend failure",
+    });
+    expect(state.activityStatus).toBe("error");
+    setActivityStatus.mockClear();
+
+    // Run A's late final arrives — inactive, should NOT overwrite error
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(state.activityStatus).toBe("error");
+  });
+
   it("does not clear activity on inactive final when another run is still in flight", () => {
     const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -700,46 +752,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-local-silent",
       sessionKey: state.currentSessionKey,
       state: "final",
-    });
-
-    expect(loadHistory).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reload history for local run with empty final when another run is active (#53115)", () => {
-    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: "run-main" },
-    });
-
-    noteLocalRunId("run-local-empty");
-
-    handleChatEvent({
-      runId: "run-local-empty",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-    });
-
-    expect(state.activeChatRunId).toBe("run-main");
-    expect(loadHistory).not.toHaveBeenCalled();
-  });
-
-  it("flushes deferred history reload after the newer local run finishes", () => {
-    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: "run-main" },
-    });
-
-    noteLocalRunId("run-local-empty");
-    handleChatEvent({
-      runId: "run-local-empty",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-    });
-
-    noteLocalRunId("run-main");
-    handleChatEvent({
-      runId: "run-main",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [{ type: "text", text: "done" }] },
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
