@@ -117,6 +117,7 @@ describe("runMessageAction plugin dispatch", () => {
 
     it("routes execution context ids into plugin handleAction", async () => {
       const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
+      const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
       await runMessageAction({
@@ -153,7 +154,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
-          mediaLocalRoots: expect.arrayContaining([path.join(stateDir, "workspace-alpha")]),
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
           toolContext: expect.objectContaining({
             currentChannelId: "chat:oc_123",
             currentThreadTs: "thread-456",
