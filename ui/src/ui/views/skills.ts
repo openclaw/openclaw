@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { SkillMessageMap } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
+import { resolveSafeExternalUrl } from "../open-external-url.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
@@ -8,6 +9,13 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "./skills-shared.ts";
+
+function safeExternalHref(raw?: string): string | null {
+  if (!raw) {
+    return null;
+  }
+  return resolveSafeExternalUrl(raw, window.location.href);
+}
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 
@@ -322,13 +330,14 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                     />
                   </div>
-                  ${
-                    skill.homepage
+                  ${(() => {
+                    const href = safeExternalHref(skill.homepage);
+                    return href
                       ? html`<div class="muted" style="font-size: 13px;">
-                        Get your key: <a href="${skill.homepage}" target="_blank" rel="noopener">${skill.homepage}</a>
+                        Get your key: <a href="${href}" target="_blank" rel="noopener noreferrer">${skill.homepage}</a>
                       </div>`
-                      : nothing
-                  }
+                      : nothing;
+                  })()}
                   <button
                     class="btn primary"
                     ?disabled=${busy}
@@ -344,7 +353,12 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           <div style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);">
             <div><span style="font-weight: 600;">Source:</span> ${skill.source}</div>
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
-            ${skill.homepage ? html`<div><a href="${skill.homepage}" target="_blank" rel="noopener">${skill.homepage}</a></div>` : nothing}
+            ${(() => {
+              const safeHref = safeExternalHref(skill.homepage);
+              return safeHref
+                ? html`<div><a href="${safeHref}" target="_blank" rel="noopener noreferrer">${skill.homepage}</a></div>`
+                : nothing;
+            })()}
           </div>
         </div>
       </div>
