@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pinEnqueueMock = vi.hoisted(() => vi.fn());
 let registerSlackPinEvents: typeof import("./pins.js").registerSlackPinEvents;
@@ -69,12 +69,15 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
 }
 
 describe("registerSlackPinEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    pinEnqueueMock.mockClear();
     ({ registerSlackPinEvents } = await import("./pins.js"));
     ({ createSlackSystemEventTestHarness: buildPinHarness } =
       await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    pinEnqueueMock.mockClear();
   });
 
   const cases: Array<{ name: string; args: PinCase; expectedCalls: number }> = [
