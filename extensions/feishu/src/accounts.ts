@@ -25,6 +25,13 @@ const {
 
 export { listFeishuAccountIds };
 
+function isUnresolvedSecretRefError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /unresolved SecretRef/i.test(error.message);
+}
+
 /**
  * Resolve the default account selection and its source.
  */
@@ -191,8 +198,17 @@ export function resolveFeishuAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
-  // Resolve credentials from merged config
-  const creds = resolveFeishuCredentials(merged);
+  // Resolve credentials from merged config.
+  // CLI startup can parse config before gateway-backed SecretRef resolution is available.
+  // Treat unresolved refs as "not configured" here instead of crashing plugin load.
+  let creds: ReturnType<typeof resolveFeishuCredentials> = null;
+  try {
+    creds = resolveFeishuCredentials(merged);
+  } catch (error) {
+    if (!isUnresolvedSecretRefError(error)) {
+      throw error;
+    }
+  }
   const accountName = (merged as FeishuAccountConfig).name;
 
   return {
