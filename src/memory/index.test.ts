@@ -554,6 +554,7 @@ describe("memory index", () => {
           db: {
             prepare: (sql: string) => {
               get: (path: string, source: string) => { hash: string } | undefined;
+              all?: (...args: unknown[]) => unknown;
             };
           };
         }
@@ -587,13 +588,41 @@ describe("memory index", () => {
         })}\n`,
       );
 
+      const originalPrepare = db.prepare.bind(db);
+      let bulkSessionStateAllCalls = 0;
+      let perFileSessionHashPrepareCalls = 0;
+      db.prepare = ((sql: string) => {
+        const statement = originalPrepare(sql);
+        if (sql === `SELECT path, hash FROM files WHERE source = ?`) {
+          if (!statement.all) {
+            throw new Error("expected sqlite statement.all for bulk session state query");
+          }
+          const bulkAll = statement.all.bind(statement);
+          return {
+            ...statement,
+            all: (...args: unknown[]) => {
+              bulkSessionStateAllCalls += 1;
+              return bulkAll(...args);
+            },
+          };
+        }
+        if (sql === `SELECT hash FROM files WHERE path = ? AND source = ?`) {
+          perFileSessionHashPrepareCalls += 1;
+        }
+        return statement;
+      }) as typeof db.prepare;
+
       await manager.sync?.({
         reason: "post-compaction",
         sessionFiles: [firstSessionPath],
       });
 
+      db.prepare = originalPrepare;
+
       expect(getSessionHash("sessions/targeted-first.jsonl")).not.toBe(firstOriginalHash);
       expect(getSessionHash("sessions/targeted-second.jsonl")).toBe(secondOriginalHash);
+      expect(bulkSessionStateAllCalls).toBe(0);
+      expect(perFileSessionHashPrepareCalls).toBeGreaterThan(0);
       await manager.close?.();
     } finally {
       if (previousStateDir === undefined) {

@@ -809,6 +809,7 @@ export abstract class MemoryManagerSyncOps {
       log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
       return;
     }
+    const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
     const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
@@ -836,11 +837,15 @@ export abstract class MemoryManagerSyncOps {
     const activePaths = targetSessionFiles
       ? null
       : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows = selectSourceFileState.all("sessions") as Array<{
-      path: string;
-      hash: string;
-    }>;
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
+    const existingRows =
+      activePaths === null
+        ? null
+        : (selectSourceFileState.all("sessions") as Array<{
+            path: string;
+            hash: string;
+          }>);
+    const existingHashes =
+      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
     const indexAll =
       params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
@@ -882,7 +887,16 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const existingHash =
+        existingHashes?.get(entry.path) ??
+        (
+          selectFileHash.get(entry.path, "sessions") as
+            | {
+                hash: string;
+              }
+            | undefined
+        )?.hash;
+      if (!params.needsFullReindex && existingHash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -911,7 +925,7 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    for (const stale of existingRows) {
+    for (const stale of existingRows ?? []) {
       if (activePaths.has(stale.path)) {
         continue;
       }
