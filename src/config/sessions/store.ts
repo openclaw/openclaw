@@ -65,8 +65,6 @@ export {
 // ============================================================================
 // Session Store Cache with TTL Support
 // ============================================================================
-
-const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }

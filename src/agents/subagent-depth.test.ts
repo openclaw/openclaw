@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { migrateSessionStoreToDirectory } from "../config/sessions/store.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
 
@@ -91,6 +92,39 @@ describe("getSubagentDepthFromSessionStore", () => {
       }`,
       "utf-8",
     );
+
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(depth).toBe(2);
+  });
+
+  it("reads persisted depth from migrated directory-backed stores", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-dir-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    const key = "agent:main:subagent:flat";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [key]: {
+            sessionId: "subagent-flat",
+            updatedAt: Date.now(),
+            spawnDepth: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await migrateSessionStoreToDirectory(storePath);
 
     const depth = getSubagentDepthFromSessionStore("subagent:flat", {
       cfg: {
