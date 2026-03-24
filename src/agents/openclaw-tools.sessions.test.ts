@@ -998,6 +998,60 @@ describe("sessions tools", () => {
     expect(details.text).toContain("active (waiting on 1 child)");
   });
 
+  it("subagents list dedupes stale rows for the same child session", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:list-dedupe-worker";
+    addSubagentRunForTests({
+      runId: "run-list-current",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current worker label",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-list-stale",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale worker label",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 90_000,
+      outcome: { status: "ok" },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-dedupe", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{ runId?: string }>;
+      recent?: Array<{ runId?: string }>;
+      text?: string;
+    };
+
+    expect(details.status).toBe("ok");
+    expect(details.active).toEqual([
+      expect.objectContaining({
+        runId: "run-list-current",
+      }),
+    ]);
+    expect(details.recent?.find((entry) => entry.runId === "run-list-stale")).toBeFalsy();
+    expect(details.text).toContain("current worker label");
+    expect(details.text).not.toContain("stale worker label");
+  });
+
   it("subagents list usage separates io tokens from prompt/cache", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();

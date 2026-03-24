@@ -272,6 +272,15 @@ export function buildSubagentList(params: {
 }): BuiltSubagentList {
   const now = Date.now();
   const recentCutoff = now - params.recentMinutes * 60_000;
+  const dedupedRuns: SubagentRunRecord[] = [];
+  const seenChildSessionKeys = new Set<string>();
+  for (const entry of sortSubagentRuns(params.runs)) {
+    if (seenChildSessionKeys.has(entry.childSessionKey)) {
+      continue;
+    }
+    seenChildSessionKeys.add(entry.childSessionKey);
+    dedupedRuns.push(entry);
+  }
   const cache = new Map<string, Record<string, SessionEntry>>();
   const pendingDescendantCount = createPendingDescendantCounter();
   let index = 1;
@@ -316,10 +325,10 @@ export function buildSubagentList(params: {
     index += 1;
     return view;
   };
-  const active = params.runs
+  const active = dedupedRuns
     .filter((entry) => isActiveSubagentRun(entry, pendingDescendantCount))
     .map((entry) => buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0));
-  const recent = params.runs
+  const recent = dedupedRuns
     .filter(
       (entry) =>
         !isActiveSubagentRun(entry, pendingDescendantCount) &&
