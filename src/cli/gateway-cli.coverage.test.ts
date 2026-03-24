@@ -65,6 +65,7 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: vi.fn(),
     install: vi.fn(),
     uninstall: vi.fn(),
     stop: vi.fn(),

@@ -60,9 +60,9 @@ const OAUTH_PROMPT_MATCHER = expect.objectContaining({
 
 async function runStateIntegrity(cfg: OpenClawConfig) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
-  const confirmSkipInNonInteractive = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-  return confirmSkipInNonInteractive;
+  const confirmRuntimeRepair = vi.fn(async () => false);
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+  return confirmRuntimeRepair;
 }
 
 function writeSessionStore(
@@ -75,7 +75,7 @@ function writeSessionStore(
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
-  await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false) });
   return stateIntegrityText();
 }
 
@@ -101,8 +101,8 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not prompt for oauth dir when no whatsapp/pairing config is active", async () => {
     const cfg: OpenClawConfig = {};
-    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
-    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     const text = stateIntegrityText();
     expect(text).toContain("OAuth dir not present");
     expect(text).not.toContain("CRITICAL: OAuth dir missing");
@@ -114,8 +114,8 @@ describe("doctor state integrity oauth dir checks", () => {
         whatsapp: {},
       },
     };
-    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
@@ -127,15 +127,15 @@ describe("doctor state integrity oauth dir checks", () => {
         },
       },
     };
-    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
   });
 
   it("prompts for oauth dir when OPENCLAW_OAUTH_DIR is explicitly configured", async () => {
     process.env.OPENCLAW_OAUTH_DIR = path.join(tempHome, ".oauth");
     const cfg: OpenClawConfig = {};
-    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
@@ -144,15 +144,15 @@ describe("doctor state integrity oauth dir checks", () => {
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-    const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.includes("This only renames them to *.deleted.<timestamp>."),
     );
-    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",
     );
     expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
       }),

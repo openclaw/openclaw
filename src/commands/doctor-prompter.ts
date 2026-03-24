@@ -1,7 +1,11 @@
 import { confirm, select } from "@clack/prompts";
-import { isTruthyEnvValue } from "../infra/env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
+import {
+  resolveDoctorRepairMode,
+  shouldAutoApproveDoctorFix,
+  type DoctorRepairMode,
+} from "./doctor-repair-mode.js";
 import { guardCancel } from "./onboard-helpers.js";
 
 export type DoctorOptions = {
@@ -16,35 +20,28 @@ export type DoctorOptions = {
 
 export type DoctorPrompter = {
   confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmRepair: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmAggressive: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmSkipInNonInteractive: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
+  confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
+  confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
+  confirmRuntimeRepair: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   select: <T>(params: Parameters<typeof select>[0], fallback: T) => Promise<T>;
   shouldRepair: boolean;
   shouldForce: boolean;
+  repairMode: DoctorRepairMode;
 };
 
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
 }): DoctorPrompter {
-  const yes = params.options.yes === true;
-  const requestedNonInteractive = params.options.nonInteractive === true;
-  const shouldRepair = params.options.repair === true || yes;
-  const shouldForce = params.options.force === true;
-  const isTty = Boolean(process.stdin.isTTY);
-  const nonInteractive = requestedNonInteractive || (!isTty && !yes);
-  const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
-
-  const canPrompt = isTty && !yes && !nonInteractive;
+  const repairMode = resolveDoctorRepairMode(params.options);
   const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
-    if (shouldRepair) {
+    if (shouldAutoApproveDoctorFix(repairMode)) {
       return true;
     }
-    if (nonInteractive) {
+    if (repairMode.nonInteractive) {
       return false;
     }
-    if (!canPrompt) {
+    if (!repairMode.canPrompt) {
       return Boolean(p.initialValue ?? false);
     }
     return guardCancel(
@@ -58,18 +55,18 @@ export function createDoctorPrompter(params: {
 
   return {
     confirm: confirmDefault,
-    confirmRepair: confirmDefault,
-    confirmAggressive: async (p) => {
-      if (shouldRepair && shouldForce) {
+    confirmAutoFix: confirmDefault,
+    confirmAggressiveAutoFix: async (p) => {
+      if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
         return true;
       }
-      if (nonInteractive) {
+      if (repairMode.nonInteractive) {
         return false;
       }
-      if (shouldRepair && !shouldForce) {
+      if (repairMode.shouldRepair && !repairMode.shouldForce) {
         return false;
       }
-      if (!canPrompt) {
+      if (!repairMode.canPrompt) {
         return Boolean(p.initialValue ?? false);
       }
       return guardCancel(
@@ -80,14 +77,26 @@ export function createDoctorPrompter(params: {
         params.runtime,
       );
     },
-    confirmSkipInNonInteractive: async (p) => {
-      if (updateInProgress && nonInteractive) {
+    confirmRuntimeRepair: async (p) => {
+      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
+        return true;
+      }
+      if (repairMode.nonInteractive) {
         return false;
       }
-      return confirmDefault(p);
+      if (!repairMode.canPrompt) {
+        return Boolean(p.initialValue ?? false);
+      }
+      return guardCancel(
+        await confirm({
+          ...p,
+          message: stylePromptMessage(p.message),
+        }),
+        params.runtime,
+      );
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
-      if (!canPrompt || shouldRepair) {
+      if (!repairMode.canPrompt || repairMode.shouldRepair) {
         return fallback;
       }
       return guardCancel(
@@ -101,7 +110,8 @@ export function createDoctorPrompter(params: {
         params.runtime,
       ) as T;
     },
-    shouldRepair,
-    shouldForce,
+    shouldRepair: repairMode.shouldRepair,
+    shouldForce: repairMode.shouldForce,
+    repairMode,
   };
 }
