@@ -146,6 +146,7 @@ export const registerTelegramHandlers = ({
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
+    receivedAtMs: number;
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
@@ -219,7 +220,16 @@ export const registerTelegramHandlers = ({
       }
       if (entries.length === 1) {
         const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
+        await processMessage(
+          last.ctx,
+          last.allMedia,
+          last.storeAllowFrom,
+          {
+            receivedAtMs: last.receivedAtMs,
+            ingressBuffer: "inbound-debounce",
+          },
+          replyMedia,
+        );
         return;
       }
       const combinedText = entries
@@ -244,7 +254,11 @@ export const registerTelegramHandlers = ({
         syntheticCtx,
         combinedMedia,
         first.storeAllowFrom,
-        messageIdOverride ? { messageIdOverride } : undefined,
+        {
+          ...(messageIdOverride ? { messageIdOverride } : {}),
+          receivedAtMs: first.receivedAtMs,
+          ingressBuffer: "inbound-debounce",
+        },
         replyMedia,
       );
     },
@@ -420,6 +434,8 @@ export const registerTelegramHandlers = ({
 
       await processMessage(buildSyntheticContext(baseCtx, syntheticMessage), [], storeAllowFrom, {
         messageIdOverride: String(last.msg.message_id),
+        receivedAtMs: first.receivedAtMs,
+        ingressBuffer: "text-fragment",
       });
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
@@ -1000,7 +1016,10 @@ export const registerTelegramHandlers = ({
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
-                reply_to_message_id: msg.message_id,
+                reply_parameters: {
+                  message_id: msg.message_id,
+                  allow_sending_without_reply: true,
+                },
               }),
           }).catch(() => {});
         }
@@ -1013,7 +1032,10 @@ export const registerTelegramHandlers = ({
         runtime,
         fn: () =>
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
+            reply_parameters: {
+              message_id: msg.message_id,
+              allow_sending_without_reply: true,
+            },
           }),
       }).catch(() => {});
       return;
@@ -1049,6 +1071,7 @@ export const registerTelegramHandlers = ({
       msg,
       allMedia,
       storeAllowFrom,
+      receivedAtMs: Date.now(),
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,

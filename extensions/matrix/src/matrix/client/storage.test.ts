@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
-import { setMatrixRuntime } from "../../runtime.js";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({
@@ -67,10 +67,8 @@ describe("matrix client storage paths", () => {
     const stateDir = path.join(homeDir, ".openclaw");
     fs.mkdirSync(stateDir, { recursive: true });
     tempDirs.push(homeDir);
-    setMatrixRuntime({
-      config: {
-        loadConfig: () => cfg,
-      },
+    installMatrixTestRuntime({
+      cfg,
       logging: {
         getChildLogger: () => ({
           info: () => {},
@@ -78,10 +76,8 @@ describe("matrix client storage paths", () => {
           error: () => {},
         }),
       },
-      state: {
-        resolveStateDir: () => stateDir,
-      },
-    } as never);
+      stateDir,
+    });
     return stateDir;
   }
 

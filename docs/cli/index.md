@@ -113,7 +113,9 @@ openclaw [--dev] [--profile <name>] <command>
     audit
   secrets
     reload
-    migrate
+    audit
+    configure
+    apply
   reset
   uninstall
   update
@@ -132,16 +134,21 @@ openclaw [--dev] [--profile <name>] <command>
     check
   plugins
     list
-    info
+    inspect
     install
+    uninstall
+    update
     enable
     disable
     doctor
+    marketplace list
   memory
     status
     index
     search
   message
+    send
+    broadcast
   agent
   agents
     list
@@ -485,6 +492,9 @@ List and inspect available skills plus readiness info.
 
 Subcommands:
 
+- `skills search [query...]`: search ClawHub skills.
+- `skills install <slug>`: install a skill from ClawHub into the active workspace.
+- `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
@@ -495,7 +505,7 @@ Options:
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
 
-Tip: use `npx clawhub` to search, install, and sync skills.
+Tip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.
 
 ### `pairing`
 
@@ -1032,7 +1042,7 @@ Subcommands:
 Auth notes:
 
 - `node` resolves gateway auth from env/config (no `--token`/`--password` flags): `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, then `gateway.auth.*`. In local mode, node host intentionally ignores `gateway.remote.*`; in `gateway.mode=remote`, `gateway.remote.*` participates per remote precedence rules.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored for node-host auth resolution.
+- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ## Nodes
 

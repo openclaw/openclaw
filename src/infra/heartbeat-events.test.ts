@@ -3,8 +3,17 @@ import {
   emitHeartbeatEvent,
   getLastHeartbeatEvent,
   onHeartbeatEvent,
+  resetHeartbeatEventsForTest,
   resolveIndicatorType,
 } from "./heartbeat-events.js";
+
+type HeartbeatEventsModule = typeof import("./heartbeat-events.js");
+
+const heartbeatEventsModuleUrl = new URL("./heartbeat-events.ts", import.meta.url).href;
+
+async function importHeartbeatEventsModule(cacheBust: string): Promise<HeartbeatEventsModule> {
+  return (await import(`${heartbeatEventsModuleUrl}?t=${cacheBust}`)) as HeartbeatEventsModule;
+}
 
 describe("resolveIndicatorType", () => {
   it("maps heartbeat statuses to indicator types", () => {
@@ -23,6 +32,7 @@ describe("heartbeat events", () => {
   });
 
   afterEach(() => {
+    resetHeartbeatEventsForTest();
     vi.useRealTimers();
   });
 
@@ -55,5 +65,29 @@ describe("heartbeat events", () => {
     emitHeartbeatEvent({ status: "failed" });
 
     expect(seen).toEqual(["first:ok-empty", "third:ok-empty"]);
+  });
+
+  it("shares heartbeat state across duplicate module instances", async () => {
+    const first = await importHeartbeatEventsModule(`first-${Date.now()}`);
+    const second = await importHeartbeatEventsModule(`second-${Date.now()}`);
+
+    first.resetHeartbeatEventsForTest();
+
+    const seen: string[] = [];
+    const stop = first.onHeartbeatEvent((evt) => {
+      seen.push(evt.status);
+    });
+
+    second.emitHeartbeatEvent({ status: "ok-token", preview: "pong" });
+
+    expect(first.getLastHeartbeatEvent()).toEqual({
+      ts: 1767960000000,
+      status: "ok-token",
+      preview: "pong",
+    });
+    expect(seen).toEqual(["ok-token"]);
+
+    stop();
+    first.resetHeartbeatEventsForTest();
   });
 });
