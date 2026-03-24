@@ -570,7 +570,8 @@ export async function dispatchReplyFromConfig(params: {
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping:
+        params.replyOptions?.suppressTyping === true || shouldSuppressTyping || suppressDelivery,
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -583,6 +584,7 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onReplyStart: suppressDelivery ? undefined : params.replyOptions?.onReplyStart,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             if (suppressDelivery) {
