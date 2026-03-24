@@ -36,6 +36,18 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
   );
 }
 
+function hasNewerStoredOAuthCredential(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  return Boolean(
+    existing &&
+    existing.provider === incoming.provider &&
+    Number.isFinite(existing.expires) &&
+    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
+  );
+}
+
 /** Sync external CLI credentials into the store for a given provider. */
 function syncExternalCliCredentialsForProvider(
   store: AuthProfileStore,
@@ -52,6 +64,18 @@ function syncExternalCliCredentialsForProvider(
 
   const existingOAuth = existing?.type === "oauth" ? existing : undefined;
   if (shallowEqualOAuthCredentials(existingOAuth, creds)) {
+    return false;
+  }
+  if (hasNewerStoredOAuthCredential(existingOAuth, creds)) {
+    if (options.log !== false) {
+      log.debug(`kept newer stored ${provider} credentials over external cli sync`, {
+        profileId,
+        storedExpires: new Date(existingOAuth!.expires).toISOString(),
+        externalExpires: Number.isFinite(creds.expires)
+          ? new Date(creds.expires).toISOString()
+          : null,
+      });
+    }
     return false;
   }
 

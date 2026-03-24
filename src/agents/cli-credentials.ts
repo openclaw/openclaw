@@ -21,6 +21,7 @@ type CachedValue<T> = {
   value: T | null;
   readAt: number;
   cacheKey: string;
+  sourceMtimeMs?: number | null;
 };
 
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
@@ -146,6 +147,14 @@ function resolveQwenCliCredentialsPath(homeDir?: string) {
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function readFileMtimeMs(filePath: string): number | null {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 function computeCodexKeychainAccount(codexHome: string) {
@@ -526,11 +535,14 @@ export function readCodexCliCredentialsCached(options?: {
 }): CodexCliCredential | null {
   const ttlMs = options?.ttlMs ?? 0;
   const now = Date.now();
-  const cacheKey = `${options?.platform ?? process.platform}|${resolveCodexCliAuthPath()}`;
+  const authPath = resolveCodexCliAuthPath();
+  const cacheKey = `${options?.platform ?? process.platform}|${authPath}`;
+  const sourceMtimeMs = readFileMtimeMs(authPath);
   if (
     ttlMs > 0 &&
     codexCliCache &&
     codexCliCache.cacheKey === cacheKey &&
+    codexCliCache.sourceMtimeMs === sourceMtimeMs &&
     now - codexCliCache.readAt < ttlMs
   ) {
     return codexCliCache.value;
@@ -539,8 +551,16 @@ export function readCodexCliCredentialsCached(options?: {
     platform: options?.platform,
     execSync: options?.execSync,
   });
-  if (ttlMs > 0) {
-    codexCliCache = { value, readAt: now, cacheKey };
+  const cachedSourceMtimeMs = readFileMtimeMs(authPath);
+  if (ttlMs > 0 && cachedSourceMtimeMs === sourceMtimeMs) {
+    codexCliCache = {
+      value,
+      readAt: now,
+      cacheKey,
+      sourceMtimeMs: cachedSourceMtimeMs,
+    };
+  } else if (ttlMs > 0) {
+    codexCliCache = null;
   }
   return value;
 }
