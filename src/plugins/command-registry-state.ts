@@ -14,19 +14,27 @@ type PluginCommandState = {
 
 const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
 
-const state = resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
-  pluginCommands: new Map<string, RegisteredPluginCommand>(),
-  registryLocked: false,
-}));
+const getState = () =>
+  resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
+    pluginCommands: new Map<string, RegisteredPluginCommand>(),
+    registryLocked: false,
+  }));
 
-export const pluginCommands = state.pluginCommands;
+const getPluginCommandMap = () => getState().pluginCommands;
+
+export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>(), {
+  get(_target, property) {
+    const value = Reflect.get(getPluginCommandMap(), property, getPluginCommandMap());
+    return typeof value === "function" ? value.bind(getPluginCommandMap()) : value;
+  },
+}) as Map<string, RegisteredPluginCommand>;
 
 export function isPluginCommandRegistryLocked(): boolean {
-  return state.registryLocked;
+  return getState().registryLocked;
 }
 
 export function setPluginCommandRegistryLocked(locked: boolean): void {
-  state.registryLocked = locked;
+  getState().registryLocked = locked;
 }
 
 export function clearPluginCommands(): void {
