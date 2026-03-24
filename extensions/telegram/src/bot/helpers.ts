@@ -18,6 +18,34 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+function extractTelegramForumFlag(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const forum = (value as { is_forum?: unknown }).is_forum;
+  return typeof forum === "boolean" ? forum : undefined;
+}
+
+export async function resolveTelegramForumFlag(params: {
+  chatId: string | number;
+  chatType?: Chat["type"];
+  isGroup: boolean;
+  isForum?: boolean;
+  getChat?: (chatId: string | number) => Promise<unknown>;
+}): Promise<boolean> {
+  if (typeof params.isForum === "boolean") {
+    return params.isForum;
+  }
+  if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
+    return false;
+  }
+  try {
+    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
