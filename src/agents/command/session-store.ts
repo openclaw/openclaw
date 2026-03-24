@@ -56,6 +56,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       model: modelUsed,
       contextTokensOverride: params.contextTokensOverride,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const entry = sessionStore[sessionKey] ?? {

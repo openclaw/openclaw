@@ -60,24 +60,84 @@ vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
-}));
+vi.mock("./pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: () => false,
+    queueEmbeddedPiMessage: () => false,
+    waitForEmbeddedPiRunEnd: async () => true,
+  };
+});
 
-vi.mock("./subagent-registry.js", () => ({
-  countActiveDescendantRuns: () => 0,
-  countPendingDescendantRuns: () => pendingDescendantRuns,
-  listSubagentRunsForRequester: () => [],
-  isSubagentSessionRunActive: () => subagentSessionRunActive,
-  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-  resolveRequesterForChildSession: () => fallbackRequesterResolution,
-}));
+vi.mock("./subagent-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+  return {
+    ...actual,
+    countActiveDescendantRuns: () => 0,
+    countPendingDescendantRuns: () => pendingDescendantRuns,
+    listSubagentRunsForRequester: () => [],
+    isSubagentSessionRunActive: () => subagentSessionRunActive,
+    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+    resolveRequesterForChildSession: () => fallbackRequesterResolution,
+  };
+});
 
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+let runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+type AnnounceFlowParams = Parameters<
+  typeof import("./subagent-announce.js").runSubagentAnnounceFlow
+>[0];
 
-type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
+async function loadFreshSubagentAnnounceFlowForTest() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: vi.fn(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(request);
+    }),
+  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => configOverride,
+    };
+  });
+  vi.doMock("../config/sessions.js", () => ({
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    resolveMainSessionKey: () => "agent:main:main",
+  }));
+  vi.doMock("./subagent-depth.js", () => ({
+    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+  }));
+  vi.doMock("./pi-embedded.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+    return {
+      ...actual,
+      isEmbeddedPiRunActive: () => false,
+      queueEmbeddedPiMessage: () => false,
+      waitForEmbeddedPiRunEnd: async () => true,
+    };
+  });
+  vi.doMock("./subagent-registry.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+    return {
+      ...actual,
+      countActiveDescendantRuns: () => 0,
+      countPendingDescendantRuns: () => pendingDescendantRuns,
+      listSubagentRunsForRequester: () => [],
+      isSubagentSessionRunActive: () => subagentSessionRunActive,
+      shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+      resolveRequesterForChildSession: () => fallbackRequesterResolution,
+    };
+  });
+  ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+}
 
 const defaultSessionConfig = {
   mainKey: "main",
@@ -158,6 +218,10 @@ describe("subagent announce timeout config", () => {
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
     fallbackRequesterResolution = null;
+  });
+
+  beforeEach(async () => {
+    await loadFreshSubagentAnnounceFlowForTest();
   });
 
   it("uses 90s timeout by default for direct announce agent call", async () => {

@@ -1454,7 +1454,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -1485,10 +1485,16 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Simulate the race: a new message arrives AFTER the drain finished and
-    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    // deleted the queue. The next enqueue refreshes the callback and should
+    // kick a new idle drain automatically.
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
 
-    // kickFollowupDrainIfIdle should have restarted the drain automatically.
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
@@ -1569,7 +1575,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
   });
 
-  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+  it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
       "./queue/drain.js?scope=restart-a",
@@ -1600,7 +1606,13 @@ describe("followup queue drain restart after idle window", () => {
 
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+      enqueueB.enqueueFollowupRun(
+        key,
+        createRun({ prompt: "after-idle" }),
+        settings,
+        "message-id",
+        runFollowup,
+      );
 
       await vi.waitFor(
         () => {

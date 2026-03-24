@@ -14,10 +14,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import {
-  assertHooksTokenSeparateFromGatewayAuth,
-  ensureGatewayStartupAuth,
-} from "./startup-auth.js";
+let assertHooksTokenSeparateFromGatewayAuth: typeof import("./startup-auth.js").assertHooksTokenSeparateFromGatewayAuth;
+let ensureGatewayStartupAuth: typeof import("./startup-auth.js").ensureGatewayStartupAuth;
+
+async function loadFreshStartupAuthModuleForTest() {
+  vi.resetModules();
+  ({ assertHooksTokenSeparateFromGatewayAuth, ensureGatewayStartupAuth } =
+    await import("./startup-auth.js"));
+}
 
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
@@ -35,9 +39,10 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     mocks.writeConfigFile.mockClear();
+    await loadFreshStartupAuthModuleForTest();
   });
 
   async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {

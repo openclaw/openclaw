@@ -30,7 +30,28 @@ vi.mock("../infra/outbound/targets.js", async () => {
   };
 });
 
-const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+let deliverAgentCommandResult: typeof import("./agent/delivery.js").deliverAgentCommandResult;
+
+async function loadFreshAgentDeliveryModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../channels/plugins/index.js", () => ({
+    getChannelPlugin: mocks.getChannelPlugin,
+    normalizeChannelId: (value: string) => value,
+  }));
+  vi.doMock("../infra/outbound/deliver.js", () => ({
+    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  }));
+  vi.doMock("../infra/outbound/targets.js", async () => {
+    const actual = await vi.importActual<typeof import("../infra/outbound/targets.js")>(
+      "../infra/outbound/targets.js",
+    );
+    return {
+      ...actual,
+      resolveOutboundTarget: mocks.resolveOutboundTarget,
+    };
+  });
+  return await import("./agent/delivery.js");
+}
 
 describe("deliverAgentCommandResult", () => {
   function createRuntime(): RuntimeEnv {
@@ -79,9 +100,11 @@ describe("deliverAgentCommandResult", () => {
     return { runtime };
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveOutboundTarget.mockClear();
+
+    ({ deliverAgentCommandResult } = await loadFreshAgentDeliveryModuleForTest());
   });
 
   it("prefers explicit accountId for outbound delivery", async () => {

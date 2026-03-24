@@ -205,3 +205,24 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   watchers.set(workspaceDir, state);
 }
+
+export async function resetSkillsRefreshForTest(): Promise<void> {
+  listeners.clear();
+  workspaceVersions.clear();
+  globalVersion = 0;
+
+  const active = Array.from(watchers.values());
+  watchers.clear();
+  await Promise.all(
+    active.map(async (state) => {
+      if (state.timer) {
+        clearTimeout(state.timer);
+      }
+      try {
+        await state.watcher.close();
+      } catch {
+        // Best-effort test cleanup.
+      }
+    }),
+  );
+}

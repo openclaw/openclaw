@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = vi.fn();
 
@@ -34,6 +33,7 @@ let configOverride: Record<string, unknown> = {
 let workspaceDirOverride = "";
 let configPathOverride = "";
 let previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 
 vi.mock("./subagent-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry.js")>();
@@ -84,6 +84,39 @@ function setupGatewayMock() {
 }
 
 async function loadSubagentSpawnModule() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("./subagent-registry.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+    return {
+      ...actual,
+      countActiveRunsForSession: () => 0,
+      registerSubagentRun: () => {},
+    };
+  });
+  vi.doMock("./subagent-announce.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./subagent-announce.js")>();
+    return {
+      ...actual,
+      buildSubagentSystemPrompt: () => "system-prompt",
+    };
+  });
+  vi.doMock("./agent-scope.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./agent-scope.js")>();
+    return {
+      ...actual,
+      resolveAgentWorkspaceDir: () => workspaceDirOverride,
+    };
+  });
+  vi.doMock("./subagent-depth.js", () => ({
+    getSubagentDepthFromSessionStore: () => 0,
+  }));
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  }));
+  ({ resetSubagentRegistryForTests } = await import("./subagent-registry.js"));
   return import("./subagent-spawn.js");
 }
 
@@ -148,7 +181,8 @@ describe("decodeStrictBase64", () => {
 // --- filename validation via spawnSubagentDirect ---
 
 describe("spawnSubagentDirect filename validation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadSubagentSpawnModule();
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     setupGatewayMock();

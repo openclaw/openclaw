@@ -9,22 +9,26 @@ import type { TypingController } from "./typing.js";
 const handleCommandsMock = vi.fn();
 const getChannelPluginMock = vi.fn();
 
-vi.mock("./commands.runtime.js", () => ({
-  handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
-  buildStatusReply: vi.fn(),
-}));
+let handleInlineActions: typeof import("./get-reply-inline-actions.js").handleInlineActions;
+type HandleInlineActionsInput = Parameters<
+  typeof import("./get-reply-inline-actions.js").handleInlineActions
+>[0];
 
-vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
-  return {
-    ...actual,
-    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  };
-});
-
-// Import after mocks.
-const { handleInlineActions } = await import("./get-reply-inline-actions.js");
-type HandleInlineActionsInput = Parameters<typeof handleInlineActions>[0];
+async function loadFreshInlineActionsModuleForTest() {
+  vi.resetModules();
+  vi.doMock("./commands.runtime.js", () => ({
+    handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
+    buildStatusReply: vi.fn(),
+  }));
+  vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+    return {
+      ...actual,
+      getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    };
+  });
+  ({ handleInlineActions } = await import("./get-reply-inline-actions.js"));
+}
 
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
@@ -107,13 +111,14 @@ async function expectInlineActionSkipped(params: {
 }
 
 describe("handleInlineActions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp" ? { commands: { skipWhenConfigEmpty: true } } : undefined,
     );
+    await loadFreshInlineActionsModuleForTest();
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {
@@ -231,10 +236,14 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(result).toEqual({
+      kind: "continue",
+      directives: clearInlineDirectives("new message"),
+      abortedLastRun: false,
+    });
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
-    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
   it("rewrites Claude bundle markdown commands into a native agent prompt", async () => {
