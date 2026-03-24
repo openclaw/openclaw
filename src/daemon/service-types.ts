@@ -9,6 +9,8 @@ export type GatewayServiceInstallArgs = {
   description?: string;
 };
 
+export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
+
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;

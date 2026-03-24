@@ -5,6 +5,7 @@ const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
   readRuntime: vi.fn(),
   restart: vi.fn(),
+  stage: vi.fn(),
   install: vi.fn(),
   readCommand: vi.fn(),
 }));
@@ -143,14 +144,19 @@ describe("maybeRepairGatewayDaemon", () => {
   function createPrompter(confirmImpl: (message: string) => boolean) {
     return {
       confirm: vi.fn(),
-      confirmRepair: vi.fn(),
-      confirmAggressive: vi.fn(),
-      confirmSkipInNonInteractive: vi.fn(async ({ message }: { message: string }) =>
-        confirmImpl(message),
-      ),
+      confirmAutoFix: vi.fn(),
+      confirmAggressiveAutoFix: vi.fn(),
+      confirmRuntimeRepair: vi.fn(async ({ message }: { message: string }) => confirmImpl(message)),
       select: vi.fn(),
       shouldRepair: false,
       shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
     };
   }
 

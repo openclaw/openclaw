@@ -380,6 +380,11 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
@@ -393,6 +398,11 @@ vi.mock("../daemon/node-service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
