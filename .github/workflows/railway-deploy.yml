@@ -1,46 +1,34 @@
 name: Trigger Railway Deploy
 
-# Fire after CI and Docker Release complete (success or failure).
-# This ensures Railway only deploys green builds.
+# Fire after Docker Release completes. This ensures Railway only deploys
+# after CI passes and the image is published to GHCR.
 on:
   workflow_run:
-    workflows:
-      - CI
-      - Docker Release
+    workflows: [Docker Release]
     types: [completed]
 
 jobs:
   trigger-deploy:
     runs-on: ubuntu-latest
-    # Only run in the fork, not upstream openclaw
-    if: github.repository == 'as3445/openclaw'
-    # Only deploy when the triggering workflow was Docker Release.
-    # CI failures should NOT trigger a Railway deploy.
-    # (We still listen to CI to consume its workflow_run event so it doesn't
-    # queue up indefinitely, but we only act on Docker Release success.)
+    # Only run in the fork, only on Docker Release success.
     if: >
-      github.event.workflow_run.name == 'Docker Release'
+      github.repository == 'as3445/openclaw'
       && github.event.workflow_run.conclusion == 'success'
     concurrency:
       group: railway-deploy
-      # Cancel in-progress deploys when a new commit arrives — stale deploys
-      # waste Railway build minutes and race with the fresh one.
       cancel-in-progress: true
     steps:
       - name: Validate and fetch the triggering commit
         env:
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          # workflow_run triggers fire from the workflow YAML's commit, not the
-          # code commit. Fetch the actual code SHA that Docker Release built.
-          echo "Docker Release built SHA: ${WORKFLOW_SHA}"
+          echo "Docker Release completed for SHA: ${WORKFLOW_SHA}"
+          # Verify the SHA is on main before deploying.
+          # Guards against force-pushes rewriting history after the workflow started.
           git fetch --depth=1 origin "${WORKFLOW_SHA}"
-          # Verify this SHA is on the main branch (not a force-pushed branch that
-          # was rewritten after the workflow ran).
           git branch -a --contains "${WORKFLOW_SHA}" | grep -q "main" \
-            && echo "SHA is on main — OK" \
+            && echo "SHA ${WORKFLOW_SHA} confirmed on main — proceeding" \
             || { echo "SHA not on main — skipping stale trigger"; exit 0; }
-          echo "Confirmed: will deploy SHA ${WORKFLOW_SHA}"
 
       - name: Push version bump to template repo
         env:
@@ -52,7 +40,7 @@ jobs:
           git config user.name "Nox (CI)"
           echo "${OPENCLAW_SHA}" > .openclaw-version
           git add .openclaw-version
-          git diff --cached --quiet && echo "No change" && exit 0
+          git diff --cached --quiet && echo "No change — skipping" && exit 0
           git commit -m "deploy: openclaw ${OPENCLAW_SHA:0:8}"
           git push
 
@@ -61,6 +49,4 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           npm install -g @railway/cli
-          # --wait ensures Railway completes the deploy before the step exits,
-          # preventing the workflow from ending while Railway is still building.
           railway redeploy --service OpenClaw --yes --wait
