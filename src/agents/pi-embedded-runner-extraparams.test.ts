@@ -88,7 +88,11 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
                 ...options,
                 onPayload: (payload) => {
                   if (payload && typeof payload === "object") {
+                    const existing = Array.isArray((payload as Record<string, unknown>).plugins)
+                      ? ((payload as Record<string, unknown>).plugins as unknown[])
+                      : [];
                     (payload as Record<string, unknown>).plugins = [
+                      ...existing,
                       { id: "auto-router", allowed_models: validModels },
                     ];
                   }

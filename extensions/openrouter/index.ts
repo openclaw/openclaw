@@ -83,7 +83,7 @@ function injectOpenRouterRouting(
  * }
  * ```
  */
-function injectAutoRouterPlugin(
+export function injectAutoRouterPlugin(
   baseStreamFn: StreamFn | undefined,
   allowedModels: string[],
 ): StreamFn {
@@ -100,7 +100,11 @@ function injectAutoRouterPlugin(
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
+          const existing = Array.isArray((payload as Record<string, unknown>).plugins)
+            ? ((payload as Record<string, unknown>).plugins as unknown[])
+            : [];
           (payload as Record<string, unknown>).plugins = [
+            ...existing,
             { id: "auto-router", allowed_models: allowedModels },
           ];
         }
