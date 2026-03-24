@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -94,8 +94,14 @@ function createBundledDuckDuckGoEntry(): PluginWebSearchProviderEntry {
 }
 
 describe("onboard-search provider resolution", () => {
-  afterEach(() => {
+  let mod: typeof import("./onboard-search.js");
+
+  beforeAll(async () => {
     vi.resetModules();
+    mod = await import("./onboard-search.js");
+  });
+
+  afterEach(() => {
     vi.clearAllMocks();
   });
 
@@ -105,7 +111,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -146,7 +151,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       plugins: {
         installs: {
@@ -197,7 +201,6 @@ describe("onboard-search provider resolution", () => {
     mocks.listBundledWebSearchProviders.mockReturnValue([firecrawlEntry]);
     mocks.resolveBundledWebSearchPluginId.mockReturnValue("firecrawl");
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -231,7 +234,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [duckduckgoEntry] : [duckduckgoEntry],
     );
 
-    const mod = await import("./onboard-search.js");
     const notes: string[] = [];
     const prompter = {
       intro: vi.fn(async () => {}),
