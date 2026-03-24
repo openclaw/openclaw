@@ -653,6 +653,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("forwards media-only tool results without typing text", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onToolResult?.({
+        mediaUrls: ["/tmp/generated.png"],
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult.mock.calls[0]?.[0]).toMatchObject({
+      mediaUrls: ["/tmp/generated.png"],
+    });
+    expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
     vi.useFakeTimers();
     let calls = 0;

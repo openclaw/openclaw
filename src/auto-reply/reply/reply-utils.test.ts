@@ -560,6 +560,20 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
+  it("does not start typing for media-only deltas", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined);
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
   it("handles tool-start typing before and after active text mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
