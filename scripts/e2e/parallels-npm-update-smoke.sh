@@ -66,6 +66,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --package-spec)
       PACKAGE_SPEC="$2"
       shift 2
@@ -90,6 +93,37 @@ done
 
 OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
 [[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+
+resolve_linux_vm_name() {
+  local json requested
+  json="$(prlctl list --all --json)"
+  requested="$LINUX_VM"
+  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" python3 - <<'PY'
+import difflib
+import json
+import os
+import sys
+
+payload = json.loads(os.environ["PRL_VM_JSON"])
+requested = os.environ["REQUESTED_VM_NAME"].strip()
+requested_lower = requested.lower()
+names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+if requested in names:
+    print(requested)
+    raise SystemExit(0)
+
+ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
+if not ubuntu_names:
+    sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+best_name = max(
+    ubuntu_names,
+    key=lambda name: difflib.SequenceMatcher(None, requested_lower, name.lower()).ratio(),
+)
+print(best_name)
+PY
+}
 
 resolve_latest_version() {
   npm view openclaw version --userconfig "$(mktemp)"
@@ -183,6 +217,53 @@ PY
   prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+run_windows_script_via_log() {
+  local script_body="$1"
+  local runner_name log_name done_name done_status
+  runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-update-$RANDOM-$RANDOM.log"
+  done_name="openclaw-update-$RANDOM-$RANDOM.done"
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+@'
+\$ErrorActionPreference = 'Stop'
+\$PSNativeCommandUseErrorActionPreference = \$false
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+try {
+$script_body
+  Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
+} catch {
+  if (Test-Path \$log) {
+    Add-Content -Path \$log -Value (\$_ | Out-String)
+  } else {
+    (\$_ | Out-String) | Set-Content -Path \$log
+  }
+  Set-Content -Path \$done -Value '1'
+}
+'@ | Set-Content -Path \$runner
+Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  while :; do
+    done_status="$(
+      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    done_status="${done_status//$'\r'/}"
+    if [[ -n "$done_status" ]]; then
+      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    sleep 2
+  done
+}
+
 run_macos_update() {
   local tgz_url="$1"
   local head_short="$2"
@@ -212,24 +293,28 @@ EOF
 run_windows_update() {
   local tgz_url="$1"
   local head_short="$2"
-  guest_powershell "$(cat <<EOF
+  run_windows_script_via_log "$(cat <<EOF
 \$env:PATH = "\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;\$env:PATH"
 \$tgz = Join-Path \$env:TEMP 'openclaw-main-update.tgz'
-curl.exe -fsSL '$tgz_url' -o \$tgz
-npm.cmd install -g \$tgz --no-fund --no-audit
+curl.exe -fsSL '$tgz_url' -o \$tgz >> \$log 2>&1
+npm.cmd install -g \$tgz --no-fund --no-audit >> \$log 2>&1
 \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
 \$version = & \$openclaw --version
-\$version
+\$version | Tee-Object -FilePath \$log -Append
 if (\$version -notmatch '$head_short') {
   throw 'version mismatch: expected substring $head_short'
 }
-& \$openclaw models set openai/gpt-5.4
+& \$openclaw models set openai/gpt-5.4 >> \$log 2>&1
 # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
 # Restart the gateway/service before verifying status or the next agent turn.
-& \$openclaw gateway restart
+& \$openclaw gateway restart >> \$log 2>&1
 Start-Sleep -Seconds 5
-& \$openclaw gateway status --deep --require-rpc
-& \$openclaw agent --agent main --session-id parallels-npm-update-windows-$head_short --message 'Reply with exact ASCII text OK only.' --json
+& \$openclaw gateway status --deep --require-rpc >> \$log 2>&1
+\$output = & \$openclaw agent --agent main --session-id parallels-npm-update-windows-$head_short --message 'Reply with exact ASCII text OK only.' --json 2>&1
+if (\$null -ne \$output) {
+  \$output | ForEach-Object { \$_ } | Tee-Object -FilePath \$log -Append
+}
+exit \$LASTEXITCODE
 EOF
 )"
 }
@@ -300,6 +385,12 @@ PY
 LATEST_VERSION="$(resolve_latest_version)"
 if [[ -z "$PACKAGE_SPEC" ]]; then
   PACKAGE_SPEC="openclaw@$LATEST_VERSION"
+fi
+
+RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
+if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
+  warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
+  LINUX_VM="$RESOLVED_LINUX_VM"
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
