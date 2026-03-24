@@ -54,12 +54,12 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         // Estimate speech duration per language, then apply 3x safety margin.
         // The watchdog is a hang guard — normal completion relies on didFinish.
         //
-        // Speech rates based on Pellegrino et al. (2011) syllable-per-second data,
-        // adjusted ~1.3x slower for TTS synthesis vs natural speech:
+        // Speech rates based on Pellegrino et al. (2019) syllable-per-second data,
+        // adjusted for TTS synthesis (slower than natural speech):
         // https://www.science.org/doi/10.1126/sciadv.aaw2594
-        //   Japanese: 7.84 SPS → ~0.19s/char (mixed kana/kanji avg ~1.5 mora/char)
-        //   Korean:   5.96 SPS → ~0.22s/char (1 char = 1 syllable)
-        //   Chinese:  5.18 SPS → ~0.25s/char (1 char = 1 syllable)
+        //   Japanese: 7.84 SPS → ~0.20s/char (mixed kana/kanji avg ~1.5 mora/char)
+        //   Korean:   5.96 SPS → ~0.25s/char (1 char = 1 syllable)
+        //   Chinese:  5.18 SPS → ~0.28s/char (1 char = 1 syllable)
         //   English:  6.19 SPS → ~0.08s/char (avg ~5 chars/syllable)
         let resolvedLang = language ?? utterance.voice?.language ?? "en"
         let perCharSeconds: Double
