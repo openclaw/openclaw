@@ -1512,7 +1512,8 @@ export async function runEmbeddedPiAgent(
             const rotated = await advanceAuthProfile();
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
-              lastRetryFailoverReason = (assistantFailoverReason ?? (timedOut ? "timeout" : null)) ?? lastRetryFailoverReason;
+              lastRetryFailoverReason =
+                assistantFailoverReason ?? (timedOut ? "timeout" : null) ?? lastRetryFailoverReason;
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
