@@ -1318,7 +1318,10 @@ describe("listSessionsFromStore subagent metadata", () => {
   });
 
   test("uses persisted active subagent runs when the local worker only has terminal snapshots", async () => {
-    await withStateDirEnv("openclaw-session-utils-subagent-", async ({ stateDir }) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
+    const stateDir = path.join(tempRoot, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    try {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:disk-live";
       const registryPath = path.join(stateDir, "subagents", "runs.json");
@@ -1359,30 +1362,38 @@ describe("listSessionsFromStore subagent metadata", () => {
         "utf-8",
       );
 
-      const row = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () => {
-        const result = listSessionsFromStore({
-          cfg,
-          storePath: "/tmp/sessions.json",
-          store: {
-            [childSessionKey]: {
-              sessionId: "sess-disk-live",
-              updatedAt: now,
-              spawnedBy: "agent:main:main",
-              status: "done",
-              endedAt: now - 1_800,
-              runtimeMs: 100,
-            } as SessionEntry,
-          },
-          opts: {},
-        });
-        return result.sessions.find((session) => session.key === childSessionKey);
-      });
+      const row = withEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+        },
+        () => {
+          const result = listSessionsFromStore({
+            cfg,
+            storePath: "/tmp/sessions.json",
+            store: {
+              [childSessionKey]: {
+                sessionId: "sess-disk-live",
+                updatedAt: now,
+                spawnedBy: "agent:main:main",
+                status: "done",
+                endedAt: now - 1_800,
+                runtimeMs: 100,
+              } as SessionEntry,
+            },
+            opts: {},
+          });
+          return result.sessions.find((session) => session.key === childSessionKey);
+        },
+      );
 
       expect(row?.status).toBe("running");
       expect(row?.startedAt).toBe(now - 9_000);
       expect(row?.endedAt).toBeUndefined();
       expect(row?.runtimeMs).toBeGreaterThanOrEqual(9_000);
-    });
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {
