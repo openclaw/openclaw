@@ -111,7 +111,7 @@ export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
   const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
-  const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 15_000;
+  const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 30_000;
   return async () => {
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
