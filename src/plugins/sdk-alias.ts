@@ -207,9 +207,11 @@ export function resolvePluginSdkAliasFile(params: {
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 
-export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
+export function listPluginSdkExportedSubpaths(
+  params: { modulePath?: string; argv1?: string } = {},
+): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath, argv1: params.argv1 });
   if (!packageRoot) {
     return [];
   }
@@ -223,10 +225,10 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: { modulePath?: string; argv1?: string } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath, argv1: params.argv1 });
   if (!packageRoot) {
     return {};
   }
@@ -240,7 +242,7 @@ export function resolvePluginSdkScopedAliasMap(
     return cached;
   }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
+  for (const subpath of listPluginSdkExportedSubpaths({ modulePath, argv1: params.argv1 })) {
     const candidateMap = {
       src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
       dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
@@ -290,12 +292,13 @@ export function buildPluginLoaderAliasMap(modulePath: string): Record<string, st
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
+    argv1: process.argv[1],
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
   return {
     ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap({ modulePath, argv1: process.argv[1] }),
   };
 }
 
