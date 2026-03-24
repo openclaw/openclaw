@@ -84,6 +84,12 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
+  // When image model is temporarily switched to a different provider, track
+  // whether we skipped clearing the session due to hasAppliedImageModelOverride.
+  // This is used later to prevent persisting the image provider's profile,
+  // which would overwrite the user's saved text-provider credential.
+  let clearedDueToProviderMismatch = false;
+
   if (current && !isProfileForProvider({ provider, profileId: current, store })) {
     // Skip persisting clear when image model is temporarily switched.
     // The provider mismatch is transient and should not clear saved credentials.
@@ -93,6 +99,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (!hasAppliedImageModelOverride) {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     }
+    clearedDueToProviderMismatch = true;
     current = undefined;
   }
 
@@ -104,6 +111,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (!hasAppliedImageModelOverride) {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     }
+    clearedDueToProviderMismatch = true;
     current = undefined;
   }
 
@@ -150,9 +158,9 @@ export async function resolveSessionAuthProfileOverride(params: {
   // The current stored profile is for the original provider and should be preserved.
   // However, if the image provider is the SAME as the original provider, we should
   // persist normally since there's no transient switch.
-  const currentIsForImageProvider =
-    current && isProfileForProvider({ provider, profileId: current, store });
-  const skipPersist = hasAppliedImageModelOverride && current && !currentIsForImageProvider;
+  // Use clearedDueToProviderMismatch to detect when we had a mismatch, since current
+  // is set to undefined in those branches before skipPersist is evaluated.
+  const skipPersist = hasAppliedImageModelOverride && clearedDueToProviderMismatch;
 
   let next = current;
   if (isNewSession) {
