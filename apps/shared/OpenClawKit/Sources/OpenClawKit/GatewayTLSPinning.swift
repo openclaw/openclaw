@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import Security
 
 public struct GatewayTLSParams: Sendable {
@@ -56,6 +57,7 @@ public enum GatewayTLSStore {
 }
 
 public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, @unchecked Sendable {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "tls-pinning")
     private let params: GatewayTLSParams
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -103,6 +105,8 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 // and it would be permanently pinned (TOFU bypass, CVSS 9.0).
                 var trustError: CFError?
                 guard SecTrustEvaluateWithError(trust, &trustError) else {
+                    let desc = trustError.map { ($0 as Error).localizedDescription } ?? "unknown"
+                    Self.logger.error("TOFU trust evaluation failed: \(desc, privacy: .public)")
                     completionHandler(.cancelAuthenticationChallenge, nil)
                     return
                 }
