@@ -6,7 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
@@ -74,16 +74,14 @@ describe("listThinkingLevels", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai-codex" &&
-        ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
-          context.modelId,
-        )) ||
+        ["gpt-5.2-codex", "gpt-5.4", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
       (provider === "github-copilot" && ["gpt-5.2", "gpt-5.2-codex"].includes(context.modelId))
         ? true
         : undefined,
     );
 
     expect(listThinkingLevels("openai-codex", "gpt-5.2-codex")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");

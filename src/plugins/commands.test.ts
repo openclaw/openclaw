@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
@@ -12,10 +11,16 @@ import {
 } from "./commands.js";
 import { setActivePluginRegistry } from "./runtime.js";
 
+type CommandsModule = typeof import("./commands.js");
+
+const commandsModuleUrl = new URL("./commands.ts", import.meta.url).href;
+
+async function importCommandsModule(cacheBust: string): Promise<CommandsModule> {
+  return (await import(`${commandsModuleUrl}?t=${cacheBust}`)) as CommandsModule;
+}
+
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
-  );
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {
@@ -106,6 +111,40 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(getPluginCommandSpecs("slack")).toEqual([]);
+  });
+
+  it("shares plugin commands across duplicate module instances", async () => {
+    const first = await importCommandsModule(`first-${Date.now()}`);
+    const second = await importCommandsModule(`second-${Date.now()}`);
+
+    first.clearPluginCommands();
+
+    expect(
+      first.registerPluginCommand("demo-plugin", {
+        name: "voice",
+        nativeNames: {
+          telegram: "voice",
+        },
+        description: "Voice command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
+
+    expect(second.getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "voice",
+        description: "Voice command",
+        acceptsArgs: false,
+      },
+    ]);
+    expect(second.matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({
+        name: "voice",
+        pluginId: "demo-plugin",
+      }),
+    });
+
+    second.clearPluginCommands();
   });
 
   it("matches provider-specific native aliases back to the canonical command", () => {

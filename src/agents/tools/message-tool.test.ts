@@ -1,9 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import { createMessageToolButtonsSchema } from "../../plugin-sdk/message-tool-schema.js";
+import { createMessageToolButtonsSchema } from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
@@ -86,17 +86,19 @@ function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+  ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
+  ({ createMessageTool } = await import("./message-tool.js"));
+});
+
+beforeEach(() => {
   mocks.runMessageAction.mockReset();
   mocks.loadConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [],
   }));
-  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
-  ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool.js"));
 });
 
 function createChannelPlugin(params: {
@@ -149,6 +151,7 @@ async function executeSend(params: {
 }) {
   const tool = createMessageTool({
     config: {} as never,
+    runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
   await tool.execute("1", {
@@ -185,6 +188,9 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
+      loadConfig: mocks.loadConfig as never,
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
@@ -214,6 +220,7 @@ describe("message tool agent routing", () => {
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
       config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {

@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
-  MemoryStore,
-  SyncAccumulator,
+  Category,
   type ISyncData,
+  type IRooms,
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk";
+import { MemoryStore } from "matrix-js-sdk/lib/store/memory.js";
+import { SyncAccumulator } from "matrix-js-sdk/lib/sync-accumulator.js";
 import { writeJsonFileAtomically } from "../../runtime-api.js";
 import { LogService } from "../sdk/logger.js";
 
@@ -17,6 +19,7 @@ type PersistedMatrixSyncStore = {
   version: number;
   savedSync: ISyncData | null;
   clientOptions?: IStoredClientOpts;
+  cleanShutdown?: boolean;
 };
 
 function createAsyncLock() {
@@ -40,31 +43,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function normalizeRoomsData(value: unknown): IRooms | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    [Category.Join]: isRecord(value[Category.Join]) ? (value[Category.Join] as IRooms["join"]) : {},
+    [Category.Invite]: isRecord(value[Category.Invite])
+      ? (value[Category.Invite] as IRooms["invite"])
+      : {},
+    [Category.Leave]: isRecord(value[Category.Leave])
+      ? (value[Category.Leave] as IRooms["leave"])
+      : {},
+    [Category.Knock]: isRecord(value[Category.Knock])
+      ? (value[Category.Knock] as IRooms["knock"])
+      : {},
+  };
+}
+
 function toPersistedSyncData(value: unknown): ISyncData | null {
   if (!isRecord(value)) {
     return null;
   }
   if (typeof value.nextBatch === "string" && value.nextBatch.trim()) {
-    if (!Array.isArray(value.accountData) || !isRecord(value.roomsData)) {
+    const roomsData = normalizeRoomsData(value.roomsData);
+    if (!Array.isArray(value.accountData) || !roomsData) {
       return null;
     }
     return {
       nextBatch: value.nextBatch,
       accountData: value.accountData,
-      roomsData: value.roomsData,
-    } as ISyncData;
+      roomsData,
+    };
   }
 
   // Older Matrix state files stored the raw /sync-shaped payload directly.
   if (typeof value.next_batch === "string" && value.next_batch.trim()) {
+    const roomsData = normalizeRoomsData(value.rooms);
+    if (!roomsData) {
+      return null;
+    }
     return {
       nextBatch: value.next_batch,
       accountData:
         isRecord(value.account_data) && Array.isArray(value.account_data.events)
           ? value.account_data.events
           : [],
-      roomsData: isRecord(value.rooms) ? value.rooms : {},
-    } as ISyncData;
+      roomsData,
+    };
   }
 
   return null;
@@ -76,6 +102,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
       version?: unknown;
       savedSync?: unknown;
       clientOptions?: unknown;
+      cleanShutdown?: unknown;
     };
     const savedSync = toPersistedSyncData(parsed.savedSync);
     if (parsed.version === STORE_VERSION) {
@@ -85,6 +112,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
         clientOptions: isRecord(parsed.clientOptions)
           ? (parsed.clientOptions as IStoredClientOpts)
           : undefined,
+        cleanShutdown: parsed.cleanShutdown === true,
       };
     }
 
@@ -93,6 +121,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
     return {
       version: STORE_VERSION,
       savedSync: toPersistedSyncData(parsed),
+      cleanShutdown: false,
     };
   } catch {
     return null;
@@ -119,6 +148,8 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   private savedSync: ISyncData | null = null;
   private savedClientOptions: IStoredClientOpts | undefined;
   private readonly hadSavedSyncOnLoad: boolean;
+  private readonly hadCleanShutdownOnLoad: boolean;
+  private cleanShutdown = false;
   private dirty = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
@@ -128,11 +159,13 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
+    let restoredCleanShutdown = false;
     try {
       const raw = readFileSync(this.storagePath, "utf8");
       const persisted = readPersistedStore(raw);
       restoredSavedSync = persisted?.savedSync ?? null;
       restoredClientOptions = persisted?.clientOptions;
+      restoredCleanShutdown = persisted?.cleanShutdown === true;
     } catch {
       // Missing or unreadable sync cache should not block startup.
     }
@@ -140,6 +173,8 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     this.savedSync = restoredSavedSync;
     this.savedClientOptions = restoredClientOptions;
     this.hadSavedSyncOnLoad = restoredSavedSync !== null;
+    this.hadCleanShutdownOnLoad = this.hadSavedSyncOnLoad && restoredCleanShutdown;
+    this.cleanShutdown = this.hadCleanShutdownOnLoad;
 
     if (this.savedSync) {
       this.accumulator.accumulate(syncDataToSyncResponse(this.savedSync), true);
@@ -152,6 +187,10 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
   hasSavedSync(): boolean {
     return this.hadSavedSyncOnLoad;
+  }
+
+  hasSavedSyncFromCleanShutdown(): boolean {
+    return this.hadCleanShutdownOnLoad;
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
@@ -205,7 +244,13 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     await super.deleteAllData();
     this.savedSync = null;
     this.savedClientOptions = undefined;
+    this.cleanShutdown = false;
     await fs.rm(this.storagePath, { force: true }).catch(() => undefined);
+  }
+
+  markCleanShutdown(): void {
+    this.cleanShutdown = true;
+    this.dirty = true;
   }
 
   async flush(): Promise<void> {
@@ -224,6 +269,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   }
 
   private markDirtyAndSchedulePersist(): void {
+    this.cleanShutdown = false;
     this.dirty = true;
     if (this.persistTimer) {
       return;
@@ -242,6 +288,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
+      cleanShutdown: this.cleanShutdown === true,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {

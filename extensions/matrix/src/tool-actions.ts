@@ -97,6 +97,27 @@ function readRawParam(params: Record<string, unknown>, key: string): unknown {
   return undefined;
 }
 
+function readStringAliasParam(
+  params: Record<string, unknown>,
+  keys: string[],
+  options: { required?: boolean } = {},
+): string | undefined {
+  for (const key of keys) {
+    const raw = readRawParam(params, key);
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (options.required) {
+    throw new Error(`${keys[0]} required`);
+  }
+  return undefined;
+}
+
 function readNumericArrayParam(
   params: Record<string, unknown>,
   key: string,
@@ -169,7 +190,10 @@ export async function handleMatrixAction(
 
   if (pollActions.has(action)) {
     const roomId = readRoomId(params);
-    const pollId = readStringParam(params, "pollId", { required: true });
+    const pollId = readStringAliasParam(params, ["pollId", "messageId"], { required: true });
+    if (!pollId) {
+      throw new Error("pollId required");
+    }
     const optionId = readStringParam(params, "pollOptionId");
     const optionIndex = readNumberParam(params, "pollOptionIndex", { integer: true });
     const optionIds = [
@@ -195,7 +219,11 @@ export async function handleMatrixAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
-        const mediaUrl = readStringParam(params, "mediaUrl");
+        const mediaUrl =
+          readStringParam(params, "mediaUrl", { trim: false }) ??
+          readStringParam(params, "media", { trim: false }) ??
+          readStringParam(params, "filePath", { trim: false }) ??
+          readStringParam(params, "path", { trim: false });
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
@@ -203,11 +231,18 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const audioAsVoice =
+          typeof readRawParam(params, "audioAsVoice") === "boolean"
+            ? (readRawParam(params, "audioAsVoice") as boolean)
+            : typeof readRawParam(params, "asVoice") === "boolean"
+              ? (readRawParam(params, "asVoice") as boolean)
+              : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice,
           ...clientOpts,
         });
         return jsonResult({ ok: true, result });

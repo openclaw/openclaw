@@ -10,11 +10,11 @@ vi.mock("../config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 
-type StoreModule = typeof import("./store.js");
+let loadConfig: typeof import("../config.js").loadConfig;
+let clearSessionStoreCacheForTest: typeof import("./store.js").clearSessionStoreCacheForTest;
+let loadSessionStore: typeof import("./store.js").loadSessionStore;
+let saveSessionStore: typeof import("./store.js").saveSessionStore;
 
-let clearSessionStoreCacheForTest: StoreModule["clearSessionStoreCacheForTest"];
-let loadSessionStore: StoreModule["loadSessionStore"];
-let saveSessionStore: StoreModule["saveSessionStore"];
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -82,9 +82,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    ({ loadConfig } = await import("../config.js"));
     ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
       await import("./store.js"));
-    const { loadConfig } = await import("../config.js");
     mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");

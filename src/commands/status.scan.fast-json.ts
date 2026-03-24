@@ -5,7 +5,7 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { buildPluginCompatibilityNotices } from "../plugins/status.js";
+import { loggingState } from "../logging/state.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
@@ -73,6 +73,18 @@ function shouldSkipMissingConfigFastPath(): boolean {
   );
 }
 
+function isMissingConfigColdStart(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env));
+}
+
+function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+  };
+}
+
 function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
 }
@@ -126,23 +138,35 @@ export async function scanStatusJsonFast(
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readStatusSourceConfig();
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } = await resolveStatusConfig({
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannels(cfg)) {
+  const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
+  if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
+    const prev = loggingState.forceConsoleToStderr;
+    loggingState.forceConsoleToStderr = true;
+    try {
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
+  const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
+  const updatePromise = skipColdStartNetworkChecks
+    ? Promise.resolve(buildColdStartUpdateResult())
+    : getUpdateCheckResult({
+        timeoutMs: updateTimeoutMs,
+        fetchGit: true,
+        includeRegistry: true,
+      });
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
@@ -157,7 +181,13 @@ export async function scanStatusJsonFast(
           )
           .catch(() => null);
 
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
+  const gatewayProbePromise = resolveGatewayProbeSnapshot({
+    cfg,
+    opts: {
+      ...opts,
+      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+    },
+  });
 
   const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
     tailscaleDnsPromise,
@@ -185,8 +215,14 @@ export async function scanStatusJsonFast(
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
+  // Keep the lean `status --json` route off the memory manager/runtime graph.
+  // Deep memory inspection is still available on the explicit `--all` path.
+  const memory = opts.all
+    ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
+    : null;
+  // `status --json` does not serialize plugin compatibility notices, so keep the
+  // fast path off the full plugin status graph after the initial scoped preload.
+  const pluginCompatibility: StatusScanResult["pluginCompatibility"] = [];
 
   return {
     cfg,

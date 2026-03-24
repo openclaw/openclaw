@@ -119,6 +119,25 @@ describe("handleMatrixAction pollVote", () => {
     ).rejects.toThrow("pollId required");
   });
 
+  it("accepts messageId as a pollId alias for poll votes", async () => {
+    const cfg = {} as CoreConfig;
+    await handleMatrixAction(
+      {
+        action: "pollVote",
+        roomId: "!room:example",
+        messageId: "$poll",
+        pollOptionIndex: 1,
+      },
+      cfg,
+    );
+
+    expect(mocks.voteMatrixPoll).toHaveBeenCalledWith("!room:example", "$poll", {
+      cfg,
+      optionIds: [],
+      optionIndexes: [1],
+    });
+  });
+
   it("passes account-scoped opts to add reactions", async () => {
     const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
     await handleMatrixAction(
@@ -227,6 +246,31 @@ describe("handleMatrixAction pollVote", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: undefined,
+    });
+  });
+
+  it("accepts shared media aliases and voice-send flags", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    await handleMatrixAction(
+      {
+        action: "sendMessage",
+        accountId: "ops",
+        to: "room:!room:example",
+        path: "/tmp/clip.mp3",
+        asVoice: true,
+      },
+      cfg,
+      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+    );
+
+    expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", undefined, {
+      cfg,
+      accountId: "ops",
+      mediaUrl: "/tmp/clip.mp3",
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+      replyToId: undefined,
+      threadId: undefined,
+      audioAsVoice: true,
     });
   });
 

@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { startTelegramWebhook } from "./webhook.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -73,6 +72,20 @@ vi.mock("grammy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("grammy")>();
   return {
     ...actual,
+    API_CONSTANTS: actual.API_CONSTANTS ?? {
+      DEFAULT_UPDATE_TYPES: ["message"],
+      ALL_UPDATE_TYPES: ["message"],
+    },
+    InputFile:
+      actual.InputFile ??
+      class InputFile {
+        constructor(public readonly path: string) {}
+      },
+    GrammyError:
+      actual.GrammyError ??
+      class GrammyError extends Error {
+        description = "";
+      },
     webhookCallback: webhookCallbackSpy,
   };
 });
@@ -80,6 +93,13 @@ vi.mock("grammy", async (importOriginal) => {
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
+
+let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ startTelegramWebhook } = await import("./webhook.js"));
+});
 
 async function fetchWithTimeout(
   input: string,
@@ -436,6 +456,7 @@ describe("startTelegramWebhook", () => {
           expect.objectContaining({
             certificate: expect.objectContaining({
               fileData: "/path/to/cert.pem",
+              filename: "cert.pem",
             }),
           }),
         );

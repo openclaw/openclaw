@@ -187,6 +187,38 @@ export function createMockWebListener(): MockWebListener {
   };
 }
 
+export function createScriptedWebListenerFactory(): AnyExport {
+  const onMessages: Array<(msg: WebInboundMessage) => Promise<void>> = [];
+  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const listeners: MockWebListener[] = [];
+
+  const listenerFactory = vi.fn(
+    async (opts: { onMessage: (msg: WebInboundMessage) => Promise<void> }) => {
+      onMessages.push(opts.onMessage);
+      let resolveClose: (reason: unknown) => void = () => {};
+      const onClose = new Promise<WebListenerCloseReason>((res) => {
+        resolveClose = res as (reason: unknown) => void;
+        closeResolvers.push(resolveClose);
+      });
+      const listener: MockWebListener = {
+        ...createMockWebListener(),
+        onClose,
+        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+      };
+      listeners.push(listener);
+      return listener;
+    },
+  );
+
+  return {
+    listenerFactory,
+    listeners,
+    getOnMessage: (index = onMessages.length - 1) => onMessages[index],
+    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    getListenerCount: () => listenerFactory.mock.calls.length,
+  };
+}
+
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
     sendMedia: vi.fn(),
