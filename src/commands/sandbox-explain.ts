@@ -1,6 +1,9 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
-import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxToolPolicyForAgent,
+} from "../agents/sandbox.js";
+import { resolveElevatedChannelFallbackAllowFrom } from "../auto-reply/reply/reply-elevated.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -81,7 +84,35 @@ function inferProviderFromSessionKey(params: {
   if (candidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  return normalizeAnyChannelId(candidate) ?? undefined;
+  return normalizeAnyChannelId(candidate) ?? candidate;
+}
+
+function inferAccountIdFromSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): string | undefined {
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const rest = parsed.rest.trim();
+  if (!rest) {
+    return undefined;
+  }
+  const parts = rest.split(":").filter(Boolean);
+  if (parts.length < 4) {
+    return undefined;
+  }
+  const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (parts[0] === configuredMainKey) {
+    return undefined;
+  }
+  const peerKind = parts[2]?.trim().toLowerCase();
+  if (peerKind !== "direct") {
+    return undefined;
+  }
+  const accountId = parts[1]?.trim();
+  return accountId || undefined;
 }
 
 function resolveActiveChannel(params: {
@@ -117,6 +148,9 @@ function resolveActiveChannel(params: {
   const normalized = normalizeAnyChannelId(candidate);
   if (normalized) {
     return normalized;
+  }
+  if (candidate) {
+    return candidate;
   }
   return inferProviderFromSessionKey({
     cfg: params.cfg,
@@ -163,6 +197,10 @@ export async function sandboxExplainCommand(
     agentId: resolvedAgentId,
     sessionKey,
   });
+  const accountId = inferAccountIdFromSessionKey({
+    cfg,
+    sessionKey,
+  });
 
   const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
   const elevatedGlobal = cfg.tools?.elevated;
@@ -172,11 +210,19 @@ export async function sandboxExplainCommand(
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
   const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
+  const globalFallbackAllow = channel
+    ? resolveElevatedChannelFallbackAllowFrom({
+        cfg,
+        provider: channel,
+        accountId,
+      })
+    : undefined;
+  const effectiveGlobalAllow = globalAllow ?? globalFallbackAllow;
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
   const allowTokens = (values?: Array<string | number>) =>
     (values ?? []).map((v) => String(v).trim()).filter(Boolean);
-  const globalAllowTokens = allowTokens(globalAllow);
+  const globalAllowTokens = allowTokens(effectiveGlobalAllow);
   const agentAllowTokens = allowTokens(agentAllow);
 
   const elevatedAllowedByConfig =
@@ -250,88 +296,48 @@ export async function sandboxExplainCommand(
     elevated: {
       enabled: elevatedEnabled,
       channel,
+      accountId,
       allowedByConfig: elevatedAllowedByConfig,
       alwaysAllowedByConfig: elevatedAlwaysAllowedByConfig,
       allowFrom: {
-        global: channel ? globalAllowTokens : undefined,
-        agent: elevatedAgent?.allowFrom && channel ? agentAllowTokens : undefined,
+        global: effectiveGlobalAllow,
+        agent: agentAllow,
       },
       failures: elevatedFailures,
     },
     fixIt,
-  } as const;
+  };
 
   if (opts.json) {
-    writeRuntimeJson(runtime, payload);
+    runtime.log(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
 
   const rich = isRich();
-  const heading = (value: string) => colorize(rich, theme.heading, value);
-  const key = (value: string) => colorize(rich, theme.muted, value);
-  const value = (val: string) => colorize(rich, theme.info, val);
-  const ok = (val: string) => colorize(rich, theme.success, val);
-  const warn = (val: string) => colorize(rich, theme.warn, val);
-  const err = (val: string) => colorize(rich, theme.error, val);
-  const bool = (flag: boolean) => (flag ? ok("true") : err("false"));
-
-  const lines: string[] = [];
-  lines.push(heading("Effective sandbox:"));
-  lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
-  lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
-  lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
-  lines.push(
-    `  ${key("runtime:")} ${payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")}`,
-  );
-  lines.push(
-    `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
-      payload.sandbox.scope,
-    )} ${key("perSession:")} ${bool(payload.sandbox.perSession)}`,
-  );
-  lines.push(
-    `  ${key("workspaceAccess:")} ${value(
-      payload.sandbox.workspaceAccess,
-    )} ${key("workspaceRoot:")} ${value(payload.sandbox.workspaceRoot)}`,
-  );
-  lines.push("");
-  lines.push(heading("Sandbox tool policy:"));
-  lines.push(
-    `  ${key(`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
-      payload.sandbox.tools.allow.join(", ") || "(empty)",
-    )}`,
-  );
-  lines.push(
-    `  ${key(`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
-      payload.sandbox.tools.deny.join(", ") || "(empty)",
-    )}`,
-  );
-  lines.push("");
-  lines.push(heading("Elevated:"));
-  lines.push(`  ${key("enabled:")} ${bool(payload.elevated.enabled)}`);
-  lines.push(`  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`);
-  lines.push(`  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`);
-  if (payload.elevated.failures.length > 0) {
+  const title = rich
+    ? colorize(theme.accent, "Sandbox explain")
+    : "Sandbox explain";
+  const lines = [
+    title,
+    `Agent: ${resolvedAgentId}`,
+    `Session: ${sessionKey}`,
+    `Sandbox: mode=${sandboxCfg.mode} scope=${sandboxCfg.scope} workspace=${sandboxCfg.workspaceAccess}`,
+    `Session sandboxed: ${sessionIsSandboxed ? "yes" : "no"}`,
+    `Allow tools: ${toolPolicy.allow.join(", ") || "(none)"}`,
+    `Deny tools: ${toolPolicy.deny.join(", ") || "(none)"}`,
+    `Elevated enabled: ${elevatedEnabled ? "yes" : "no"}`,
+    `Elevated channel: ${channel ?? "(unknown)"}`,
+    `Elevated account: ${accountId ?? "(unknown)"}`,
+    `Elevated allowedByConfig: ${elevatedAllowedByConfig ? "yes" : "no"}`,
+  ];
+  if (elevatedFailures.length > 0) {
     lines.push(
-      `  ${key("failing gates:")} ${warn(
-        payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", "),
-      )}`,
+      `Elevated failures: ${elevatedFailures.map((failure) => failure.key).join(", ")}`,
     );
   }
-  if (payload.sandbox.mode === "non-main" && payload.sandbox.sessionIsSandboxed) {
-    lines.push("");
-    lines.push(
-      `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(
-        payload.mainSessionKey,
-      )}`,
-    );
+  if (fixIt.length > 0) {
+    lines.push(`Fix-it: ${fixIt.join(", ")}`);
   }
-  lines.push("");
-  lines.push(heading("Fix-it:"));
-  for (const key of payload.fixIt) {
-    lines.push(`  - ${key}`);
-  }
-  lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
-
-  runtime.log(`${lines.join("\n")}\n`);
+  lines.push(`Docs: ${formatDocsLink(SANDBOX_DOCS_URL)}`);
+  writeRuntimeJson(runtime, lines.join("\n"));
 }
