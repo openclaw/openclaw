@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 
 function makeMockHttpResponse() {
-  const chunks: Buffer[] = [];
+  const chunks: (Buffer | string)[] = [];
   const headers: Record<string, string> = {};
   const res = {
     statusCode: 200,
@@ -15,14 +15,17 @@ function makeMockHttpResponse() {
       headers[name.toLowerCase()] = value;
     },
     getHeader: (name: string) => headers[name.toLowerCase()],
-    write: (chunk: Buffer) => chunks.push(chunk),
-    end: (chunk?: Buffer) => {
+    write: (chunk: Buffer | string) => chunks.push(chunk),
+    end: (chunk?: Buffer | string) => {
       if (chunk) {
         chunks.push(chunk);
       }
     },
   } as unknown as ServerResponse;
-  const end = () => Buffer.concat(chunks);
+  const end = () => {
+    const result = chunks.map(c => (typeof c === "string" ? c : c.toString())).join("");
+    return result;
+  };
   return { res, end, headers };
 }
 
@@ -85,10 +88,10 @@ describe("favicon.svg under basePath (issue #53172)", () => {
         },
       );
       // When basePath is empty, the entire URL is treated as the file path
-      // So /openclaw/favicon.svg would look for a file named that
-      console.log("handled:", handled);
-      console.log("statusCode:", res.statusCode);
-      console.log("response body:", end().toString());
+      // So /openclaw/favicon.svg would look for a file named that, which doesn't exist
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+      expect(end().toString()).toBe("Not Found");
     });
   });
 });
