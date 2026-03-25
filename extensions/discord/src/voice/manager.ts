@@ -402,11 +402,33 @@ export class DiscordVoiceManager {
     }
 
     const voiceChannelId = channelInfo?.id ?? channelId;
-    // If a sessionChannelId is explicitly configured, route the agent session to that channel
-    // (e.g. a paired text channel) so transcripts and replies are visible as text.
+    // If a sessionChannelId is explicitly configured, validate and route the agent session to that
+    // channel (e.g. a paired text channel) so transcripts and replies are visible as text.
+    // Validation: must be a text-capable channel in the same guild.
     // Otherwise fall back to the voice channel so text chat in the voice channel
     // shares the same session as spoken audio.
-    const sessionChannelId = params.sessionChannelId?.trim() || voiceChannelId;
+    let sessionChannelId = voiceChannelId;
+    if (params.sessionChannelId?.trim()) {
+      const candidateId = params.sessionChannelId.trim();
+      const sessionChannelInfo = await this.params.client
+        .fetchChannel(candidateId)
+        .catch(() => null);
+      if (
+        !sessionChannelInfo ||
+        ("type" in sessionChannelInfo && isVoiceChannel(sessionChannelInfo.type))
+      ) {
+        return {
+          ok: false,
+          message: `Session channel ${candidateId} is not a text-capable channel.`,
+        };
+      }
+      const sessionGuildId =
+        "guildId" in sessionChannelInfo ? sessionChannelInfo.guildId : undefined;
+      if (sessionGuildId && sessionGuildId !== guildId) {
+        return { ok: false, message: "Session channel is not in this guild." };
+      }
+      sessionChannelId = candidateId;
+    }
     if (sessionChannelId !== voiceChannelId) {
       logVoiceVerbose(
         `join: routing voice session to text channel ${sessionChannelId} (voice channel ${channelId})`,
