@@ -94,20 +94,10 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const started = await startServerWithClient("secret");
     const paired = await pairReadScopedOperator("silent-scope-upgrade-reconnect-poc");
 
-    let initialDeviceTokenWs: WebSocket | undefined;
     let sharedAuthReconnectWs: WebSocket | undefined;
     let postAttemptDeviceTokenWs: WebSocket | undefined;
 
     try {
-      initialDeviceTokenWs = await openTrackedWs(started.port);
-      const beforeUpgrade = await connectReq(initialDeviceTokenWs, {
-        skipDefaultAuth: true,
-        deviceToken: paired.deviceToken,
-        deviceIdentityPath: paired.identityPath,
-        scopes: ["operator.admin"],
-      });
-      expect(beforeUpgrade.ok).toBe(false);
-
       sharedAuthReconnectWs = await openTrackedWs(started.port);
       const sharedAuthUpgradeAttempt = await connectReq(sharedAuthReconnectWs, {
         token: "secret",
@@ -116,6 +106,13 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
       expect(sharedAuthUpgradeAttempt.ok).toBe(false);
       expect(sharedAuthUpgradeAttempt.error?.message).toBe("pairing required");
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(1);
+      expect(
+        (sharedAuthUpgradeAttempt.error?.details as { requestId?: unknown; code?: string })
+          ?.requestId,
+      ).toBe(pending.pending[0]?.requestId);
 
       const afterUpgradeAttempt = await getPairedDevice(paired.deviceId);
       expect(afterUpgradeAttempt?.approvedScopes).toEqual(["operator.read"]);
@@ -131,7 +128,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
       expect(afterUpgrade.ok).toBe(false);
     } finally {
-      initialDeviceTokenWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
       started.ws.close();
@@ -217,10 +213,60 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message).toBe("pairing required");
+      expect(
+        (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
+      ).toBeUndefined();
       await expect(requestedEvent).rejects.toThrow("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toEqual([]);
+    } finally {
+      approveSpy.mockRestore();
+      ws?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("returns the replacement pending request id when a silent request is superseded", async () => {
+    const started = await startServerWithClient("secret");
+    const loaded = loadDeviceIdentity("silent-reconnect-supersede-race");
+    let ws: WebSocket | undefined;
+    let replacementRequestId = "";
+
+    const approveSpy = vi
+      .spyOn(devicePairingModule, "approveDevicePairing")
+      .mockImplementation(async (requestId: string) => {
+        const replacement = await devicePairingModule.requestDevicePairing({
+          deviceId: loaded.identity.deviceId,
+          publicKey: loaded.publicKey,
+          role: "operator",
+          scopes: ["operator.read"],
+          clientId: GATEWAY_CLIENT_NAMES.TEST,
+          clientMode: GATEWAY_CLIENT_MODES.TEST,
+          silent: false,
+        });
+        replacementRequestId = replacement.request.requestId;
+        return null;
+      });
+
+    try {
+      ws = await openTrackedWs(started.port);
+      const res = await connectReq(ws, {
+        token: "secret",
+        deviceIdentityPath: loaded.identityPath,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toBe("pairing required");
+      expect(replacementRequestId).toBeTruthy();
+      expect(
+        (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
+      ).toBe(replacementRequestId);
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending.map((entry) => entry.requestId)).toContain(replacementRequestId);
     } finally {
       approveSpy.mockRestore();
       ws?.close();

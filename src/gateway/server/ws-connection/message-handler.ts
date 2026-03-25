@@ -764,10 +764,10 @@ export function attachGatewayWsMessageHandler(params: {
               if (scopes.length === 0) {
                 return true;
               }
-              const pairedScopes = Array.isArray(pairedCandidate.scopes)
-                ? pairedCandidate.scopes
-                : Array.isArray(pairedCandidate.approvedScopes)
-                  ? pairedCandidate.approvedScopes
+              const pairedScopes = Array.isArray(pairedCandidate.approvedScopes)
+                ? pairedCandidate.approvedScopes
+                : Array.isArray(pairedCandidate.scopes)
+                  ? pairedCandidate.scopes
                   : [];
               if (pairedScopes.length === 0) {
                 return false;
@@ -794,6 +794,21 @@ export function attachGatewayWsMessageHandler(params: {
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
+            let recoveryRequestId: string | undefined = pairing.request.requestId;
+            const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
+              const pendingList = await listDevicePairing();
+              const exactPending = pendingList.pending.find(
+                (pending) => pending.requestId === pairing.request.requestId,
+              );
+              if (exactPending) {
+                return exactPending.requestId;
+              }
+              const replacementPending = pendingList.pending.find(
+                (pending) =>
+                  pending.deviceId === device.id && pending.publicKey === devicePublicKey,
+              );
+              return replacementPending?.requestId;
+            };
             if (pairing.request.silent === true) {
               approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
@@ -814,12 +829,10 @@ export function attachGatewayWsMessageHandler(params: {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
                 );
-                const requestStillPending =
-                  !resolvedByConcurrentApproval && pairing.created
-                    ? (await listDevicePairing()).pending.some(
-                        (pending) => pending.requestId === pairing.request.requestId,
-                      )
-                    : false;
+                const requestStillPending = !resolvedByConcurrentApproval
+                  ? ((recoveryRequestId = await resolveLivePendingRequestId()),
+                    recoveryRequestId === pairing.request.requestId)
+                  : false;
                 if (requestStillPending) {
                   context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
                 }
@@ -831,7 +844,7 @@ export function attachGatewayWsMessageHandler(params: {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
-                requestId: pairing.request.requestId,
+                ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
                 reason,
               });
               send({
@@ -841,7 +854,7 @@ export function attachGatewayWsMessageHandler(params: {
                 error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
                   details: {
                     code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-                    requestId: pairing.request.requestId,
+                    ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
                     reason,
                   },
                 }),
