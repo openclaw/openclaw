@@ -10,7 +10,7 @@
 
 ## Gateway restart and checks
 
-- Main bot rule: the long-lived LaunchAgent gateway must run from the `main` checkout, not a feature worktree. If a fix lives in a worktree, merge it first, update `main`, and only then restart the gateway from `main`.
+- Main bot rule: validate fixes from a feature worktree first when possible, using a tester bot or other isolated runtime. The long-lived LaunchAgent gateway for the primary bot must still run from the `main` checkout, not a feature worktree. If a fix lives in a worktree, test it there first, then merge it, update `main`, and only then restart the primary gateway from `main`.
 - Restart:
   - `pkill -9 -f openclaw-gateway || true`
   - `nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
@@ -33,4 +33,4 @@
 - The gateway is managed by the mac app.
 - Restart via the OpenClaw Mac app or `scripts/restart-mac.sh`, not a random tmux process.
 - Use `scripts/clawlog.sh` for macOS unified logs.
-- The primary bot must run from `main`, not from a worktree build. Use worktrees for development only, then merge to `main`, rebuild, and restart the gateway from `main`.
+- Worktrees are valid for development and pre-merge validation. The primary bot must run from `main`, not from a worktree build. Test in the worktree first, then merge to `main`, rebuild, and restart the gateway from `main`.
