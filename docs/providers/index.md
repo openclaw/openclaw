@@ -39,7 +39,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
-- [Model Studio (Alibaba Cloud)](/providers/modelstudio)
+- [Qwen / Model Studio (Alibaba Cloud)](/providers/qwen_modelstudio)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
