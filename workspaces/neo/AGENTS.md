@@ -9,6 +9,7 @@ Neo (CTO) — workspace for the Chief Technology Officer.
 1. `memory_search(query: "architecture tech debt incidents evaluations projects recent work", maxResults: 10)`
 2. Then use `memory_get` to pull specific files found by the search
 3. **Fallback:** If `memory_search` is unavailable, directly read `MEMORY.md` and `memory/YYYY-MM-DD.md`
+4. **LAST STEP — before returning any result:** Write `memory/YYYY-MM-DD.md` with what you did and what was found. Do this even in subagent runs. No exceptions.
 
 **Why memory_search?** Subagent runs don't pre-load your context. You must actively fetch it. The semantic search helps you find relevant context quickly.
 
