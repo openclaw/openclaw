@@ -115,17 +115,17 @@ export class AgentMemoSearchManager implements MemorySearchManager {
         }
         const data: AgentMemoSearchResponse = await response.json();
         const items = data.results ?? data.data ?? [];
-        return items.map((item): MemorySearchResult => ({
-          path: item.id ?? item.metadata?.path ?? "",
-          startLine: typeof item.metadata?.start_line === "number" ? item.metadata.start_line : 0,
-          endLine: typeof item.metadata?.end_line === "number" ? item.metadata.end_line : 0,
-          score: item.score ?? item.similarity ?? 0,
-          snippet: item.content ?? item.text ?? "",
-          source: "memory",
-          citation: item.metadata?.source
-            ? String(item.metadata.source)
-            : undefined,
-        }));
+        return items.map(
+          (item): MemorySearchResult => ({
+            path: item.id ?? item.metadata?.path ?? "",
+            startLine: typeof item.metadata?.start_line === "number" ? item.metadata.start_line : 0,
+            endLine: typeof item.metadata?.end_line === "number" ? item.metadata.end_line : 0,
+            score: item.score ?? item.similarity ?? 0,
+            snippet: item.content ?? item.text ?? "",
+            source: "memory",
+            citation: item.metadata?.source ? String(item.metadata.source) : undefined,
+          }),
+        );
       },
     });
   }

@@ -52,6 +52,7 @@ integrate it as a first-class `memorySearch` provider in OpenClaw.
 ```
 
 The integration is **thin adapter** pattern:
+
 - OpenClaw delegates search to agentMemo via HTTP
 - agentMemo handles all embedding, indexing, and storage
 - No local SQLite / vector index needed on the OpenClaw side for this path
@@ -177,15 +178,16 @@ if (resolved.provider === "agentmemo") {
 
 ## 5. API Mapping
 
-| OpenClaw Operation | agentMemo Endpoint | Notes |
-|---|---|---|
-| `memory_search(query)` | `POST /search` | Body: `{query, namespace, limit, min_score}` |
-| `memory_get(path)` | `GET /memories/{id}` | Path-encoded id |
-| Health probe | `GET /health` | Used by `probeEmbeddingAvailability()` |
+| OpenClaw Operation     | agentMemo Endpoint   | Notes                                        |
+| ---------------------- | -------------------- | -------------------------------------------- |
+| `memory_search(query)` | `POST /search`       | Body: `{query, namespace, limit, min_score}` |
+| `memory_get(path)`     | `GET /memories/{id}` | Path-encoded id                              |
+| Health probe           | `GET /health`        | Used by `probeEmbeddingAvailability()`       |
 
 ### 5.1 `/search` Request / Response
 
 **Request:**
+
 ```json
 {
   "query": "how do I reset my password",
@@ -196,6 +198,7 @@ if (resolved.provider === "agentmemo") {
 ```
 
 **Response:**
+
 ```json
 {
   "results": [
@@ -228,23 +231,23 @@ if (resolved.provider === "agentmemo") {
 
 ## 6. New Files
 
-| File | Description |
-|---|---|
+| File                                | Description                                    |
+| ----------------------------------- | ---------------------------------------------- |
 | `src/memory/providers/agentmemo.ts` | `AgentMemoSearchManager` class (new, ~200 LOC) |
-| `docs/agentmemo-provider-design.md` | This document |
-| `PR_DESCRIPTION.md` | PR description draft |
+| `docs/agentmemo-provider-design.md` | This document                                  |
+| `PR_DESCRIPTION.md`                 | PR description draft                           |
 
 ---
 
 ## 7. Modified Files (to complete implementation)
 
-| File | Change |
-|---|---|
-| `src/config/types.tools.ts` | Add `"agentmemo"` to `provider` union + `agentmemo?: {...}` config block |
-| `src/agents/memory-search.ts` | Resolve `agentmemo` config, add to `provider` union type |
-| `src/memory/search-manager.ts` | Add `agentmemo` branch in `getMemorySearchManager()` |
-| `src/config/zod-schema.agent-defaults.ts` | Extend Zod schema for `agentmemo` provider |
-| `src/secrets/target-registry-data.ts` | Register `agentmemo.apiKey` as a secret target |
+| File                                      | Change                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| `src/config/types.tools.ts`               | Add `"agentmemo"` to `provider` union + `agentmemo?: {...}` config block |
+| `src/agents/memory-search.ts`             | Resolve `agentmemo` config, add to `provider` union type                 |
+| `src/memory/search-manager.ts`            | Add `agentmemo` branch in `getMemorySearchManager()`                     |
+| `src/config/zod-schema.agent-defaults.ts` | Extend Zod schema for `agentmemo` provider                               |
+| `src/secrets/target-registry-data.ts`     | Register `agentmemo.apiKey` as a secret target                           |
 
 ---
 
