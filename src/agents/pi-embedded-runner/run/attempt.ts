@@ -1275,7 +1275,10 @@ function wrapStreamRepairMalformedToolCallArguments(
                   repairedArgsByIndex.set(event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex)) {
+                  if (
+                    repair.trailingSuffix.length > 0 &&
+                    !loggedRepairIndices.has(event.contentIndex)
+                  ) {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
                       `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
