@@ -123,7 +123,7 @@ describe("message hook mappers", () => {
     });
   });
 
-  it("normalizes Discord DM targets for inbound claim contexts", () => {
+  it("passes through raw conversationId for inbound claim contexts", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
         Provider: "discord",
@@ -137,10 +137,12 @@ describe("message hook mappers", () => {
       }),
     );
 
+    // inbound_claim context uses canonical.conversationId directly
+    // (consistent with toPluginMessageContext and agent hook contexts)
     expect(toPluginInboundClaimContext(canonical)).toEqual({
       channelId: "discord",
       accountId: "acc-1",
-      conversationId: "user:1177378744822943744",
+      conversationId: "channel:1480574946919846079",
       parentConversationId: undefined,
       senderId: "sender-1",
       messageId: "msg-1",

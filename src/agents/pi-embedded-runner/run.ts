@@ -277,6 +277,8 @@ export async function runEmbeddedPiAgent(
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        conversationId: params.messageTo ?? undefined,
+        accountId: params.agentAccountId ?? undefined,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {

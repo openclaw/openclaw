@@ -178,58 +178,19 @@ function deriveParentConversationId(
   );
 }
 
-function deriveConversationId(canonical: CanonicalInboundMessageHookContext): string | undefined {
-  if (canonical.channelId === "discord") {
-    const rawTarget = canonical.to ?? canonical.originatingTo ?? canonical.conversationId;
-    const rawSender = canonical.from;
-    const senderUserId = rawSender?.startsWith("discord:user:")
-      ? rawSender.slice("discord:user:".length)
-      : rawSender?.startsWith("discord:")
-        ? rawSender.slice("discord:".length)
-        : undefined;
-    if (!canonical.isGroup && senderUserId) {
-      return `user:${senderUserId}`;
-    }
-    if (!rawTarget) {
-      return undefined;
-    }
-    if (rawTarget.startsWith("discord:channel:")) {
-      return `channel:${rawTarget.slice("discord:channel:".length)}`;
-    }
-    if (rawTarget.startsWith("discord:user:")) {
-      return `user:${rawTarget.slice("discord:user:".length)}`;
-    }
-    if (rawTarget.startsWith("discord:")) {
-      return `user:${rawTarget.slice("discord:".length)}`;
-    }
-    if (rawTarget.startsWith("channel:") || rawTarget.startsWith("user:")) {
-      return rawTarget;
-    }
-  }
-  const baseConversationId = stripChannelPrefix(
-    canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
-    canonical.channelId,
-  );
-  if (canonical.channelId === "telegram" && baseConversationId) {
-    const threadId =
-      typeof canonical.threadId === "number" || typeof canonical.threadId === "string"
-        ? String(canonical.threadId).trim()
-        : "";
-    if (threadId) {
-      return `${baseConversationId}:topic:${threadId}`;
-    }
-  }
-  return baseConversationId;
-}
+// deriveConversationId was removed: it did per-channel transformations
+// (Discord DM rerouting, Telegram thread suffixes, Slack prefix stripping)
+// that produced conversationId values inconsistent with toPluginMessageContext
+// and agent hook contexts. Per-channel normalization should live in channel
+// adapters, not in generic hook mappers. See toPluginInboundClaimContext.
 
 export function toPluginInboundClaimContext(
   canonical: CanonicalInboundMessageHookContext,
 ): PluginHookInboundClaimContext {
-  const conversationId = deriveConversationId(canonical);
   return {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
-    conversationId,
+    conversationId: canonical.conversationId,
     parentConversationId: deriveParentConversationId(canonical),
     senderId: canonical.senderId,
     messageId: canonical.messageId,
