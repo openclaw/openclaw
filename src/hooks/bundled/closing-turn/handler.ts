@@ -254,9 +254,17 @@ async function buildPortfolioPulse(workspaceDir: string): Promise<string | undef
 
 // ---- Delivery helper ----
 
+/** Delay helper (ms). */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 /**
  * Parse channel + to from a session key and send a message directly.
  * Returns false if the session key can't be parsed or send fails.
+ *
+ * Checks routeReply's ok field (routeReply never throws — it returns
+ * { ok: false } on failure). On first failure, retries once after a
+ * short delay to ride out transient network blips (e.g. IPv6→IPv4
+ * fallback in the Telegram fetch dispatcher).
  */
 async function sendDirect(params: {
   text: string;
@@ -271,17 +279,38 @@ async function sendDirect(params: {
     if (!channel || !to) {
       return false;
     }
-    await routeReply({
-      payload: { text: params.text },
-      channel: channel as Parameters<typeof routeReply>[0]["channel"],
-      to,
-      sessionKey: params.sessionKey,
-      cfg: params.cfg,
-    });
-    return true;
+
+    const send = () =>
+      routeReply({
+        payload: { text: params.text },
+        channel: channel as Parameters<typeof routeReply>[0]["channel"],
+        to,
+        sessionKey: params.sessionKey,
+        cfg: params.cfg,
+      });
+
+    const result = await send();
+    if (result.ok) {
+      return true;
+    }
+
+    // First attempt failed — retry once after a short delay.
+    // The Telegram fetch dispatcher may need a moment to settle on IPv4
+    // after an IPv6 timeout triggers the sticky fallback.
+    log.warn(`sendDirect failed (will retry): ${result.error ?? "unknown"}`);
+    await sleep(1500);
+
+    const retry = await send();
+    if (retry.ok) {
+      log.info("sendDirect retry succeeded");
+      return true;
+    }
+
+    log.warn(`sendDirect retry also failed: ${retry.error ?? "unknown"}`);
+    return false;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.warn(`sendDirect failed: ${message}`);
+    log.warn(`sendDirect threw: ${message}`);
     return false;
   }
 }
