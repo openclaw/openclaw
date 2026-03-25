@@ -698,8 +698,7 @@ export function createAgentEventHandler({
     const { evt, phase, sessionKey, clientRunId, isControlUiVisible } = params;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
-    const stopReason =
-      typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+    const stopReason = typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
 
     if (isControlUiVisible && sessionKey) {
       if (!isAborted) {
@@ -917,10 +916,7 @@ export function createAgentEventHandler({
       return;
     }
 
-    if (
-      sessionKey &&
-      lifecyclePhase === "start"
-    ) {
+    if (sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
