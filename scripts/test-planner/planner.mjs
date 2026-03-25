@@ -987,10 +987,7 @@ export function buildExecutionPlan(request, options = {}) {
     context.noIsolateArgs.length > 0
       ? context.executionBudget.topLevelParallelLimitNoIsolate
       : context.executionBudget.topLevelParallelLimitIsolated;
-  const defaultTopLevelParallelLimit =
-    context.noIsolateArgs.length > 0
-      ? Math.max(1, baseTopLevelParallelLimit + (context.runtime.intentProfile === "max" ? 1 : 0))
-      : baseTopLevelParallelLimit;
+  const defaultTopLevelParallelLimit = baseTopLevelParallelLimit;
   const topLevelParallelLimit = Math.max(
     1,
     parseEnvNumber(env, "OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", defaultTopLevelParallelLimit),

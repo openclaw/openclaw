@@ -162,11 +162,18 @@ const withIntentBudgetAdjustments = (budget, intentProfile, cpuCount) => {
       gatewayWorkers: 1,
       topLevelParallelEnabled: false,
       topLevelParallelLimit: 1,
+      topLevelParallelLimitNoIsolate: 1,
+      topLevelParallelLimitIsolated: 1,
       deferredRunConcurrency: 1,
     };
   }
 
   if (intentProfile === "max") {
+    const maxTopLevelParallelLimit = clamp(
+      Math.max(budget.topLevelParallelLimitNoIsolate ?? budget.topLevelParallelLimit ?? 1, 5),
+      1,
+      8,
+    );
     return {
       ...budget,
       vitestMaxWorkers: clamp(Math.max(budget.vitestMaxWorkers, Math.min(8, cpuCount)), 1, 16),
@@ -176,7 +183,13 @@ const withIntentBudgetAdjustments = (budget, intentProfile, cpuCount) => {
       extensionWorkers: clamp(Math.max(budget.extensionWorkers, Math.min(6, cpuCount)), 1, 6),
       gatewayWorkers: clamp(Math.max(budget.gatewayWorkers, Math.min(2, cpuCount)), 1, 6),
       topLevelParallelEnabled: true,
-      topLevelParallelLimit: clamp(Math.max(budget.topLevelParallelLimit, 5), 1, 8),
+      topLevelParallelLimit: maxTopLevelParallelLimit,
+      topLevelParallelLimitNoIsolate: maxTopLevelParallelLimit,
+      topLevelParallelLimitIsolated: clamp(
+        Math.max(budget.topLevelParallelLimitIsolated ?? budget.topLevelParallelLimit ?? 1, 4),
+        1,
+        8,
+      ),
       deferredRunConcurrency: Math.max(budget.deferredRunConcurrency ?? 1, 3),
     };
   }

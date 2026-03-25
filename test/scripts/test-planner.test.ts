@@ -79,6 +79,40 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("honors the max-profile top-level no-isolate cap without adding extra lanes", () => {
+    const artifacts = createExecutionArtifacts({
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+      OPENCLAW_TEST_PROFILE: "max",
+    });
+    const plan = buildExecutionPlan(
+      {
+        profile: "max",
+        mode: "local",
+        surfaces: ["unit", "extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env: {
+          RUNNER_OS: "Linux",
+          OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+          OPENCLAW_TEST_LOAD_AWARE: "0",
+          OPENCLAW_TEST_PROFILE: "max",
+        },
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.runtimeCapabilities.intentProfile).toBe("max");
+    expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(8);
+    expect(plan.topLevelParallelLimit).toBe(8);
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("splits mixed targeted file selections across surfaces", () => {
     const artifacts = createExecutionArtifacts({});
     const plan = buildExecutionPlan(
