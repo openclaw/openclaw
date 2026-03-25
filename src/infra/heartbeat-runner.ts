@@ -945,12 +945,16 @@ export async function runHeartbeatOnce(opts: {
     // we treat everything as event-driven UNLESS it's a known periodic reason.
     // This is safer — new event sources get drain by default.
     //
-    // Edge case: an interval/retry heartbeat may discover queued exec or cron
-    // events (tagged by contextKey) that arrived between heartbeat cycles.
-    // The prompt already references those events, so we must drain them too.
+    // For periodic runs: hasCronEvents (from tagged contextKey) can still be
+    // true since cronEvents is computed from raw pendingEventEntries regardless
+    // of shouldInspectPendingEvents.  hasExecCompletion is always false for
+    // periodic runs because it's derived from the filtered pendingEvents array
+    // (empty when shouldInspectPendingEvents is false) — but that's fine:
+    // exec completions trigger their own event-driven heartbeat wake (reason
+    // "exec:<id>:exit" → reasonKind "other" → !isPeriodicHeartbeat → drain).
     const reasonKind = resolveHeartbeatReasonKind(opts.reason);
     const isPeriodicHeartbeat = reasonKind === "interval" || reasonKind === "retry";
-    const isEventDriven = !isPeriodicHeartbeat || hasExecCompletion || hasCronEvents;
+    const isEventDriven = !isPeriodicHeartbeat || hasCronEvents;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
