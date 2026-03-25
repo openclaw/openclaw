@@ -6,11 +6,13 @@ import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
+  SESSION_CLEANUP_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { sweepIdleSessions } from "./session-cleanup.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -39,11 +41,14 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  /** State directory for periodic session store cleanup. Omit to skip. */
+  stateDir?: string;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  sessionCleanup: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -132,33 +137,64 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+  // media cleanup
+  let mediaCleanup: ReturnType<typeof setInterval> | null = null;
+  if (typeof params.mediaCleanupTtlMs === "number") {
+    let mediaCleanupInFlight: Promise<void> | null = null;
+    const runMediaCleanup = () => {
+      if (mediaCleanupInFlight) {
+        return mediaCleanupInFlight;
+      }
+      mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+        recursive: true,
+        pruneEmptyDirs: true,
+      })
+        .catch((err) => {
+          params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
+        })
+        .finally(() => {
+          mediaCleanupInFlight = null;
+        });
+      return mediaCleanupInFlight;
+    };
+
+    mediaCleanup = setInterval(() => {
+      void runMediaCleanup();
+    }, 60 * 60_000);
+
+    void runMediaCleanup();
   }
 
-  let mediaCleanupInFlight: Promise<void> | null = null;
-  const runMediaCleanup = () => {
-    if (mediaCleanupInFlight) {
-      return mediaCleanupInFlight;
-    }
-    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
-      recursive: true,
-      pruneEmptyDirs: true,
-    })
-      .catch((err) => {
-        params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
+  // Periodic session store cleanup — prune idle/stale sessions.
+  // Startup cleanup is handled separately in startGatewaySidecars;
+  // this timer handles ongoing periodic sweeps.
+  let sessionCleanup: ReturnType<typeof setInterval> | null = null;
+  if (params.stateDir) {
+    const stateDir = params.stateDir;
+    let sessionCleanupInFlight: Promise<void> | null = null;
+    const runSessionCleanup = () => {
+      if (sessionCleanupInFlight) {
+        return;
+      }
+      sessionCleanupInFlight = sweepIdleSessions({
+        stateDir,
+        log: {
+          info: () => {},
+          warn: (msg) => params.logHealth.error(msg),
+        },
       })
-      .finally(() => {
-        mediaCleanupInFlight = null;
-      });
-    return mediaCleanupInFlight;
-  };
+        .catch((err) => {
+          params.logHealth.error(`session cleanup failed: ${formatError(err)}`);
+        })
+        .finally(() => {
+          sessionCleanupInFlight = null;
+        });
+    };
 
-  const mediaCleanup = setInterval(() => {
-    void runMediaCleanup();
-  }, 60 * 60_000);
+    sessionCleanup = setInterval(() => {
+      runSessionCleanup();
+    }, SESSION_CLEANUP_INTERVAL_MS);
+  }
 
-  void runMediaCleanup();
-
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup, sessionCleanup };
 }

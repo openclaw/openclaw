@@ -87,7 +87,7 @@ describe("sweepCronRunSessions", () => {
       },
       "agent:main:telegram:dm:123": {
         sessionId: "regular-session",
-        updatedAt: now - 100 * 3_600_000, // old but not a cron run
+        updatedAt: now - 2 * 3_600_000, // 2h ago — not a cron run, preserved by reaper
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));

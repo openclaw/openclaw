@@ -28,6 +28,7 @@ import {
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { sweepIdleSessions } from "./session-cleanup.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
@@ -57,6 +58,11 @@ export async function startGatewaySidecars(params: {
         log: { warn: (message) => params.log.warn(message) },
       });
     }
+
+    // Prune idle/stale sessions on startup (fire-and-forget).
+    void sweepIdleSessions({ stateDir, log: params.log, force: true }).catch((err) =>
+      params.log.warn(`session idle cleanup failed on startup: ${String(err)}`),
+    );
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
   }

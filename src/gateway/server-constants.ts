@@ -35,3 +35,4 @@ export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;
 export const DEDUPE_MAX = 1000;
+export const SESSION_CLEANUP_INTERVAL_MS = 5 * 60_000; // 5 minutes

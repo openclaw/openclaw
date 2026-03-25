@@ -138,9 +138,9 @@ export type SessionConfig = {
 export type SessionMaintenanceMode = "enforce" | "warn";
 
 export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "24h". */
   pruneAfter?: string | number;
   /** Deprecated. Use pruneAfter instead. */
   pruneDays?: number;
