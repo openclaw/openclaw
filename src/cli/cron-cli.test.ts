@@ -288,6 +288,23 @@ describe("cron cli", () => {
     expect(params?.payload?.thinking).toBe("low");
   });
 
+  it("rejects invalid --timeout-seconds on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Daily",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--timeout-seconds",
+      "10s",
+    ]);
+  });
+
   it("defaults isolated cron add to announce delivery", async () => {
     await runCronCommand([
       "cron",
