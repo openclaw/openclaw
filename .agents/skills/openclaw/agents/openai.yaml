@@ -1,0 +1,6 @@
+interface:
+  display_name: "Openclaw"
+  short_description: "Repo-specific patterns and workflows for openclaw"
+  default_prompt: "Use the openclaw repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
