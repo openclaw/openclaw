@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -6,17 +6,18 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", () => {
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
+  const module = { existsSync, readFileSync };
   return {
-    existsSync,
-    readFileSync,
-    default: { existsSync, readFileSync },
+    ...module,
+    default: module,
   };
 });
 vi.mock("node:os", () => {
   const homedir = vi.fn();
+  const module = { homedir };
   return {
-    homedir,
-    default: { homedir },
+    ...module,
+    default: module,
   };
 });
 import { execFileSync } from "node:child_process";
@@ -61,13 +62,11 @@ describe("browser default executable detection", () => {
     });
   }
 
-  beforeAll(async () => {
-    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
+    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
   });
 
   it("prefers default Chromium browser on macOS", async () => {
