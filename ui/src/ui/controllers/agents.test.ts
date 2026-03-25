@@ -21,6 +21,25 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
+    sessionKey: "main",
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "gpt-5-mini",
+          modelProvider: "openai",
+        },
+      ],
+    },
+    chatModelOverrides: {},
+    chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+    agentsPanel: "overview",
   };
   return { state, request };
 }
@@ -188,7 +207,7 @@ describe("loadToolsEffective", () => {
       sessionKey: "main",
     });
     expect(state.toolsEffectiveResult).toEqual(payload);
-    expect(state.toolsEffectiveResultKey).toBe("main:main");
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
     expect(state.toolsEffectiveError).toBeNull();
     expect(state.toolsEffectiveLoading).toBe(false);
   });
