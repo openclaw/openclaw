@@ -213,16 +213,25 @@ class NodeGatewayCoordinator(
 
   fun buildWearProxyGatewayConfig(): ProxyGatewayConfigPayload? {
     val endpoint = resolveWearProxyGatewayEndpoint() ?: return null
+    return buildWearProxyGatewayConfig(endpoint)
+  }
+
+  internal fun buildWearProxyGatewayConfig(endpoint: GatewayEndpoint): ProxyGatewayConfigPayload? {
     val tls = connectionManager.resolveTlsParams(endpoint)
     val token = prefs.loadGatewayToken()?.trim()?.takeIf { it.isNotEmpty() }
     val bootstrapToken = prefs.loadGatewayBootstrapToken()?.trim()?.takeIf { it.isNotEmpty() }
     val password = prefs.loadGatewayPassword()?.trim()?.takeIf { it.isNotEmpty() }
     val fingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim()?.takeIf { it.isNotEmpty() }
 
+    if (tls?.required == true && fingerprint.isNullOrBlank()) {
+      // Only hand Wear a direct TLS fallback once the phone has a pinned fingerprint.
+      return null
+    }
+
     return ProxyGatewayConfigPayload(
       host = endpoint.host,
       port = endpoint.port,
-      useTls = tls != null,
+      useTls = tls?.required == true,
       token = token,
       bootstrapToken = bootstrapToken,
       password = password,
