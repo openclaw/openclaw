@@ -987,13 +987,26 @@ export function buildToolsMessage(
     .filter((group) => group.tools.length > 0);
 
   if (groups.length === 0) {
-    return "No tools are available for this agent right now.";
+    const lines = [
+      "No tools are available for this agent right now.",
+      "",
+      `Profile: ${result.profile}`,
+    ];
+    if (result.unavailableCount > 0) {
+      lines.push(
+        "",
+        `${result.unavailableCount} cataloged tool${
+          result.unavailableCount === 1 ? "" : "s"
+        } unavailable right now.`,
+      );
+    }
+    return lines.join("\n");
   }
 
   const verbose = options?.verbose === true;
   const lines = verbose
-    ? ["Available tools", "", "What this agent can use right now:"]
-    : ["Available tools"];
+    ? ["Available tools", "", `Profile: ${result.profile}`, "What this agent can use right now:"]
+    : ["Available tools", "", `Profile: ${result.profile}`];
 
   for (const group of groups) {
     lines.push("", group.label);
@@ -1010,6 +1023,14 @@ export function buildToolsMessage(
     lines.push("", "Tool availability depends on this agent's configuration.");
   } else {
     lines.push("", "Use /tools verbose for descriptions.");
+  }
+  if (result.unavailableCount > 0) {
+    lines.push(
+      "",
+      `${result.unavailableCount} cataloged tool${
+        result.unavailableCount === 1 ? "" : "s"
+      } unavailable right now.`,
+    );
   }
   return lines.join("\n");
 }

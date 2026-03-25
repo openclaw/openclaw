@@ -112,6 +112,8 @@ describe("agents tools panel (browser)", () => {
         createBaseParams({
           toolsEffectiveResult: {
             agentId: "main",
+            profile: "messaging",
+            unavailableCount: 0,
             groups: [
               {
                 id: "channel",

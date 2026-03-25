@@ -20,6 +20,8 @@ describe("tools product copy", () => {
   it("formats built-in and plugin tools for end users", () => {
     const text = buildToolsMessage({
       agentId: "main",
+      profile: "coding",
+      unavailableCount: 2,
       groups: [
         {
           id: "core",
@@ -61,17 +63,21 @@ describe("tools product copy", () => {
     });
 
     expect(text).toContain("Available tools");
+    expect(text).toContain("Profile: coding");
     expect(text).toContain("Built-in tools");
     expect(text).toContain("exec, web_search");
     expect(text).toContain("Connected tools");
     expect(text).toContain("docs_lookup (docs)");
     expect(text).toContain("Use /tools verbose for descriptions.");
+    expect(text).toContain("2 cataloged tools unavailable right now.");
   });
 
   it("keeps detailed descriptions in verbose mode", () => {
     const text = buildToolsMessage(
       {
         agentId: "main",
+        profile: "minimal",
+        unavailableCount: 1,
         groups: [
           {
             id: "core",
@@ -93,14 +99,18 @@ describe("tools product copy", () => {
     );
 
     expect(text).toContain("What this agent can use right now:");
+    expect(text).toContain("Profile: minimal");
     expect(text).toContain("Exec - Run shell commands");
     expect(text).toContain("Tool availability depends on this agent's configuration.");
+    expect(text).toContain("1 cataloged tool unavailable right now.");
   });
 
   it("trims verbose output before schema-like doc blocks", () => {
     const text = buildToolsMessage(
       {
         agentId: "main",
+        profile: "coding",
+        unavailableCount: 0,
         groups: [
           {
             id: "core",
@@ -131,8 +141,12 @@ describe("tools product copy", () => {
     expect(
       buildToolsMessage({
         agentId: "main",
+        profile: "full",
+        unavailableCount: 3,
         groups: [],
       }),
-    ).toBe("No tools are available for this agent right now.");
+    ).toBe(
+      "No tools are available for this agent right now.\n\nProfile: full\n\n3 cataloged tools unavailable right now.",
+    );
   });
 });

@@ -5,6 +5,8 @@ async function loadToolsHarness(options?: {
   resolveToolsMock?: ReturnType<typeof vi.fn>;
   resolveTools?: () => {
     agentId: string;
+    profile: string;
+    unavailableCount: number;
     groups: Array<{
       id: "core" | "plugin" | "channel";
       label: string;
@@ -36,6 +38,8 @@ async function loadToolsHarness(options?: {
       options?.resolveTools ??
         (() => ({
           agentId: "main",
+          profile: "coding",
+          unavailableCount: 2,
           groups: [
             {
               id: "core" as const,
@@ -119,10 +123,12 @@ describe("handleToolsCommand", () => {
     const result = await handleToolsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Available tools");
+    expect(result?.reply?.text).toContain("Profile: coding");
     expect(result?.reply?.text).toContain("Built-in tools");
     expect(result?.reply?.text).toContain("exec");
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
+    expect(result?.reply?.text).toContain("2 cataloged tools unavailable right now.");
     expect(resolveToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: false,
@@ -163,6 +169,7 @@ describe("handleToolsCommand", () => {
     );
 
     expect(result?.reply?.text).toContain("What this agent can use right now:");
+    expect(result?.reply?.text).toContain("Profile: coding");
     expect(result?.reply?.text).toContain("Exec - Run shell commands");
     expect(result?.reply?.text).toContain("Docs Lookup - Search internal documentation");
   });

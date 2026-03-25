@@ -4,6 +4,9 @@ async function loadHarness(options?: {
   tools?: Array<{ name: string; label?: string; description?: string; displaySummary?: string }>;
   pluginMeta?: Record<string, { pluginId: string } | undefined>;
   channelMeta?: Record<string, { channelId: string } | undefined>;
+  pluginCatalogTools?: Array<{ name: string }>;
+  coreCatalogTools?: string[];
+  effectivePolicy?: { profile?: string; providerProfile?: string };
 }) {
   vi.resetModules();
   vi.doMock("./agent-scope.js", async (importOriginal) => {
@@ -24,9 +27,22 @@ async function loadHarness(options?: {
   }));
   vi.doMock("../plugins/tools.js", () => ({
     getPluginToolMeta: (tool: { name: string }) => options?.pluginMeta?.[tool.name],
+    resolvePluginTools: () => options?.pluginCatalogTools ?? [],
   }));
   vi.doMock("./channel-tools.js", () => ({
     getChannelAgentToolMeta: (tool: { name: string }) => options?.channelMeta?.[tool.name],
+  }));
+  vi.doMock("./tool-catalog.js", () => ({
+    listCoreToolSections: () => [
+      {
+        id: "core",
+        label: "Core",
+        tools: (options?.coreCatalogTools ?? []).map((id) => ({ id, label: id, description: id })),
+      },
+    ],
+  }));
+  vi.doMock("./pi-tools.policy.js", () => ({
+    resolveEffectiveToolPolicy: () => options?.effectivePolicy ?? {},
   }));
   return await import("./tools-effective-inventory.js");
 }
@@ -47,6 +63,7 @@ describe("resolveEffectiveToolInventory", () => {
 
     expect(result).toEqual({
       agentId: "main",
+      profile: "full",
       groups: [
         {
           id: "core",
@@ -93,6 +110,7 @@ describe("resolveEffectiveToolInventory", () => {
           ],
         },
       ],
+      unavailableCount: 0,
     });
   });
 
@@ -155,5 +173,19 @@ describe("resolveEffectiveToolInventory", () => {
       "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
     );
     expect(result.groups[0]?.tools[0]?.rawDescription).toContain("ACTIONS:");
+  });
+
+  it("includes the resolved tool profile and counts cataloged unavailable tools", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [{ name: "exec", label: "Exec", description: "Run shell commands" }],
+      coreCatalogTools: ["exec", "read"],
+      pluginCatalogTools: [{ name: "docs_lookup" }],
+      effectivePolicy: { profile: "minimal", providerProfile: "coding" },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.profile).toBe("coding");
+    expect(result.unavailableCount).toBe(2);
   });
 });

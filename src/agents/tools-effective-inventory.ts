@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, resolvePluginTools } from "../plugins/tools.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
+import { listCoreToolSections } from "./tool-catalog.js";
 import { resolveToolDisplay } from "./tool-display.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -27,7 +29,9 @@ export type EffectiveToolInventoryGroup = {
 
 export type EffectiveToolInventoryResult = {
   agentId: string;
+  profile: string;
   groups: EffectiveToolInventoryGroup[];
+  unavailableCount: number;
 };
 
 export type ResolveEffectiveToolInventoryParams = {
@@ -200,6 +204,40 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
   });
 }
 
+function countUnavailableCatalogTools(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+  agentDir: string;
+  effectiveToolIds: Set<string>;
+}): number {
+  const catalogIds = new Set(
+    listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id)),
+  );
+  const pluginTools = resolvePluginTools({
+    context: {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      agentId: params.agentId,
+    },
+    existingToolNames: catalogIds,
+    toolAllowlist: ["group:plugins"],
+    suppressNameConflicts: true,
+    allowGatewaySubagentBinding: true,
+  });
+  for (const tool of pluginTools) {
+    catalogIds.add(tool.name);
+  }
+  let unavailableCount = 0;
+  for (const id of catalogIds) {
+    if (!params.effectiveToolIds.has(id)) {
+      unavailableCount++;
+    }
+  }
+  return unavailableCount;
+}
+
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {
@@ -235,6 +273,14 @@ export function resolveEffectiveToolInventory(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
   });
+  const effectivePolicy = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
 
   const entries = disambiguateLabels(
     effectiveTools
@@ -250,6 +296,18 @@ export function resolveEffectiveToolInventory(
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
+  const effectiveToolIds = new Set(
+    entries
+      .filter((entry) => entry.source === "core" || entry.source === "plugin")
+      .map((entry) => entry.id),
+  );
+  const unavailableCount = countUnavailableCatalogTools({
+    cfg: params.cfg,
+    agentId,
+    workspaceDir,
+    agentDir,
+    effectiveToolIds,
+  });
 
   const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
   for (const entry of entries) {
@@ -273,5 +331,5 @@ export function resolveEffectiveToolInventory(
     })
     .filter((group): group is EffectiveToolInventoryGroup => group !== null);
 
-  return { agentId, groups };
+  return { agentId, profile, groups, unavailableCount };
 }
