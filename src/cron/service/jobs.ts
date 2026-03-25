@@ -139,8 +139,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "exec") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "exec"',
+    );
   }
 }
 
@@ -669,6 +671,26 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "exec") {
+    if (existing.kind !== "exec") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "exec" }> = { ...existing };
+    if (typeof patch.command === "string") {
+      next.command = patch.command;
+    }
+    if (typeof patch.shell === "string") {
+      next.shell = patch.shell;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    if (patch.env !== undefined) {
+      next.env = patch.env;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -754,6 +776,19 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "exec") {
+    if (typeof patch.command !== "string" || patch.command.trim().length === 0) {
+      throw new Error('cron.update payload.kind="exec" requires command');
+    }
+    return {
+      kind: "exec",
+      command: patch.command,
+      shell: patch.shell,
+      timeoutSeconds: patch.timeoutSeconds,
+      env: patch.env,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

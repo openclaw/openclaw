@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -1004,6 +1005,119 @@ export async function runDueJobs(state: CronServiceState) {
   }
 }
 
+/**
+ * Default shell for exec payload jobs.
+ * On Windows, uses `cmd` with `/c` flag. On all other platforms uses `/bin/sh`.
+ */
+function resolveDefaultExecShell(): string {
+  return process.platform === "win32" ? "cmd" : "/bin/sh";
+}
+
+/**
+ * Run a cron job with payload.kind="exec" by spawning a child process.
+ * No LLM session is created — the command runs directly in the gateway process env.
+ *
+ * Exit code 0 → status "ok", stdout+stderr become summary.
+ * Non-zero exit → status "error", error includes exit code.
+ * Timeout → process receives SIGTERM, then SIGKILL after 5s → status "error".
+ */
+async function runExecJob(job: CronJob, abortSignal?: AbortSignal): Promise<CronRunOutcome> {
+  if (job.payload.kind !== "exec") {
+    return { status: "skipped", error: "not an exec job" };
+  }
+
+  const { command, shell, env = {}, timeoutSeconds } = job.payload;
+  const resolvedShell = shell?.trim() || resolveDefaultExecShell();
+  const shellArgs = process.platform === "win32" ? ["/c", command] : ["-c", command];
+  const jobTimeoutMs =
+    typeof timeoutSeconds === "number" && timeoutSeconds > 0
+      ? Math.floor(timeoutSeconds * 1000)
+      : undefined;
+
+  return new Promise<CronRunOutcome>((resolve) => {
+    const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+
+    const proc = spawn(resolvedShell, shellArgs, {
+      env: mergedEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    let finished = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    let killForceTimer: NodeJS.Timeout | undefined;
+
+    const finish = (outcome: CronRunOutcome) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      if (killForceTimer) {
+        clearTimeout(killForceTimer);
+      }
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve(outcome);
+    };
+
+    const killProcess = (reason: "timeout" | "abort") => {
+      if (finished) {
+        return;
+      }
+      proc.kill("SIGTERM");
+      // Force-kill after 5s if SIGTERM is not enough
+      killForceTimer = setTimeout(() => {
+        if (!finished) {
+          proc.kill("SIGKILL");
+        }
+      }, 5_000);
+      killForceTimer.unref();
+      const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+      finish({
+        status: "error",
+        error: reason === "timeout" ? timeoutErrorMessage() : "exec: aborted",
+        summary: combined || undefined,
+      });
+    };
+
+    const onAbort = () => killProcess("abort");
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+    if (jobTimeoutMs !== undefined) {
+      killTimer = setTimeout(() => killProcess("timeout"), jobTimeoutMs);
+      killTimer.unref();
+    }
+
+    proc.on("error", (err: Error) => {
+      finish({ status: "error", error: `exec: ${err.message}` });
+    });
+
+    proc.on("close", (code: number | null) => {
+      const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+      if (code === 0) {
+        finish({ status: "ok", summary: combined || undefined });
+      } else {
+        finish({
+          status: "error",
+          error: `exec: exit code ${code ?? "null"}`,
+          summary: combined || undefined,
+        });
+      }
+    });
+  });
+}
+
 export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
@@ -1123,6 +1237,24 @@ export async function executeJobCore(
       });
       return { status: "ok", summary: text };
     }
+  }
+
+  if (job.payload.kind === "exec") {
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const execResult = await runExecJob(job, abortSignal);
+    // Deliver summary to main session via announce if requested and no channel dep available.
+    if (
+      execResult.status === "ok" &&
+      execResult.summary &&
+      resolveCronDeliveryPlan(job).requested
+    ) {
+      const truncated = execResult.summary.slice(0, 4000);
+      state.deps.enqueueSystemEvent(truncated, { agentId: job.agentId });
+      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}:exec-announce` });
+    }
+    return execResult;
   }
 
   if (job.payload.kind !== "agentTurn") {

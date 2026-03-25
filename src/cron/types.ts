@@ -79,9 +79,37 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+type CronExecPayloadFields = {
+  /** Shell command to execute directly (no LLM session created). */
+  command: string;
+  /**
+   * Shell to use. Defaults to `/bin/sh` on Unix and `cmd` on Windows.
+   * Use `bash` or `zsh` for shell-specific features.
+   */
+  shell?: string;
+  /** Timeout in seconds. Process is sent SIGTERM, then SIGKILL after 5s. */
+  timeoutSeconds?: number;
+  /** Additional environment variables merged into the gateway process env. */
+  env?: Record<string, string>;
+};
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+type CronExecPayload = {
+  kind: "exec";
+} & CronExecPayloadFields;
+
+type CronExecPayloadPatch = {
+  kind: "exec";
+} & Partial<CronExecPayloadFields>;
+
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronExecPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronExecPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
