@@ -312,8 +312,10 @@ async function deployDiscordCommands(params: {
       }
       return result;
     } catch (err) {
+      attachDiscordDeployRequestBody(err, body);
+      const details = formatDiscordDeployErrorDetails(err);
       params.runtime.error?.(
-        `discord startup [${accountId}] deploy-rest:put:error ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}`,
+        `discord startup [${accountId}] deploy-rest:put:error ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
       );
       throw err;
     }
@@ -400,13 +402,108 @@ function logDiscordStartupPhase(params: {
     `discord startup [${params.accountId}] ${params.phase} ${elapsedMs}ms${suffix ? ` ${suffix}` : ""}`,
   );
 }
+
+const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;
+
+type DiscordDeployErrorLike = {
+  status?: unknown;
+  discordCode?: unknown;
+  rawBody?: unknown;
+  deployRequestBody?: unknown;
+};
+
+function attachDiscordDeployRequestBody(err: unknown, body: unknown) {
+  if (!err || typeof err !== "object" || body === undefined) {
+    return;
+  }
+  const deployErr = err as DiscordDeployErrorLike;
+  if (deployErr.deployRequestBody === undefined) {
+    deployErr.deployRequestBody = body;
+  }
+}
+
+function stringifyDiscordDeployField(value: unknown): string {
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return inspect(value, { depth: 2, breakLength: 120 });
+  }
+}
+
+function readDiscordDeployRejectedFields(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string").slice(0, 6);
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  return Object.keys(value).slice(0, 6);
+}
+
+function resolveDiscordRejectedDeployEntriesSource(
+  rawBody: unknown,
+): Record<string, unknown> | null {
+  if (!rawBody || typeof rawBody !== "object") {
+    return null;
+  }
+  const payload = rawBody as { errors?: unknown };
+  const errors = payload.errors && typeof payload.errors === "object" ? payload.errors : undefined;
+  const source = errors ?? rawBody;
+  return source && typeof source === "object" ? (source as Record<string, unknown>) : null;
+}
+
+function formatDiscordRejectedDeployEntries(params: {
+  rawBody: unknown;
+  requestBody: unknown;
+}): string[] {
+  const requestBody = Array.isArray(params.requestBody) ? params.requestBody : null;
+  const rejectedEntriesSource = resolveDiscordRejectedDeployEntriesSource(params.rawBody);
+  if (!rejectedEntriesSource || !requestBody || requestBody.length === 0) {
+    return [];
+  }
+  const rawEntries = Object.entries(rejectedEntriesSource).filter(([key]) => /^\d+$/.test(key));
+  return rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT).flatMap(([key, value]) => {
+    const index = Number.parseInt(key, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= requestBody.length) {
+      return [];
+    }
+    const command = requestBody[index];
+    if (!command || typeof command !== "object") {
+      return [`#${index} fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`];
+    }
+    const payload = command as {
+      name?: unknown;
+      description?: unknown;
+      options?: unknown;
+    };
+    const parts = [
+      `#${index}`,
+      `fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`,
+    ];
+    if (typeof payload.name === "string" && payload.name.trim().length > 0) {
+      parts.push(`name=${payload.name}`);
+    }
+    if (payload.description !== undefined) {
+      parts.push(`description=${stringifyDiscordDeployField(payload.description)}`);
+    }
+    if (Array.isArray(payload.options) && payload.options.length > 0) {
+      parts.push(`options=${payload.options.length}`);
+    }
+    return [parts.join(" ")];
+  });
+}
+
 function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
   }
-  const status = (err as { status?: unknown }).status;
-  const discordCode = (err as { discordCode?: unknown }).discordCode;
-  const rawBody = (err as { rawBody?: unknown }).rawBody;
+  const status = (err as DiscordDeployErrorLike).status;
+  const discordCode = (err as DiscordDeployErrorLike).discordCode;
+  const rawBody = (err as DiscordDeployErrorLike).rawBody;
+  const requestBody = (err as DiscordDeployErrorLike).deployRequestBody;
   const details: string[] = [];
   if (typeof status === "number") {
     details.push(`status=${status}`);
@@ -427,6 +524,10 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
       const trimmed = bodyText.length > maxLen ? `${bodyText.slice(0, maxLen)}...` : bodyText;
       details.push(`body=${trimmed}`);
     }
+  }
+  const rejectedEntries = formatDiscordRejectedDeployEntries({ rawBody, requestBody });
+  if (rejectedEntries.length > 0) {
+    details.push(`rejected=${rejectedEntries.join("; ")}`);
   }
   return details.length > 0 ? ` (${details.join(", ")})` : "";
 }
@@ -1058,4 +1159,5 @@ export const __testing = {
   resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,
   resolveThreadBindingsEnabled: resolveThreadBindingsEnabledForTesting,
+  formatDiscordDeployErrorDetails,
 };
