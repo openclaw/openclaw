@@ -190,18 +190,22 @@ export default definePluginEntry({
         if (providerRouting) {
           streamFn = injectOpenRouterRouting(streamFn, providerRouting);
         }
+        let autoRouterAllowedModels: string[] = [];
         const autoRouterConfig = ctx.extraParams?.autoRouter;
         if (autoRouterConfig != null && typeof autoRouterConfig === "object") {
-          const allowedModels = (autoRouterConfig as Record<string, unknown>).allowedModels;
-          if (Array.isArray(allowedModels) && allowedModels.length > 0) {
-            const validModels = allowedModels.filter((m): m is string => typeof m === "string");
+          const rawAllowedModels = (autoRouterConfig as Record<string, unknown>).allowedModels;
+          if (Array.isArray(rawAllowedModels) && rawAllowedModels.length > 0) {
+            const validModels = rawAllowedModels.filter((m): m is string => typeof m === "string");
             if (validModels.length > 0) {
+              autoRouterAllowedModels = validModels;
               streamFn = injectAutoRouterPlugin(streamFn, validModels);
             }
           }
         }
         const skipReasoningInjection =
-          ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId);
+          ctx.modelId === "auto" ||
+          isProxyReasoningUnsupported(ctx.modelId) ||
+          autoRouterAllowedModels.some(isProxyReasoningUnsupported);
         const openRouterThinkingLevel = skipReasoningInjection ? undefined : ctx.thinkingLevel;
         streamFn = createOpenRouterWrapper(streamFn, openRouterThinkingLevel);
         streamFn = createOpenRouterSystemCacheWrapper(streamFn);
