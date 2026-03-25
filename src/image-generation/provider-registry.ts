@@ -80,6 +80,7 @@ const API_TO_IMAGE_GENERATION_PROVIDER: Record<string, string> = {
 function resolveCompatibleImageGenerationProvider(
   providerId: string,
   cfg: OpenClawConfig | undefined,
+  canonical: Map<string, ImageGenerationProviderPlugin>,
 ): ImageGenerationProviderPlugin | undefined {
   const providerConfig = cfg?.models?.providers?.[providerId];
   if (!providerConfig) {
@@ -93,7 +94,7 @@ function resolveCompatibleImageGenerationProvider(
   if (!targetId) {
     return undefined;
   }
-  return buildProviderMaps(cfg).canonical.get(targetId);
+  return canonical.get(targetId);
 }
 
 export function getImageGenerationProvider(
@@ -105,5 +106,8 @@ export function getImageGenerationProvider(
     return undefined;
   }
   const maps = buildProviderMaps(cfg);
-  return maps.aliases.get(normalized) ?? resolveCompatibleImageGenerationProvider(normalized, cfg);
+  return (
+    maps.aliases.get(normalized) ??
+    resolveCompatibleImageGenerationProvider(normalized, cfg, maps.canonical)
+  );
 }
