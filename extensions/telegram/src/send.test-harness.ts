@@ -30,8 +30,8 @@ const { loadWebMedia } = vi.hoisted(() => ({
 
 const { imageMetadata } = vi.hoisted(() => ({
   imageMetadata: {
-    width: undefined as number | undefined,
-    height: undefined as number | undefined,
+    width: 1200 as number | undefined,
+    height: 800 as number | undefined,
   },
 }));
 
@@ -159,8 +159,8 @@ export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
     loadWebMedia.mockReset();
-    imageMetadata.width = undefined;
-    imageMetadata.height = undefined;
+    imageMetadata.width = 1200;
+    imageMetadata.height = 800;
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     undiciFetch.mockReset();

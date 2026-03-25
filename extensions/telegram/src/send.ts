@@ -798,7 +798,8 @@ export async function sendMessageTelegram(
       const height = metadata?.height;
 
       if (typeof width !== "number" || typeof height !== "number") {
-        return true;
+        sendLogger.warn("Photo dimensions are unavailable. Sending as document instead.");
+        return false;
       }
 
       const shorterSide = Math.min(width, height);
@@ -816,8 +817,10 @@ export async function sendMessageTelegram(
       }
       return true;
     } catch (err) {
-      logVerbose(`Failed to validate photo dimensions: ${formatErrorMessage(err)}`);
-      return true;
+      sendLogger.warn(
+        `Failed to validate photo dimensions: ${formatErrorMessage(err)}. Sending as document instead.`,
+      );
+      return false;
     }
   }
 

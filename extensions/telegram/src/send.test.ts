@@ -1094,6 +1094,40 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("10");
   });
 
+  it("sends images as documents when metadata dimensions are unavailable", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendDocument, sendPhoto } as unknown as {
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    imageMetadata.width = undefined;
+    imageMetadata.height = undefined;
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
   it("keeps regular document sends on the default Telegram params", async () => {
     const chatId = "123";
     const sendDocument = vi.fn().mockResolvedValue({
