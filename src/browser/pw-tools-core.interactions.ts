@@ -1,3 +1,4 @@
+import type { Locator } from "playwright-core";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -8,6 +9,7 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 import {
   normalizeTimeoutMs,
   requireRef,
@@ -45,6 +47,39 @@ async function getRestoredPageForTarget(opts: TargetOpts) {
 
 function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
+}
+
+async function scrollLocatorIntoCenterIfOffscreen(locator: Locator): Promise<void> {
+  await locator
+    .evaluate((el) => {
+      if (!(el instanceof Element)) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth || 0;
+      const height = window.innerHeight || document.documentElement.clientHeight || 0;
+      const offscreen =
+        rect.bottom <= 0 || rect.right <= 0 || rect.top >= height || rect.left >= width;
+      if (offscreen) {
+        el.scrollIntoView({ block: "center", inline: "center" });
+      }
+      return offscreen;
+    })
+    .catch(() => {});
+}
+
+function resolveCdpMouseButtons(button: "left" | "right" | "middle" = "left"): {
+  button: "left" | "right" | "middle";
+  buttons: number;
+} {
+  switch (button) {
+    case "right":
+      return { button, buttons: 2 };
+    case "middle":
+      return { button, buttons: 4 };
+    default:
+      return { button: "left", buttons: 1 };
+  }
 }
 
 async function awaitEvalWithAbort<T>(
@@ -96,6 +131,7 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
+    await scrollLocatorIntoCenterIfOffscreen(locator);
     const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
     if (delayMs > 0) {
       await locator.hover({ timeout });
@@ -232,6 +268,7 @@ export async function typeViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
+    await scrollLocatorIntoCenterIfOffscreen(locator);
     if (opts.slowly) {
       await locator.click({ timeout });
       await locator.type(text, { timeout, delay: 75 });
@@ -244,6 +281,61 @@ export async function typeViaPlaywright(opts: {
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
+}
+
+export async function clickCoordsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  button?: "left" | "right" | "middle";
+  doubleClick?: boolean;
+}): Promise<{ x: number; y: number }> {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  const x = Math.round(opts.x);
+  const y = Math.round(opts.y);
+  const { button, buttons } = resolveCdpMouseButtons(opts.button);
+
+  await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      const dispatchClick = async (clickCount: number) => {
+        await send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button,
+          buttons,
+          clickCount,
+        });
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x,
+          y,
+          button,
+          buttons: 0,
+          clickCount,
+        });
+      };
+
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x,
+        y,
+        button: "none",
+        buttons: 0,
+      });
+      await dispatchClick(1);
+      if (opts.doubleClick) {
+        await dispatchClick(2);
+      }
+    },
+  });
+
+  return { x, y };
 }
 
 export async function fillFormViaPlaywright(opts: {
@@ -734,6 +826,16 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
       });
       break;
+    case "click-coords":
+      await clickCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        button: action.button as "left" | "right" | "middle" | undefined,
+        doubleClick: action.doubleClick,
+      });
+      break;
     case "type":
       await typeViaPlaywright({
         cdpUrl,
@@ -763,6 +865,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
       });
       break;
+    case "scrollintoview":
     case "scrollIntoView":
       await scrollIntoViewViaPlaywright({
         cdpUrl,

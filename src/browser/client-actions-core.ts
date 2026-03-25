@@ -12,6 +12,8 @@ export type BrowserFormField = {
   value?: string | number | boolean;
 };
 
+export type BrowserActVerifyMode = "screenshot";
+
 export type BrowserActRequest =
   | {
       kind: "click";
@@ -23,6 +25,16 @@ export type BrowserActRequest =
       modifiers?: string[];
       delayMs?: number;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
+    }
+  | {
+      kind: "click-coords";
+      x: number;
+      y: number;
+      targetId?: string;
+      doubleClick?: boolean;
+      button?: string;
+      verifyWith?: BrowserActVerifyMode;
     }
   | {
       kind: "type";
@@ -33,21 +45,30 @@ export type BrowserActRequest =
       submit?: boolean;
       slowly?: boolean;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | {
+      kind: "press";
+      key: string;
+      targetId?: string;
+      delayMs?: number;
+      verifyWith?: BrowserActVerifyMode;
+    }
   | {
       kind: "hover";
       ref?: string;
       selector?: string;
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
   | {
-      kind: "scrollIntoView";
+      kind: "scrollIntoView" | "scrollintoview";
       ref?: string;
       selector?: string;
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
   | {
       kind: "drag";
@@ -57,6 +78,7 @@ export type BrowserActRequest =
       endSelector?: string;
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
   | {
       kind: "select";
@@ -65,14 +87,22 @@ export type BrowserActRequest =
       values: string[];
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
   | {
       kind: "fill";
       fields: BrowserFormField[];
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
-  | { kind: "resize"; width: number; height: number; targetId?: string }
+  | {
+      kind: "resize";
+      width: number;
+      height: number;
+      targetId?: string;
+      verifyWith?: BrowserActVerifyMode;
+    }
   | {
       kind: "wait";
       timeMs?: number;
@@ -84,15 +114,33 @@ export type BrowserActRequest =
       fn?: string;
       targetId?: string;
       timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
-  | { kind: "close"; targetId?: string }
+  | {
+      kind: "evaluate";
+      fn: string;
+      ref?: string;
+      targetId?: string;
+      timeoutMs?: number;
+      verifyWith?: BrowserActVerifyMode;
+    }
+  | {
+      kind: "close";
+      targetId?: string;
+      verifyWith?: BrowserActVerifyMode;
+    }
   | {
       kind: "batch";
       actions: BrowserActRequest[];
       targetId?: string;
       stopOnError?: boolean;
+      verifyWith?: BrowserActVerifyMode;
     };
+
+export type BrowserActVerification = {
+  mode: BrowserActVerifyMode;
+  path: string;
+};
 
 export type BrowserActResponse = {
   ok: true;
@@ -100,6 +148,7 @@ export type BrowserActResponse = {
   url?: string;
   result?: unknown;
   results?: Array<{ ok: boolean; error?: string }>;
+  verification?: BrowserActVerification;
 };
 
 export type BrowserDownloadPayload = {

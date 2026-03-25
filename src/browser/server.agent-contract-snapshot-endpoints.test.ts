@@ -107,6 +107,29 @@ describe("browser control server", () => {
       doubleClick: false,
     });
 
+    const clickCoords = await postJson<{
+      ok: boolean;
+      verification?: { mode?: string; path?: string };
+    }>(`${base}/act`, {
+      kind: "click-coords",
+      x: 180,
+      y: 240,
+      verifyWith: "screenshot",
+    });
+    expect(clickCoords.ok).toBe(true);
+    expect(clickCoords.verification).toMatchObject({
+      mode: "screenshot",
+      path: "/tmp/fake.png",
+    });
+    expect(pwMocks.clickCoordsViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      x: 180,
+      y: 240,
+      button: undefined,
+      doubleClick: false,
+    });
+
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",
       ref: "1",

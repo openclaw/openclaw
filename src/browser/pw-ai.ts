@@ -21,6 +21,7 @@ export {
   armFileUploadViaPlaywright,
   batchViaPlaywright,
   clickViaPlaywright,
+  clickCoordsViaPlaywright,
   closePageViaPlaywright,
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,

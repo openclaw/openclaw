@@ -1,5 +1,8 @@
+import path from "node:path";
+import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import {
   clickChromeMcpElement,
+  clickChromeMcpCoords,
   closeChromeMcpTab,
   dragChromeMcpElement,
   evaluateChromeMcpScript,
@@ -8,20 +11,22 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  scrollChromeMcpElementIntoViewIfNeeded,
+  takeChromeMcpScreenshot,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import {
+  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+  normalizeBrowserScreenshot,
+} from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+import { normalizeActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
   readBody,
   requirePwAi,
@@ -29,7 +34,7 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
@@ -43,6 +48,107 @@ function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
       : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
     "Docs: /gateway/configuration#browser-openclaw-managed-browser",
   ].join("\n");
+}
+
+type ActVerificationPw = {
+  takeScreenshotViaPlaywright: (opts: {
+    cdpUrl: string;
+    targetId?: string;
+    fullPage?: boolean;
+    type?: "png" | "jpeg";
+  }) => Promise<{ buffer: Buffer }>;
+};
+
+function parseVerifyWith(value: unknown): "screenshot" | undefined {
+  return value === "screenshot" ? "screenshot" : undefined;
+}
+
+async function saveActVerificationScreenshot(buffer: Buffer): Promise<string> {
+  const normalized = await normalizeBrowserScreenshot(buffer, {
+    maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  });
+  await ensureMediaDir();
+  const saved = await saveMediaBuffer(
+    normalized.buffer,
+    normalized.contentType ?? "image/png",
+    "browser",
+    DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  );
+  return path.resolve(saved.path);
+}
+
+async function buildActVerification(params: {
+  verifyWith?: "screenshot";
+  usesChromeMcp: boolean;
+  profileName: string;
+  userDataDir?: string;
+  cdpUrl: string;
+  targetId: string;
+  res: BrowserResponse;
+  pw?: ActVerificationPw | null;
+}): Promise<{ mode: "screenshot"; path: string } | undefined> {
+  if (params.verifyWith !== "screenshot") {
+    return undefined;
+  }
+
+  let buffer: Buffer;
+  if (params.usesChromeMcp) {
+    buffer = await takeChromeMcpScreenshot({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+    });
+  } else {
+    const pw = params.pw ?? (await requirePwAi(params.res, "act:verify"));
+    if (!pw) {
+      return undefined;
+    }
+    const shot = await pw.takeScreenshotViaPlaywright({
+      cdpUrl: params.cdpUrl,
+      targetId: params.targetId,
+    });
+    buffer = shot.buffer;
+  }
+
+  return {
+    mode: "screenshot",
+    path: await saveActVerificationScreenshot(buffer),
+  };
+}
+
+async function sendActSuccess(params: {
+  res: BrowserResponse;
+  verifyWith?: "screenshot";
+  usesChromeMcp: boolean;
+  profileName: string;
+  userDataDir?: string;
+  cdpUrl: string;
+  targetId: string;
+  url?: string;
+  result?: unknown;
+  results?: Array<{ ok: boolean; error?: string }>;
+  pw?: ActVerificationPw | null;
+}): Promise<void> {
+  const verification = await buildActVerification({
+    verifyWith: params.verifyWith,
+    usesChromeMcp: params.usesChromeMcp,
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    cdpUrl: params.cdpUrl,
+    targetId: params.targetId,
+    res: params.res,
+    pw: params.pw,
+  });
+
+  params.res.json({
+    ok: true,
+    targetId: params.targetId,
+    ...(params.url !== undefined ? { url: params.url } : {}),
+    ...(params.result !== undefined ? { result: params.result } : {}),
+    ...(params.results !== undefined ? { results: params.results } : {}),
+    ...(verification ? { verification } : {}),
+  });
 }
 
 function buildExistingSessionWaitPredicate(params: {
@@ -191,8 +297,8 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
     throw new Error("batch actions must be objects");
   }
   const raw = value as Record<string, unknown>;
-  const kind = toStringOrEmpty(raw.kind);
-  if (!isActKind(kind)) {
+  const kind = normalizeActKind(toStringOrEmpty(raw.kind));
+  if (!kind) {
     throw new Error("batch actions must use a supported kind");
   }
 
@@ -231,6 +337,28 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
         ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
         ...(delayMs !== undefined ? { delayMs } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
+    case "click-coords": {
+      const x = toNumber(raw.x);
+      const y = toNumber(raw.y);
+      if (x === undefined || y === undefined) {
+        throw new Error("click-coords requires x and y");
+      }
+      const buttonRaw = toStringOrEmpty(raw.button);
+      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
+      if (buttonRaw && !button) {
+        throw new Error("click-coords button must be left|right|middle");
+      }
+      const targetId = toStringOrEmpty(raw.targetId) || undefined;
+      const doubleClick = toBoolean(raw.doubleClick);
+      return {
+        kind,
+        x,
+        y,
+        ...(targetId ? { targetId } : {}),
+        ...(button ? { button } : {}),
+        ...(doubleClick !== undefined ? { doubleClick } : {}),
       };
     }
     case "type": {
@@ -453,14 +581,17 @@ export function registerBrowserAgentActRoutes(
 ) {
   app.post("/act", async (req, res) => {
     const body = readBody(req);
-    const kindRaw = toStringOrEmpty(body.kind);
-    if (!isActKind(kindRaw)) {
+    const kind = normalizeActKind(toStringOrEmpty(body.kind));
+    if (!kind) {
       return jsonError(res, 400, "kind is required");
     }
-    const kind: ActKind = kindRaw;
     const targetId = resolveTargetIdFromBody(body);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
+    }
+    const verifyWith = parseVerifyWith(body.verifyWith);
+    if (Object.hasOwn(body, "verifyWith") && !verifyWith) {
+      return jsonError(res, 400, "verifyWith must be screenshot");
     }
     const earlyFn = kind === "wait" || kind === "evaluate" ? toStringOrEmpty(body.fn) : "";
     if (
@@ -521,6 +652,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session click currently supports left-click only (no button overrides/modifiers).",
                 );
               }
+              await scrollChromeMcpElementIntoViewIfNeeded({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                uid: ref!,
+              });
               await clickChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
@@ -528,7 +665,16 @@ export function registerBrowserAgentActRoutes(
                 uid: ref!,
                 doubleClick,
               });
-              return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+                url: tab.url,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -558,7 +704,79 @@ export function registerBrowserAgentActRoutes(
               clickRequest.timeoutMs = timeoutMs;
             }
             await pw.clickViaPlaywright(clickRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              url: tab.url,
+              pw,
+            });
+          }
+          case "click-coords": {
+            const x = toNumber(body.x);
+            const y = toNumber(body.y);
+            if (x === undefined || y === undefined) {
+              return jsonError(res, 400, "x and y are required");
+            }
+            const doubleClick = toBoolean(body.doubleClick) ?? false;
+            const buttonRaw = toStringOrEmpty(body.button) || "";
+            const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
+            if (buttonRaw && !button) {
+              return jsonError(res, 400, "button must be left|right|middle");
+            }
+            if (isExistingSession) {
+              const result = await clickChromeMcpCoords({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                x,
+                y,
+                button,
+                doubleClick,
+              });
+              if (!result.success) {
+                return jsonError(res, 404, "No element found at the requested coordinates.");
+              }
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+                url: tab.url,
+                result,
+              });
+            }
+            const pw = await requirePwAi(res, `act:${kind}`);
+            if (!pw) {
+              return;
+            }
+            const result = await pw.clickCoordsViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              x,
+              y,
+              button,
+              doubleClick,
+            });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              url: tab.url,
+              result,
+              pw,
+            });
           }
           case "type": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -588,6 +806,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session type does not support slowly=true; use fill/press instead.",
                 );
               }
+              await scrollChromeMcpElementIntoViewIfNeeded({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                uid: ref!,
+              });
               await fillChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
@@ -603,7 +827,15 @@ export function registerBrowserAgentActRoutes(
                   key: "Enter",
                 });
               }
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -626,7 +858,16 @@ export function registerBrowserAgentActRoutes(
               typeRequest.timeoutMs = timeoutMs;
             }
             await pw.typeViaPlaywright(typeRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "press": {
             const key = toStringOrEmpty(body.key);
@@ -644,7 +885,15 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 key,
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -656,7 +905,16 @@ export function registerBrowserAgentActRoutes(
               key,
               delayMs: delayMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "hover": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -686,7 +944,15 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: ref!,
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -699,7 +965,16 @@ export function registerBrowserAgentActRoutes(
               selector,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "scrollIntoView": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -730,7 +1005,15 @@ export function registerBrowserAgentActRoutes(
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -750,7 +1033,16 @@ export function registerBrowserAgentActRoutes(
               scrollRequest.timeoutMs = timeoutMs;
             }
             await pw.scrollIntoViewViaPlaywright(scrollRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "drag": {
             const startRef = toStringOrEmpty(body.startRef) || undefined;
@@ -786,7 +1078,15 @@ export function registerBrowserAgentActRoutes(
                 fromUid: startRef!,
                 toUid: endRef!,
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -801,7 +1101,16 @@ export function registerBrowserAgentActRoutes(
               endSelector,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "select": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -840,7 +1149,15 @@ export function registerBrowserAgentActRoutes(
                 uid: ref!,
                 value: values[0] ?? "",
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -854,7 +1171,16 @@ export function registerBrowserAgentActRoutes(
               values,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "fill": {
             const rawFields = Array.isArray(body.fields) ? body.fields : [];
@@ -887,7 +1213,15 @@ export function registerBrowserAgentActRoutes(
                   value: String(field.value ?? ""),
                 })),
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -899,7 +1233,16 @@ export function registerBrowserAgentActRoutes(
               fields,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "resize": {
             const width = toNumber(body.width);
@@ -915,7 +1258,16 @@ export function registerBrowserAgentActRoutes(
                 width,
                 height,
               });
-              return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+                url: tab.url,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -927,7 +1279,17 @@ export function registerBrowserAgentActRoutes(
               width,
               height,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              url: tab.url,
+              pw,
+            });
           }
           case "wait": {
             const timeMs = toNumber(body.timeMs);
@@ -983,7 +1345,15 @@ export function registerBrowserAgentActRoutes(
                 fn,
                 timeoutMs,
               });
-              return res.json({ ok: true, targetId: tab.targetId });
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
+                targetId: tab.targetId,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -1001,7 +1371,16 @@ export function registerBrowserAgentActRoutes(
               fn,
               timeoutMs,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              pw,
+            });
           }
           case "evaluate": {
             if (!evaluateEnabled) {
@@ -1028,8 +1407,13 @@ export function registerBrowserAgentActRoutes(
                 fn,
                 args: ref ? [ref] : undefined,
               });
-              return res.json({
-                ok: true,
+              return await sendActSuccess({
+                res,
+                verifyWith,
+                usesChromeMcp: true,
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                cdpUrl,
                 targetId: tab.targetId,
                 url: tab.url,
                 result,
@@ -1050,11 +1434,17 @@ export function registerBrowserAgentActRoutes(
               evalRequest.timeoutMs = evalTimeoutMs;
             }
             const result = await pw.evaluateViaPlaywright(evalRequest);
-            return res.json({
-              ok: true,
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
               targetId: tab.targetId,
               url: tab.url,
               result,
+              pw,
             });
           }
           case "close": {
@@ -1105,7 +1495,17 @@ export function registerBrowserAgentActRoutes(
               stopOnError,
               evaluateEnabled,
             });
-            return res.json({ ok: true, targetId: tab.targetId, results: result.results });
+            return await sendActSuccess({
+              res,
+              verifyWith,
+              usesChromeMcp: false,
+              profileName,
+              userDataDir: profileCtx.profile.userDataDir,
+              cdpUrl,
+              targetId: tab.targetId,
+              results: result.results,
+              pw,
+            });
           }
           default: {
             return jsonError(res, 400, "unsupported kind");

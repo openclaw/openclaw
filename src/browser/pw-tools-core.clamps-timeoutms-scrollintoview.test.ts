@@ -66,10 +66,11 @@ describe("pw-tools-core", () => {
       expectedMessage: /not found or not visible/i,
     },
   ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
+    const evaluate = vi.fn(async () => false);
     const click = vi.fn(async () => {
       throw new Error(errorMessage);
     });
-    setPwToolsCoreCurrentRefLocator({ click });
+    setPwToolsCoreCurrentRefLocator({ evaluate, click });
     setPwToolsCoreCurrentPage({});
 
     await expect(
@@ -81,12 +82,13 @@ describe("pw-tools-core", () => {
     ).rejects.toThrow(expectedMessage);
   });
   it("rewrites covered/hidden errors into interactable hints", async () => {
+    const evaluate = vi.fn(async () => false);
     const click = vi.fn(async () => {
       throw new Error(
         "Element is not receiving pointer events because another element intercepts pointer events",
       );
     });
-    setPwToolsCoreCurrentRefLocator({ click });
+    setPwToolsCoreCurrentRefLocator({ evaluate, click });
     setPwToolsCoreCurrentPage({});
 
     await expect(
@@ -96,5 +98,35 @@ describe("pw-tools-core", () => {
         ref: "1",
       }),
     ).rejects.toThrow(/not interactable/i);
+  });
+
+  it("scrolls offscreen targets before click and type", async () => {
+    const order: string[] = [];
+    const evaluate = vi.fn(async () => {
+      order.push("evaluate");
+      return true;
+    });
+    const click = vi.fn(async () => {
+      order.push("click");
+    });
+    const fill = vi.fn(async () => {
+      order.push("fill");
+    });
+    setPwToolsCoreCurrentRefLocator({ evaluate, click, fill });
+    setPwToolsCoreCurrentPage({});
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+    });
+    await mod.typeViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+      text: "hello",
+    });
+
+    expect(order).toEqual(["evaluate", "click", "evaluate", "fill"]);
   });
 });

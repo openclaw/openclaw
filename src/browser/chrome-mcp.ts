@@ -14,6 +14,12 @@ type ChromeMcpStructuredPage = {
   selected?: boolean;
 };
 
+type ChromeMcpTool = {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+};
+
 type ChromeMcpToolResult = {
   structuredContent?: Record<string, unknown>;
   content?: Array<Record<string, unknown>>;
@@ -65,6 +71,26 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
       id: record.id,
       url: typeof record.url === "string" ? record.url : undefined,
       selected: record.selected === true,
+    });
+  }
+  return out;
+}
+
+function asTools(value: unknown): ChromeMcpTool[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: ChromeMcpTool[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    const name = typeof record?.name === "string" ? record.name : "";
+    if (!name) {
+      continue;
+    }
+    out.push({
+      name,
+      description: typeof record?.description === "string" ? record.description : undefined,
+      inputSchema: asRecord(record?.inputSchema) ?? undefined,
     });
   }
   return out;
@@ -241,9 +267,11 @@ async function createRealSession(
     try {
       await client.connect(transport);
       const tools = await client.listTools();
-      if (!tools.tools.some((tool) => tool.name === "list_pages")) {
+      const toolList = asTools((tools as { tools?: unknown }).tools);
+      if (!toolList.some((tool) => tool.name === "list_pages")) {
         throw new Error("Chrome MCP server did not expose the expected navigation tools.");
       }
+      await bootstrapChromeMcpDevtools(client, toolList).catch(() => {});
     } catch (err) {
       await client.close().catch(() => {});
       const targetLabel = userDataDir
@@ -262,6 +290,63 @@ async function createRealSession(
     transport,
     ready,
   };
+}
+
+function findRawDevtoolsToolName(tools: ChromeMcpTool[]): string | null {
+  for (const tool of tools) {
+    const haystack = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
+    if (
+      haystack.includes("devtools protocol") ||
+      haystack.includes("raw cdp") ||
+      haystack.includes("cdp command") ||
+      haystack.includes("devtools command")
+    ) {
+      return tool.name;
+    }
+  }
+  return null;
+}
+
+async function bootstrapChromeMcpDevtools(client: Client, tools: ChromeMcpTool[]): Promise<void> {
+  const rawToolName = findRawDevtoolsToolName(tools);
+  if (!rawToolName) {
+    return;
+  }
+
+  const callVariants = [
+    (method: string, params: Record<string, unknown>) => ({ method, params }),
+    (method: string, params: Record<string, unknown>) => ({ command: method, params }),
+    (method: string, params: Record<string, unknown>) => ({ cdpMethod: method, cdpParams: params }),
+    (method: string, params: Record<string, unknown>) => ({ name: method, params }),
+  ];
+  const commands = [
+    {
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+    },
+    { method: "Runtime.enable", params: {} },
+    { method: "Log.enable", params: {} },
+  ];
+
+  for (const command of commands) {
+    let succeeded = false;
+    for (const buildArgs of callVariants) {
+      try {
+        await client.callTool({
+          name: rawToolName,
+          arguments: buildArgs(command.method, command.params),
+        });
+        succeeded = true;
+        break;
+      } catch {
+        // Best-effort bootstrap only. Current chrome-devtools-mcp builds usually
+        // do not expose a raw CDP tool, so failures here should not break attach.
+      }
+    }
+    if (!succeeded) {
+      break;
+    }
+  }
 }
 
 async function getSession(profileName: string, userDataDir?: string): Promise<ChromeMcpSession> {
@@ -502,6 +587,104 @@ export async function clickChromeMcpElement(params: {
     uid: params.uid,
     ...(params.doubleClick ? { dblClick: true } : {}),
   });
+}
+
+export async function scrollChromeMcpElementIntoViewIfNeeded(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  uid: string;
+}): Promise<void> {
+  await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    args: [params.uid],
+    fn: `(el) => {
+      if (!(el instanceof Element)) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth || 0;
+      const height = window.innerHeight || document.documentElement.clientHeight || 0;
+      const offscreen =
+        rect.bottom <= 0 ||
+        rect.right <= 0 ||
+        rect.top >= height ||
+        rect.left >= width;
+      if (offscreen) {
+        el.scrollIntoView({ block: "center", inline: "center" });
+      }
+      return offscreen;
+    }`,
+  });
+}
+
+export async function clickChromeMcpCoords(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  x: number;
+  y: number;
+  button?: "left" | "right" | "middle";
+  doubleClick?: boolean;
+}): Promise<{
+  success: boolean;
+  elementFound: boolean;
+  coords: { x: number; y: number };
+}> {
+  const x = Math.round(params.x);
+  const y = Math.round(params.y);
+  const button = params.button ?? "left";
+  const buttonCode = button === "middle" ? 1 : button === "right" ? 2 : 0;
+  const buttonMask = button === "middle" ? 4 : button === "right" ? 2 : 1;
+  const result = await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: `() => {
+      const x = ${JSON.stringify(x)};
+      const y = ${JSON.stringify(y)};
+      const buttonCode = ${JSON.stringify(buttonCode)};
+      const buttonMask = ${JSON.stringify(buttonMask)};
+      const target = document.elementFromPoint(x, y);
+      if (!(target instanceof Element)) {
+        return { success: false, elementFound: false, coords: { x, y } };
+      }
+      const common = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        screenX: window.screenX + x,
+        screenY: window.screenY + y,
+        button: buttonCode,
+        buttons: buttonMask,
+        view: window,
+      };
+      const dispatch = (type, detail) => {
+        target.dispatchEvent(new MouseEvent(type, { ...common, detail }));
+      };
+      dispatch("mousemove", 0);
+      dispatch("mousedown", 1);
+      dispatch("mouseup", 1);
+      dispatch("click", 1);
+      if (${params.doubleClick ? "true" : "false"}) {
+        dispatch("mousedown", 2);
+        dispatch("mouseup", 2);
+        dispatch("click", 2);
+        dispatch("dblclick", 2);
+      }
+      return { success: true, elementFound: true, coords: { x, y } };
+    }`,
+  });
+  const record = asRecord(result);
+  return {
+    success: record?.success === true,
+    elementFound: record?.elementFound === true,
+    coords: { x, y },
+  };
 }
 
 export async function fillChromeMcpElement(params: {

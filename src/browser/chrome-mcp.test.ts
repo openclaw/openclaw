@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChromeMcpArgs,
+  clickChromeMcpCoords,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
+  scrollChromeMcpElementIntoViewIfNeeded,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
 
@@ -141,6 +143,91 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(result).toBe(123);
+  });
+
+  it("scrolls an existing-session element into view before acting", async () => {
+    let evaluateArgs: Record<string, unknown> | undefined;
+    const factory: ChromeMcpSessionFactory = async () => {
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
+        if (name === "evaluate_script") {
+          evaluateArgs = args;
+          return {
+            content: [
+              {
+                type: "text",
+                text: "```json\ntrue\n```",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await scrollChromeMcpElementIntoViewIfNeeded({
+      profileName: "chrome-live",
+      targetId: "1",
+      uid: "btn-7",
+    });
+
+    const fnText =
+      typeof evaluateArgs?.function === "string"
+        ? evaluateArgs.function
+        : JSON.stringify(evaluateArgs);
+    expect(evaluateArgs).toMatchObject({
+      pageId: 1,
+      args: ["btn-7"],
+    });
+    expect(fnText).toContain("scrollIntoView");
+  });
+
+  it("supports coordinate clicks via evaluate_script on existing-session pages", async () => {
+    let evaluateArgs: Record<string, unknown> | undefined;
+    const factory: ChromeMcpSessionFactory = async () => {
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
+        if (name === "evaluate_script") {
+          evaluateArgs = args;
+          return {
+            content: [
+              {
+                type: "text",
+                text: '```json\n{"success":true,"elementFound":true,"coords":{"x":240,"y":360}}\n```',
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const result = await clickChromeMcpCoords({
+      profileName: "chrome-live",
+      targetId: "1",
+      x: 240,
+      y: 360,
+      doubleClick: true,
+    });
+
+    expect(result).toEqual({
+      success: true,
+      elementFound: true,
+      coords: { x: 240, y: 360 },
+    });
+    const fnText =
+      typeof evaluateArgs?.function === "string"
+        ? evaluateArgs.function
+        : JSON.stringify(evaluateArgs);
+    expect(evaluateArgs).toMatchObject({ pageId: 1 });
+    expect(fnText).toContain("document.elementFromPoint");
+    expect(fnText).toContain("dblclick");
   });
 
   it("surfaces MCP tool errors instead of JSON parse noise", async () => {

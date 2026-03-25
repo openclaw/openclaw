@@ -20,10 +20,18 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async ({ x, y }: { x: number; y: number }) => ({
+    success: true,
+    elementFound: true,
+    coords: { x, y },
+  })),
+  clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
+  fillChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  scrollChromeMcpElementIntoViewIfNeeded: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
@@ -34,16 +42,18 @@ const chromeMcpMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
-  clickChromeMcpElement: vi.fn(async () => {}),
+  clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
+  clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
-  fillChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
   pressChromeMcpKey: vi.fn(async () => {}),
   resizeChromeMcpPage: vi.fn(async () => {}),
+  scrollChromeMcpElementIntoViewIfNeeded: chromeMcpMocks.scrollChromeMcpElementIntoViewIfNeeded,
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
 }));
@@ -136,8 +146,12 @@ function getActPostHandler() {
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    chromeMcpMocks.clickChromeMcpCoords.mockClear();
+    chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
+    chromeMcpMocks.scrollChromeMcpElementIntoViewIfNeeded.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript
@@ -255,5 +269,65 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       fn: "() => window.location.href",
     });
+  });
+
+  it("scrolls existing-session elements into view before click", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "btn-1" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.scrollChromeMcpElementIntoViewIfNeeded).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "btn-1",
+      userDataDir: undefined,
+    });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "btn-1",
+      userDataDir: undefined,
+      doubleClick: false,
+    });
+  });
+
+  it("supports coordinate clicks for existing-session profiles", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click-coords", x: 320, y: 180, verifyWith: "screenshot" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      targetId: "7",
+      verification: { mode: "screenshot", path: "/tmp/fake.png" },
+    });
+    expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      userDataDir: undefined,
+      x: 320,
+      y: 180,
+      button: undefined,
+      doubleClick: false,
+    });
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 });

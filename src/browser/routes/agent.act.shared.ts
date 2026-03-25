@@ -1,6 +1,7 @@
 export const ACT_KINDS = [
   "batch",
   "click",
+  "click-coords",
   "close",
   "drag",
   "evaluate",
@@ -21,6 +22,13 @@ export function isActKind(value: unknown): value is ActKind {
     return false;
   }
   return (ACT_KINDS as readonly string[]).includes(value);
+}
+
+export function normalizeActKind(value: unknown): ActKind | null {
+  if (value === "scrollintoview") {
+    return "scrollIntoView";
+  }
+  return isActKind(value) ? value : null;
 }
 
 export type ClickButton = "left" | "right" | "middle";

@@ -100,6 +100,7 @@ const pwMocks = vi.hoisted(() => ({
   armFileUploadViaPlaywright: vi.fn(async () => {}),
   batchViaPlaywright: vi.fn(async () => ({ results: [] })),
   clickViaPlaywright: vi.fn(async () => {}),
+  clickCoordsViaPlaywright: vi.fn(async ({ x, y }: { x: number; y: number }) => ({ x, y })),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
   downloadViaPlaywright: vi.fn(async () => ({
@@ -145,6 +146,11 @@ export function getPwMocks(): Record<string, MockFn> {
 
 const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
+  clickChromeMcpCoords: vi.fn(async ({ x, y }: { x: number; y: number }) => ({
+    success: true,
+    elementFound: true,
+    coords: { x, y },
+  })),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
@@ -167,6 +173,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
   pressChromeMcpKey: vi.fn(async () => {}),
   resizeChromeMcpPage: vi.fn(async () => {}),
+  scrollChromeMcpElementIntoViewIfNeeded: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
