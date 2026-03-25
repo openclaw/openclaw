@@ -263,6 +263,48 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
+  it("reconnects and retries list_pages once when Chrome MCP reports a stale selected page", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name !== "list_pages") {
+          throw new Error(`unexpected tool ${name}`);
+        }
+        if (factoryCalls === 1) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "The selected page has been closed. Call list_pages to see open pages.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+        };
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toEqual([
+      {
+        targetId: "1",
+        title: "",
+        url: "https://example.com",
+        type: "page",
+      },
+    ]);
+  });
+
   it("creates a fresh session when userDataDir changes for the same profile", async () => {
     const createdSessions: ChromeMcpSession[] = [];
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];

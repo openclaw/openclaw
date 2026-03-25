@@ -40,6 +40,8 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const STALE_SELECTED_PAGE_ERROR =
+  "The selected page has been closed. Call list_pages to see open pages.";
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -151,6 +153,12 @@ function extractMessageText(result: ChromeMcpToolResult): string {
 function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+function shouldReconnectForToolError(name: string, message: string): boolean {
+  // Some chrome-devtools-mcp failures are emitted as tool errors even though the
+  // session state is no longer usable. Reset the cached session and retry once.
+  return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
 }
 
 function extractJsonMessage(result: ChromeMcpToolResult): unknown {
@@ -314,25 +322,37 @@ async function callTool(
   args: Record<string, unknown> = {},
 ): Promise<ChromeMcpToolResult> {
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
-  const session = await getSession(profileName, userDataDir);
-  let result: ChromeMcpToolResult;
-  try {
-    result = (await session.client.callTool({
-      name,
-      arguments: args,
-    })) as ChromeMcpToolResult;
-  } catch (err) {
-    // Transport/connection error — tear down session so it reconnects on next call
-    sessions.delete(cacheKey);
-    await session.client.close().catch(() => {});
-    throw err;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const session = await getSession(profileName, userDataDir);
+    let result: ChromeMcpToolResult;
+    try {
+      result = (await session.client.callTool({
+        name,
+        arguments: args,
+      })) as ChromeMcpToolResult;
+    } catch (err) {
+      // Transport/connection error — tear down session so it reconnects on next call
+      sessions.delete(cacheKey);
+      await session.client.close().catch(() => {});
+      throw err;
+    }
+    // Most tool-level errors (element not found, script error, etc.) do not
+    // indicate a broken connection. Some page-state errors do leave the session
+    // unusable, so reset and retry once in-band.
+    if (result.isError) {
+      const message = extractToolErrorMessage(result, name);
+      if (shouldReconnectForToolError(name, message)) {
+        sessions.delete(cacheKey);
+        await session.client.close().catch(() => {});
+        if (attempt === 0) {
+          continue;
+        }
+      }
+      throw new Error(message);
+    }
+    return result;
   }
-  // Tool-level errors (element not found, script error, etc.) don't indicate a
-  // broken connection — don't tear down the session for these.
-  if (result.isError) {
-    throw new Error(extractToolErrorMessage(result, name));
-  }
-  return result;
+  throw new Error(`Chrome MCP tool "${name}" failed after reconnect.`);
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
