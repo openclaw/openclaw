@@ -74,10 +74,10 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(updateLastRoute?.threadId).toBeUndefined();
   });
 
-  it("does not set updateLastRoute for group messages", async () => {
+  it("passes threadId to updateLastRoute for forum topic group messages", async () => {
     const ctx = await buildCtx({
       message: {
-        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group", is_forum: true },
         text: "@bot hello",
         message_thread_id: 99,
       },
@@ -88,7 +88,32 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute is undefined for groups
-    expect(getRecordedUpdateLastRoute(0)).toBeUndefined();
+    const updateLastRoute = getRecordedUpdateLastRoute(0) as
+      | { threadId?: string; to?: string }
+      | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
+    expect(updateLastRoute?.threadId).toBe("99");
+  });
+
+  it("passes threadId to updateLastRoute for the forum General topic", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group", is_forum: true },
+        text: "@bot hello",
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    const updateLastRoute = getRecordedUpdateLastRoute(0) as
+      | { threadId?: string; to?: string }
+      | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
+    expect(updateLastRoute?.threadId).toBe("1");
   });
 });
