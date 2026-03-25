@@ -53,4 +53,45 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
   });
+
+  it("delivers block-only replies through to sendMessageSlack", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: { type: "plain_text", text: "Option A" },
+            value: "reply_1_option_a",
+          },
+        ],
+      },
+    ];
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "",
+            channelData: {
+              slack: {
+                blocks,
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock).toHaveBeenCalledWith(
+      "C123",
+      "",
+      expect.objectContaining({
+        blocks,
+      }),
+    );
+  });
 });

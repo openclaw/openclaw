@@ -100,6 +100,7 @@ import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-tt
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
+
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {

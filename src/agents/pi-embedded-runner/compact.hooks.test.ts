@@ -24,6 +24,7 @@ let compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbedde
 let compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
+
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
 const TEST_SESSION_FILE = "/tmp/session.jsonl";

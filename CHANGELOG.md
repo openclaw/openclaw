@@ -214,6 +214,7 @@ Docs: https://docs.openclaw.ai
 - LINE: harden Express webhook parsing to verified raw body (#51202) Thanks @gladiator9797 and @joshavant.
 - Exec: harden host env override handling across gateway and node (#51207) Thanks @gladiator9797 and @joshavant.
 - Voice Call: enforce spoken-output contract and fix stream TTS silence regression (#51500) Thanks @joshavant.
+
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
 - Plugins/Matrix TTS: send auto-TTS replies as native Matrix voice bubbles instead of generic audio attachments. (#37080) thanks @Matthew19990919.
 - Plugins/discovery: distinguish missing package entry files from package-path escape violations so startup skips absent plugin entry paths without raising false security diagnostics. (#52491) Thanks @hclsys.
@@ -292,6 +293,11 @@ Docs: https://docs.openclaw.ai
 - Plugins/Matrix: durably dedupe inbound room events across gateway restarts so previously handled Matrix messages are not replayed as new, while preserving clean-restart backlog delivery for unseen events. (#50922) thanks @gumadeiras
 - Agents/media replies: migrate the remaining browser, canvas, and nodes snapshot outputs onto `details.media` so generated media keeps attaching to assistant replies after the collect-then-attach refactor. (#51731) Thanks @christianklotz.
 - Android/contacts search: escape literal `%` and `_` in contact-name queries so searches like `100%` or `_id` no longer match unrelated contacts through SQL `LIKE` wildcards. (#41891) Thanks @Kaneki-x.
+- Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
+
+### Fixes
+
+- Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. Thanks @vincentkoc.
 
 ## 2026.3.13
 
