@@ -430,7 +430,7 @@ describe("feishu_doc image fetch hardening", () => {
       fileName: "test-local.txt",
     });
 
-    const feishuDocTool = resolveFeishuDocTool({ workspaceDir: "/home/user/project" });
+    const feishuDocTool = resolveFeishuDocTool();
 
     const result = await feishuDocTool.execute("tool-call", {
       action: "upload_file",
@@ -443,12 +443,11 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.file_token).toBe("token_1");
     expect(result.details.file_name).toBe("test-local.txt");
 
+    // localRoots is not passed — loadWebMedia uses default roots (tmp, media,
+    // workspace, sandboxes) plus workspace-profile auto-discovery.
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       expect.stringContaining("test-local.txt"),
-      expect.objectContaining({
-        optimizeImages: false,
-        localRoots: ["/home/user/project"],
-      }),
+      expect.objectContaining({ optimizeImages: false }),
     );
 
     expect(driveUploadAllMock).toHaveBeenCalledWith(
