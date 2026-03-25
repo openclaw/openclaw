@@ -196,7 +196,7 @@ struct OpenClawConfigFileTests {
             #expect(clobberedPath != nil)
             if let clobberedPath {
                 let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
-                #expect(preserved == "\(clobbered)\n")
+                #expect(preserved == clobbered)
             }
         }
     }
