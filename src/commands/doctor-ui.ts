@@ -49,7 +49,7 @@ export async function maybeRepairUiProtocolFreshness(
         return;
       }
 
-      const shouldRepair = await prompter.confirmRepair({
+      const shouldRepair = await prompter.confirmAutoFix({
         message: "Build Control UI assets now?",
         initialValue: true,
       });
@@ -107,7 +107,7 @@ export async function maybeRepairUiProtocolFreshness(
           "UI Freshness",
         );
 
-        const shouldRepair = await prompter.confirmAggressive({
+        const shouldRepair = await prompter.confirmAggressiveAutoFix({
           message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
           initialValue: true,
         });

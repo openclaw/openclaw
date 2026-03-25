@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
@@ -6,7 +6,6 @@ import {
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
 } from "../../../test/helpers/extensions/setup-wizard.js";
-import { whatsappPlugin } from "./channel.js";
 
 const loginWebMock = vi.hoisted(() => vi.fn(async () => {}));
 const pathExistsMock = vi.hoisted(() => vi.fn(async () => false));
@@ -22,9 +21,10 @@ vi.mock("./login.js", () => ({
   loginWeb: loginWebMock,
 }));
 
-vi.mock("../../../src/utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../src/utils.js")>("../../../src/utils.js");
+vi.mock("openclaw/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
+    "openclaw/plugin-sdk/setup",
+  );
   return {
     ...actual,
     pathExists: pathExistsMock,
@@ -47,7 +47,7 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
-const whatsappConfigure = createPluginSetupWizardConfigure(whatsappPlugin);
+let whatsappConfigure: ReturnType<typeof createPluginSetupWizardConfigure>;
 
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createQueuedWizardPrompter>;
@@ -91,6 +91,12 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 }
 
 describe("whatsapp setup wizard", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    const { whatsappPlugin } = await import("./channel.js");
+    whatsappConfigure = createPluginSetupWizardConfigure(whatsappPlugin);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     pathExistsMock.mockResolvedValue(false);

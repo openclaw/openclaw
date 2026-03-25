@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -98,9 +99,11 @@ describe("canvas host", () => {
   };
 
   beforeAll(async () => {
+    vi.doUnmock("undici");
+    vi.resetModules();
+    const require = createRequire(import.meta.url);
     ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
-    const undiciModule = await vi.importActual<typeof import("undici")>("undici");
-    realFetch = undiciModule.fetch;
+    ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketClient = wsModule.WebSocket;
     WebSocketServerClass = wsModule.WebSocketServer;

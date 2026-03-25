@@ -82,6 +82,48 @@ export const sessionMessages: unknown[] = [
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 
+export function resetCompactSessionStateMocks(): void {
+  sanitizeSessionHistoryMock.mockReset();
+  sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
+    return params.messages;
+  });
+
+  getMemorySearchManagerMock.mockReset();
+  getMemorySearchManagerMock.mockResolvedValue({
+    manager: {
+      sync: vi.fn(async () => {}),
+    },
+  });
+  resolveMemorySearchConfigMock.mockReset();
+  resolveMemorySearchConfigMock.mockReturnValue({
+    sources: ["sessions"],
+    sync: {
+      sessions: {
+        postCompactionForce: true,
+      },
+    },
+  });
+  resolveSessionAgentIdMock.mockReset();
+  resolveSessionAgentIdMock.mockReturnValue("main");
+  estimateTokensMock.mockReset();
+  estimateTokensMock.mockReturnValue(10);
+  sessionMessages.splice(
+    0,
+    sessionMessages.length,
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  );
+  sessionAbortCompactionMock.mockReset();
+}
+
 export function resetCompactHooksHarnessMocks(): void {
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
@@ -122,45 +164,7 @@ export function resetCompactHooksHarnessMocks(): void {
   });
 
   triggerInternalHook.mockReset();
-  sanitizeSessionHistoryMock.mockReset();
-  sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
-    return params.messages;
-  });
-
-  getMemorySearchManagerMock.mockReset();
-  getMemorySearchManagerMock.mockResolvedValue({
-    manager: {
-      sync: vi.fn(async () => {}),
-    },
-  });
-  resolveMemorySearchConfigMock.mockReset();
-  resolveMemorySearchConfigMock.mockReturnValue({
-    sources: ["sessions"],
-    sync: {
-      sessions: {
-        postCompactionForce: true,
-      },
-    },
-  });
-  resolveSessionAgentIdMock.mockReset();
-  resolveSessionAgentIdMock.mockReturnValue("main");
-  estimateTokensMock.mockReset();
-  estimateTokensMock.mockReturnValue(10);
-  sessionMessages.splice(
-    0,
-    sessionMessages.length,
-    { role: "user", content: "hello", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-    {
-      role: "toolResult",
-      toolCallId: "t1",
-      toolName: "exec",
-      content: [{ type: "text", text: "output" }],
-      isError: false,
-      timestamp: 3,
-    },
-  );
-  sessionAbortCompactionMock.mockReset();
+  resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
 }
@@ -280,6 +284,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("./lanes.js", () => ({

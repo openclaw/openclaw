@@ -1,28 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: vi.fn(),
-}));
+const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
-}));
-
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import {
-  buildExecExitOutcome,
-  emitExecSystemEvent,
-  formatExecFailureReason,
-} from "./bash-tools.exec-runtime.js";
-
-const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
-const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
+let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
+let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
+let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 
 describe("emitExecSystemEvent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
+    vi.doMock("../infra/heartbeat-wake.js", () => ({
+      requestHeartbeatNow: requestHeartbeatNowMock,
+    }));
+    vi.doMock("../infra/system-events.js", () => ({
+      enqueueSystemEvent: enqueueSystemEventMock,
+    }));
+    ({ buildExecExitOutcome, emitExecSystemEvent, formatExecFailureReason } =
+      await import("./bash-tools.exec-runtime.js"));
   });
 
   it("scopes heartbeat wake to the event session key", () => {
