@@ -305,12 +305,23 @@ function logToFile(
   }
 }
 
+function computeNextLocalMidnightMs(): number {
+  const d = new Date();
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let nextRolloverMs = 0;
   const getFileLogger = (): TsLogger<LogObj> => {
-    if (!fileLogger) {
-      fileLogger = getChildLogger({ subsystem });
+    const now = Date.now();
+    if (fileLogger && now < nextRolloverMs) {
+      return fileLogger;
     }
+    // Rebuild child logger — either first call or date has rolled over.
+    fileLogger = getChildLogger({ subsystem });
+    nextRolloverMs = computeNextLocalMidnightMs();
     return fileLogger;
   };
   const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>): void => {

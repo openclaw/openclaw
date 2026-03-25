@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
+import * as loggerModule from "./logger.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -20,6 +21,7 @@ afterEach(() => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  vi.restoreAllMocks();
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
@@ -143,5 +145,46 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("subsystem file logger date rollover", () => {
+  it("rebuilds file logger child when date rolls past midnight", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const spy = vi.spyOn(loggerModule, "getChildLogger");
+    const log = createSubsystemLogger("test-rollover");
+
+    // First file-logged message creates the child logger.
+    log.info("before rollover");
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Simulate midnight crossing by advancing Date.now past the cached rollover time.
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    const originalDateNow = Date.now;
+    Date.now = () => tomorrow.getTime() + 1;
+    try {
+      // Reset the root logger so getChildLogger produces a new child from the new base.
+      resetLogger();
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+      log.info("after rollover");
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it("reuses cached file logger within the same day", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const spy = vi.spyOn(loggerModule, "getChildLogger");
+    const log = createSubsystemLogger("test-same-day");
+
+    log.info("first");
+    log.info("second");
+    log.info("third");
+
+    // Only one child logger created despite multiple log calls.
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
