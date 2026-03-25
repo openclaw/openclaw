@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/core";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
@@ -84,7 +87,22 @@ function resolveMinimaxTtsApiKey(
   if (typeof minimaxKey === "string" && minimaxKey.trim()) {
     return minimaxKey.trim();
   }
-  return undefined;
+  // Fallback: read OAuth credentials from ~/.minimax/oauth_creds.json
+  return readMiniMaxOAuthAccessToken();
+}
+
+function readMiniMaxOAuthAccessToken(): string | undefined {
+  try {
+    const credPath = path.join(homedir(), ".minimax", "oauth_creds.json");
+    if (!existsSync(credPath)) {
+      return undefined;
+    }
+    const raw = JSON.parse(readFileSync(credPath, "utf8")) as Record<string, unknown>;
+    const token = raw.access_token;
+    return typeof token === "string" && token.trim() ? token.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function minimaxTTS(params: {

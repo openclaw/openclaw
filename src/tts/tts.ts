@@ -572,9 +572,23 @@ export function resolveTtsApiKey(
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
   if (normalizedProvider === "minimax") {
-    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY || readMiniMaxOAuthAccessToken();
   }
   return undefined;
+}
+
+function readMiniMaxOAuthAccessToken(): string | undefined {
+  try {
+    const credPath = path.join(resolveUserPath("~"), ".minimax", "oauth_creds.json");
+    if (!existsSync(credPath)) {
+      return undefined;
+    }
+    const raw = JSON.parse(readFileSync(credPath, "utf8")) as Record<string, unknown>;
+    const token = raw.access_token;
+    return typeof token === "string" && token.trim() ? token.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "microsoft"] as const;
