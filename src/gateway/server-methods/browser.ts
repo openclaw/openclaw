@@ -4,6 +4,10 @@ import {
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  isPersistentBrowserProfileMutation,
+  resolveRequestedBrowserProfile,
+} from "../../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -19,25 +23,6 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
 };
-
-function resolveRequestedProfile(params: {
-  query?: Record<string, unknown>;
-  body?: unknown;
-}): string | undefined {
-  const queryProfile =
-    typeof params.query?.profile === "string" ? params.query.profile.trim() : undefined;
-  if (queryProfile) {
-    return queryProfile;
-  }
-  if (!params.body || typeof params.body !== "object") {
-    return undefined;
-  }
-  const bodyProfile =
-    "profile" in params.body && typeof params.body.profile === "string"
-      ? params.body.profile.trim()
-      : undefined;
-  return bodyProfile || undefined;
-}
 
 type BrowserProxyFile = {
   path: string;
@@ -167,6 +152,17 @@ export const browserHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot create or delete persistent browser profiles",
+        ),
+      );
+      return;
+    }
 
     const cfg = loadConfig();
     let nodeTarget: NodeSession | null = null;
@@ -206,7 +202,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         query,
         body,
         timeoutMs,
-        profile: resolveRequestedProfile({ query, body }),
+        profile: resolveRequestedBrowserProfile({ query, body }),
       };
       const res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,

@@ -1,22 +1,52 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { buildStatusReply } from "./commands.js";
-import {
-  applyInlineDirectivesFastLane,
-  handleDirectiveOnly,
-  type InlineDirectives,
-  isDirectiveOnly,
-  persistInlineDirectives,
-} from "./directive-handling.js";
-import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
+import type { CommandContext } from "./commands-types.js";
+import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
+import { isDirectiveOnly, type InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
+let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
+let directiveLevelsPromise: Promise<typeof import("./directive-handling.levels.js")> | null = null;
+let directiveImplPromise: Promise<typeof import("./directive-handling.impl.js")> | null = null;
+let directiveFastLanePromise: Promise<typeof import("./directive-handling.fast-lane.js")> | null =
+  null;
+let directivePersistPromise: Promise<
+  typeof import("./directive-handling.persist.runtime.js")
+> | null = null;
+
+function loadCommandsStatus() {
+  commandsStatusPromise ??= import("./commands-status.runtime.js");
+  return commandsStatusPromise;
+}
+
+function loadDirectiveLevels() {
+  directiveLevelsPromise ??= import("./directive-handling.levels.js");
+  return directiveLevelsPromise;
+}
+
+function loadDirectiveImpl() {
+  directiveImplPromise ??= import("./directive-handling.impl.js");
+  return directiveImplPromise;
+}
+
+function loadDirectiveFastLane() {
+  directiveFastLanePromise ??= import("./directive-handling.fast-lane.js");
+  return directiveFastLanePromise;
+}
+
+function loadDirectivePersist() {
+  directivePersistPromise ??= import("./directive-handling.persist.runtime.js");
+  return directivePersistPromise;
+}
 
 export type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -41,14 +71,15 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
+  agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
-  sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];
+  sessionScope: SessionScope | undefined;
   isGroup: boolean;
   allowTextCommands: boolean;
-  command: Parameters<typeof buildStatusReply>[0]["command"];
+  command: CommandContext;
   directives: InlineDirectives;
   messageProviderKey: string;
   elevatedEnabled: boolean;
@@ -56,16 +87,14 @@ export async function applyInlineDirectiveOverrides(params: {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultProvider: string;
   defaultModel: string;
-  aliasIndex: Parameters<typeof applyInlineDirectivesFastLane>[0]["aliasIndex"];
+  aliasIndex: ApplyInlineDirectivesFastLaneParams["aliasIndex"];
   provider: string;
   model: string;
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   resolvedElevatedLevel: ElevatedLevel;
-  defaultActivation: () => ReturnType<
-    Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"]
-  >;
+  defaultActivation: () => "always" | "mention";
   contextTokens: number;
   effectiveModelDirective?: string;
   typing: TypingController;
@@ -76,6 +105,7 @@ export async function applyInlineDirectiveOverrides(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -130,8 +160,39 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
+  if (modelState.resetModelOverride) {
+    enqueueSystemEvent(
+      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
+      {
+        sessionKey,
+        contextKey: `model:reset:${initialModelLabel}`,
+      },
+    );
+  }
+
   if (!command.isAuthorizedSender) {
     directives = clearInlineDirectives(directives.cleaned);
+  }
+
+  const hasAnyDirective =
+    directives.hasThinkDirective ||
+    directives.hasFastDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasReasoningDirective ||
+    directives.hasElevatedDirective ||
+    directives.hasExecDirective ||
+    directives.hasModelDirective ||
+    directives.hasQueueDirective ||
+    directives.hasStatusDirective;
+
+  if (!hasAnyDirective && !modelState.resetModelOverride) {
+    return {
+      kind: "continue",
+      directives,
+      provider,
+      model,
+      contextTokens,
+    };
   }
 
   if (
@@ -150,25 +211,34 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
-    } = await resolveCurrentDirectiveLevels({
+    } = await (
+      await loadDirectiveLevels()
+    ).resolveCurrentDirectiveLevels({
       sessionEntry,
+      agentEntry,
       agentCfg,
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
-    const directiveReply = await handleDirectiveOnly({
+    const directiveReply = await (
+      await loadDirectiveImpl()
+    ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       currentThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
       surface: ctx.Surface,
+      gatewayClientScopes: ctx.GatewayClientScopes,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
+      const { buildStatusReply } = await loadCommandsStatus();
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -199,18 +269,10 @@ export async function applyInlineDirectiveOverrides(params: {
     return { kind: "reply", reply: statusReply ?? directiveReply };
   }
 
-  const hasAnyDirective =
-    directives.hasThinkDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasExecDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective ||
-    directives.hasStatusDirective;
-
   if (hasAnyDirective && command.isAuthorizedSender) {
-    const fastLane = await applyInlineDirectivesFastLane({
+    const fastLane = await (
+      await loadDirectiveFastLane()
+    ).applyInlineDirectivesFastLane({
       directives,
       commandAuthorized: command.isAuthorizedSender,
       ctx,
@@ -244,7 +306,9 @@ export async function applyInlineDirectiveOverrides(params: {
     model = fastLane.model;
   }
 
-  const persisted = await persistInlineDirectives({
+  const persisted = await (
+    await loadDirectivePersist()
+  ).persistInlineDirectives({
     directives,
     effectiveModelDirective,
     cfg,
@@ -264,6 +328,8 @@ export async function applyInlineDirectiveOverrides(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
   });
   provider = persisted.provider;
   model = persisted.model;

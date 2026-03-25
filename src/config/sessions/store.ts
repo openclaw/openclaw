@@ -5,7 +5,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
-} from "../../gateway/session-utils.fs.js";
+} from "../../gateway/session-archive.fs.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -15,13 +15,14 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
-import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
+  isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
@@ -45,25 +46,8 @@ import {
 
 const log = createSubsystemLogger("sessions/store");
 
-// ============================================================================
-// Session Store Cache with TTL Support
-// ============================================================================
-
-const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
-
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function getSessionStoreTtl(): number {
-  return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
-    defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
-  });
-}
-
-function isSessionStoreCacheEnabled(): boolean {
-  return isCacheEnabled(getSessionStoreTtl());
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -201,7 +185,6 @@ export function loadSessionStore(
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
-      ttlMs: getSessionStoreTtl(),
       mtimeMs: currentFileStat?.mtimeMs,
       sizeBytes: currentFileStat?.sizeBytes,
     });
@@ -309,6 +292,12 @@ type SaveSessionStoreOptions = {
   skipMaintenance?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
+  /**
+   * Session keys that are allowed to drop persisted ACP metadata during this update.
+   * All other updates preserve existing `entry.acp` blocks when callers replace the
+   * whole session entry without carrying ACP state forward.
+   */
+  allowDropAcpMetaSessionKeys?: string[];
   /** Optional callback for warn-only maintenance. */
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   /** Optional callback with maintenance stats after a save. */
@@ -335,6 +324,64 @@ function updateSessionStoreWriteCaches(params: {
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
   });
+}
+
+function resolveMutableSessionStoreKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): string | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (Object.prototype.hasOwnProperty.call(store, trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeStoreSessionKey(trimmed);
+  if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+    return normalized;
+  }
+  return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
+}
+
+function collectAcpMetadataSnapshot(
+  store: Record<string, SessionEntry>,
+): Map<string, NonNullable<SessionEntry["acp"]>> {
+  const snapshot = new Map<string, NonNullable<SessionEntry["acp"]>>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (entry?.acp) {
+      snapshot.set(sessionKey, entry.acp);
+    }
+  }
+  return snapshot;
+}
+
+function preserveExistingAcpMetadata(params: {
+  previousAcpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
+  nextStore: Record<string, SessionEntry>;
+  allowDropSessionKeys?: string[];
+}): void {
+  const allowDrop = new Set(
+    (params.allowDropSessionKeys ?? []).map((key) => normalizeStoreSessionKey(key)),
+  );
+  for (const [previousKey, previousAcp] of params.previousAcpByKey.entries()) {
+    const normalizedKey = normalizeStoreSessionKey(previousKey);
+    if (allowDrop.has(normalizedKey)) {
+      continue;
+    }
+    const nextKey = resolveMutableSessionStoreKey(params.nextStore, previousKey);
+    if (!nextKey) {
+      continue;
+    }
+    const nextEntry = params.nextStore[nextKey];
+    if (!nextEntry || nextEntry.acp) {
+      continue;
+    }
+    params.nextStore[nextKey] = {
+      ...nextEntry,
+      acp: previousAcp,
+    };
+  }
 }
 
 async function saveSessionStoreUnlocked(
@@ -526,7 +573,13 @@ export async function updateSessionStore<T>(
   return await withSessionStoreLock(storePath, async () => {
     // Always re-read inside the lock to avoid clobbering concurrent writers.
     const store = loadSessionStore(storePath, { skipCache: true });
+    const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
+    preserveExistingAcpMetadata({
+      previousAcpByKey,
+      nextStore: store,
+      allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
+    });
     await saveSessionStoreUnlocked(storePath, store, opts);
     return result;
   });

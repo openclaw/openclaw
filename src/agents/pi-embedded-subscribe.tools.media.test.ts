@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMediaArtifact,
+  extractToolResultMediaPaths,
+  filterToolResultMediaUrls,
+  isToolResultMediaTrusted,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -12,12 +17,38 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(42)).toEqual([]);
   });
 
-  it("returns empty array when content is missing", () => {
-    expect(extractToolResultMediaPaths({ details: { path: "/tmp/img.png" } })).toEqual([]);
+  it("extracts structured details.media without content blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrls: ["/tmp/img.png", "/tmp/img-2.png"],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/img.png", "/tmp/img-2.png"],
+    });
   });
 
   it("returns empty array when content has no text or image blocks", () => {
     expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toEqual([]);
+  });
+
+  it("extracts structured media with audioAsVoice", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
   });
 
   it("extracts MEDIA: path from text content block", () => {
@@ -228,5 +259,31 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+
+  it("trusts image_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("image_generate")).toBe(true);
+  });
+
+  it("does not trust local MEDIA paths for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("still allows remote MEDIA urls for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["https://example.com/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual(["https://example.com/screenshot.png"]);
   });
 });

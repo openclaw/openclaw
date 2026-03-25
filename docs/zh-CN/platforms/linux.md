@@ -1,31 +1,31 @@
 ---
 read_when:
-  - 查找 Linux 配套应用状态时
-  - 规划平台覆盖或贡献时
+  - 查找 Linux 配套应用状态
+  - 规划平台覆盖范围或贡献
 summary: Linux 支持 + 配套应用状态
 title: Linux 应用
 x-i18n:
-  generated_at: "2026-02-03T07:52:18Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: a9bbbcecf2fd522a2f5ac8f3b9068febbc43658465bfb9276bff6c3e946789d2
+  generated_at: "2026-03-16T06:24:30Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: 12f2a28ec8fc17769210bda97af11fda332355956d41bba69ac51cc523be6178
   source_path: platforms/linux.md
   workflow: 15
 ---
 
 # Linux 应用
 
-Gateway 网关在 Linux 上完全支持。**Node 是推荐的运行时**。
-不推荐 Bun 用于 Gateway 网关（WhatsApp/Telegram 存在 bug）。
+Gateway 网关在 Linux 上得到完全支持。**Node 是推荐的运行时**。
+不建议将 Bun 用于 Gateway 网关（存在 WhatsApp/Telegram bug）。
 
-原生 Linux 配套应用已在计划中。如果你想帮助构建，欢迎贡献。
+原生 Linux 配套应用已在规划中。如果你想帮助构建一个，欢迎贡献。
 
-## 新手快速路径（VPS）
+## 面向初学者的快速路径（VPS）
 
-1. 安装 Node 22+
+1. 安装 Node 24（推荐；Node 22 LTS，目前 `22.16+`，为了兼容性仍然可用）
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
-4. 从你的笔记本电脑：`ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
+4. 在你的笔记本电脑上运行：`ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. 打开 `http://127.0.0.1:18789/` 并粘贴你的令牌
 
 分步 VPS 指南：[exe.dev](/install/exe-dev)
@@ -49,19 +49,19 @@ Gateway 网关在 Linux 上完全支持。**Node 是推荐的运行时**。
 openclaw onboard --install-daemon
 ```
 
-或：
+或者：
 
 ```
 openclaw gateway install
 ```
 
-或：
+或者：
 
 ```
 openclaw configure
 ```
 
-出现提示时选择 **Gateway service**。
+出现提示时，选择 **Gateway 服务**。
 
 修复/迁移：
 
@@ -71,9 +71,8 @@ openclaw doctor
 
 ## 系统控制（systemd 用户单元）
 
-OpenClaw 默认安装 systemd **用户**服务。对于共享或常驻服务器使用**系统**
-服务。完整的单元示例和指南
-在 [Gateway 网关运行手册](/gateway) 中。
+OpenClaw 默认安装 systemd **用户**服务。对于共享或始终在线的服务器，请使用 **系统** 服务。完整的单元示例和指导
+请参见 [Gateway 网关运行手册](/gateway)。
 
 最小设置：
 

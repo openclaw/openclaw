@@ -68,6 +68,25 @@ describe("inbound-path-policy", () => {
     ]);
   });
 
+  it("matches iMessage account ids case-insensitively for attachment roots", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: {
+            Work: {
+              attachmentRoots: ["/Users/work/Library/Messages/Attachments"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveIMessageAttachmentRoots({ cfg, accountId: "work" })).toEqual([
+      "/Users/work/Library/Messages/Attachments",
+      ...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+    ]);
+  });
+
   it("falls back to default iMessage roots", () => {
     const cfg = {} as OpenClawConfig;
     expect(resolveIMessageAttachmentRoots({ cfg })).toEqual([...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS]);

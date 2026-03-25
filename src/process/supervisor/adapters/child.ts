@@ -1,22 +1,15 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 function resolveCommand(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
-  const lower = command.toLowerCase();
-  if (lower.endsWith(".exe") || lower.endsWith(".cmd") || lower.endsWith(".bat")) {
-    return command;
-  }
-  const basename = lower.split(/[\\/]/).pop() ?? lower;
-  if (basename === "npm" || basename === "pnpm" || basename === "yarn" || basename === "npx") {
-    return `${command}.cmd`;
-  }
-  return command;
+  return resolveWindowsCommandShim({
+    command,
+    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+  });
 }
 
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
@@ -132,12 +125,11 @@ export async function createChildAdapter(params: {
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         killProcessTree(pid);
-      } else {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore kill errors
-        }
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore kill errors
       }
       return;
     }

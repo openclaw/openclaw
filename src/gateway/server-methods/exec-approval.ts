@@ -1,9 +1,13 @@
+import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -91,6 +95,10 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (!effectiveCommandText) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
       if (
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
@@ -102,6 +110,7 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -121,9 +130,13 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: effectiveCommandText,
-        commandArgv: effectiveCommandArgv,
-        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        command: sanitizeExecApprovalDisplayText(effectiveCommandText),
+        commandPreview:
+          host === "node" || !approvalContext.commandPreview
+            ? undefined
+            : sanitizeExecApprovalDisplayText(approvalContext.commandPreview),
+        commandArgv: host === "node" ? undefined : effectiveCommandArgv,
+        envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
         cwd: effectiveCwd ?? null,

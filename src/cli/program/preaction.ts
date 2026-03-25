@@ -1,16 +1,18 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
+import { loggingState } from "../../logging/state.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  getCommandPathWithRootOptions,
-  getVerboseFlag,
-  hasFlag,
-  hasHelpOrVersion,
-} from "../argv.js";
+import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallPreactionRequest,
+} from "../plugin-install-config-policy.js";
+import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -32,12 +34,10 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "directory",
   "agents",
   "configure",
-  "onboard",
   "status",
   "health",
 ]);
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
-const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
 
@@ -67,6 +67,36 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
+function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+}
+
+function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: boolean): boolean {
+  const [primary, secondary] = commandPath;
+  if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
+    return false;
+  }
+  if ((primary === "status" || primary === "health") && jsonOutputMode) {
+    return false;
+  }
+  // Setup wizard and channels add should stay manifest-first and load selected plugins on demand.
+  if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
+    return false;
+  }
+  return true;
+}
+function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(
+      resolvePluginInstallPreactionRequest({
+        actionCommand,
+        commandPath,
+        argv: process.argv,
+      }),
+    ) === "recover-matrix-only"
+  );
+}
+
 function getRootCommand(command: Command): Command {
   let current = command;
   while (current.parent) {
@@ -87,17 +117,6 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
-function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
-  if (!hasFlag(argv, "--json")) {
-    return false;
-  }
-  const key = `${commandPath[0] ?? ""} ${commandPath[1] ?? ""}`.trim();
-  if (JSON_PARSE_ONLY_COMMANDS.has(key)) {
-    return false;
-  }
-  return true;
-}
-
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -106,6 +125,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const commandPath = getCommandPathWithRootOptions(argv, 2);
+    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    if (jsonOutputMode) {
+      routeLogsToStderr();
+    }
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
@@ -126,17 +149,28 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
+    const allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
-      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      ...(allowInvalid ? { allowInvalid: true } : {}),
+      ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
     });
-    // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
+    // Load plugins for commands that need channel access.
+    // When --json output is active, temporarily route logs to stderr so plugin
+    // registration messages don't corrupt the JSON payload on stdout.
+    if (shouldLoadPluginsForCommand(commandPath, jsonOutputMode)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded();
+      const prev = loggingState.forceConsoleToStderr;
+      if (jsonOutputMode) {
+        loggingState.forceConsoleToStderr = true;
+      }
+      try {
+        ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
+      } finally {
+        loggingState.forceConsoleToStderr = prev;
+      }
     }
   });
 }

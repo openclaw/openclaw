@@ -6,6 +6,10 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import {
+  consumePendingToolMediaReply,
+  hasAssistantVisibleReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
@@ -48,6 +52,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
+    const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
+    const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    const rawErrorConsoleSuffix = safeRawErrorPreview ? ` rawError=${safeRawErrorPreview}` : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
@@ -55,10 +63,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       isError: true,
       error: safeErrorText,
       failoverReason,
-      provider: lastAssistant.provider,
       model: lastAssistant.model,
+      provider: lastAssistant.provider,
       ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true error=${safeErrorText}`,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -93,6 +101,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   }
 
   ctx.flushBlockReplyBuffer();
+  const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+  if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+    ctx.emitBlockReply(pendingToolMediaReply);
+  }
   // Flush the reply pipeline so the response reaches the channel before
   // compaction wait blocks the run.  This mirrors the pattern used by
   // handleToolExecutionStart and ensures delivery is not held hostage to

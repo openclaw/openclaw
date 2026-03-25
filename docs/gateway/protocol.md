@@ -181,6 +181,13 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+- Operators may call `tools.effective` (`operator.read`) to fetch the runtime-effective tool
+  inventory for a session.
+  - `sessionKey` is required.
+  - The gateway derives trusted runtime context from the session server-side instead of accepting
+    caller-supplied auth or delivery context.
+  - The response is session-scoped and reflects what the active conversation can use right now,
+    including core, plugin, and channel tools.
 
 ## Exec approvals
 
@@ -206,6 +213,12 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   persisted by the client for future connects.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
+- Auth failures include `error.details.code` plus recovery hints:
+  - `error.details.canRetryWithDeviceToken` (boolean)
+  - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
+- Client behavior for `AUTH_TOKEN_MISMATCH`:
+  - Trusted clients may attempt one bounded retry with a cached per-device token.
+  - If that retry fails, clients should stop automatic reconnect loops and surface operator action guidance.
 
 ## Device identity + pairing
 
@@ -217,8 +230,9 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - **Local** connects include loopback and the gateway host’s own tailnet address
   (so same‑host tailnet binds can still auto‑approve).
 - All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it **only** when `gateway.controlUi.dangerouslyDisableDeviceAuth`
-  is enabled for break-glass use.
+  Control UI can omit it only in these modes:
+  - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
+  - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

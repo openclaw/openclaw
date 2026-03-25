@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { sendHandlers } from "./send.js";
 import type { GatewayRequestContext } from "./types.js";
+
+type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-  resolveOutboundTarget: vi.fn(() => ({ ok: true, to: "resolved" })),
+  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
   resolveMessageChannelSelection: vi.fn(),
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
@@ -31,6 +31,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
+let sendHandlers: typeof import("./send.js").sendHandlers;
 
 function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
   if (typeof params.sessionKey === "string") {
@@ -89,6 +90,11 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+async function loadFreshSendHandlersForTest() {
+  vi.resetModules();
+  ({ sendHandlers } = await import("./send.js"));
+}
+
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
@@ -142,7 +148,7 @@ function mockDeliverySuccess(messageId: string) {
 describe("gateway send mirroring", () => {
   let registrySeq = 0;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
@@ -153,6 +159,7 @@ describe("gateway send mirroring", () => {
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    await loadFreshSendHandlersForTest();
   });
 
   it("accepts media-only sends without message", async () => {
@@ -334,6 +341,7 @@ describe("gateway send mirroring", () => {
           sessionKey: "agent:main:main",
           text: "caption",
           mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+          idempotencyKey: "idem-2",
         }),
       }),
     );
@@ -507,7 +515,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    vi.mocked(resolveOutboundTarget).mockReturnValue({
+    mocks.resolveOutboundTarget.mockReturnValue({
       ok: false,
       error: new Error("target not found"),
     });

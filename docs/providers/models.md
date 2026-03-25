@@ -32,13 +32,14 @@ model as `provider/model`.
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Mistral](/providers/mistral)
 - [Synthetic](/providers/synthetic)
-- [OpenCode Zen](/providers/opencode)
+- [OpenCode (Zen + Go)](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
+- [xAI](/providers/xai)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

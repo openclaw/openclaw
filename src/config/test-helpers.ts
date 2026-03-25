@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "./config.js";
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-config-" });
@@ -11,6 +12,23 @@ export async function writeOpenClawConfig(home: string, config: unknown): Promis
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   return configPath;
+}
+
+export async function writeStateDirDotEnv(
+  content: string,
+  params?: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+  },
+): Promise<{ dotEnvPath: string; stateDir: string }> {
+  const stateDir = params?.stateDir ?? params?.env?.OPENCLAW_STATE_DIR?.trim();
+  if (!stateDir) {
+    throw new Error("Expected OPENCLAW_STATE_DIR or explicit stateDir for .env test setup");
+  }
+  const dotEnvPath = path.join(stateDir, ".env");
+  await fs.mkdir(path.dirname(dotEnvPath), { recursive: true });
+  await fs.writeFile(dotEnvPath, content, "utf-8");
+  return { dotEnvPath, stateDir };
 }
 
 export async function withTempHomeConfig<T>(
@@ -53,7 +71,9 @@ export async function withEnvOverride<T>(
 }
 
 export function buildWebSearchProviderConfig(params: {
-  provider: string;
+  provider: NonNullable<
+    NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
+  >;
   enabled?: boolean;
   providerConfig?: Record<string, unknown>;
 }): Record<string, unknown> {
@@ -61,14 +81,32 @@ export function buildWebSearchProviderConfig(params: {
   if (params.enabled !== undefined) {
     search.enabled = params.enabled;
   }
-  if (params.providerConfig) {
-    search[params.provider] = params.providerConfig;
-  }
+  const pluginId =
+    params.provider === "gemini"
+      ? "google"
+      : params.provider === "grok"
+        ? "xai"
+        : params.provider === "kimi"
+          ? "moonshot"
+          : params.provider;
   return {
     tools: {
       web: {
         search,
       },
     },
+    ...(params.providerConfig
+      ? {
+          plugins: {
+            entries: {
+              [pluginId]: {
+                config: {
+                  webSearch: params.providerConfig,
+                },
+              },
+            },
+          },
+        }
+      : {}),
   };
 }
