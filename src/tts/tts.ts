@@ -352,6 +352,8 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
     return base;
   }
+  // Preserve override precedence even when callers mix the legacy microsoft alias
+  // and the edge alias across global and account-level config.
   const mergedMicrosoftAlias =
     base.microsoft || base.edge || override.microsoft || override.edge
       ? {
