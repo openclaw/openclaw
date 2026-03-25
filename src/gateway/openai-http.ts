@@ -423,7 +423,8 @@ function resolveAgentResponseUsage(result: unknown): {
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
   const cacheRead = usage.cacheRead ?? 0;
-  const total = usage.total ?? input + output + cacheRead;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const total = usage.total ?? input + output + cacheRead + cacheWrite;
   return {
     prompt_tokens: input + cacheRead,
     completion_tokens: output,
