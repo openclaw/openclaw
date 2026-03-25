@@ -627,7 +627,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         if (readable?.text) {
           text = readable.text;
           title = readable.title;
-          extractor = readable.extractor ?? "defuddle";
+          extractor = readable.extractor ?? "unknown";
         } else {
           const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
           if (firecrawl) {

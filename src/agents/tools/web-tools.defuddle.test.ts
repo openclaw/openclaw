@@ -34,6 +34,7 @@ describe("web fetch extraction (defuddle)", () => {
     });
     expect(result?.text).toContain("Main content starts here");
     expect(result?.title).toBe("Example Article");
+    expect(result?.extractor).toBe("defuddle");
   });
 
   it("extracts readable markdown", async () => {
@@ -44,5 +45,6 @@ describe("web fetch extraction (defuddle)", () => {
     });
     expect(result?.text).toContain("Main content starts here");
     expect(result?.title).toBe("Example Article");
+    expect(result?.extractor).toBe("defuddle");
   });
 });

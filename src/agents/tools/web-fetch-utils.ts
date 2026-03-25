@@ -251,7 +251,7 @@ async function extractWithDefuddle(params: {
 }): Promise<{ text: string; title?: string } | null> {
   try {
     const { Defuddle } = await loadDefuddleDeps();
-    const parsed = await Defuddle(params.html, params.url, { markdown: true });
+    const parsed = await Defuddle(params.html, params.url, { markdown: true, useAsync: false });
     if (!parsed?.content) {
       return null;
     }
