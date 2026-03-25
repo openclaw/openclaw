@@ -187,6 +187,7 @@ const handler: HookHandler = async (event) => {
   log.info(`cache-ttl-warning: handler invoked type=${event.type} action=${event.action}`);
   const isSent = event.type === "message" && event.action === "sent";
   const isReceived = event.type === "message" && event.action === "received";
+  const isLlmRequest = event.type === "agent" && event.action === "llm-request";
   const isSessionReset =
     event.type === "command" && (event.action === "new" || event.action === "reset");
 
@@ -203,8 +204,8 @@ const handler: HookHandler = async (event) => {
     return;
   }
 
-  if (!isSent && !isReceived) {
-    log.info(`cache-ttl-warning: not a message sent/received event — skipping`);
+  if (!isSent && !isReceived && !isLlmRequest) {
+    log.info(`cache-ttl-warning: not a message sent/received or llm-request event — skipping`);
     return;
   }
 
@@ -258,11 +259,51 @@ const handler: HookHandler = async (event) => {
     to = ctx.from;
     conversationId = ctx.conversationId ?? ctx.from;
     isGroup = ctx.isGroup ?? false;
+  } else if (isLlmRequest) {
+    const ctx = event.context as {
+      channelId?: string;
+      conversationId?: string;
+    };
+    channelId = ctx.channelId;
+    conversationId = ctx.conversationId;
+    // LLM requests only reset existing timers — they don't have a "to" for
+    // sending notices. We still need channelId + conversationId to look up the
+    // correct timer entry.
   }
 
-  if (!channelId || !conversationId || !to) {
+  if (!channelId || !conversationId) {
     log.info(
-      `cache-ttl-warning: missing fields — channelId=${channelId} conversationId=${conversationId} to=${to} isSent=${isSent} isReceived=${isReceived}`,
+      `cache-ttl-warning: missing fields — channelId=${channelId} conversationId=${conversationId} to=${to} isSent=${isSent} isReceived=${isReceived} isLlmRequest=${isLlmRequest}`,
+    );
+    return;
+  }
+
+  // For LLM requests we only need to reset existing timers, not start new ones
+  // (we don't have a "to" address for sending notices).
+  if (isLlmRequest && !to) {
+    const timerStore = getTimerStore();
+    const bareConversationId = conversationId.replace(/^.*:/, "");
+    const key = makeConversationKey(channelId, bareConversationId);
+    const existing = timerStore.get(key);
+    if (!existing) {
+      log.info(`cache-ttl-warning: llm-request for ${key} but no active timer — skipping`);
+      return;
+    }
+    // Re-derive "to" from the existing timer entry so we can restart the full
+    // timer cycle (including notices) using the original recipient.
+    to = existing.lastNoticeTo;
+    if (!to) {
+      // No prior notice sent yet — just clear and restart using conversationId
+      // as a fallback "to". The timer will fire notices to this address.
+      log.info(`cache-ttl-warning: llm-request reset for ${key} (no prior notice target)`);
+      clearConversationTimers(timerStore, key);
+      return;
+    }
+  }
+
+  if (!to) {
+    log.info(
+      `cache-ttl-warning: missing 'to' field — channelId=${channelId} conversationId=${conversationId}`,
     );
     return;
   }

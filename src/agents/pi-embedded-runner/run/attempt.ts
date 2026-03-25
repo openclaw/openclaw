@@ -194,6 +194,7 @@ function withPendingToolCallsHint(
     },
   };
 }
+import { createInternalHookEvent, triggerInternalHook } from "../../../hooks/internal-hooks.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -1100,6 +1101,22 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+
+      // Fire agent:llm-request on every LLM API call so the cache-ttl-warning
+      // hook can track the true Anthropic prompt-cache TTL boundary.
+      {
+        const innerForCacheTtl = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          void triggerInternalHook(
+            createInternalHookEvent("agent", "llm-request", params.sessionKey ?? params.sessionId, {
+              sessionKey: params.sessionKey,
+              conversationId: params.sessionId,
+              channelId: params.messageChannel ?? params.messageProvider,
+            }),
+          );
+          return innerForCacheTtl(model, context, options);
+        };
       }
 
       try {
