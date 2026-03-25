@@ -8,6 +8,8 @@
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
+  PluginHookAfterAgentCompleteEvent,
+  PluginHookAfterAgentCompleteResult,
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
@@ -61,6 +63,8 @@ import type {
 // Re-export types for consumers
 export type {
   PluginHookAgentContext,
+  PluginHookAfterAgentCompleteEvent,
+  PluginHookAfterAgentCompleteResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeDispatchContext,
@@ -499,6 +503,32 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           ...mergeBeforeModelResolve(acc, next),
         }),
       },
+    );
+  }
+
+  // =========================================================================
+  // After Agent Complete Hook (Speedtrap)
+  // =========================================================================
+
+  /**
+   * Run after_agent_complete hook.
+   * Fires after agent produces a response, before delivery.
+   * Allows plugins to reinject context or suppress the response.
+   * Runs sequentially.
+   */
+  async function runAfterAgentComplete(
+    event: PluginHookAfterAgentCompleteEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAfterAgentCompleteResult | undefined> {
+    return runModifyingHook<"after_agent_complete", PluginHookAfterAgentCompleteResult>(
+      "after_agent_complete",
+      event,
+      ctx,
+      (acc, next) => ({
+        reinject: next.reinject ?? acc?.reinject,
+        injectContext: next.injectContext ?? acc?.injectContext,
+        suppress: next.suppress ?? acc?.suppress,
+      }),
     );
   }
 
@@ -986,6 +1016,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeModelResolve,
     runBeforePromptBuild,
     runBeforeAgentStart,
+    // After agent complete (Speedtrap)
+    runAfterAgentComplete,
     runLlmInput,
     runLlmOutput,
     runAgentEnd,
