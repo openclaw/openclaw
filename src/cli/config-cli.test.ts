@@ -17,6 +17,7 @@ const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
@@ -26,6 +27,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
+}));
+
+vi.mock("../config/runtime-schema.js", () => ({
+  readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -127,6 +132,36 @@ describe("config cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
+      schema: {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+          plugins: {
+            type: "object",
+            properties: {
+              entries: {
+                type: "object",
+              },
+            },
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "2026-03-25T00:00:00.000Z",
+    });
     mockExit.mockImplementation((code: number) => {
       const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
       throw new Error(`__exit__:${code} - ${errorMessages}`);
@@ -409,6 +444,74 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
       expect(mockLog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("config schema", () => {
+    it("prints the generated JSON schema as plain text", async () => {
+      await runConfigCommand(["config", "schema"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        properties?: Record<string, unknown>;
+      };
+      expect(payload.properties?.$schema).toEqual({ type: "string" });
+      expect(payload.properties?.channels).toEqual({
+        type: "object",
+        properties: {
+          telegram: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      });
+      expect(payload.properties?.plugins).toEqual({
+        type: "object",
+        properties: {
+          entries: {
+            type: "object",
+          },
+        },
+      });
+    });
+
+    it("falls back cleanly when best-effort schema loading returns channel-only data", async () => {
+      mockReadBestEffortRuntimeConfigSchema.mockResolvedValueOnce({
+        schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: {
+            channels: {
+              type: "object",
+              properties: {
+                telegram: {
+                  type: "object",
+                },
+              },
+            },
+          },
+        },
+        uiHints: {},
+        version: "test",
+        generatedAt: "2026-03-25T00:00:00.000Z",
+      });
+
+      await runConfigCommand(["config", "schema"]);
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(String(mockLog.mock.calls.at(-1)?.[0])) as {
+        properties?: Record<string, unknown>;
+      };
+      expect(payload.properties?.$schema).toEqual({ type: "string" });
+      expect(payload.properties?.channels).toBeTruthy();
+      expect(payload.properties?.plugins).toBeUndefined();
+      expect(mockError).not.toHaveBeenCalled();
     });
   });
 

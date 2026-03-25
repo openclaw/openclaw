@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: expose `runHeartbeatOnce` in the plugin runtime `system` namespace so plugins can trigger a single heartbeat cycle with an explicit delivery target override (e.g. `heartbeat: { target: "last" }`). (#40299) Thanks @loveyana.
 - Agents/compaction: surface safeguard-specific cancel reasons and relabel benign manual `/compact` no-op cases as skipped instead of failed. (#51072) Thanks @afurm.
 - Agents/compaction: preserve the post-compaction AGENTS refresh on stale-usage preflight compaction for both immediate replies and queued followups. (#49479) Thanks @jared596.
+- CLI: add `openclaw config schema` to print the generated JSON schema for `openclaw.json`. (#54523) Thanks @kvokka.
 
 ### Fixes
 

@@ -1,14 +1,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fallbackRequireMock, readLoggingConfigMock } = vi.hoisted(() => ({
-  readLoggingConfigMock: vi.fn(() => undefined),
-  fallbackRequireMock: vi.fn(() => {
-    throw new Error("config fallback should not be used in this test");
-  }),
-}));
+const { fallbackRequireMock, readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } =
+  vi.hoisted(() => ({
+    readLoggingConfigMock: vi.fn(() => undefined),
+    shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
+    fallbackRequireMock: vi.fn(() => {
+      throw new Error("config fallback should not be used in this test");
+    }),
+  }));
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
+  shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
 }));
 
 vi.mock("./node-require.js", () => ({
@@ -29,6 +32,8 @@ beforeEach(() => {
   delete process.env.OPENCLAW_TEST_FILE_LOG;
   delete process.env.OPENCLAW_LOG_LEVEL;
   readLoggingConfigMock.mockClear();
+  shouldSkipMutatingLoggingConfigReadMock.mockReset();
+  shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   fallbackRequireMock.mockClear();
   logging.resetLogger();
   logging.setLoggerOverride(null);
@@ -62,5 +67,15 @@ describe("getResolvedLoggerSettings", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("info");
+  });
+
+  it("skips fallback config loads for config schema", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(true);
+
+    const settings = logging.getResolvedLoggerSettings();
+
+    expect(settings.level).toBe("info");
+    expect(fallbackRequireMock).not.toHaveBeenCalled();
   });
 });

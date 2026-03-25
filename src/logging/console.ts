@@ -2,7 +2,7 @@ import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
@@ -73,7 +73,7 @@ function resolveConsoleSettings(): ConsoleSettings {
 
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
