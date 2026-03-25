@@ -414,8 +414,9 @@ export async function handleFeishuMessage(params: {
 
     ({ requireMention } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
-      globalConfig: feishuCfg,
-      groupConfig,
+      cfg,
+      accountId: account.accountId,
+      groupId: ctx.chatId,
       groupPolicy,
     }));
 
