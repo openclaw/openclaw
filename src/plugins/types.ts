@@ -1424,7 +1424,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_dispatch";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1452,6 +1453,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_dispatch",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -1674,6 +1676,39 @@ export type PluginHookInboundClaimEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+};
+
+// before_dispatch hook
+export type PluginHookBeforeDispatchEvent = {
+  /** Message text content. */
+  content: string;
+  /** Body text prepared for agent (after command parsing). */
+  body?: string;
+  /** Channel identifier (e.g. "telegram", "discord"). */
+  channel?: string;
+  /** Session key for this message. */
+  sessionKey?: string;
+  /** Sender identifier. */
+  senderId?: string;
+  /** Whether this is a group message. */
+  isGroup?: boolean;
+  /** Message timestamp. */
+  timestamp?: number;
+};
+
+export type PluginHookBeforeDispatchContext = {
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  senderId?: string;
+};
+
+export type PluginHookBeforeDispatchResult = {
+  /** Whether the plugin handled this message (skips default dispatch). */
+  handled: boolean;
+  /** Plugin-defined reply text (used when handled=true). */
+  text?: string;
 };
 
 // message_received hook
@@ -1937,6 +1972,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  before_dispatch: (
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
