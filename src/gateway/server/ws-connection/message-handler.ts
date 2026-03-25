@@ -11,6 +11,7 @@ import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  listDevicePairing,
   requestDevicePairing,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
@@ -813,7 +814,13 @@ export function attachGatewayWsMessageHandler(params: {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
                 );
-                if (!resolvedByConcurrentApproval && pairing.created) {
+                const requestStillPending =
+                  !resolvedByConcurrentApproval && pairing.created
+                    ? (await listDevicePairing()).pending.some(
+                        (pending) => pending.requestId === pairing.request.requestId,
+                      )
+                    : false;
+                if (requestStillPending) {
                   context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
                 }
               }

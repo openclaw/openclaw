@@ -2,12 +2,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import * as devicePairingModule from "../infra/device-pairing.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import * as devicePairingModule from "../infra/device-pairing.js";
 import {
   approveDevicePairing,
   getPairedDevice,
@@ -15,8 +15,10 @@ import {
 } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
+  connectOk,
   connectReq,
   installGatewayTestHooks,
+  onceMessage,
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
@@ -147,22 +149,24 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let simulatedRace = false;
     const approveSpy = vi
       .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown, maybeBaseDir?: unknown) => {
-        if (simulatedRace) {
-          return await approveOriginal(
+      .mockImplementation(
+        async (requestId: string, optionsOrBaseDir?: unknown, maybeBaseDir?: unknown) => {
+          if (simulatedRace) {
+            return await approveOriginal(
+              requestId,
+              optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
+              maybeBaseDir as string | undefined,
+            );
+          }
+          simulatedRace = true;
+          await approveOriginal(
             requestId,
             optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
             maybeBaseDir as string | undefined,
           );
-        }
-        simulatedRace = true;
-        await approveOriginal(
-          requestId,
-          optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
-          maybeBaseDir as string | undefined,
-        );
-        return null;
-      });
+          return null;
+        },
+      );
 
     try {
       ws = await openTrackedWs(started.port);
@@ -175,6 +179,47 @@ describe("gateway silent scope-upgrade reconnect", () => {
       const paired = await getPairedDevice(loaded.identity.deviceId);
       expect(paired?.publicKey).toBe(loaded.publicKey);
       expect(paired?.tokens?.operator?.token).toBeTruthy();
+    } finally {
+      approveSpy.mockRestore();
+      ws?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("does not rebroadcast a deleted silent pairing request after a concurrent rejection", async () => {
+    const started = await startServerWithClient("secret");
+    const loaded = loadDeviceIdentity("silent-reconnect-reject-race");
+    let ws: WebSocket | undefined;
+
+    const approveSpy = vi
+      .spyOn(devicePairingModule, "approveDevicePairing")
+      .mockImplementation(async (requestId: string) => {
+        await devicePairingModule.rejectDevicePairing(requestId);
+        return null;
+      });
+
+    try {
+      await connectOk(started.ws, { scopes: ["operator.pairing"], device: null });
+      const requestedEvent = onceMessage(
+        started.ws,
+        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
+        300,
+      );
+
+      ws = await openTrackedWs(started.port);
+      const res = await connectReq(ws, {
+        token: "secret",
+        deviceIdentityPath: loaded.identityPath,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toBe("pairing required");
+      await expect(requestedEvent).rejects.toThrow("timeout");
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toEqual([]);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
