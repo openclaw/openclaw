@@ -33,10 +33,12 @@ export async function waitForDiscordGatewayStop(
         return;
       }
       settled = true;
-      cleanup();
       try {
         gateway?.disconnect?.();
       } finally {
+        // remove listeners after disconnect so late "error" events emitted
+        // during disconnect are still handled instead of becoming uncaught
+        cleanup();
         resolve();
       }
     };
@@ -45,10 +47,10 @@ export async function waitForDiscordGatewayStop(
         return;
       }
       settled = true;
-      cleanup();
       try {
         gateway?.disconnect?.();
       } finally {
+        cleanup();
         reject(err);
       }
     };
