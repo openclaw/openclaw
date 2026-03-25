@@ -1,0 +1,134 @@
+name: Upstream Sync Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+concurrency:
+  group: upstream-sync-release-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+jobs:
+  tag-sync-merge:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'sync/upstream-')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout merged main
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch tags
+        run: git fetch origin --tags --force
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ ! "${package_version}" =~ ^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+            echo "::error::Unsupported package.json version: ${package_version}"
+            exit 1
+          fi
+
+          base_tag="v${package_version}"
+          release_tag="${base_tag}"
+          if git rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null; then
+            suffix=1
+            while git rev-parse -q --verify "refs/tags/${base_tag}-${suffix}" >/dev/null; do
+              suffix=$((suffix + 1))
+            done
+            release_tag="${base_tag}-${suffix}"
+          fi
+
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git tag "${RELEASE_TAG}"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+      - name: Create mctl-gitops dispatch token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+
+      - name: Create fallback mctl-gitops dispatch token
+        if: steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@v2
+        id: app-token-fallback
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          owner: mctlhq
+          repositories: mctl-gitops
+
+      - name: Trigger mctl-gitops image build
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const releaseTag = process.env.RELEASE_TAG;
+            const imageTag = releaseTag.replace(/^v/, "");
+            const buildId = `sync-pr-${context.payload.pull_request.number}-${context.runId}`;
+            await github.rest.actions.createWorkflowDispatch({
+              owner: "mctlhq",
+              repo: "mctl-gitops",
+              workflow_id: "build-image.yaml",
+              ref: "main",
+              inputs: {
+                repo: "mctlhq/mctl-openclaw",
+                git_ref: releaseTag,
+                image_name: "ghcr.io/mctlhq/openclaw",
+                image_tag: imageTag,
+                dockerfile_path: "Dockerfile",
+                team_name: "labs",
+                component_name: "openclaw",
+                build_id: buildId,
+              },
+            });
+
+      - name: Summarize
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+          PACKAGE_VERSION: ${{ steps.tag.outputs.package_version }}
+        run: |
+          {
+            echo "## Upstream Sync Release"
+            echo ""
+            echo "- package version: \`${PACKAGE_VERSION}\`"
+            echo "- created tag: \`${RELEASE_TAG}\`"
+            echo "- local tag-triggered workflows will start from the tag push"
+            echo "- mctl-gitops Build Image was dispatched for \`ghcr.io/mctlhq/openclaw:${RELEASE_TAG#v}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

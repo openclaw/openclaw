@@ -11,6 +11,7 @@ The default maintenance mode is a weekly sync PR from `upstream/main` into this 
 3. That branch merges `upstream/main` into `origin/main`.
 4. The workflow opens or updates a PR back to `main`.
 5. Merge only after CI and the `labs-openclaw` rollout checks pass.
+6. When a `sync/upstream-*` PR is merged into `main`, a release workflow creates the next valid tag and dispatches `mctl-gitops` `Build Image` for `ghcr.io/mctlhq/openclaw`.
 
 Use manual syncs only for urgent upstream fixes that cannot wait for the weekly cadence.
 
@@ -43,8 +44,8 @@ Review these areas on every upstream sync PR:
 
 After merging an upstream sync PR:
 
-1. Create a fresh fork tag.
-2. Build a new image from that tag.
+1. Confirm the auto-release workflow created a fresh fork tag.
+2. Wait for the `mctl-gitops` image build triggered by that tag.
 3. Roll `labs-openclaw` to the new image.
 4. Confirm ArgoCD reports `Synced Healthy`.
 5. Verify:
