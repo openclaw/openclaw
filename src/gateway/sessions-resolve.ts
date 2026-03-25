@@ -77,8 +77,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
         includeUnknown: p.includeUnknown === true,
         spawnedBy: p.spawnedBy,
         agentId: p.agentId,
-        search: sessionId,
-        limit: 8,
       },
     });
     const matches = list.sessions.filter(
