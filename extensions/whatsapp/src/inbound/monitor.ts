@@ -1,4 +1,4 @@
-import type { AnyMessageContent, proto, WAMessage, WASocket } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
@@ -25,7 +25,7 @@ import {
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
-import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type { WebInboundMessage, WebListenerCloseReason, WebSocketRef } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
@@ -49,7 +49,7 @@ export async function monitorWebInbox(options: {
    * Optional shared socket reference. When set, reply/send closures resolve
    * the latest socket at call time so reconnect can swap sockets safely.
    */
-  socketRef?: { current: WASocket | null };
+  socketRef?: WebSocketRef;
   /** Whether disconnect-class send errors should retry for a reconnect gap. */
   shouldRetryDisconnect?: () => boolean;
   /** Whether the monitor is currently in a reconnect gap after a connection close. */

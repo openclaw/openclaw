@@ -15,6 +15,7 @@ import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
+import type { WebSocketRef } from "../inbound/types.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -153,7 +154,7 @@ export async function monitorWebChannel(
   let reconnectAttempts = 0;
   // Reply closures dereference this at send time, so reconnect can swap
   // sockets without dropping in-flight messages on stale connections.
-  const socketRef: { current: import("@whiskeysockets/baileys").WASocket | null } = {
+  const socketRef: WebSocketRef = {
     current: null,
   };
   let shouldRetryDisconnect = keepAlive;

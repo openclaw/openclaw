@@ -1,4 +1,4 @@
-import type { AnyMessageContent } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, WAPresence, WASocket } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { ReconnectPolicy } from "../reconnect.js";
 
@@ -6,6 +6,15 @@ export type WebListenerCloseReason = {
   status?: number;
   isLoggedOut: boolean;
   error?: unknown;
+};
+
+export type WebSendSocket = Pick<WASocket, "sendMessage" | "sendPresenceUpdate"> & {
+  sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
+  sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+};
+
+export type WebSocketRef = {
+  current: WebSendSocket | null;
 };
 
 export type WebInboundMessage = {

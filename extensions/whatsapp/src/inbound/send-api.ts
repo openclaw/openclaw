@@ -1,7 +1,8 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
+import type { WebSendSocket } from "./types.js";
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -17,13 +18,7 @@ function resolveOutboundMessageId(result: unknown): string {
     : "unknown";
 }
 
-export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
-  defaultAccountId: string;
-}) {
+export function createWebSendApi(params: { sock: WebSendSocket; defaultAccountId: string }) {
   return {
     sendMessage: async (
       to: string,

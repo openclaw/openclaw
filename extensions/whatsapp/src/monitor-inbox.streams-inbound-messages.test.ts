@@ -146,13 +146,11 @@ describe("web monitor inbox", () => {
     } | null;
     expect(inbound).not.toBeNull();
 
-    const replacementSock = {
+    const replacementSock: NonNullable<InboxMonitorOptions["socketRef"]>["current"] = {
       sendMessage: vi.fn(async () => undefined),
       sendPresenceUpdate: vi.fn(async () => undefined),
     };
-    socketRef.current = replacementSock as unknown as NonNullable<
-      InboxMonitorOptions["socketRef"]
-    >["current"];
+    socketRef.current = replacementSock;
 
     await inbound?.reply("pong");
     await inbound?.sendMedia({ text: "after-reconnect" });
