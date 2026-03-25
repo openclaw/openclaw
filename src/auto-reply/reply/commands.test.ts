@@ -2339,6 +2339,49 @@ describe("handleCommands hooks", () => {
       spy.mockRestore();
     }
   });
+
+  it("triggers hooks for bare 'new' and 'reset' without slash prefix", async () => {
+    const cases = [
+      {
+        name: "bare new command",
+        params: buildParams("new", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        expectedAction: "new",
+      },
+      {
+        name: "bare reset command",
+        params: buildParams("reset", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        expectedAction: "reset",
+      },
+      {
+        name: "bare new with arguments is NOT treated as command (false positive guard)",
+        params: buildParams("new take notes", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        expectedAction: null,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+      await handleCommands(testCase.params);
+      if (testCase.expectedAction === null) {
+        expect(spy, testCase.name).not.toHaveBeenCalledWith(
+          expect.objectContaining({ type: "command" }),
+        );
+      } else {
+        expect(spy, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "command", action: testCase.expectedAction }),
+        );
+      }
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("handleCommands context", () => {
