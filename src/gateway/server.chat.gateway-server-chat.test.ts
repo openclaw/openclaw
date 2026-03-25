@@ -821,6 +821,68 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send suppresses transient lifecycle errors when the same run later succeeds", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-chat-fallback-recovery";
+      const releaseBlockedReply = mockBlockedChatReply();
+
+      try {
+        await sendChatAndExpectStarted(runId, "hold chat run open");
+
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.runId === runId &&
+            o.payload?.state === "final",
+          8_000,
+        );
+        const errorPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.runId === runId &&
+            o.payload?.state === "error",
+          300,
+        );
+
+        emitAgentEvent({
+          runId,
+          sessionKey: "main",
+          stream: "lifecycle",
+          data: { phase: "error", error: "temporary rate limit" },
+        });
+        emitAgentEvent({
+          runId,
+          sessionKey: "main",
+          stream: "assistant",
+          data: { text: "Recovered reply" },
+        });
+        emitAgentEvent({
+          runId,
+          sessionKey: "main",
+          stream: "lifecycle",
+          data: { phase: "end" },
+        });
+
+        await expect(errorPromise).rejects.toThrow("timeout");
+        const finalEvent = await finalPromise;
+        expect(finalEvent.payload).toMatchObject({
+          runId,
+          sessionKey: "main",
+          state: "final",
+        });
+        expect(finalEvent.payload?.message?.content?.[0]?.text).toBe("Recovered reply");
+
+        await abortChatRun(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
+  });
+
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

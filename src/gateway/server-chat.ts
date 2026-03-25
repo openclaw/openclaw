@@ -15,7 +15,9 @@ import { formatForLog } from "./ws-log.js";
 /**
  * Embedded runs can emit transient lifecycle `error` events while model/auth
  * fallback is still in progress. Delay terminal chat/session cleanup so later
- * same-run activity can supersede the transient failure.
+ * same-run activity can supersede the transient failure. Keep this aligned
+ * with AGENT_RUN_ERROR_RETRY_GRACE_MS in server-methods/agent-job.ts so
+ * websocket chat events and agent.wait observe the same terminal semantics.
  */
 const CHAT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
