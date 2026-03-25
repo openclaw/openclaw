@@ -1,34 +1,234 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
-import type { FollowupRun } from "./queue.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 
-vi.mock(
-  "../../agents/model-fallback.js",
-  async () => await import("../../test-utils/model-fallback.mock.js"),
-);
+let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
+let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
+let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
+let sessionRunAccounting: typeof import("./session-run-accounting.js");
+let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
+let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
+const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
+const FOLLOWUP_TEST_QUEUES = new Map<
+  string,
+  {
+    items: FollowupRun[];
+    lastRun?: FollowupRun["run"];
+  }
+>();
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-}));
+function debugFollowupTest(message: string): void {
+  if (!FOLLOWUP_DEBUG) {
+    return;
+  }
+  process.stderr.write(`[followup-runner.test] ${message}\n`);
+}
 
-vi.mock("./route-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-reply.js")>();
-  return {
-    ...actual,
+async function incrementRunCompactionCountForFollowupTest(
+  params: Parameters<typeof import("./session-run-accounting.js").incrementRunCompactionCount>[0],
+): Promise<number | undefined> {
+  const {
+    sessionStore,
+    sessionKey,
+    sessionEntry,
+    amount = 1,
+    newSessionId,
+    lastCallUsage,
+  } = params;
+  if (!sessionStore || !sessionKey) {
+    return undefined;
+  }
+  const entry = sessionStore[sessionKey] ?? sessionEntry;
+  if (!entry) {
+    return undefined;
+  }
+
+  const nextCount = Math.max(0, entry.compactionCount ?? 0) + Math.max(0, amount);
+  const nextEntry: SessionEntry = {
+    ...entry,
+    compactionCount: nextCount,
+    updatedAt: Date.now(),
+  };
+  if (newSessionId && newSessionId !== entry.sessionId) {
+    nextEntry.sessionId = newSessionId;
+    if (entry.sessionFile?.trim()) {
+      nextEntry.sessionFile = path.join(path.dirname(entry.sessionFile), `${newSessionId}.jsonl`);
+    }
+  }
+  const promptTokens =
+    (lastCallUsage?.input ?? 0) +
+    (lastCallUsage?.cacheRead ?? 0) +
+    (lastCallUsage?.cacheWrite ?? 0);
+  if (promptTokens > 0) {
+    nextEntry.totalTokens = promptTokens;
+    nextEntry.totalTokensFresh = true;
+    nextEntry.inputTokens = undefined;
+    nextEntry.outputTokens = undefined;
+    nextEntry.cacheRead = undefined;
+    nextEntry.cacheWrite = undefined;
+  }
+
+  sessionStore[sessionKey] = nextEntry;
+  if (sessionEntry) {
+    Object.assign(sessionEntry, nextEntry);
+  }
+  return nextCount;
+}
+
+function getFollowupTestQueue(key: string): {
+  items: FollowupRun[];
+  lastRun?: FollowupRun["run"];
+} {
+  const cleaned = key.trim();
+  const existing = FOLLOWUP_TEST_QUEUES.get(cleaned);
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    items: [] as FollowupRun[],
+    lastRun: undefined as FollowupRun["run"] | undefined,
+  };
+  FOLLOWUP_TEST_QUEUES.set(cleaned, created);
+  return created;
+}
+
+function clearFollowupQueueForFollowupTest(key: string): number {
+  const cleaned = key.trim();
+  const queue = FOLLOWUP_TEST_QUEUES.get(cleaned);
+  if (!queue) {
+    return 0;
+  }
+  const cleared = queue.items.length;
+  FOLLOWUP_TEST_QUEUES.delete(cleaned);
+  return cleared;
+}
+
+function enqueueFollowupRunForFollowupTest(key: string, run: FollowupRun): boolean {
+  const queue = getFollowupTestQueue(key);
+  queue.items.push(run);
+  queue.lastRun = run.run;
+  return true;
+}
+
+function refreshQueuedFollowupSessionForFollowupTest(params: {
+  key: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
+    return;
+  }
+  if (params.previousSessionId === params.nextSessionId) {
+    return;
+  }
+  const queue = FOLLOWUP_TEST_QUEUES.get(cleaned);
+  if (!queue) {
+    return;
+  }
+  const rewrite = (run?: FollowupRun["run"]) => {
+    if (!run || run.sessionId !== params.previousSessionId) {
+      return;
+    }
+    run.sessionId = params.nextSessionId!;
+    if (params.nextSessionFile?.trim()) {
+      run.sessionFile = params.nextSessionFile;
+    }
+  };
+  rewrite(queue.lastRun);
+  for (const item of queue.items) {
+    rewrite(item.run);
+  }
+}
+
+async function persistRunSessionUsageForFollowupTest(
+  params: Parameters<typeof import("./session-run-accounting.js").persistRunSessionUsage>[0],
+): Promise<void> {
+  const { storePath, sessionKey } = params;
+  if (!storePath || !sessionKey) {
+    return;
+  }
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey];
+  if (!entry) {
+    return;
+  }
+  const nextEntry: SessionEntry = {
+    ...entry,
+    updatedAt: Date.now(),
+    modelProvider: params.providerUsed ?? entry.modelProvider,
+    model: params.modelUsed ?? entry.model,
+    contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+    systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+  };
+  if (params.usage) {
+    nextEntry.inputTokens = params.usage.input ?? 0;
+    nextEntry.outputTokens = params.usage.output ?? 0;
+    const cacheUsage = params.lastCallUsage ?? params.usage;
+    nextEntry.cacheRead = cacheUsage?.cacheRead ?? 0;
+    nextEntry.cacheWrite = cacheUsage?.cacheWrite ?? 0;
+  }
+  const promptTokens =
+    params.promptTokens ??
+    (params.lastCallUsage?.input ?? params.usage?.input ?? 0) +
+      (params.lastCallUsage?.cacheRead ?? params.usage?.cacheRead ?? 0) +
+      (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
+  nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
+  nextEntry.totalTokensFresh = promptTokens > 0;
+  store[sessionKey] = nextEntry;
+  await saveSessionStore(storePath, store);
+}
+
+async function loadFreshFollowupRunnerModuleForTest() {
+  vi.resetModules();
+  vi.doMock(
+    "../../agents/model-fallback.js",
+    async () => await import("../../test-utils/model-fallback.mock.js"),
+  );
+  vi.doMock("../../agents/session-write-lock.js", () => ({
+    acquireSessionWriteLock: vi.fn(async () => ({
+      release: async () => {},
+    })),
+  }));
+  vi.doMock("../../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn(async () => false),
+    compactEmbeddedPiSession: vi.fn(async () => undefined),
+    isEmbeddedPiRunActive: vi.fn(() => false),
+    isEmbeddedPiRunStreaming: vi.fn(() => false),
+    queueEmbeddedPiMessage: vi.fn(async () => undefined),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
+  }));
+  vi.doMock("./queue.js", () => ({
+    clearFollowupQueue: clearFollowupQueueForFollowupTest,
+    enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+    refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
+  }));
+  vi.doMock("./session-run-accounting.js", () => ({
+    persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
+    incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+  }));
+  vi.doMock("./route-reply.js", () => ({
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
-  };
-});
-
-import { createFollowupRunner } from "./followup-runner.js";
+  }));
+  ({ createFollowupRunner } = await import("./followup-runner.js"));
+  ({ loadSessionStore, saveSessionStore } = await import("../../config/sessions/store.js"));
+  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  sessionRunAccounting = await import("./session-run-accounting.js");
+  ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
+}
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -40,13 +240,37 @@ const ROUTABLE_TEST_CHANNELS = new Set([
   "feishu",
 ]);
 
-beforeEach(() => {
+beforeEach(async () => {
+  await loadFreshFollowupRunnerModuleForTest();
+  runEmbeddedPiAgentMock.mockReset();
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
   isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
   );
+  clearFollowupQueue("main");
+  FOLLOWUP_TEST_QUEUES.clear();
+});
+
+afterEach(async () => {
+  clearFollowupQueue("main");
+  FOLLOWUP_TEST_QUEUES.clear();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  const { clearSessionStoreCacheForTest } = await import("../../config/sessions/store.js");
+  clearSessionStoreCacheForTest();
+  if (!FOLLOWUP_DEBUG) {
+    return;
+  }
+  const handles = (process as NodeJS.Process & { _getActiveHandles?: () => unknown[] })
+    ._getActiveHandles?.()
+    .map((handle) => handle?.constructor?.name ?? typeof handle);
+  debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
+  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
+    ._getActiveRequests?.()
+    .map((request) => request?.constructor?.name ?? typeof request);
+  debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
@@ -56,6 +280,11 @@ function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   return createMockFollowupRun(overrides);
+}
+
+async function normalizeComparablePath(filePath: string): Promise<string> {
+  const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
+  return path.join(parent, path.basename(filePath));
 }
 
 function mockCompactionRun(params: {
@@ -134,6 +363,7 @@ describe("createFollowupRunner compaction", () => {
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -145,6 +375,7 @@ describe("createFollowupRunner compaction", () => {
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
+          sessionId: "session-rotated",
           compactionCount: 2,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
@@ -174,6 +405,72 @@ describe("createFollowupRunner compaction", () => {
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
+    expect(sessionStore.main.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
+  });
+
+  it("refreshes queued followup runs to the rotated transcript", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session-rotated",
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queuedNext = createQueuedRun({
+      prompt: "next",
+      run: {
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      },
+    });
+    const queueSettings: QueueSettings = { mode: "queue" };
+    enqueueFollowupRun("main", queuedNext, queueSettings);
+
+    const current = createQueuedRun({
+      run: {
+        verboseLevel: "on",
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      },
+    });
+
+    await runner(current);
+
+    expect(queuedNext.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
   });
 
   it("does not count failed compaction end events in followup runs", async () => {
@@ -484,6 +781,64 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     // Accumulated usage is still stored for usage/cost tracking.
     expect(store[sessionKey]?.inputTokens).toBe(1_000);
     expect(store[sessionKey]?.outputTokens).toBe(50);
+  });
+
+  it("passes queued config into usage persistence during drained followups", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-usage-cfg-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+
+    const cfg = {
+      messages: {
+        responsePrefix: "agent",
+      },
+    };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          lastCallUsage: { input: 6, output: 3 },
+          model: "claude-opus-4-5",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            config: cfg,
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath,
+        sessionKey,
+        cfg,
+      }),
+    );
+    persistSpy.mockRestore();
   });
 
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {

@@ -47,8 +47,10 @@ import {
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
+  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
@@ -77,6 +79,10 @@ function resolveAllowModelOverrideFromClient(
   return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
 }
 
+function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return resolveSenderIsOwnerFromClient(client);
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -97,6 +103,43 @@ async function runSessionResetFromAgent(params: {
     key: result.key,
     sessionId: result.entry.sessionId,
   };
+}
+
+function emitSessionsChanged(
+  context: Pick<
+    GatewayRequestHandlerOptions["context"],
+    "broadcastToConnIds" | "getSessionEventSubscriberConnIds"
+  >,
+  payload: { sessionKey?: string; reason: string },
+) {
+  const connIds = context.getSessionEventSubscriberConnIds();
+  if (connIds.size === 0) {
+    return;
+  }
+  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+  context.broadcastToConnIds(
+    "sessions.changed",
+    {
+      ...payload,
+      ts: Date.now(),
+      ...(sessionRow
+        ? {
+            totalTokens: sessionRow.totalTokens,
+            totalTokensFresh: sessionRow.totalTokensFresh,
+            contextTokens: sessionRow.contextTokens,
+            estimatedCostUsd: sessionRow.estimatedCostUsd,
+            modelProvider: sessionRow.modelProvider,
+            model: sessionRow.model,
+            status: sessionRow.status,
+            startedAt: sessionRow.startedAt,
+            endedAt: sessionRow.endedAt,
+            runtimeMs: sessionRow.runtimeMs,
+          }
+        : {}),
+    },
+    connIds,
+    { dropIfSlow: true },
+  );
 }
 
 function dispatchAgentRunFromGateway(params: {
@@ -201,6 +244,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const canResetSession = resolveCanResetSessionFromClient(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     if (requestedModelOverride && !allowModelOverride) {
       respond(
@@ -334,10 +378,19 @@ export const agentHandlers: GatewayRequestHandlers = {
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
+    let isNewSession = false;
     let skipTimestampInjection = false;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
+      if (!canResetSession) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+        );
+        return;
+      }
       const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
@@ -373,6 +426,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
+      isNewSession = !entry;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
@@ -600,6 +654,26 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+
+    if (resolvedSessionKey) {
+      reactivateCompletedSubagentSession({
+        sessionKey: resolvedSessionKey,
+        runId,
+      });
+    }
+
+    if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+      emitSessionsChanged(context, {
+        sessionKey: resolvedSessionKey,
+        reason: "create",
+      });
+    }
+    if (resolvedSessionKey) {
+      emitSessionsChanged(context, {
+        sessionKey: resolvedSessionKey,
+        reason: "send",
+      });
+    }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 

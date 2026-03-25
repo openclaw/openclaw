@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildStructuredCard,
   editMessageFeishu,
@@ -28,6 +28,7 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
+  resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
 }));
 
 vi.mock("./runtime.js", () => ({

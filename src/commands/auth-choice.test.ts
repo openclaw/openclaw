@@ -31,7 +31,7 @@ import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
+} from "../plugins/provider-model-definitions.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -50,7 +50,7 @@ import {
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
 
-vi.mock("../providers/github-copilot-auth.js", () => ({
+vi.mock("../../extensions/github-copilot/login.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
@@ -62,9 +62,14 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
+vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginProviders,
+  };
+});
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({
@@ -1423,7 +1428,7 @@ describe("applyAuthChoice", () => {
         profileId: "minimax-portal:default",
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
-        defaultModel: "minimax-portal/MiniMax-M2.5",
+        defaultModel: "minimax-portal/MiniMax-M2.7",
         apiKey: "minimax-oauth", // pragma: allowlist secret
       },
     ];

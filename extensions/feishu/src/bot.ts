@@ -10,10 +10,9 @@ import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  createScopedPairingAccess,
+  createChannelPairingController,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  issuePairingChallenge,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
   resolveAgentOutboundIdentity,
@@ -21,7 +20,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
@@ -241,7 +240,7 @@ export async function handleFeishuMessage(params: {
   } = params;
 
   // Resolve account with merged config
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const feishuCfg = account.config;
 
   const log = runtime?.log ?? console.log;
@@ -358,6 +357,14 @@ export async function handleFeishuMessage(params: {
     ? [...new Set(rawBroadcastAgents.map((id) => normalizeAgentId(id)))]
     : null;
 
+  // Parse message create_time early so every downstream consumer (pending
+  // history, inbound payload, etc.) uses the original authoring timestamp
+  // instead of the delivery/processing time.  Feishu uses a millisecond
+  // epoch string; fall back to Date.now() only when the field is absent.
+  const messageCreateTimeMs = event.message.create_time
+    ? parseInt(event.message.create_time, 10)
+    : Date.now();
+
   let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {
     if (groupConfig?.enabled === false) {
@@ -415,8 +422,10 @@ export async function handleFeishuMessage(params: {
 
     ({ requireMention } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
-      globalConfig: feishuCfg,
-      groupConfig,
+      cfg,
+      accountId: account.accountId,
+      groupId: ctx.chatId,
+      groupPolicy,
     }));
 
     if (requireMention && !ctx.mentionedBot) {
@@ -433,7 +442,7 @@ export async function handleFeishuMessage(params: {
           entry: {
             sender: ctx.senderOpenId,
             body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
-            timestamp: Date.now(),
+            timestamp: messageCreateTimeMs,
             messageId: ctx.messageId,
           },
         });
@@ -445,7 +454,7 @@ export async function handleFeishuMessage(params: {
 
   try {
     const core = getFeishuRuntime();
-    const pairing = createScopedPairingAccess({
+    const pairing = createChannelPairingController({
       core,
       channel: "feishu",
       accountId: account.accountId,
@@ -471,12 +480,10 @@ export async function handleFeishuMessage(params: {
 
     if (isDirect && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        await issuePairingChallenge({
-          channel: "feishu",
+        await pairing.issueChallenge({
           senderId: ctx.senderOpenId,
           senderIdLine: `Your Feishu user id: ${ctx.senderOpenId}`,
           meta: { name: ctx.senderName },
-          upsertPairingRequest: pairing.upsertPairingRequest,
           onCreated: () => {
             log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
           },
@@ -920,7 +927,7 @@ export async function handleFeishuMessage(params: {
         // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
         // ID and would produce invalid reply targets downstream.
         MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
-        Timestamp: Date.now(),
+        Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
@@ -930,10 +937,6 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    // Parse message create_time (Feishu uses millisecond epoch string).
-    const messageCreateTimeMs = event.message.create_time
-      ? parseInt(event.message.create_time, 10)
-      : undefined;
     // Determine reply target based on group session mode:
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.

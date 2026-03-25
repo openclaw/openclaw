@@ -1,24 +1,23 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/zalo";
 import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "../../../test/helpers/extensions/directory.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
+  const directory = expectDirectorySurface(zaloPlugin.directory);
 
-  it("lists peers from allowFrom", async () => {
+  async function expectPeersFromAllowFrom(allowFrom: string[]) {
     const cfg = {
       channels: {
         zalo: {
-          allowFrom: ["zalo:123", "zl:234", "345"],
+          allowFrom,
         },
       },
     } as unknown as OpenClawConfig;
-
-    const directory = expectDirectorySurface(zaloPlugin.directory);
 
     await expect(
       directory.listPeers({
@@ -45,5 +44,16 @@ describe("zalo directory", () => {
         runtime: runtimeEnv,
       }),
     ).resolves.toEqual([]);
+  }
+
+  it("lists peers from allowFrom", async () => {
+    await expectPeersFromAllowFrom(["zalo:123", "zl:234", "345"]);
+  });
+
+  it("normalizes spaced zalo prefixes in allowFrom and pairing entries", async () => {
+    await expectPeersFromAllowFrom(["  zalo:123  ", "  zl:234  ", " 345 "]);
+
+    expect(zaloPlugin.pairing?.normalizeAllowEntry?.("  zalo:123  ")).toBe("123");
+    expect(zaloPlugin.messaging?.normalizeTarget?.("  zl:234  ")).toBe("234");
   });
 });

@@ -1,28 +1,36 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
-  applyDirectoryQueryAndLimit,
-  collectNormalizedDirectoryIds,
-  listDirectoryGroupEntriesFromMapKeys,
-  toDirectoryEntries,
+  listResolvedDirectoryEntriesFromSources,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectSlackAccount, type InspectedSlackAccount } from "../api.js";
+import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 import { parseSlackTarget } from "./targets.js";
 
-export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }) as InspectedSlackAccount | null;
-  if (!account || !("config" in account)) {
-    return [];
-  }
+function resolveSlackDirectoryConfigAccount(
+  cfg: DirectoryConfigParams["cfg"],
+  accountId?: string | null,
+) {
+  const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultSlackAccountId(cfg));
+  const config = mergeSlackAccountConfig(cfg, resolvedAccountId);
+  return {
+    accountId: resolvedAccountId,
+    config,
+    dm: config.dm,
+  };
+}
 
-  const allowFrom = account.config.allowFrom ?? account.dm?.allowFrom ?? [];
-  const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
-    (channel) => channel.users ?? [],
-  );
-  const ids = collectNormalizedDirectoryIds({
-    sources: [allowFrom, Object.keys(account.config.dms ?? {}), channelUsers],
+export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
+  return listResolvedDirectoryEntriesFromSources({
+    ...params,
+    kind: "user",
+    resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
+    resolveSources: (account) => {
+      const allowFrom = account.config.allowFrom ?? account.dm?.allowFrom ?? [];
+      const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
+        (channel) => channel.users ?? [],
+      );
+      return [allowFrom, Object.keys(account.config.dms ?? {}), channelUsers];
+    },
     normalizeId: (raw) => {
       const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
       const normalizedUserId = (mention?.[1] ?? raw).replace(/^(slack|user):/i, "").trim();
@@ -34,21 +42,14 @@ export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigP
       return normalized?.kind === "user" ? `user:${normalized.id.toLowerCase()}` : null;
     },
   });
-  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }) as InspectedSlackAccount | null;
-  if (!account || !("config" in account)) {
-    return [];
-  }
-  return listDirectoryGroupEntriesFromMapKeys({
-    groups: account.config.channels,
-    query: params.query,
-    limit: params.limit,
+  return listResolvedDirectoryEntriesFromSources({
+    ...params,
+    kind: "group",
+    resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
+    resolveSources: (account) => [Object.keys(account.config.channels ?? {})],
     normalizeId: (raw) => {
       const normalized = parseSlackTarget(raw, { defaultKind: "channel" });
       return normalized?.kind === "channel" ? `channel:${normalized.id.toLowerCase()}` : null;
