@@ -177,12 +177,14 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
-  });
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
-  });
+  const sendCall = sock.sendMessage.mock.calls[0];
+  expect(sendCall?.[0]).toBe(jid);
+  const text = String((sendCall?.[1] as { text?: string } | undefined)?.text ?? "");
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(`Your WhatsApp phone number: ${senderE164}`);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain("```\nPAIRCODE\n```");
+  expect(text).toContain("pairing approve whatsapp PAIRCODE");
 }
 
 let authDir: string | undefined;

@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - TUI/chat: preserve pending user messages when a slow local run emits an empty final event, but still defer and flush the needed history reload after the newer active run finishes so silent/tool-only runs do not stay incomplete. (#53130) Thanks @joelnishanth.
 - Marketplace/agents: correct the ClawHub skill URL in agent docs and stream marketplace archive downloads to disk so installs avoid excess memory use and fail cleanly on empty responses. (#54160) Thanks @QuinnH496.
 - Gateway/channels: keep channel startup sequential while isolating per-channel boot failures, so one broken channel no longer blocks later channels from starting. (#54215) Thanks @JonathanJing.
+- Discord/gateway supervision: centralize gateway error handling behind a lifetime-owned supervisor so early, active, and late-teardown Carbon gateway errors stay classified consistently and stop surfacing as process-killing teardown crashes.
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Telegram/forum topics: recover `#General` topic `1` routing when Telegram omits forum metadata, including native commands, interactive callbacks, inbound message context, and fallback error replies. (#53699) thanks @huntharo
 - Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
@@ -52,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Plugins: enforce terminal hook decision semantics for tool/message guards (#54241) Thanks @joshavant.
 - Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
 - Telegram/pairing: render pairing codes and approval commands as Telegram-only code blocks while keeping shared pairing replies plain text for other channels. (#52784) Thanks @sumukhj1219.
+- Telegram/native commands: run native slash-command execution against the resolved runtime snapshot so DM commands still reply when fresh config reads surface unresolved SecretRefs. (#53179) Thanks @nimbleenigma.
 
 ## 2026.3.23
 
