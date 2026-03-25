@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadConfig } from "../../src/config/config.js";
 import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
@@ -11,7 +12,23 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/extensions/provider-registration.js";
+import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+
+const runtimeMocks = vi.hoisted(() => ({
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+  getOAuthApiKey: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: runtimeMocks.getOAuthApiKey,
+}));
+
+import { getOAuthApiKey as getCodexOAuthApiKey } from "./openai-codex-provider.runtime.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
@@ -164,6 +181,14 @@ async function createTempAgentDir(): Promise<string> {
 }
 
 describe("openai plugin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("registers the expected provider surfaces", () => {
     const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
 
@@ -178,6 +203,109 @@ describe("openai plugin", () => {
     expect(speechProviders).toHaveLength(1);
     expect(mediaProviders).toHaveLength(1);
     expect(imageProviders).toHaveLength(1);
+  });
+
+  it("generates PNG buffers from the OpenAI Images API", async () => {
+    const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            b64_json: Buffer.from("png-data").toString("base64"),
+            revised_prompt: "revised",
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const authStore = { version: 1, profiles: {} };
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "draw a cat",
+      cfg: {},
+      authStore,
+    });
+
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        store: authStore,
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          model: "gpt-image-1",
+          prompt: "draw a cat",
+          n: 1,
+          size: "1024x1024",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        {
+          buffer: Buffer.from("png-data"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+          revisedPrompt: "revised",
+        },
+      ],
+      model: "gpt-image-1",
+    });
+  });
+
+  it("rejects reference-image edits for now", async () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-1",
+        prompt: "Edit this image",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("does not support reference-image edits");
+  });
+
+  it("bootstraps the env proxy dispatcher before refreshing oauth credentials", async () => {
+    const refreshed = {
+      newCredentials: {
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 60_000,
+      },
+    };
+    runtimeMocks.getOAuthApiKey.mockResolvedValue(refreshed);
+
+    await expect(
+      getCodexOAuthApiKey("openai-codex", {
+        "openai-codex": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now(),
+        },
+      }),
+    ).resolves.toBe(refreshed);
+
+    expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(runtimeMocks.getOAuthApiKey).toHaveBeenCalledOnce();
+    expect(
+      runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+    ).toBeLessThan(runtimeMocks.getOAuthApiKey.mock.invocationCallOrder[0]);
   });
 });
 
