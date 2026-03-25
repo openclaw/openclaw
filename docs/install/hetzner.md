@@ -193,6 +193,11 @@ For the generic Docker flow, see [Docker](/install/docker).
           ]
     ```
 
+    If you are adapting the repository's default `docker-compose.yml`, replace
+    the `ports:` block rather than merging an override on top of the existing
+    public port mappings. A naive override can leave `0.0.0.0:18789` or
+    `0.0.0.0:18790` exposed even when you intended a loopback-only VPS setup.
+
     `--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
 
   </Step>
