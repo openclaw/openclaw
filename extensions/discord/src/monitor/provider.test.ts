@@ -354,9 +354,26 @@ describe("monitorDiscordProvider", () => {
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {
     const emitter = new EventEmitter();
+    const drained: Array<{ message: string; type: string }> = [];
     clientGetPluginMock.mockImplementation((name: string) =>
       name === "gateway" ? { emitter, disconnect: vi.fn() } : undefined,
     );
+    monitorLifecycleMock.mockImplementationOnce(async (params) => {
+      (
+        params as {
+          gatewaySupervisor?: {
+            drainPending: (
+              handler: (event: { message: string; type: string }) => "continue" | "stop",
+            ) => "continue" | "stop";
+          };
+          threadBindings: { stop: () => void };
+        }
+      ).gatewaySupervisor?.drainPending((event) => {
+        drained.push(event);
+        return "continue";
+      });
+      params.threadBindings.stop();
+    });
     clientFetchUserMock.mockImplementationOnce(async () => {
       emitter.emit("error", new Error("Fatal Gateway error: 4014"));
       return { id: "bot-1" };
@@ -368,11 +385,9 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    const lifecycleArgs = monitorLifecycleMock.mock.calls[0]?.[0] as {
-      pendingGatewayErrors?: unknown[];
-    };
-    expect(lifecycleArgs.pendingGatewayErrors).toHaveLength(1);
-    expect(String(lifecycleArgs.pendingGatewayErrors?.[0])).toContain("4014");
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.type).toBe("disallowed-intents");
+    expect(drained[0]?.message).toContain("4014");
   });
 
   it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
