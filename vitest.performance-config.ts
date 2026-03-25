@@ -18,19 +18,24 @@ const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
   return runnerOs === "windows";
 };
 
-export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
+type VitestExperimentalConfig = {
   experimental?: {
     fsModuleCache?: true;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   };
-} {
+};
+
+export function loadVitestExperimentalConfig(
+  env: EnvMap = process.env,
+  platform: NodeJS.Platform = process.platform,
+): VitestExperimentalConfig {
   const experimental: {
     fsModuleCache?: true;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   } = {};
-  const windowsEnv = isWindowsEnv(env, process.platform);
+  const windowsEnv = isWindowsEnv(env, platform);
 
   if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
