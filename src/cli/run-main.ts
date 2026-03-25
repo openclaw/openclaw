@@ -95,18 +95,8 @@ export async function runCli(argv: string[] = process.argv) {
   }
   const containerTargetName =
     parsedContainer.container ?? process.env.OPENCLAW_CONTAINER?.trim() ?? null;
-  if (
-    containerTargetName &&
-    (parsedProfile.profile ||
-      process.env.OPENCLAW_PROFILE?.trim() ||
-      process.env.OPENCLAW_GATEWAY_PORT?.trim() ||
-      process.env.OPENCLAW_GATEWAY_URL?.trim() ||
-      process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-      process.env.OPENCLAW_GATEWAY_PASSWORD?.trim())
-  ) {
-    throw new Error(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+  if (containerTargetName && parsedProfile.profile) {
+    throw new Error("--container cannot be combined with --profile/--dev");
   }
 
   const containerTarget = maybeRunCliInContainer(originalArgv);

@@ -27,6 +27,7 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
+import { searchGraphUsers } from "./graph-users.js";
 import {
   escapeOData,
   fetchGraphJson,
@@ -161,5 +162,64 @@ describe("msteams graph helpers", () => {
       "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
     );
     expect(calls[1]).toContain("/teams/team%2Fops/channels?$select=id,displayName");
+  });
+
+  it("returns no graph users for blank queries", async () => {
+    globalThis.fetch = vi.fn() as typeof fetch;
+    await expect(searchGraphUsers({ token: "token-1", query: "   " })).resolves.toEqual([]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses exact mail or UPN lookup for email-like graph user queries", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ value: [{ id: "user-1", displayName: "User One" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await searchGraphUsers({
+      token: "token-2",
+      query: "alice.o'hara@example.com",
+    });
+
+    expect(result).toEqual([{ id: "user-1", displayName: "User One" }]);
+    expect(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0])).toContain(
+      "/users?$filter=(mail%20eq%20'alice.o''hara%40example.com'%20or%20userPrincipalName%20eq%20'alice.o''hara%40example.com')&$select=id,displayName,mail,userPrincipalName",
+    );
+  });
+
+  it("uses displayName search with eventual consistency and default top handling", async () => {
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.includes("displayName%3Abob")) {
+        return new Response(JSON.stringify({ value: [{ id: "user-2", displayName: "Bob" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await expect(searchGraphUsers({ token: "token-3", query: "bob", top: 25 })).resolves.toEqual([
+      { id: "user-2", displayName: "Bob" },
+    ]);
+    await expect(searchGraphUsers({ token: "token-4", query: "carol" })).resolves.toEqual([]);
+
+    const calls = vi.mocked(globalThis.fetch).mock.calls;
+    expect(String(calls[0]?.[0])).toContain(
+      "/users?$search=%22displayName%3Abob%22&$select=id,displayName,mail,userPrincipalName&$top=25",
+    );
+    expect(calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({ ConsistencyLevel: "eventual" }),
+      }),
+    );
+    expect(String(calls[1]?.[0])).toContain(
+      "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",
+    );
   });
 });
