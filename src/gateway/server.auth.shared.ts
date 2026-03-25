@@ -76,7 +76,6 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
 const openTailscaleWs = async (port: number) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
-      origin: "https://gateway.tailnet.ts.net",
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
       "x-forwarded-host": "gateway.tailnet.ts.net",
@@ -391,6 +390,6 @@ export {
   writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
-export { getHandshakeTimeoutMs } from "./server-constants.js";
+export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
 export { PROTOCOL_VERSION } from "./protocol/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

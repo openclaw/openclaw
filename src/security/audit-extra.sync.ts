@@ -1,8 +1,4 @@
-import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 /**
  * Synchronous security audit collector functions.
@@ -11,6 +7,8 @@ import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/
  */
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { resolveEffectiveSandboxToolPolicyForAgent } from "../agents/tool-policy-sandbox.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -21,7 +19,7 @@ import {
 } from "../config/model-input.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { resolveAllowedAgentIds } from "../gateway/hooks.js";
+import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
@@ -320,7 +318,10 @@ function resolveToolPolicies(params: {
   }
 
   if (params.sandboxMode === "all") {
-    const sandboxPolicy = resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined);
+    const sandboxPolicy = resolveEffectiveSandboxToolPolicyForAgent(
+      params.cfg,
+      params.agentId ?? undefined,
+    );
     policies.push(sandboxPolicy);
   }
 

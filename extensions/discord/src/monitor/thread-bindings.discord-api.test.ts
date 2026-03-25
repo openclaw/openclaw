@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -24,13 +24,23 @@ vi.mock("../client.js", () => ({
   createDiscordRestClient: hoisted.createDiscordRestClient,
 }));
 
-vi.mock("../send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
-  sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    addRoleDiscord: vi.fn(),
+    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
+    sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
+  };
+});
 
-const { maybeSendBindingMessage, resolveChannelIdForBinding } =
-  await import("./thread-bindings.discord-api.js");
+let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
+let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
+
+beforeAll(async () => {
+  ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
+    await import("./thread-bindings.discord-api.js"));
+});
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {

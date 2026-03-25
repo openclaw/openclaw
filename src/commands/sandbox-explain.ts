@@ -1,8 +1,6 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { resolveEffectiveSandboxToolPolicyForAgent } from "../agents/tool-policy-sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -19,7 +17,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -148,7 +146,7 @@ export async function sandboxExplainCommand(
   });
 
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
-  const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
+  const toolPolicy = resolveEffectiveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const mainSessionKey = resolveAgentMainSessionKey({
     cfg,
     agentId: resolvedAgentId,
@@ -221,8 +219,10 @@ export async function sandboxExplainCommand(
     fixIt.push("agents.list[].sandbox.mode=off");
   }
   fixIt.push("tools.sandbox.tools.allow");
+  fixIt.push("tools.sandbox.tools.alsoAllow");
   fixIt.push("tools.sandbox.tools.deny");
   fixIt.push("agents.list[].tools.sandbox.tools.allow");
+  fixIt.push("agents.list[].tools.sandbox.tools.alsoAllow");
   fixIt.push("agents.list[].tools.sandbox.tools.deny");
   fixIt.push("tools.elevated.enabled");
   if (channel) {
@@ -262,7 +262,7 @@ export async function sandboxExplainCommand(
   } as const;
 
   if (opts.json) {
-    runtime.log(`${JSON.stringify(payload, null, 2)}\n`);
+    writeRuntimeJson(runtime, payload);
     return;
   }
 

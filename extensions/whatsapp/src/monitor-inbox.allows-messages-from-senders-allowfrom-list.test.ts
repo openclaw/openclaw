@@ -1,14 +1,14 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
-import { monitorWebInbox } from "./inbound.js";
 import {
-  DEFAULT_ACCOUNT_ID,
+  buildNotifyMessageUpsert,
   expectPairingPromptSent,
-  getAuthDir,
-  getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  settleInboundWork,
+  startInboxMonitor,
   upsertPairingRequestMock,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -29,13 +29,8 @@ function createAllowListConfig(allowFrom: string[]) {
 }
 
 async function openInboxMonitor(onMessage = vi.fn()) {
-  const listener = await monitorWebInbox({
-    verbose: false,
-    accountId: DEFAULT_ACCOUNT_ID,
-    authDir: getAuthDir(),
-    onMessage,
-  });
-  return { onMessage, listener, sock: getSock() };
+  const { listener, sock } = await startInboxMonitor(onMessage);
+  return { onMessage, listener, sock };
 }
 
 async function expectOutboundDmSkipsPairing(params: {
@@ -54,13 +49,7 @@ async function expectOutboundDmSkipsPairing(params: {
   });
 
   const onMessage = vi.fn();
-  const listener = await monitorWebInbox({
-    verbose: false,
-    accountId: DEFAULT_ACCOUNT_ID,
-    authDir: getAuthDir(),
-    onMessage,
-  });
-  const sock = getSock();
+  const { listener, sock } = await startInboxMonitor(onMessage);
 
   try {
     sock.ev.emit("messages.upsert", {
@@ -77,7 +66,7 @@ async function expectOutboundDmSkipsPairing(params: {
         },
       ],
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -99,19 +88,15 @@ describe("web monitor inbox", () => {
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "auth1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "authorized message" },
-          messageTimestamp: nowSeconds(60_000),
-        },
-      ],
-    };
+    const upsert = buildNotifyMessageUpsert({
+      id: "auth1",
+      remoteJid: "999@s.whatsapp.net",
+      text: "authorized message",
+      timestamp: nowSeconds(60_000),
+    });
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
@@ -133,19 +118,15 @@ describe("web monitor inbox", () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "self1", fromMe: false, remoteJid: "123@s.whatsapp.net" },
-          message: { conversation: "self message" },
-          messageTimestamp: nowSeconds(60_000),
-        },
-      ],
-    };
+    const upsert = buildNotifyMessageUpsert({
+      id: "self1",
+      remoteJid: "123@s.whatsapp.net",
+      text: "self message",
+      timestamp: nowSeconds(60_000),
+    });
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
@@ -165,64 +146,45 @@ describe("web monitor inbox", () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     // Message from someone else should be blocked
-    const upsertBlocked = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "no-config-1",
-            fromMe: false,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: { conversation: "ping" },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    };
+    const upsertBlocked = buildNotifyMessageUpsert({
+      id: "no-config-1",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: nowSeconds(),
+    });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await new Promise((resolve) => setImmediate(resolve));
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 5 },
+    );
     expect(onMessage).not.toHaveBeenCalled();
     expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
-    const upsertBlockedAgain = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "no-config-1b",
-            fromMe: false,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: { conversation: "ping again" },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    };
+    const upsertBlockedAgain = buildNotifyMessageUpsert({
+      id: "no-config-1b",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping again",
+      timestamp: nowSeconds(),
+    });
 
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settleInboundWork();
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
 
     // Message from self should be allowed
-    const upsertSelf = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "no-config-2",
-            fromMe: false,
-            remoteJid: "123@s.whatsapp.net",
-          },
-          message: { conversation: "self ping" },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    };
+    const upsertSelf = buildNotifyMessageUpsert({
+      id: "no-config-2",
+      remoteJid: "123@s.whatsapp.net",
+      text: "self ping",
+      timestamp: nowSeconds(),
+    });
 
     sock.ev.emit("messages.upsert", upsertSelf);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
@@ -252,6 +214,90 @@ describe("web monitor inbox", () => {
     });
   });
 
+  it("allows owner fromMe group commands when they were not sent by the gateway", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "owner-group-1",
+            fromMe: true,
+            remoteJid: "120363@g.us",
+            participant: "123@s.whatsapp.net",
+          },
+          message: { conversation: "/status" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Owner",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "/status",
+        chatType: "group",
+        from: "120363@g.us",
+        fromMe: true,
+        senderE164: "+123",
+      }),
+    );
+
+    await listener.close();
+  });
+
+  it("filters group fromMe echoes only when the gateway sent the matching message id", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-group-echo-1" } });
+    await listener.sendMessage("120363@g.us", "gateway echo candidate");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "bot-group-echo-1",
+            fromMe: true,
+            remoteJid: "120363@g.us",
+            participant: "123@s.whatsapp.net",
+          },
+          message: { conversation: "gateway echo candidate" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Owner",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
     const staleTs = Math.floor(Date.now() / 1000) - 300;
@@ -273,17 +319,19 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // Verify it WAS marked as read
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "999@s.whatsapp.net",
-        id: "history1",
-        participant: undefined,
-        fromMe: false,
+    await vi.waitFor(
+      () => {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          {
+            remoteJid: "999@s.whatsapp.net",
+            id: "history1",
+            participant: undefined,
+            fromMe: false,
+          },
+        ]);
       },
-    ]);
+      { timeout: 5_000, interval: 5 },
+    );
 
     // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
@@ -292,13 +340,7 @@ describe("web monitor inbox", () => {
   });
 
   it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage: vi.fn(),
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    const sock = getSock();
+    const { listener, sock } = await startInboxMonitor(vi.fn());
 
     await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
 

@@ -4,7 +4,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   type ProviderInfo,
-} from "../../../extensions/telegram/src/model-buttons.js";
+} from "../../../extensions/telegram/api.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";

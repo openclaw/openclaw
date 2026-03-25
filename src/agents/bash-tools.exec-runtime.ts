@@ -19,6 +19,7 @@ export {
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import {
   addSession,
   appendOutput,
@@ -34,6 +35,25 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+
+const SMKX = "\x1b[?1h";
+const RMKX = "\x1b[?1l";
+
+/**
+ * Detect cursor key mode from PTY output chunk.
+ * Uses lastIndexOf to find the *last* toggle in the chunk.
+ * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
+ * or null if no toggle is found.
+ */
+export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+  const lastSmkx = raw.lastIndexOf(SMKX);
+  const lastRmkx = raw.lastIndexOf(RMKX);
+  if (lastSmkx === -1 && lastRmkx === -1) {
+    return null;
+  }
+  // Whichever appears later in the chunk wins.
+  return lastSmkx > lastRmkx ? "application" : "normal";
+}
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
@@ -143,15 +163,36 @@ export const execSchema = Type.Object({
   ),
 });
 
-export type ExecProcessOutcome = {
-  status: "completed" | "failed";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  aggregated: string;
-  timedOut: boolean;
-  reason?: string;
-};
+export type ExecProcessFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "signal"
+  | "aborted"
+  | "runtime-error";
+
+type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
+export type ExecProcessOutcome =
+  | {
+      status: "completed";
+      exitCode: number;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      aggregated: string;
+      timedOut: boolean;
+      failureKind: ExecProcessFailureKind;
+      reason: string;
+    };
 
 export type ExecProcessHandle = {
   session: ProcessSession;
@@ -286,6 +327,116 @@ export function emitExecSystemEvent(
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
+function joinExecFailureOutput(aggregated: string, reason: string) {
+  return aggregated ? `${aggregated}\n\n${reason}` : reason;
+}
+
+function classifyExecFailureKind(params: {
+  exitReason: TerminationReason;
+  exitCode: number;
+  isShellFailure: boolean;
+  exitSignal: NodeJS.Signals | number | null;
+}): ExecExitFailureKind {
+  if (params.isShellFailure) {
+    return params.exitCode === 127 ? "shell-command-not-found" : "shell-not-executable";
+  }
+  if (params.exitReason === "overall-timeout") {
+    return "overall-timeout";
+  }
+  if (params.exitReason === "no-output-timeout") {
+    return "no-output-timeout";
+  }
+  if (params.exitSignal != null) {
+    return "signal";
+  }
+  return "aborted";
+}
+
+export function formatExecFailureReason(params: {
+  failureKind: ExecExitFailureKind;
+  exitSignal: NodeJS.Signals | number | null;
+  timeoutSec: number | null | undefined;
+}): string {
+  switch (params.failureKind) {
+    case "shell-command-not-found":
+      return "Command not found";
+    case "shell-not-executable":
+      return "Command not executable (permission denied)";
+    case "overall-timeout":
+      return typeof params.timeoutSec === "number" && params.timeoutSec > 0
+        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).";
+    case "no-output-timeout":
+      return "Command timed out waiting for output";
+    case "signal":
+      return `Command aborted by signal ${params.exitSignal}`;
+    case "aborted":
+      return "Command aborted before exit code was captured";
+  }
+}
+
+export function buildExecExitOutcome(params: {
+  exit: RunExit;
+  aggregated: string;
+  durationMs: number;
+  timeoutSec: number | null | undefined;
+}): ExecProcessOutcome {
+  const exitCode = params.exit.exitCode ?? 0;
+  const isNormalExit = params.exit.reason === "exit";
+  const isShellFailure = exitCode === 126 || exitCode === 127;
+  const status: ExecProcessOutcome["status"] =
+    isNormalExit && !isShellFailure ? "completed" : "failed";
+  if (status === "completed") {
+    const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+    return {
+      status: "completed",
+      exitCode,
+      exitSignal: params.exit.exitSignal,
+      durationMs: params.durationMs,
+      aggregated: params.aggregated + exitMsg,
+      timedOut: false,
+    };
+  }
+  const failureKind = classifyExecFailureKind({
+    exitReason: params.exit.reason,
+    exitCode,
+    isShellFailure,
+    exitSignal: params.exit.exitSignal,
+  });
+  const reason = formatExecFailureReason({
+    failureKind,
+    exitSignal: params.exit.exitSignal,
+    timeoutSec: params.timeoutSec,
+  });
+  return {
+    status: "failed",
+    exitCode: params.exit.exitCode,
+    exitSignal: params.exit.exitSignal,
+    durationMs: params.durationMs,
+    aggregated: params.aggregated,
+    timedOut: params.exit.timedOut,
+    failureKind,
+    reason: joinExecFailureOutput(params.aggregated, reason),
+  };
+}
+
+export function buildExecRuntimeErrorOutcome(params: {
+  error: unknown;
+  aggregated: string;
+  durationMs: number;
+}): ExecProcessOutcome {
+  return {
+    status: "failed",
+    exitCode: null,
+    exitSignal: null,
+    durationMs: params.durationMs,
+    aggregated: params.aggregated,
+    timedOut: false,
+    failureKind: "runtime-error",
+    reason: joinExecFailureOutput(params.aggregated, String(params.error)),
+  };
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -342,6 +493,7 @@ export async function runExecProcess(opts: {
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
 
@@ -365,7 +517,15 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const raw = data.toString();
+    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
+    // and sent atomically by terminals. Split across chunks is rare in practice.
+    const mode = detectCursorKeyMode(raw);
+    if (mode) {
+      session.cursorKeyMode = mode;
+    }
+    const str = sanitizeBinaryOutput(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -384,6 +544,7 @@ export async function runExecProcess(opts: {
     typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
+  let sandboxFinalizeToken: unknown;
 
   const spawnSpec:
     | {
@@ -398,11 +559,18 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
-      } = (() => {
+      } = await (async () => {
     if (opts.sandbox) {
+      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
+        command: execCommand,
+        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+        env: shellRuntimeEnv,
+        usePty: opts.usePty,
+      });
+      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
       return {
         mode: "child" as const,
-        argv: [
+        argv: backendExecSpec?.argv ?? [
           "docker",
           ...buildDockerExecArgs({
             containerName: opts.sandbox.containerName,
@@ -412,8 +580,10 @@ export async function runExecProcess(opts: {
             tty: opts.usePty,
           }),
         ],
-        env: process.env,
-        stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        env: backendExecSpec?.env ?? process.env,
+        stdinMode:
+          backendExecSpec?.stdinMode ??
+          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -519,71 +689,38 @@ export async function runExecProcess(opts: {
 
   const promise = managedRun
     .wait()
-    .then((exit): ExecProcessOutcome => {
+    .then(async (exit): Promise<ExecProcessOutcome> => {
       const durationMs = Date.now() - startedAt;
-      const isNormalExit = exit.reason === "exit";
-      const exitCode = exit.exitCode ?? 0;
-      // Shell exit codes 126 (not executable) and 127 (command not found) are
-      // unrecoverable infrastructure failures that should surface as real errors
-      // rather than silently completing — e.g. `python: command not found`.
-      const isShellFailure = exitCode === 126 || exitCode === 127;
-      const status: "completed" | "failed" =
-        isNormalExit && !isShellFailure ? "completed" : "failed";
+      const outcome = buildExecExitOutcome({
+        exit,
+        aggregated: session.aggregated.trim(),
+        durationMs,
+        timeoutSec: opts.timeoutSec,
+      });
 
-      markExited(session, exit.exitCode, exit.exitSignal, status);
-      maybeNotifyOnExit(session, status);
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
-      const aggregated = session.aggregated.trim();
-      if (status === "completed") {
-        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
-        return {
-          status: "completed",
-          exitCode,
-          exitSignal: exit.exitSignal,
-          durationMs,
-          aggregated: aggregated + exitMsg,
-          timedOut: false,
-        };
+      if (opts.sandbox?.finalizeExec) {
+        await opts.sandbox.finalizeExec({
+          status: outcome.status,
+          exitCode: exit.exitCode ?? null,
+          timedOut: exit.timedOut,
+          token: sandboxFinalizeToken,
+        });
       }
-      const reason = isShellFailure
-        ? exitCode === 127
-          ? "Command not found"
-          : "Command not executable (permission denied)"
-        : exit.reason === "overall-timeout"
-          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
-            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
-          : exit.reason === "no-output-timeout"
-            ? "Command timed out waiting for output"
-            : exit.exitSignal != null
-              ? `Command aborted by signal ${exit.exitSignal}`
-              : "Command aborted before exit code was captured";
-      return {
-        status: "failed",
-        exitCode: exit.exitCode,
-        exitSignal: exit.exitSignal,
-        durationMs,
-        aggregated,
-        timedOut: exit.timedOut,
-        reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
-      };
+      return outcome;
     })
     .catch((err): ExecProcessOutcome => {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
-      const aggregated = session.aggregated.trim();
-      const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
-      return {
-        status: "failed",
-        exitCode: null,
-        exitSignal: null,
+      return buildExecRuntimeErrorOutcome({
+        error: err,
+        aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
-        aggregated,
-        timedOut: false,
-        reason: message,
-      };
+      });
     });
 
   return {
