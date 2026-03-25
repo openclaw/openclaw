@@ -83,6 +83,8 @@ beforeEach(() => {
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
+  // Worker-thread Vitest runs do not reliably mutate the real process title,
+  // so capture writes at the property boundary instead.
   Object.defineProperty(process, "title", {
     configurable: true,
     enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
