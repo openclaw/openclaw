@@ -247,7 +247,15 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath: str
     const script = `<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${escapedPath};</script>`;
     // Insert after the opening <head> tag, before any other content.
     // Use a callback function to avoid replacement-token expansion (e.g., $&, $`, $').
-    html = html.replace(/<head[^>]*>/i, (match) => match + script);
+    // If <head> is not found, prepend the script as a fallback.
+    let injected = false;
+    html = html.replace(/<head[^>]*>/i, (match) => {
+      injected = true;
+      return match + script;
+    });
+    if (!injected) {
+      html = script + html;
+    }
   }
   // Compute CSP hashes for any inline scripts (including the basePath script we may have injected)
   const hashes = computeInlineScriptHashes(html);

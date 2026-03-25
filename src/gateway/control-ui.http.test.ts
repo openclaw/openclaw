@@ -601,4 +601,30 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it("injects basePath script at start when <head> tag is missing", async () => {
+    const html = "<html><body>No head tag</body></html>\n";
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/openclaw/", method: "GET" } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: tmp },
+          },
+        );
+        expect(handled).toBe(true);
+        const servedHtml = end.mock.calls[0]?.[0] as string | undefined;
+        expect(servedHtml).toBeDefined();
+        // Script should be prepended when <head> is not found
+        expect(servedHtml).toContain(
+          '<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__="/openclaw";</script>',
+        );
+        expect(servedHtml!.startsWith("<script>")).toBe(true);
+      },
+    });
+  });
 });
