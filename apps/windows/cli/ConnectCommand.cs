@@ -423,7 +423,8 @@ internal sealed class GatewayCliClient : IDisposable
         {
             var result = await _ws.ReceiveAsync(buffer, ct);
             if (result.MessageType == WebSocketMessageType.Close) break;
-            accumulated.Add(new ArraySegment<byte>(buffer, 0, result.Count));
+            // Copy before buffering — buffer is reused on the next ReceiveAsync call.
+            accumulated.Add(new ArraySegment<byte>(buffer[..result.Count]));
             if (result.EndOfMessage) break;
         }
 

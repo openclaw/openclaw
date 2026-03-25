@@ -235,8 +235,21 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
             token = Domain.Config.OpenClawConfigFile.ReadGatewayAuthToken();
         }
 
-        _logger.LogInformation("Sending connect: tokenPresent={HasToken} tokenLen={Len}",
-            !string.IsNullOrEmpty(token), token?.Length ?? 0);
+        // Read password for deployments using gateway.auth.mode=password.
+        string? password = null;
+        if (string.IsNullOrEmpty(token))
+        {
+            password = Domain.Config.OpenClawConfigFile.GatewayPassword();
+        }
+
+        _logger.LogInformation("Sending connect: tokenPresent={HasToken} passwordPresent={HasPw}",
+            !string.IsNullOrEmpty(token), !string.IsNullOrEmpty(password));
+
+        object auth = !string.IsNullOrEmpty(token)
+            ? new { token }
+            : !string.IsNullOrEmpty(password)
+                ? (object)new { password }
+                : new { };
 
         var frame = JsonSerializer.Serialize(new
         {
@@ -264,7 +277,7 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
                 caps = Array.Empty<string>(),
                 commands = Array.Empty<string>(),
                 permissions = new { },
-                auth = new { token },
+                auth,
                 locale = "en-US",
                 userAgent = "openclaw-windows/1.0.0"
             },
