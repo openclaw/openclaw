@@ -1,0 +1,718 @@
+# Instincts generated from https://github.com/AbdulSadath77/openclaw
+# Generated: 2026-03-25T18:39:07.134Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: openclaw-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, test, refactor
+
+## Evidence
+
+- 200 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix(compaction): surface safeguard cancel reasons and clarify /compact skips (#51072), test: keep vitest on forks only
+
+---
+id: openclaw-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Commit Length
+
+## Action
+
+Write moderate-length commit messages (~55 characters)
+
+## Evidence
+
+- Average commit message length: 55 chars
+- Based on 200 commits
+
+---
+id: openclaw-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Naming Files
+
+## Action
+
+Use kebab-case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: kebab-case
+
+---
+id: openclaw-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: openclaw-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: openclaw-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: acp, agents, auto-reply, bindings, bootstrap
+
+---
+id: openclaw-test-colocate
+trigger: "when writing tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Test Colocate
+
+## Action
+
+Place test file next to the source file (e.g., Button.test.tsx next to Button.tsx)
+
+## Evidence
+
+- Colocated test pattern detected
+- Tests live alongside source files
+
+---
+id: openclaw-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Test Framework
+
+## Action
+
+Use vitest as the test framework
+
+## Evidence
+
+- Test framework detected: vitest
+- File pattern: *.test.ts
+
+---
+id: openclaw-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: openclaw-test-mocking
+trigger: "when mocking dependencies in tests"
+confidence: 0.75
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Mocking pattern detected: vi.mock
+- Consistent across test files
+
+---
+id: openclaw-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Test Types
+
+## Action
+
+Write unit, integration, e2e tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration, e2e
+- Coverage config: yes
+
+---
+id: openclaw-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.75
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~5x per month
+- Files: src/auto-reply/reply/*, src/plugins/*, extensions/feishu/src/*
+
+---
+id: openclaw-workflow-refactoring
+trigger: "when refactoring code"
+confidence: 0.7
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Refactoring
+
+## Action
+
+Follow the refactoring workflow:
+1. Ensure tests pass before refactor
+2. Refactor code structure
+3. Verify tests still pass
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~4x per month
+- Files: src/**/*
+
+---
+id: openclaw-workflow-feature-or-bugfix-with-tests-and-changelog
+trigger: "when doing feature or bugfix with tests and changelog"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Feature Or Bugfix With Tests And Changelog
+
+## Action
+
+Follow the feature-or-bugfix-with-tests-and-changelog workflow:
+1. Implement code changes in relevant source files (e.g., src/ or extensions/).
+2. Add or update corresponding test files (e.g., *.test.ts) in the same or related directory.
+3. Update CHANGELOG.md to document the change.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~10x per month
+- Files: src/**/*.ts, src/**/*.test.ts, extensions/**/**/*.ts
+
+---
+id: openclaw-workflow-plugin-or-extension-provider-addition-or-update
+trigger: "when doing plugin or extension provider addition or update"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Plugin Or Extension Provider Addition Or Update
+
+## Action
+
+Follow the plugin-or-extension-provider-addition-or-update workflow:
+1. Add or modify provider implementation files in extensions/<provider>/.
+2. Update or add related test files in the same extension.
+3. Update or add documentation files for the provider.
+4. Update CHANGELOG.md.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: extensions/*/*.ts, extensions/*/*.test.ts, docs/providers/*.md
+
+---
+id: openclaw-workflow-release-preparation-or-version-bump
+trigger: "when doing release preparation or version bump"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Release Preparation Or Version Bump
+
+## Action
+
+Follow the release-preparation-or-version-bump workflow:
+1. Update version numbers in config files (e.g., Version.xcconfig, Info.plist, package.json).
+2. Update or generate schema/config files (e.g., schema.base.generated.ts, config-baseline.json).
+3. Update CHANGELOG.md.
+4. Optionally update appcast.xml.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: apps/ios/Config/Version.xcconfig, apps/macos/Sources/OpenClaw/Resources/Info.plist, package.json
+
+---
+id: openclaw-workflow-test-suite-refactor-or-collapsing
+trigger: "when doing test suite refactor or collapsing"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Test Suite Refactor Or Collapsing
+
+## Action
+
+Follow the test-suite-refactor-or-collapsing workflow:
+1. Identify related test files (e.g., in extensions/telegram/src/).
+2. Merge or collapse multiple test files into fewer or single files.
+3. Remove redundant or duplicate tests.
+4. Commit with a message indicating test suite collapse or refactor.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: extensions/telegram/src/*.test.ts, test/**/*.test.ts
+
+---
+id: openclaw-workflow-plugin-sdk-or-loader-alias-update
+trigger: "when doing plugin sdk or loader alias update"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/AbdulSadath77/openclaw
+---
+
+# Openclaw Workflow Plugin Sdk Or Loader Alias Update
+
+## Action
+
+Follow the plugin-sdk-or-loader-alias-update workflow:
+1. Modify src/plugins/sdk-alias.ts and/or src/plugins/loader.ts.
+2. Update or add related test files (e.g., sdk-alias.test.ts).
+3. Update package.json exports if needed.
+4. Update CHANGELOG.md.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src/plugins/sdk-alias.ts, src/plugins/loader.ts, src/plugins/sdk-alias.test.ts
+
+---
+id: openclaw-instinct-file-naming
+trigger: "When creating a new file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct File Naming
+
+## Action
+
+Name the file using kebab-case (e.g., my-feature.ts)
+
+## Evidence
+
+- Pattern in src/auto-reply/reply/dispatch-from-config.test.ts
+- Pattern in extensions/feishu/src/bot.ts
+
+---
+id: openclaw-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Function Naming
+
+## Action
+
+Name the function using camelCase (e.g., handleEvent)
+
+## Evidence
+
+- TypeScript code style conventions
+- Pattern in src/ and extensions/ files
+
+---
+id: openclaw-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase (e.g., MessageHandler)
+
+## Evidence
+
+- TypeScript code style conventions
+- Pattern in src/ and extensions/ files
+
+---
+id: openclaw-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE (e.g., MAX_RETRIES)
+
+## Evidence
+
+- TypeScript code style conventions
+- Pattern in src/ and extensions/ files
+
+---
+id: openclaw-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Import Style
+
+## Action
+
+Use relative import paths (e.g., import x from '../module')
+
+## Evidence
+
+- Pattern in src/ and extensions/ files
+
+---
+id: openclaw-instinct-export-style
+trigger: "When exporting functions or classes"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Export Style
+
+## Action
+
+Use named exports (e.g., export function foo())
+
+## Evidence
+
+- Pattern in src/ and extensions/ files
+
+---
+id: openclaw-instinct-test-file-pattern
+trigger: "When creating a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Test File Pattern
+
+## Action
+
+Name the file with the pattern *.test.ts
+
+## Evidence
+
+- Pattern in src/auto-reply/reply/dispatch-from-config.test.ts
+- Pattern in extensions/feishu/src/config-schema.test.ts
+
+---
+id: openclaw-instinct-test-framework
+trigger: "When writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Test Framework
+
+## Action
+
+Use the vitest framework for all tests
+
+## Evidence
+
+- vitest.config.ts present
+- Pattern in *.test.ts files
+
+---
+id: openclaw-instinct-mocking-style
+trigger: "When mocking dependencies in tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Mocking Style
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Pattern in *.test.ts files
+- Mention of mockingStyle: vi.mock
+
+---
+id: openclaw-instinct-test-types
+trigger: "When designing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Test Types
+
+## Action
+
+Include unit, integration, and e2e tests as appropriate
+
+## Evidence
+
+- Mention of testTypes: [unit, integration, e2e]
+- Pattern in test files
+
+---
+id: openclaw-instinct-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Commit Format
+
+## Action
+
+Use conventional commit prefixes (fix, test, refactor, build, docs, etc.) and a concise summary
+
+## Evidence
+
+- fix(compaction): surface safeguard cancel reasons and clarify /compact skips (#51072)
+- test: keep vitest on forks only
+- refactor: align pairing replies, daemon hints, and feishu mention policy
+
+---
+id: openclaw-instinct-feature-bugfix-workflow
+trigger: "When adding a new feature or fixing a bug that requires validation and release notes"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Feature Bugfix Workflow
+
+## Action
+
+Implement code changes, add/update corresponding tests, and update CHANGELOG.md
+
+## Evidence
+
+- Workflow: feature-or-bugfix-with-tests-and-changelog
+- Pattern in commits and files: src/**/*.ts, *.test.ts, CHANGELOG.md
+
+---
+id: openclaw-instinct-plugin-provider-workflow
+trigger: "When adding or updating a provider/capability in an extension or plugin"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Plugin Provider Workflow
+
+## Action
+
+Modify provider implementation, update/add related tests and documentation, then update CHANGELOG.md
+
+## Evidence
+
+- Workflow: plugin-or-extension-provider-addition-or-update
+- Pattern in extensions/*/*.ts, docs/providers/*.md, CHANGELOG.md
+
+---
+id: openclaw-instinct-release-prep-workflow
+trigger: "When preparing for a new release or bumping the version"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Release Prep Workflow
+
+## Action
+
+Update version numbers, schema/config files, and CHANGELOG.md; optionally update appcast.xml
+
+## Evidence
+
+- Workflow: release-preparation-or-version-bump
+- Pattern in package.json, schema.base.generated.ts, CHANGELOG.md, appcast.xml
+
+---
+id: openclaw-instinct-test-suite-refactor-workflow
+trigger: "When restructuring, merging, or improving the organization of test files"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Test Suite Refactor Workflow
+
+## Action
+
+Merge/collapse related test files, remove redundancies, and commit with a message indicating test suite refactor
+
+## Evidence
+
+- Workflow: test-suite-refactor-or-collapsing
+- Pattern in extensions/telegram/src/*.test.ts, test/**/*.test.ts
+
+---
+id: openclaw-instinct-plugin-sdk-alias-update-workflow
+trigger: "When changing plugin-sdk exports or plugin loader alias resolution"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: AbdulSadath77/openclaw
+---
+
+# Openclaw Instinct Plugin Sdk Alias Update Workflow
+
+## Action
+
+Modify sdk-alias/loader, update/add related tests, update package.json exports and CHANGELOG.md
+
+## Evidence
+
+- Workflow: plugin-sdk-or-loader-alias-update
+- Pattern in src/plugins/sdk-alias.ts, src/plugins/loader.ts, package.json, CHANGELOG.md
+
