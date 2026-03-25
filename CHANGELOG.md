@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - MiniMax: add image generation provider for `image-01` model, supporting generate and image-to-image editing with aspect ratio control. (#54487) Thanks @liyuan97.
 - MiniMax: trim model catalog to M2.7 only, removing legacy M2, M2.1, M2.5, and VL-01 models. (#54487) Thanks @liyuan97.
+- Plugins/runtime: expose `runHeartbeatOnce` in the plugin runtime `system` namespace so plugins can trigger a single heartbeat cycle with an explicit delivery target override (e.g. `heartbeat: { target: "last" }`). (#40299) Thanks @loveyana.
 
 ### Fixes
 
