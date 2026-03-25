@@ -1366,6 +1366,95 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(newParent?.childSessions).toEqual(["agent:main:subagent:shared-child"]);
   });
 
+  test("does not reattach moved children through stale spawnedBy store metadata", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:subagent:old-parent-store": {
+        sessionId: "sess-old-parent-store",
+        updatedAt: now - 4_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:subagent:new-parent-store": {
+        sessionId: "sess-new-parent-store",
+        updatedAt: now - 3_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:subagent:shared-child-store": {
+        sessionId: "sess-shared-child-store",
+        updatedAt: now - 1_000,
+        spawnedBy: "agent:main:subagent:old-parent-store",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-old-parent-store",
+      childSessionKey: "agent:main:subagent:old-parent-store",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent store task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent-store",
+      childSessionKey: "agent:main:subagent:new-parent-store",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent store task",
+      cleanup: "keep",
+      createdAt: now - 8_000,
+      startedAt: now - 7_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-store-stale-parent",
+      childSessionKey: "agent:main:subagent:shared-child-store",
+      controllerSessionKey: "agent:main:subagent:old-parent-store",
+      requesterSessionKey: "agent:main:subagent:old-parent-store",
+      requesterDisplayKey: "old-parent-store",
+      task: "shared child stale store parent",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_500,
+      endedAt: now - 4_500,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-child-store-current-parent",
+      childSessionKey: "agent:main:subagent:shared-child-store",
+      controllerSessionKey: "agent:main:subagent:new-parent-store",
+      requesterSessionKey: "agent:main:subagent:new-parent-store",
+      requesterDisplayKey: "new-parent-store",
+      task: "shared child current store parent",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const oldParent = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:old-parent-store",
+    );
+    const newParent = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:new-parent-store",
+    );
+
+    expect(oldParent?.childSessions).toBeUndefined();
+    expect(newParent?.childSessions).toEqual(["agent:main:subagent:shared-child-store"]);
+  });
+
   test("preserves original session timing across follow-up replacement runs", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
