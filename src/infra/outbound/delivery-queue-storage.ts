@@ -26,6 +26,8 @@ export type QueuedDeliveryPayload = {
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
+  gatewayClientScopes?: readonly string[];
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -142,6 +144,7 @@ export async function enqueueDelivery(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mirror: params.mirror,
+    gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   });
   return id;

@@ -552,6 +552,7 @@ export type ChannelPollContext = {
   threadId?: string | null;
   silent?: boolean;
   isAnonymous?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

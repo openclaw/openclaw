@@ -141,6 +141,7 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
