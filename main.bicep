@@ -221,6 +221,7 @@ node --require /tmp/patch.js openclaw.mjs config set channels.slack.enabled true
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '"open"'
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom "$OPENCLAW_SLACK_ALLOWED_MEMBERS"
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '"open"'
+node --require /tmp/patch.js openclaw.mjs config set tools.profile full
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
