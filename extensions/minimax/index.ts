@@ -24,6 +24,7 @@ import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+import { createMinimaxWebSearchProvider } from "./minimax-web-search-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
@@ -284,5 +285,6 @@ export default definePluginEntry({
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProviderForApi());
+    api.registerWebSearchProvider(createMinimaxWebSearchProvider());
   },
 });
