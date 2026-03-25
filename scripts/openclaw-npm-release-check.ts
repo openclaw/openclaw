@@ -227,6 +227,7 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
 
   const mismatchedExtensions: Array<{ name: string; version: string }> = [];
   const missingVersionExtensions: string[] = [];
+  const parseErrorExtensions: string[] = [];
 
   for (const dir of dirs) {
     const packagePath = join(extensionsDir, dir.name, "package.json");
@@ -242,7 +243,7 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
         mismatchedExtensions.push({ name: dir.name, version: pkg.version });
       }
     } catch {
-      // Skip extensions with invalid package.json
+      parseErrorExtensions.push(dir.name);
     }
   }
 
@@ -256,6 +257,12 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
   if (missingVersionExtensions.length > 0) {
     errors.push(
       `${missingVersionExtensions.length} extension(s) are missing a version field in package.json: ${missingVersionExtensions.join(", ")}. Every extension must have a version matching the core package.`,
+    );
+  }
+
+  if (parseErrorExtensions.length > 0) {
+    errors.push(
+      `${parseErrorExtensions.length} extension(s) have invalid or unreadable package.json: ${parseErrorExtensions.join(", ")}. Fix or remove these manifests before release.`,
     );
   }
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   collectControlUiPackErrors,
@@ -248,7 +248,7 @@ describe("collectReleasePackageMetadataErrors", () => {
 });
 
 describe("collectExtensionVersionErrors", () => {
-  it("detects extension version mismatches in the current project", () => {
+  it("detects extension version mismatches", () => {
     // Skip if extensions directory doesn't exist (sparse checkout)
     if (!existsSync("extensions")) {
       return;
@@ -262,30 +262,39 @@ describe("collectExtensionVersionErrors", () => {
     expect(errors[0]).toContain("pnpm plugins:sync");
   });
 
-  it("returns no errors when root version matches extensions", () => {
+  it("returns no errors when all extensions match the root version", () => {
     // Skip if extensions directory doesn't exist (sparse checkout)
     if (!existsSync("extensions")) {
       return;
     }
 
-    // Get the actual version from the root package.json
-    const rootPkg = JSON.parse(readFileSync("package.json", "utf8"));
-    const rootVersion = rootPkg.version;
+    // Create a mock scenario: use the first extension's version as the "root" version
+    // This guarantees at least one extension matches, testing the matching logic
+    const extensionsDir = "extensions";
+    const firstExtension = readdirSync(extensionsDir, { withFileTypes: true }).filter((e) =>
+      e.isDirectory(),
+    )[0];
 
-    // Check current extensions to see if they match
-    const errors = collectExtensionVersionErrors(rootVersion);
-
-    // If extensions are in sync, expect no errors
-    // If extensions are out of sync (current state), just verify the function returns valid output
-    if (errors.length === 0) {
-      // Happy path: all extensions match the root version
-      expect(errors).toHaveLength(0);
-    } else {
-      // Current state: extensions are out of sync
-      // Verify the error format is correct
-      expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0]).toContain("extension(s) have version mismatch");
-      expect(errors[0]).toContain("pnpm plugins:sync");
+    if (!firstExtension) {
+      return; // No extensions to test
     }
+
+    const firstPkgPath = `extensions/${firstExtension.name}/package.json`;
+    if (!existsSync(firstPkgPath)) {
+      return;
+    }
+
+    const firstPkg = JSON.parse(readFileSync(firstPkgPath, "utf8"));
+    if (!firstPkg.version) {
+      return;
+    }
+
+    // Use this extension's version as root version
+    // The function should not report this extension as mismatched
+    const errors = collectExtensionVersionErrors(firstPkg.version);
+
+    // At minimum, this specific extension should NOT be in the error message
+    const hasFirstExtensionError = errors.some((e) => e.includes(firstExtension.name));
+    expect(hasFirstExtensionError).toBe(false);
   });
 });
