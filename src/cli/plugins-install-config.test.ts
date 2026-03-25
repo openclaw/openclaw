@@ -119,6 +119,36 @@ describe("loadConfigForInstall", () => {
     expect(result).toBe(snapshotCfg);
   });
 
+  it("allows npm:-prefixed Matrix reinstall recovery", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
+    const snapshotCfg = {
+      plugins: { installs: { matrix: { source: "path", installPath: "/gone" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { matrix: {} } } },
+        config: snapshotCfg,
+        issues: [
+          { path: "channels.matrix", message: "unknown channel id: matrix" },
+          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+        ],
+      }),
+    );
+
+    const result = await loadConfigForInstall({
+      rawSpec: "npm:@openclaw/matrix",
+      normalizedSpec: "npm:@openclaw/matrix",
+    });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(cleanStaleMatrixPluginConfigMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toBe(snapshotCfg);
+  });
+
   it("rejects unrelated invalid config even during Matrix reinstall", async () => {
     const invalidConfigErr = new Error("config invalid");
     (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";

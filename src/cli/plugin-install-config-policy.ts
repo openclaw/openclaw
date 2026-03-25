@@ -20,11 +20,20 @@ function isPluginInstallCommand(commandPath: string[]): boolean {
   return commandPath[0] === "plugins" && commandPath[1] === "install";
 }
 
+function stripNpmPrefix(spec: string): string {
+  const trimmed = spec.trim();
+  return trimmed.toLowerCase().startsWith("npm:") ? trimmed.slice("npm:".length).trim() : trimmed;
+}
+
 function isExplicitMatrixInstallRequest(request: PluginInstallRequestContext): boolean {
   if (request.marketplace) {
     return false;
   }
-  const candidates = [request.rawSpec.trim(), request.normalizedSpec.trim()];
+  const candidates = [
+    request.rawSpec.trim(),
+    request.normalizedSpec.trim(),
+    stripNpmPrefix(request.rawSpec),
+  ];
   if (candidates.includes("@openclaw/matrix")) {
     return true;
   }
