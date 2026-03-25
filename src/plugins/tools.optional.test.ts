@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
   optional: boolean;
   source: string;
+  names: string[];
   factory: (ctx: unknown) => unknown;
 };
 
@@ -59,6 +61,7 @@ function setMultiToolRegistry() {
       pluginId: "multi",
       optional: false,
       source: "/tmp/multi.js",
+      names: ["message", "other_tool"],
       factory: () => [makeTool("message"), makeTool("other_tool")],
     },
   ]);
@@ -78,6 +81,7 @@ function setOptionalDemoRegistry() {
       pluginId: "optional-demo",
       optional: true,
       source: "/tmp/optional-demo.js",
+      names: ["optional_tool"],
       factory: () => makeTool("optional_tool"),
     },
   ]);
@@ -94,6 +98,7 @@ describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
+    resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
 
@@ -126,6 +131,7 @@ describe("resolvePluginTools optional tools", () => {
         pluginId: "message",
         optional: false,
         source: "/tmp/message.js",
+        names: ["optional_tool"],
         factory: () => makeTool("optional_tool"),
       },
     ]);
