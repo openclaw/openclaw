@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -32,7 +34,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
-  triggerInternalHook: vi.fn(async () => {}),
+  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -236,8 +238,25 @@ async function getMainPreviewEntry(ws: import("ws").WebSocket) {
   return entry;
 }
 
+function isInternalHookEvent(value: unknown): value is InternalHookEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.sessionKey === "string" &&
+    Array.isArray(candidate.messages) &&
+    typeof candidate.context === "object" &&
+    candidate.context !== null
+  );
+}
+
 describe("gateway server sessions", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
@@ -1915,6 +1934,50 @@ describe("gateway server sessions", () => {
         action: "patch",
       }),
     );
+
+    ws.close();
+  });
+
+  test("session:patch hook mutations cannot change the response path", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cfg-isolation-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
+      if (!isInternalHookEvent(event) || !isSessionPatchEvent(event)) {
+        return;
+      }
+      event.context.cfg.agents = {
+        ...event.context.cfg.agents,
+        defaults: {
+          ...event.context.cfg.agents?.defaults,
+          model: "zai/glm-4.6",
+        },
+      };
+    });
+
+    const { ws } = await openClient();
+    const patched = await rpcReq<{
+      entry: { label?: string };
+      key: string;
+      resolved: { modelProvider: string; model: string };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "cfg-isolation",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.resolved).toEqual({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
     ws.close();
   });

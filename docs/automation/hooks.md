@@ -326,7 +326,7 @@ See `SessionsPatchParamsSchema` in `src/gateway/protocol/schema/sessions.ts` for
 
 ```typescript
 const handler = async (event) => {
-  if (event.type !== "session:patch") {
+  if (event.type !== "session" || event.action !== "patch") {
     return;
   }
   const { patch } = event.context;

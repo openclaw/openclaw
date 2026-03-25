@@ -18,7 +18,11 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { triggerInternalHook, type SessionPatchHookEvent } from "../../hooks/internal-hooks.js";
+import {
+  triggerInternalHook,
+  type SessionPatchHookContext,
+  type SessionPatchHookEvent,
+} from "../../hooks/internal-hooks.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -895,15 +899,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const hookContext: SessionPatchHookContext = structuredClone({
+      sessionEntry: applied.entry,
+      patch: p,
+      cfg,
+    });
     const hookEvent: SessionPatchHookEvent = {
       type: "session",
       action: "patch",
       sessionKey: target.canonicalKey ?? key,
-      context: {
-        sessionEntry: { ...applied.entry },
-        patch: { ...p },
-        cfg,
-      },
+      context: hookContext,
       timestamp: new Date(),
       messages: [],
     };
