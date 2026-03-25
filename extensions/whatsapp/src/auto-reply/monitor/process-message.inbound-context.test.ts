@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 
 let capturedCtx: unknown;
@@ -111,9 +111,12 @@ import { updateLastRouteInBackground } from "./last-route.js";
 let processMessage: typeof import("./process-message.js").processMessage;
 
 describe("web processMessage inbound context", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ processMessage } = await import("./process-message.js"));
+  });
+
+  beforeEach(async () => {
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();

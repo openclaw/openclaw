@@ -4,6 +4,10 @@ import {
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
+import {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  normalizeGoogleApiBaseUrl,
+} from "../infra/google-api-base-url.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -22,7 +26,6 @@ export type GeminiEmbeddingClient = {
   outputDimensionality?: number;
 };
 
-const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
@@ -205,9 +208,9 @@ function normalizeGeminiBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, "");
   const openAiIndex = trimmed.indexOf("/openai");
   if (openAiIndex > -1) {
-    return trimmed.slice(0, openAiIndex);
+    return normalizeGoogleApiBaseUrl(trimmed.slice(0, openAiIndex));
   }
-  return trimmed;
+  return normalizeGoogleApiBaseUrl(trimmed);
 }
 
 function buildGeminiModelPath(model: string): string {
@@ -302,7 +305,8 @@ export async function resolveGeminiEmbeddingClient(
       );
 
   const providerConfig = options.config.models?.providers?.google;
-  const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
+  const rawBaseUrl =
+    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GOOGLE_API_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);

@@ -86,6 +86,13 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
       error: null,
       result: null,
     },
+    toolsEffective: {
+      loading: false,
+      error: null,
+      result: null,
+    },
+    runtimeSessionKey: "main",
+    runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
