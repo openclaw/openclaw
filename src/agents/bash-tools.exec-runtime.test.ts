@@ -4,8 +4,41 @@ const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
+let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+
+describe("detectCursorKeyMode", () => {
+  beforeEach(async () => {
+    ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
+  });
+
+  it("returns null when no toggle found", () => {
+    expect(detectCursorKeyMode("hello world")).toBe(null);
+    expect(detectCursorKeyMode("")).toBe(null);
+  });
+
+  it("detects smkx (application mode)", () => {
+    expect(detectCursorKeyMode("\x1b[?1h")).toBe("application");
+    expect(detectCursorKeyMode("\x1b[?1h\x1b=")).toBe("application");
+    expect(detectCursorKeyMode("before \x1b[?1h after")).toBe("application");
+  });
+
+  it("detects rmkx (normal mode)", () => {
+    expect(detectCursorKeyMode("\x1b[?1l")).toBe("normal");
+    expect(detectCursorKeyMode("\x1b[?1l\x1b>")).toBe("normal");
+    expect(detectCursorKeyMode("before \x1b[?1l after")).toBe("normal");
+  });
+
+  it("last toggle wins when both present", () => {
+    // smkx first, then rmkx - should be normal
+    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l")).toBe("normal");
+    // rmkx first, then smkx - should be application
+    expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
+    // Multiple toggles - last one wins
+    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
 
 describe("emitExecSystemEvent", () => {
   beforeEach(async () => {

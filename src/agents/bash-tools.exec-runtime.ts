@@ -36,6 +36,25 @@ import {
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
+const SMKX = "\x1b[?1h";
+const RMKX = "\x1b[?1l";
+
+/**
+ * Detect cursor key mode from PTY output chunk.
+ * Uses lastIndexOf to find the *last* toggle in the chunk.
+ * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
+ * or null if no toggle is found.
+ */
+export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+  const lastSmkx = raw.lastIndexOf(SMKX);
+  const lastRmkx = raw.lastIndexOf(RMKX);
+  if (lastSmkx === -1 && lastRmkx === -1) {
+    return null;
+  }
+  // Whichever appears later in the chunk wins.
+  return lastSmkx > lastRmkx ? "application" : "normal";
+}
+
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
@@ -474,6 +493,7 @@ export async function runExecProcess(opts: {
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
 
@@ -497,7 +517,15 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const raw = data.toString();
+    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
+    // and sent atomically by terminals. Split across chunks is rare in practice.
+    const mode = detectCursorKeyMode(raw);
+    if (mode) {
+      session.cursorKeyMode = mode;
+    }
+    const str = sanitizeBinaryOutput(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();

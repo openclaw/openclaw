@@ -131,9 +131,7 @@ describe("runCli profile env bootstrap", () => {
   it("rejects --container combined with --profile", async () => {
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "--profile", "rawdog", "status"]),
-    ).rejects.toThrow(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
 
     expect(dotenvState.loadDotEnv).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
@@ -142,17 +140,13 @@ describe("runCli profile env bootstrap", () => {
   it("rejects --container combined with interleaved --profile", async () => {
     await expect(
       runCli(["node", "openclaw", "status", "--container", "demo", "--profile", "rawdog"]),
-    ).rejects.toThrow(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
   });
 
   it("rejects --container combined with interleaved --dev", async () => {
     await expect(
       runCli(["node", "openclaw", "status", "--container", "demo", "--dev"]),
-    ).rejects.toThrow(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
   });
 
   it("does not let dotenv change container target resolution", async () => {
@@ -174,12 +168,12 @@ describe("runCli profile env bootstrap", () => {
     });
   });
 
-  it("rejects container mode when OPENCLAW_PROFILE is already set in env", async () => {
+  it("allows container mode when OPENCLAW_PROFILE is already set in env", async () => {
     process.env.OPENCLAW_PROFILE = "work";
 
-    await expect(runCli(["node", "openclaw", "--container", "demo", "status"])).rejects.toThrow(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+    await expect(
+      runCli(["node", "openclaw", "--container", "demo", "status"]),
+    ).resolves.toBeUndefined();
   });
 
   it.each([
@@ -187,12 +181,12 @@ describe("runCli profile env bootstrap", () => {
     ["OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"],
     ["OPENCLAW_GATEWAY_TOKEN", "demo-token"],
     ["OPENCLAW_GATEWAY_PASSWORD", "demo-password"],
-  ])("rejects container mode when %s is set in env", async (key, value) => {
+  ])("allows container mode when %s is set in env", async (key, value) => {
     process.env[key] = value;
 
-    await expect(runCli(["node", "openclaw", "--container", "demo", "status"])).rejects.toThrow(
-      "--container cannot be combined with --profile/--dev or gateway override env vars",
-    );
+    await expect(
+      runCli(["node", "openclaw", "--container", "demo", "status"]),
+    ).resolves.toBeUndefined();
   });
 
   it("allows container mode when only OPENCLAW_STATE_DIR is set in env", async () => {
