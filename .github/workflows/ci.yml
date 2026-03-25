@@ -643,8 +643,8 @@ jobs:
 
   compat-node22:
     name: "compat-node22"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    needs: [scope]
+    if: needs.scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
