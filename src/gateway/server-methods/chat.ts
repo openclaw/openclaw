@@ -1490,7 +1490,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             cfg,
             catalog: [],
             defaultProvider,
-            defaultModel: undefined,
+            defaultModel: agentDefault.model,
             agentId,
           });
           const storedModelInAllowlist = allowAny || allowedKeys.has(userModelKey);
