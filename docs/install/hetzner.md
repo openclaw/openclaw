@@ -191,6 +191,27 @@ For the generic Docker flow, see [Docker](/install/docker).
             "${OPENCLAW_GATEWAY_PORT}",
             "--allow-unconfigured",
           ]
+      openclaw-cli:
+        image: ${OPENCLAW_IMAGE}
+        build: .
+        env_file:
+          - .env
+        environment:
+          - HOME=/home/node
+          - TERM=xterm-256color
+          - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+          - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+          - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
+        volumes:
+          - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+          - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+        network_mode: "service:openclaw-gateway"
+        stdin_open: true
+        tty: true
+        init: true
+        entrypoint: ["node", "dist/index.js"]
+        depends_on:
+          - openclaw-gateway
     ```
 
     `--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
@@ -212,6 +233,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     ```bash
     docker compose run --rm openclaw-cli config set gateway.controlUi.allowedOrigins '["http://127.0.0.1:18789"]' --strict-json
+    docker compose restart openclaw-gateway
     ```
 
     If you changed the gateway port, replace `18789` with your configured port.
