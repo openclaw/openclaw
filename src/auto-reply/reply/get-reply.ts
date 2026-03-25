@@ -353,11 +353,27 @@ export async function getReplyFromConfig(
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
         const imageModelKeys = new Set<string>();
+
+        // Resolve the image model's primary to get its provider for fallback resolution.
+        // Providerless fallbacks should resolve against the image model's provider,
+        // not the agent's default provider (to handle mixed-provider configs correctly).
+        let imageModelDefaultProvider = defaultProvider;
+        if (imageModelPrimary && channelAliasIndex && defaultProvider) {
+          const resolved = resolveModelRefFromString({
+            raw: imageModelPrimary.trim(),
+            defaultProvider,
+            aliasIndex: channelAliasIndex,
+          });
+          if (resolved) {
+            imageModelDefaultProvider = resolved.ref.provider;
+          }
+        }
+
         const addResolvedModelKey = (rawModel: string) => {
           imageModelKeys.add(rawModel.trim());
           const resolved = resolveModelRefFromString({
             raw: rawModel.trim(),
-            defaultProvider,
+            defaultProvider: imageModelDefaultProvider,
             aliasIndex: channelAliasIndex,
           });
           if (resolved) {
