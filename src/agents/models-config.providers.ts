@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAnthropicVertexProvider,
