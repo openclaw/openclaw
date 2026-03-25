@@ -17,6 +17,8 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
 const DELEGATION_POLL_INTERVAL_MS = 30_000;
 const DELEGATION_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+// Orphaned runs: accepted (created_at set) but never started; treated as lost after this duration
+const DELEGATION_ORPHAN_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 type ActiveRunRow = {
   run_id: string;
@@ -251,6 +253,50 @@ export function startGatewayMaintenanceTimers(params: {
           } catch (updateErr) {
             params.logHealth.error(
               `delegation: failed to mark zombie run ${row.run_id} as ended: ${formatError(updateErr)}`,
+            );
+          }
+        }
+      }
+
+      // Detect orphaned runs: accepted (inserted) but never started, older than threshold.
+      // This happens when the gateway restarts between sessions_spawn returning "accepted" and
+      // the subagent actually being launched. The run has created_at but started_at IS NULL.
+      for (const row of rows) {
+        if (
+          row.started_at == null &&
+          row.ended_at == null &&
+          row.created_at != null &&
+          nowMs - row.created_at > DELEGATION_ORPHAN_THRESHOLD_MS
+        ) {
+          params.logHealth.error(
+            `delegation: orphaned run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
+              `task=${(row.task ?? "").slice(0, 80)}) — accepted but never started after ` +
+              `${Math.round((nowMs - row.created_at) / 1000)}s, marking failed`,
+          );
+          try {
+            db.prepare(
+              `UPDATE op1_subagent_runs
+               SET ended_at = ?, outcome_json = ?, ended_reason = ?, cleanup_completed_at = ?
+               WHERE run_id = ?`,
+            ).run(
+              nowMs,
+              JSON.stringify({ status: "interrupted", reason: "gateway_restart_before_start" }),
+              "gateway_restart_before_start",
+              nowMs,
+              row.run_id,
+            );
+            // Notify the requester session so the user knows the delegation was lost
+            if (row.requester_session_key) {
+              params.nodeSendToSession(row.requester_session_key, "delegation-lost", {
+                runId: row.run_id,
+                reason: "gateway_restart_before_start",
+                message:
+                  "A delegation was interrupted because the gateway restarted before the subagent could start. Please retry your request.",
+              });
+            }
+          } catch (updateErr) {
+            params.logHealth.error(
+              `delegation: failed to mark orphaned run ${row.run_id} as failed: ${formatError(updateErr)}`,
             );
           }
         }

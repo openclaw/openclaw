@@ -45,7 +45,7 @@ You wake up fresh each session. These files are your continuity:
 
 ### 📝 Write It Down
 
-**MANDATORY at end of every session with more than 5 messages:** Write a daily note to `memory/YYYY-MM-DD.md`. Include: what task you were given, what you found or did, and any pending items. Even if the result was "nothing found" — write it down (date and task matter for continuity).
+**MANDATORY at end of every session:** Write a daily note to `memory/YYYY-MM-DD.md`. Include: what task you were given, what you found or did, and any pending items. Even if the result was "nothing found" — write it down (date and task matter for continuity). No exceptions — write before returning results.
 
 Memory is limited. If you want to remember something, write it to a file. "Mental notes" don't survive sessions. Files do.
 

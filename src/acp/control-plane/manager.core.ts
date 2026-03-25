@@ -202,6 +202,43 @@ export class AcpSessionManager {
         logVerbose(
           `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
         );
+        // If the identity has been pending for more than 24 hours and still can't be reconciled,
+        // mark it as resolved to prevent this warning from firing on every gateway restart.
+        // The session was likely created against a backend session that no longer exists.
+        const STALE_PENDING_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+        const lastUpdatedAt = currentIdentity?.lastUpdatedAt ?? 0;
+        if (lastUpdatedAt > 0 && Date.now() - lastUpdatedAt > STALE_PENDING_THRESHOLD_MS) {
+          logVerbose(
+            `acp-manager: marking stale pending identity as resolved for ${session.sessionKey} (pending since ${new Date(lastUpdatedAt).toISOString()})`,
+          );
+          await this.writeSessionMeta({
+            cfg: params.cfg,
+            sessionKey: session.sessionKey,
+            mutate: (currentMeta) => {
+              if (!currentMeta) {
+                return null;
+              }
+              const existingIdentity = currentMeta.identity;
+              return {
+                ...currentMeta,
+                identity: {
+                  source: existingIdentity?.source ?? "status",
+                  ...(existingIdentity?.acpxRecordId
+                    ? { acpxRecordId: existingIdentity.acpxRecordId }
+                    : {}),
+                  ...(existingIdentity?.acpxSessionId
+                    ? { acpxSessionId: existingIdentity.acpxSessionId }
+                    : {}),
+                  ...(existingIdentity?.agentSessionId
+                    ? { agentSessionId: existingIdentity.agentSessionId }
+                    : {}),
+                  state: "resolved" as const,
+                  lastUpdatedAt: Date.now(),
+                },
+              };
+            },
+          });
+        }
       }
     }
 

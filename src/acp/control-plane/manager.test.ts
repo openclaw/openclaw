@@ -1032,6 +1032,66 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).not.toHaveBeenCalled();
   });
 
+  it("marks stale pending identity as resolved when reconcile fails and identity is older than 24h", async () => {
+    const runtimeState = createRuntime();
+    // ensureSession throws to simulate a backend that no longer has this session
+    runtimeState.ensureSession.mockRejectedValue(new Error("ACP session not found"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    // lastUpdatedAt is 25 hours ago — older than the 24h stale threshold
+    const stalePendingAt = Date.now() - 25 * 60 * 60 * 1000;
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxRecordId: "old-record",
+        lastUpdatedAt: stalePendingAt,
+      },
+    };
+    const sessionKey = "agent:codex:acp:stale-session";
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: { sessionId: "stale-1", updatedAt: Date.now(), acp: currentMeta },
+        acp: currentMeta,
+      },
+    ]);
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return { sessionKey: key, storeSessionKey: key, acp: currentMeta };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return { sessionId: "stale-1", updatedAt: Date.now(), acp: currentMeta };
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    // checked=1 failed=1 because ensureSession threw, but the stale session should be resolved
+    expect(result).toEqual({ checked: 1, resolved: 0, failed: 1 });
+    // After failing, the stale identity should be flipped to "resolved" so future restarts skip it
+    expect(currentMeta.identity?.state).toBe("resolved");
+    expect(currentMeta.identity?.acpxRecordId).toBe("old-record");
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves existing ACP session identifiers when ensure returns none", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({
