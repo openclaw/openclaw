@@ -1,8 +1,15 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -229,6 +236,81 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
+function buildCronAwarenessIdempotencyKey(params: {
+  deliveryIdempotencyKey: string;
+  sessionKey: string;
+}): string {
+  return `cron-awareness:v1:${params.deliveryIdempotencyKey}:${params.sessionKey}`;
+}
+
+function collectDeliveryMirrorMediaUrls(payloads: readonly ReplyPayload[]): string[] | undefined {
+  const urls = payloads.flatMap((payload) => {
+    const mediaUrls = payload.mediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [];
+    if (mediaUrls.length > 0) {
+      return mediaUrls;
+    }
+    const mediaUrl = payload.mediaUrl?.trim();
+    return mediaUrl ? [mediaUrl] : [];
+  });
+  if (urls.length === 0) {
+    return undefined;
+  }
+  return [...new Set(urls)];
+}
+
+function resolveCronAwarenessMainTarget(params: { cfg: OpenClawConfig; agentId: string }): {
+  sessionKey: string;
+  storeAgentId: string;
+} {
+  const sessionKey =
+    params.cfg.session?.scope === "global"
+      ? resolveMainSessionKey(params.cfg)
+      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+  return {
+    sessionKey,
+    storeAgentId: sessionKey === "global" ? resolveDefaultAgentId(params.cfg) : params.agentId,
+  };
+}
+
+async function persistCronAwarenessMirror(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  agentId: string;
+  deliveryIdempotencyKey: string;
+  payloads: readonly ReplyPayload[];
+  outputText?: string;
+  synthesizedText?: string;
+}): Promise<void> {
+  const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
+  const mediaUrls = collectDeliveryMirrorMediaUrls(params.payloads);
+  if (!text && !mediaUrls) {
+    return;
+  }
+
+  const target = resolveCronAwarenessMainTarget({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const appended = await appendAssistantMessageToSessionTranscript({
+    agentId: target.storeAgentId,
+    storePath: resolveStorePath(params.cfg.session?.store, {
+      agentId: target.storeAgentId,
+    }),
+    sessionKey: target.sessionKey,
+    text,
+    mediaUrls,
+    idempotencyKey: buildCronAwarenessIdempotencyKey({
+      deliveryIdempotencyKey: params.deliveryIdempotencyKey,
+      sessionKey: target.sessionKey,
+    }),
+  });
+  if (!appended.ok) {
+    logWarn(
+      `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${appended.reason}`,
+    );
+  }
+}
+
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
@@ -419,6 +501,15 @@ export async function dispatchCronDelivery(
         : await runDelivery();
       delivered = deliveryResults.length > 0;
       if (delivered) {
+        await persistCronAwarenessMirror({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey,
+          payloads: payloadsForDelivery,
+          outputText,
+          synthesizedText,
+        });
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
       return null;

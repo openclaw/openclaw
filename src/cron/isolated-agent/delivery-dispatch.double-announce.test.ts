@@ -14,6 +14,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (must be hoisted before imports) ---
 
+vi.mock("../../config/sessions.js", () => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
+    ok: true,
+    sessionFile: "x",
+    messageId: "m-1",
+  })),
+  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
+  resolveMainSessionKey: vi.fn(() => "global"),
+  resolveStorePath: vi.fn(
+    (_store: unknown, opts?: { agentId?: string }) =>
+      `/mock/${opts?.agentId?.trim().toLowerCase() || "main"}/sessions.json`,
+  ),
+}));
+
 vi.mock("../../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
