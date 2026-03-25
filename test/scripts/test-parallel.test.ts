@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,7 +15,17 @@ import {
 } from "../../scripts/test-parallel-utils.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const listTempArtifactDirs = () => {
+  const prefix = "openclaw-test-parallel-";
+  return new Set(
+    fs
+      .readdirSync(os.tmpdir(), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
+      .map((entry) => path.join(os.tmpdir(), entry.name)),
+  );
+};
 const readWrapperCommand = (env = {}) => {
+  const beforeTempDirs = listTempArtifactDirs();
   const result = spawnSync(
     "node",
     [
@@ -33,10 +44,7 @@ const readWrapperCommand = (env = {}) => {
       encoding: "utf8",
     },
   );
-  const combinedOutput = `${result.stdout}\n${result.stderr}`;
-  const tempDirs = [...combinedOutput.matchAll(/(\/[^\s]*openclaw-test-parallel-[^\s]*)/g)].map(
-    (match) => match[1],
-  );
+  const tempDirs = [...listTempArtifactDirs()].filter((dir) => !beforeTempDirs.has(dir));
 
   try {
     expect(result.status).toBe(0);
