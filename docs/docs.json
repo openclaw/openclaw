@@ -1194,7 +1194,7 @@
                   "providers/litellm",
                   "providers/minimax",
                   "providers/mistral",
-                  "providers/modelstudio",
+                  "providers/qwen_modelstudio",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
