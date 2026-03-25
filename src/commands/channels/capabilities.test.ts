@@ -3,10 +3,16 @@ process.env.NO_COLOR = "1";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
 const logs: string[] = [];
 const errors: string[] = [];
+const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
+const mocks = vi.hoisted(() => ({
+  writeConfigFile: vi.fn(),
+  resolveInstallableChannelPlugin: vi.fn(),
+}));
 
 vi.mock("./shared.js", () => ({
   requireValidConfig: vi.fn(async () => ({ channels: {} })),
@@ -18,6 +24,18 @@ vi.mock("./shared.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: vi.fn(),
+}));
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    writeConfigFile: mocks.writeConfigFile,
+  };
+});
+
+vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
+  resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
 }));
 
 const runtime = {
@@ -58,7 +76,7 @@ function buildPlugin(params: {
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => params.account ?? { accountId: "default" },
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       isConfigured: () => true,
       isEnabled: () => true,
     },
@@ -68,7 +86,7 @@ function buildPlugin(params: {
         }
       : undefined,
     actions: {
-      listActions: () => ["poll"],
+      describeMessageTool: () => ({ actions: ["poll"] }),
     },
   };
 }
@@ -77,6 +95,11 @@ describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
     resetOutput();
     vi.clearAllMocks();
+    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      configChanged: false,
+    });
   });
 
   it("prints Slack bot + user scopes when user token is configured", async () => {
@@ -106,6 +129,12 @@ describe("channelsCapabilitiesCommand", () => {
     };
     vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
     vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
 
     await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
 
@@ -139,11 +168,54 @@ describe("channelsCapabilitiesCommand", () => {
     };
     vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
     vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "msteams",
+      plugin,
+      configChanged: false,
+    });
 
     await channelsCapabilitiesCommand({ channel: "msteams" }, runtime);
 
     const output = logs.join("\n");
     expect(output).toContain("ChannelMessage.Read.All (channel history)");
     expect(output).toContain("Files.Read.All (files (OneDrive))");
+  });
+
+  it("installs an explicit optional channel before rendering capabilities", async () => {
+    const plugin = buildPlugin({
+      id: "whatsapp",
+      probe: { ok: true },
+    });
+    plugin.status = {
+      ...plugin.status,
+      formatCapabilitiesProbe: () => [{ text: "Probe: linked" }],
+    };
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: {
+        channels: {},
+        plugins: { entries: { whatsapp: { enabled: true } } },
+      },
+      channelId: "whatsapp",
+      plugin,
+      configChanged: true,
+    });
+    vi.mocked(listChannelPlugins).mockReturnValue([]);
+    vi.mocked(getChannelPlugin).mockReturnValue(undefined);
+
+    await channelsCapabilitiesCommand({ channel: "whatsapp" }, runtime);
+
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawChannel: "whatsapp",
+        allowInstall: true,
+      }),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plugins: { entries: { whatsapp: { enabled: true } } },
+      }),
+    );
+    expect(logs.join("\n")).toContain("Probe: linked");
   });
 });

@@ -85,10 +85,10 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.4 exists", async () => {
     mockPiDiscoveryModels([
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -198,7 +198,7 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
       },
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -241,7 +241,6 @@ describe("loadModelCatalog", () => {
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
-        name: "gpt-5.4",
       }),
     );
   });

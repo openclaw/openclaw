@@ -129,7 +129,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setForeground(value: Boolean) {
     foreground = value
-    runtimeRef.value?.setForeground(value)
+    val runtime =
+      if (value && prefs.onboardingCompleted.value) {
+        ensureRuntime()
+      } else {
+        runtimeRef.value
+      }
+    runtime?.setForeground(value)
   }
 
   fun setDisplayName(value: String) {
@@ -229,6 +235,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
     ensureRuntime().handleCanvasA2UIActionFromWebView(payloadJson)
+  }
+
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
   }
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {

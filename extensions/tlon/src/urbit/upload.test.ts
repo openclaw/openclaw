@@ -1,23 +1,23 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 
-// Mock fetchWithSsrFGuard from plugin-sdk
-vi.mock("openclaw/plugin-sdk/tlon", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/tlon")>();
+// Mock fetchWithSsrFGuard from the focused infra seam.
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
     fetchWithSsrFGuard: vi.fn(),
   };
 });
 
-// Mock @tloncorp/api
-vi.mock("@tloncorp/api", () => ({
+// Mock the local Tlon upload seam.
+vi.mock("../tlon-api.js", () => ({
   uploadFile: vi.fn(),
 }));
 
 describe("uploadImageFromUrl", () => {
   async function loadUploadMocks() {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
-    const { uploadFile } = await import("@tloncorp/api");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/infra-runtime");
+    const { uploadFile } = await import("../tlon-api.js");
     const { uploadImageFromUrl } = await import("./upload.js");
     return {
       mockFetch: vi.mocked(fetchWithSsrFGuard),

@@ -1,3 +1,6 @@
+// Private helper surface for the bundled signal plugin.
+// Keep this list additive and scoped to symbols used under extensions/signal.
+
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
@@ -52,6 +55,9 @@ export {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
 } from "../../extensions/signal/api.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/runtime-api.js";
-export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/runtime-api.js";
-export { sendMessageSignal } from "../../extensions/signal/runtime-api.js";
+export { monitorSignalProvider } from "../../extensions/signal/api.js";
+export { probeSignal } from "../../extensions/signal/api.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
+export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
+export { sendMessageSignal } from "../../extensions/signal/api.js";
+export { signalMessageActions } from "../../extensions/signal/api.js";

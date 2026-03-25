@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/discord";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../../extensions/discord/src/runtime-api.js";
 
 export type NativeCommandSpecMock = {
   name: string;
@@ -248,15 +248,16 @@ export const baseConfig = (): OpenClawConfig =>
     channels: {
       discord: {
         accounts: {
-          default: {},
+          default: {
+            token: "MTIz.abc.def",
+          },
         },
       },
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", () => {
-  class Command {}
-  class ReadyListener {}
+vi.mock("@buape/carbon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon")>();
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -293,7 +294,7 @@ vi.mock("@buape/carbon", () => {
       return clientGetPluginMock(name);
     }
   }
-  return { Client, Command, RateLimitError, ReadyListener };
+  return { ...actual, Client, RateLimitError };
 });
 
 vi.mock("@buape/carbon/gateway", () => ({
@@ -318,6 +319,16 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/command-auth", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth")>(
+    "openclaw/plugin-sdk/command-auth",
+  );
+  return {
+    ...actual,
+    listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
+    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+  };
+});
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
     "openclaw/plugin-sdk/reply-runtime",
@@ -325,8 +336,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   return {
     ...actual,
     resolveTextChunkLimit: () => 2000,
-    listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
   };
 });
 
@@ -463,11 +472,14 @@ vi.mock("../../../extensions/discord/src/monitor/provider.lifecycle.js", () => (
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/rest-fetch.js", () => ({
-  resolveDiscordRestFetch: () => async () => undefined,
+  resolveDiscordRestFetch: () => async () => {
+    throw new Error("offline");
+  },
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
+  resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
 }));

@@ -1,3 +1,6 @@
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
@@ -10,10 +13,7 @@ import {
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-} from "openclaw/plugin-sdk/bluebubbles";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveBlueBubblesAccount } from "./accounts.js";
-import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
+} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import {
   normalizeBlueBubblesHandle,
@@ -67,10 +67,10 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg, currentChannelId }) => {
+  describeMessageTool: ({ cfg, currentChannelId }) => {
     const account = resolveBlueBubblesAccount({ cfg: cfg });
     if (!account.enabled || !account.configured) {
-      return [];
+      return null;
     }
     const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
@@ -107,7 +107,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         }
       }
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),

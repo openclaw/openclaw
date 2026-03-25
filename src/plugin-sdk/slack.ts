@@ -29,13 +29,13 @@ export {
   resolveConfiguredFromRequiredCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
+export {
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
+} from "../../extensions/slack/api.js";
 export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -43,7 +43,7 @@ export {
 export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/slack/api.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
@@ -60,7 +60,18 @@ export { extractSlackToolSend, listSlackMessageActions } from "../../extensions/
 export { buildSlackThreadingToolContext } from "../../extensions/slack/api.js";
 export { parseSlackBlocksInput } from "../../extensions/slack/api.js";
 export { handleSlackHttpRequest } from "../../extensions/slack/api.js";
-export { sendMessageSlack } from "../../extensions/slack/runtime-api.js";
+export { createSlackWebClient } from "../../extensions/slack/src/client.js";
+export { normalizeAllowListLower } from "../../extensions/slack/src/monitor/allow-list.js";
+export {
+  handleSlackAction,
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+  monitorSlackProvider,
+  probeSlack,
+  resolveSlackChannelAllowlist,
+  resolveSlackUserAllowlist,
+  sendMessageSlack,
+} from "../../extensions/slack/runtime-api.js";
 export {
   deleteSlackMessage,
   downloadSlackFile,
@@ -78,6 +89,4 @@ export {
   unpinSlackMessage,
 } from "../../extensions/slack/api.js";
 export { recordSlackThreadParticipation } from "../../extensions/slack/api.js";
-export { handleSlackMessageAction } from "./slack-message-actions.js";
-export { createSlackActions } from "../channels/plugins/slack.actions.js";
-export type { SlackActionContext } from "../agents/tools/slack-actions.js";
+export type { SlackActionContext } from "../../extensions/slack/runtime-api.js";

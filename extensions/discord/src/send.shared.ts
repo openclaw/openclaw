@@ -12,11 +12,13 @@ import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -276,10 +278,7 @@ export function buildDiscordTextChunks(
     maxLines: opts.maxLinesPerMessage,
     chunkMode: opts.chunkMode,
   });
-  if (!chunks.length && text) {
-    chunks.push(text);
-  }
-  return chunks;
+  return resolveTextChunksWithFallback(text, chunks);
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {
@@ -418,6 +417,7 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
+  filename: string | undefined,
   mediaLocalRoots: readonly string[] | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
@@ -432,6 +432,12 @@ async function sendDiscordMedia(
     mediaUrl,
     buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
   );
+  const requestedFileName = filename?.trim();
+  const resolvedFileName =
+    requestedFileName ||
+    media.fileName ||
+    (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
+    "upload";
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
@@ -451,7 +457,7 @@ async function sendDiscordMedia(
     files: [
       {
         data: fileData,
-        name: media.fileName ?? "upload",
+        name: resolvedFileName,
       },
     ],
   });

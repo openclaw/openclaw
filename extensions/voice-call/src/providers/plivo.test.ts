@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { PlivoProvider } from "./plivo.js";
 
+function requireEvent<T>(event: T | undefined, message: string): T {
+  if (!event) {
+    throw new Error(message);
+  }
+  return event;
+}
+
+function requireResponseBody(body: string | undefined): string {
+  if (!body) {
+    throw new Error("Plivo provider did not return a response body");
+  }
+  return body;
+}
+
 describe("PlivoProvider", () => {
   it("parses answer callback into call.answered and returns keep-alive XML", () => {
     const provider = new PlivoProvider({
@@ -18,11 +32,13 @@ describe("PlivoProvider", () => {
     });
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.type).toBe("call.answered");
-    expect(result.events[0]?.callId).toBe("internal-call-id");
-    expect(result.events[0]?.providerCallId).toBe("call-uuid");
-    expect(result.providerResponseBody).toContain("<Wait");
-    expect(result.providerResponseBody).toContain('length="300"');
+    const event = requireEvent(result.events[0], "expected Plivo answer event");
+    expect(event.type).toBe("call.answered");
+    expect(event.callId).toBe("internal-call-id");
+    expect(event.providerCallId).toBe("call-uuid");
+    const responseBody = requireResponseBody(result.providerResponseBody);
+    expect(responseBody).toContain("<Wait");
+    expect(responseBody).toContain('length="300"');
   });
 
   it("uses verified request key when provided", () => {
@@ -44,6 +60,8 @@ describe("PlivoProvider", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.dedupeKey).toBe("plivo:v3:verified");
+    expect(requireEvent(result.events[0], "expected verified Plivo event").dedupeKey).toBe(
+      "plivo:v3:verified",
+    );
   });
 });

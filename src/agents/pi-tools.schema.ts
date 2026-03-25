@@ -1,6 +1,10 @@
+import type { ModelCompatConfig } from "../config/types.models.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
+import { stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -65,8 +69,13 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 export function normalizeToolParameters(
   tool: AnyAgentTool,
-  options?: { modelProvider?: string; modelId?: string },
+  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
 ): AnyAgentTool {
+  function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
+    copyPluginToolMeta(tool, target);
+    copyChannelAgentToolMeta(tool as never, target as never);
+    return target;
+  }
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -88,13 +97,13 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (isXai) {
+    if (hasXaiSchemaProfile) {
       return stripXaiUnsupportedKeywords(s);
     }
     return s;
@@ -103,10 +112,10 @@ export function normalizeToolParameters(
   // If schema already has type + properties (no top-level anyOf to merge),
   // clean it for Gemini/xAI compatibility as appropriate.
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
-    return {
+    return preserveToolMeta({
       ...tool,
       parameters: applyProviderCleaning(schema),
-    };
+    });
   }
 
   // Some tool schemas (esp. unions) may omit `type` at the top-level. If we see
@@ -118,10 +127,10 @@ export function normalizeToolParameters(
     !Array.isArray(schema.oneOf)
   ) {
     const schemaWithType = { ...schema, type: "object" };
-    return {
+    return preserveToolMeta({
       ...tool,
       parameters: applyProviderCleaning(schemaWithType),
-    };
+    });
   }
 
   const variantKey = Array.isArray(schema.anyOf)
@@ -187,7 +196,7 @@ export function normalizeToolParameters(
     additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
   };
 
-  return {
+  return preserveToolMeta({
     ...tool,
     // Flatten union schemas into a single object schema:
     // - Gemini doesn't allow top-level `type` together with `anyOf`.
@@ -195,7 +204,7 @@ export function normalizeToolParameters(
     // - Anthropic accepts proper JSON Schema with constraints.
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
     parameters: applyProviderCleaning(flattenedSchema),
-  };
+  });
 }
 
 /**

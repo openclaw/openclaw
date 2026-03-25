@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -122,6 +122,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
       }),
     ),
+    asDocument: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+      }),
+    ),
     interactive: Type.Optional(interactiveMessageSchema),
   };
   if (!options.includeInteractive) {
@@ -197,11 +203,8 @@ function buildPollSchema() {
       ),
     ),
   };
-  for (const name of POLL_CREATION_PARAM_NAMES) {
+  for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[name];
-    if (def.telegramOnly) {
-      continue;
-    }
     switch (def.kind) {
       case "string":
         props[name] = Type.Optional(Type.String());
@@ -389,6 +392,9 @@ type MessageToolOptions = {
   agentSessionKey?: string;
   sessionId?: string;
   config?: OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
+  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
+  runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -624,6 +630,10 @@ function buildMessageToolDescription(options?: {
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const loadConfigForTool = options?.loadConfig ?? loadConfig;
+  const resolveSecretRefsForTool =
+    options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
+  const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const resolvedAgentId = options?.agentSessionKey
     ? resolveSessionAgentId({
@@ -661,6 +671,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   return {
     label: "Message",
     name: "message",
+    displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
     execute: async (_toolCallId, args, signal) => {
@@ -686,7 +697,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
       let cfg = options?.config;
       if (!cfg) {
-        const loadedRaw = loadConfig();
+        const loadedRaw = loadConfigForTool();
         const scope = resolveMessageSecretScope({
           channel: params.channel,
           target: params.target,
@@ -701,7 +712,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           accountId: scope.accountId,
         });
         cfg = (
-          await resolveCommandSecretRefsViaGateway({
+          await resolveSecretRefsForTool({
             config: loadedRaw,
             commandName: "tools.message",
             targetIds: scopedTargets.targetIds,
@@ -768,7 +779,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const result = await runMessageAction({
+      const result = await runMessageActionForTool({
         cfg,
         action,
         params,
