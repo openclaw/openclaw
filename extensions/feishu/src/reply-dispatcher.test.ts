@@ -13,7 +13,10 @@ const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: 
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted(() => [] as any[]);
 
-vi.mock("./accounts.js", () => ({ resolveFeishuAccount: resolveFeishuAccountMock }));
+vi.mock("./accounts.js", () => ({
+  resolveFeishuAccount: resolveFeishuAccountMock,
+  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
+}));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,

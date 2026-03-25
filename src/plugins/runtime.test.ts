@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginRegistry,
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
@@ -12,6 +13,12 @@ describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("stays empty until a caller explicitly installs or requires a registry", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("keeps the pinned route registry when the active plugin registry changes", () => {
