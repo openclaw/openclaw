@@ -128,6 +128,8 @@ export type OpenClawConfig = {
       enabled?: boolean;
       /** Absolute or user-relative directory root for `rl-feed/` (default: `<stateDir>/rl-feed`). */
       outputDir?: string;
+      /** When true, learning-bridge exports scrubbed prompt/response text as `contentScrubbed`. Default: false. */
+      exportScrubbedContent?: boolean;
       /** Soft cap for packages emitted per calendar day (optional; not enforced in v1). */
       maxPackagesPerDay?: number;
     };

@@ -37,6 +37,19 @@ describe("research schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts research.learningBridge.exportScrubbedContent nested key", () => {
+    const result = validateConfigObject({
+      research: {
+        enabled: true,
+        learningBridge: {
+          enabled: true,
+          exportScrubbedContent: true,
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects unknown learningBridge keys", () => {
     const result = validateConfigObject({
       research: {

@@ -866,6 +866,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When true (and research is enabled), classifies research events and writes slime-compatible `rl-feed/` artifacts at run end under the configured output directory (default: false).",
   "research.learningBridge.outputDir":
     "Optional absolute path for the `rl-feed/` root. Must stay under the OpenClaw state directory. Defaults to `<stateDir>/rl-feed`.",
+  "research.learningBridge.exportScrubbedContent":
+    "When true, learning bridge exports scrubbed prompt/response text as `contentScrubbed` for user/assistant turns. Default: false (hash-only privacy-first export).",
   "research.learningBridge.maxPackagesPerDay":
     "Optional soft cap for RL feed packages per day (reserved for future enforcement; v1 does not rate-limit).",
   memory: "Memory backend configuration (global).",

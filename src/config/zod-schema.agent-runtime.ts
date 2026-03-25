@@ -740,6 +740,7 @@ export const ResearchSchema = z
       .object({
         enabled: z.boolean().optional(),
         outputDir: z.string().optional(),
+        exportScrubbedContent: z.boolean().optional(),
         maxPackagesPerDay: z.number().int().nonnegative().optional(),
       })
       .strict()

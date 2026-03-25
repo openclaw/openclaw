@@ -33,6 +33,8 @@ export async function exportLearningBridgeRun(params: {
   const enriched = classifyResearchEvents(params.events);
   const packageId = params.packageId ?? randomUUID();
   const createdAtMs = params.nowMs ?? Date.now();
+  const exportScrubbedContent =
+    params.cfg?.research?.learningBridge?.exportScrubbedContent === true;
 
   const pkg = buildTrajectoryPackage({
     packageId,
@@ -41,6 +43,7 @@ export async function exportLearningBridgeRun(params: {
     sessionId: params.sessionId,
     createdAtMs,
     enrichedEvents: enriched,
+    exportScrubbedContent,
   });
 
   try {

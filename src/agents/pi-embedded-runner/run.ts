@@ -995,7 +995,10 @@ export async function runEmbeddedPiAgent(
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant,
+            assistantTexts,
           } = attempt;
+          const exportScrubbedContent =
+            params.config?.research?.learningBridge?.exportScrubbedContent === true;
           endTimedOut = timedOut;
           await research.emit({
             kind: "llm.request",
@@ -1003,6 +1006,7 @@ export async function runEmbeddedPiAgent(
               provider,
               model: modelId,
               promptChars: params.prompt.length,
+              ...(exportScrubbedContent ? { promptScrubbed: prompt } : {}),
               imageCount: params.images?.length ?? 0,
             },
           });
@@ -1023,6 +1027,11 @@ export async function runEmbeddedPiAgent(
               provider: lastAssistant?.provider ?? provider,
               model: lastAssistant?.model ?? modelId,
               stopReason: lastAssistant?.stopReason,
+              ...(exportScrubbedContent
+                ? {
+                    responseScrubbed: (assistantTexts.at(-1) ?? "").trim() || undefined,
+                  }
+                : {}),
               usage: {
                 input: lastAssistantUsage?.input,
                 output: lastAssistantUsage?.output,

@@ -10937,6 +10937,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               outputDir: {
                 type: "string",
               },
+              exportScrubbedContent: {
+                type: "boolean",
+              },
               maxPackagesPerDay: {
                 type: "integer",
                 minimum: 0,
@@ -13625,6 +13628,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Learning Bridge RL Feed Output Directory",
       help: "Optional absolute path for the `rl-feed/` root. Must stay under the OpenClaw state directory. Defaults to `<stateDir>/rl-feed`.",
       tags: ["storage"],
+    },
+    "research.learningBridge.exportScrubbedContent": {
+      label: "Learning Bridge Export Scrubbed Content",
+      help: "When true, learning bridge exports scrubbed prompt/response text as `contentScrubbed` for user/assistant turns. Default: false (hash-only privacy-first export).",
+      tags: ["advanced"],
     },
     "research.learningBridge.maxPackagesPerDay": {
       label: "Learning Bridge Max Packages Per Day",

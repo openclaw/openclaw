@@ -106,4 +106,41 @@ describe("exportLearningBridgeRun", () => {
     const rlPath = path.join(tmpRoot, "rl-feed");
     await expect(fs.stat(rlPath)).rejects.toThrow();
   });
+
+  it("writes contentScrubbed in trajectories when exportScrubbedContent is enabled", async () => {
+    const pkgId = "scrubbed-pkg";
+    await exportLearningBridgeRun({
+      cfg: {
+        research: { enabled: true, learningBridge: { enabled: true, exportScrubbedContent: true } },
+      } as never,
+      runId: "r1",
+      sessionId: "s1",
+      agentId: "a1",
+      packageId: pkgId,
+      events: [
+        baseEvent({
+          kind: "llm.request",
+          payload: { promptScrubbed: "PROMPT_SCRUBBED" },
+        }),
+        baseEvent({
+          kind: "llm.response",
+          payload: { responseScrubbed: "RESPONSE_SCRUBBED" },
+        }),
+      ],
+    });
+
+    const trajPath = path.join(tmpRoot, "rl-feed", "trajectories", `${pkgId}.jsonl`);
+    const traj = await fs.readFile(trajPath, "utf8");
+    const lines = traj
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { role: string; contentScrubbed?: string });
+
+    const user = lines.find((l) => l.role === "user");
+    const assistant = lines.find((l) => l.role === "assistant");
+    expect(user).toBeDefined();
+    expect(assistant).toBeDefined();
+    expect(user?.contentScrubbed).toBe("PROMPT_SCRUBBED");
+    expect(assistant?.contentScrubbed).toBe("RESPONSE_SCRUBBED");
+  });
 });

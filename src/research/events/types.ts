@@ -70,6 +70,8 @@ const LlmRequestEventSchema = ResearchEventBaseSchema.extend({
       provider: z.string().optional(),
       model: z.string().optional(),
       promptChars: z.number().int().nonnegative().optional(),
+      /** When enabled, carries scrubbed prompt text suitable for tokenization/export. */
+      promptScrubbed: z.string().optional(),
       imageCount: z.number().int().nonnegative().optional(),
     })
     .strict(),
@@ -82,6 +84,8 @@ const LlmResponseEventSchema = ResearchEventBaseSchema.extend({
       provider: z.string().optional(),
       model: z.string().optional(),
       stopReason: z.string().optional(),
+      /** When enabled, carries scrubbed response text suitable for tokenization/export. */
+      responseScrubbed: z.string().optional(),
       usage: z
         .object({
           input: z.number().int().nonnegative().optional(),

@@ -38,7 +38,11 @@ function deriveRouting(rewardKinds: Array<RewardSignal["kind"]>): {
   return { dominant: "binary", suggested: "binary" };
 }
 
-function buildTurns(enriched: ResearchEventV1[], packageId: string): TrajectorTurn[] {
+function buildTurns(
+  enriched: ResearchEventV1[],
+  packageId: string,
+  exportScrubbedContent: boolean,
+): TrajectorTurn[] {
   const turns: TrajectorTurn[] = [];
   let stepIdx = 0;
   for (const ev of enriched) {
@@ -56,6 +60,9 @@ function buildTurns(enriched: ResearchEventV1[], packageId: string): TrajectorTu
       turns.push({
         ...base,
         role: "user",
+        ...(exportScrubbedContent && ev.payload.promptScrubbed !== undefined
+          ? { contentScrubbed: ev.payload.promptScrubbed }
+          : {}),
       });
       stepIdx += 1;
       continue;
@@ -64,6 +71,9 @@ function buildTurns(enriched: ResearchEventV1[], packageId: string): TrajectorTu
       turns.push({
         ...base,
         role: "assistant",
+        ...(exportScrubbedContent && ev.payload.responseScrubbed !== undefined
+          ? { contentScrubbed: ev.payload.responseScrubbed }
+          : {}),
       });
       stepIdx += 1;
       continue;
@@ -88,9 +98,11 @@ export type BuildTrajectoryPackageParams = {
   sessionId: string;
   createdAtMs: number;
   enrichedEvents: ResearchEventV1[];
+  exportScrubbedContent?: boolean;
 };
 
 export function buildTrajectoryPackage(params: BuildTrajectoryPackageParams): TrajectoryPackage {
+  const exportScrubbedContent = params.exportScrubbedContent ?? false;
   const rewards = params.enrichedEvents
     .map((e) => e.reward)
     .filter((r): r is NonNullable<typeof r> => Boolean(r));
@@ -104,7 +116,7 @@ export function buildTrajectoryPackage(params: BuildTrajectoryPackageParams): Tr
     createdAt: params.createdAtMs,
     runId: params.runId,
     sessionId: params.sessionId,
-    turns: buildTurns(params.enrichedEvents, params.packageId),
+    turns: buildTurns(params.enrichedEvents, params.packageId, exportScrubbedContent),
     rewardSignals: rewards,
     skillsActivated: collectSkills(params.enrichedEvents),
     sessionRecallHits: 0,

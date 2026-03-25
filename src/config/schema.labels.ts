@@ -371,6 +371,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "research.learningBridge": "Learning Bridge",
   "research.learningBridge.enabled": "Learning Bridge Enabled",
   "research.learningBridge.outputDir": "Learning Bridge RL Feed Output Directory",
+  "research.learningBridge.exportScrubbedContent": "Learning Bridge Export Scrubbed Content",
   "research.learningBridge.maxPackagesPerDay": "Learning Bridge Max Packages Per Day",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
