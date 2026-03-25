@@ -103,6 +103,21 @@ type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
 
+function normalizeComparablePath(value: string): string {
+  return path
+    .normalize(value)
+    .replace(/\\/g, "/")
+    .replace(/^[A-Za-z]:/, "");
+}
+
+function expectMediaLocalRootsToContainPreferredTmpRoot(
+  roots: readonly string[] | undefined,
+): void {
+  const expected = normalizeComparablePath(resolvePreferredOpenClawTmpDir());
+  const normalizedRoots = (roots ?? []).map((root) => normalizeComparablePath(root));
+  expect(normalizedRoots).toContain(expected);
+}
+
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
     NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["sendWhatsApp"]
@@ -486,13 +501,9 @@ describe("deliverOutboundPayloads", () => {
       payload: { text: "hi", mediaUrl: "https://example.com/x.png" },
     });
 
-    expect(sendTelegram).toHaveBeenCalledWith(
-      "123",
-      "hi",
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
-      }),
-    );
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendTelegram).toHaveBeenCalledWith("123", "hi", expect.any(Object));
+    expectMediaLocalRootsToContainPreferredTmpRoot(sendOpts?.mediaLocalRoots);
   });
 
   it("includes OpenClaw tmp root in signal mediaLocalRoots", async () => {
@@ -506,13 +517,9 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendSignal },
     });
 
-    expect(sendSignal).toHaveBeenCalledWith(
-      "+1555",
-      "hi",
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
-      }),
-    );
+    const sendOpts = sendSignal.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendSignal).toHaveBeenCalledWith("+1555", "hi", expect.any(Object));
+    expectMediaLocalRootsToContainPreferredTmpRoot(sendOpts?.mediaLocalRoots);
   });
 
   it("forwards audioAsVoice through generic plugin media delivery", async () => {
@@ -569,13 +576,9 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "+1555",
-      "hi",
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
-      }),
-    );
+    const sendOpts = sendWhatsApp.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "hi", expect.any(Object));
+    expectMediaLocalRootsToContainPreferredTmpRoot(sendOpts?.mediaLocalRoots);
   });
 
   it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
@@ -589,13 +592,9 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "imessage:+15551234567",
-      "hi",
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
-      }),
-    );
+    const sendOpts = sendIMessage.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendIMessage).toHaveBeenCalledWith("imessage:+15551234567", "hi", expect.any(Object));
+    expectMediaLocalRootsToContainPreferredTmpRoot(sendOpts?.mediaLocalRoots);
   });
 
   it("uses signal media maxBytes from config", async () => {
