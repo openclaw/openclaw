@@ -13452,7 +13452,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.memorySearch.store.path": {
       label: "Memory Search Index Path",
-      help: "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
+      help: "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.evox/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
       tags: ["storage"],
     },
     "agents.defaults.memorySearch.store.vector.enabled": {
@@ -16059,7 +16059,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      help: "Resolved install directory (usually ~/.evox/extensions/<id>).",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {

@@ -290,15 +290,20 @@ export function resolveConfigDir(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  // Prefer .evox (new), fallback to .openclaw (legacy) for backward compatibility
+  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".evox");
+  const legacyDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {
-    const hasNew = fs.existsSync(newDir);
-    if (hasNew) {
+    if (fs.existsSync(newDir)) {
       return newDir;
+    }
+    if (fs.existsSync(legacyDir)) {
+      return legacyDir;
     }
   } catch {
     // best-effort
   }
+  // Default to new .evox for fresh installs
   return newDir;
 }
 

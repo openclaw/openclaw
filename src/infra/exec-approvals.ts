@@ -150,8 +150,8 @@ const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
-const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const DEFAULT_SOCKET = "~/.evox/exec-approvals.sock";
+const DEFAULT_FILE = "~/.evox/exec-approvals.json";
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
