@@ -29,10 +29,9 @@ export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps):
 
   const accounts = snapshot?.channelAccounts?.[key] ?? [];
   const defaultAccountId = snapshot?.channelDefaultAccountId?.[key];
-  const defaultAccount =
-    (defaultAccountId
-      ? accounts.find((account) => account.accountId === defaultAccountId)
-      : undefined) ?? accounts[0];
+  const defaultAccount = defaultAccountId
+    ? accounts.find((account) => account.accountId === defaultAccountId)
+    : accounts[0];
 
   if (typeof defaultAccount?.configured === "boolean") {
     return defaultAccount.configured;
