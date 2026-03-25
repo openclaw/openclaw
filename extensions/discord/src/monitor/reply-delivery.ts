@@ -13,6 +13,16 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildCanonicalSentMessageHookContext,
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -136,6 +146,63 @@ function resolveBindingPersona(
     avatarUrl = undefined;
   }
   return { username, avatarUrl };
+}
+
+type EmitMessageSentHookParams = {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  enabled: boolean;
+  sessionKeyForInternalHooks?: string;
+  chatId: string;
+  accountId?: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: string;
+  isGroup?: boolean;
+  groupId?: string;
+};
+
+function emitMessageSentHooks(params: EmitMessageSentHookParams): void {
+  if (!params.enabled && !params.sessionKeyForInternalHooks) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: params.chatId,
+    content: params.content,
+    success: params.success,
+    error: params.error,
+    channelId: "discord",
+    accountId: params.accountId,
+    conversationId: params.chatId,
+    messageId: params.messageId,
+    isGroup: params.isGroup,
+    groupId: params.groupId,
+  });
+  if (params.enabled) {
+    fireAndForgetHook(
+      Promise.resolve(
+        params.hookRunner!.runMessageSent(
+          toPluginMessageSentEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      ),
+      "discord: message_sent plugin hook failed",
+    );
+  }
+  if (!params.sessionKeyForInternalHooks) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "sent",
+        params.sessionKeyForInternalHooks,
+        toInternalMessageSentContext(canonical),
+      ),
+    ),
+    "discord: message:sent internal hook failed",
+  );
 }
 
 async function sendDiscordChunkWithFallback(params: {
@@ -268,38 +335,126 @@ export async function deliverDiscordReply(params: {
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
   let deliveredAny = false;
-  for (const payload of params.replies) {
-    const tableMode = params.tableMode ?? "code";
-    const reply = resolveSendableOutboundReplyParts(payload, {
-      text: convertMarkdownTables(payload.text ?? "", tableMode),
-    });
-    if (!reply.hasContent) {
-      continue;
-    }
-    if (!reply.hasMedia) {
-      const mode = params.chunkMode ?? "length";
-      const chunks = resolveTextChunksWithFallback(
-        reply.text,
-        chunkDiscordTextWithMode(reply.text, {
-          maxChars: chunkLimit,
-          maxLines: params.maxLinesPerMessage,
-          chunkMode: mode,
-        }),
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+
+  for (const originalPayload of params.replies) {
+    let payload = originalPayload;
+    if (hasMessageSendingHooks) {
+      const mediaUrls = payload.mediaUrls?.length
+        ? payload.mediaUrls
+        : payload.mediaUrl
+          ? [payload.mediaUrl]
+          : [];
+      const hookResult = await hookRunner?.runMessageSending(
+        {
+          to: params.target,
+          content: payload.text ?? "",
+          metadata: {
+            channel: "discord",
+            mediaUrls,
+            threadId: binding?.threadId,
+          },
+        },
+        {
+          channelId: "discord",
+          accountId: params.accountId,
+          conversationId: params.target,
+        },
       );
-      for (const chunk of chunks) {
-        if (!chunk.trim()) {
-          continue;
+      if (hookResult?.cancel) {
+        continue;
+      }
+      if (typeof hookResult?.content === "string" && hookResult.content !== (payload.text ?? "")) {
+        payload = { ...payload, text: hookResult.content };
+      }
+    }
+
+    const contentForSentHook = payload.text || "";
+    let thisPayloadDelivered = false;
+
+    try {
+      const tableMode = params.tableMode ?? "code";
+      const reply = resolveSendableOutboundReplyParts(payload, {
+        text: convertMarkdownTables(payload.text ?? "", tableMode),
+      });
+      if (!reply.hasContent) {
+        continue;
+      }
+      if (!reply.hasMedia) {
+        const mode = params.chunkMode ?? "length";
+        const chunks = resolveTextChunksWithFallback(
+          reply.text,
+          chunkDiscordTextWithMode(reply.text, {
+            maxChars: chunkLimit,
+            maxLines: params.maxLinesPerMessage,
+            chunkMode: mode,
+          }),
+        );
+        for (const chunk of chunks) {
+          if (!chunk.trim()) {
+            continue;
+          }
+          const replyTo = resolveReplyTo();
+          await sendDiscordChunkWithFallback({
+            cfg: params.cfg,
+            target: params.target,
+            text: chunk,
+            token: params.token,
+            rest: params.rest,
+            accountId: params.accountId,
+            maxLinesPerMessage: params.maxLinesPerMessage,
+            replyTo,
+            binding,
+            chunkMode: params.chunkMode,
+            username: persona.username,
+            avatarUrl: persona.avatarUrl,
+            channelId,
+            request,
+            retryConfig,
+          });
+          deliveredAny = true;
+          thisPayloadDelivered = true;
         }
+        
+        emitMessageSentHooks({
+          hookRunner,
+          enabled: hasMessageSentHooks,
+          sessionKeyForInternalHooks: params.sessionKey,
+          chatId: params.target,
+          accountId: params.accountId,
+          content: contentForSentHook,
+          success: thisPayloadDelivered,
+        });
+        continue;
+      }
+
+      const firstMedia = reply.mediaUrls[0];
+      if (!firstMedia) {
+        continue;
+      }
+      // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
+      if (payload.audioAsVoice) {
         const replyTo = resolveReplyTo();
+        await sendVoiceMessageDiscord(params.target, firstMedia, {
+          cfg: params.cfg,
+          token: params.token,
+          rest: params.rest,
+          accountId: params.accountId,
+          replyTo,
+        });
+        deliveredAny = true;
+        // Voice messages cannot include text; send remaining text separately if present.
         await sendDiscordChunkWithFallback({
           cfg: params.cfg,
           target: params.target,
-          text: chunk,
+          text: reply.text,
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
           maxLinesPerMessage: params.maxLinesPerMessage,
-          replyTo,
+          replyTo: resolveReplyTo(),
           binding,
           chunkMode: params.chunkMode,
           username: persona.username,
@@ -308,53 +463,48 @@ export async function deliverDiscordReply(params: {
           request,
           retryConfig,
         });
-        deliveredAny = true;
+        // Additional media items are sent as regular attachments (voice is single-file only).
+        await sendMediaWithLeadingCaption({
+          mediaUrls: reply.mediaUrls.slice(1),
+          caption: "",
+          send: async ({ mediaUrl }) => {
+            const replyTo = resolveReplyTo();
+            await sendWithRetry(
+              () =>
+                sendMessageDiscord(params.target, "", {
+                  cfg: params.cfg,
+                  token: params.token,
+                  rest: params.rest,
+                  mediaUrl,
+                  accountId: params.accountId,
+                  mediaLocalRoots: params.mediaLocalRoots,
+                  replyTo,
+                }),
+              retryConfig,
+            );
+          },
+        });
+        
+        emitMessageSentHooks({
+          hookRunner,
+          enabled: hasMessageSentHooks,
+          sessionKeyForInternalHooks: params.sessionKey,
+          chatId: params.target,
+          accountId: params.accountId,
+          content: contentForSentHook,
+          success: true,
+        });
+        continue;
       }
-      continue;
-    }
 
-    const firstMedia = reply.mediaUrls[0];
-    if (!firstMedia) {
-      continue;
-    }
-    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
-    if (payload.audioAsVoice) {
-      const replyTo = resolveReplyTo();
-      await sendVoiceMessageDiscord(params.target, firstMedia, {
-        cfg: params.cfg,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        replyTo,
-      });
-      deliveredAny = true;
-      // Voice messages cannot include text; send remaining text separately if present.
-      await sendDiscordChunkWithFallback({
-        cfg: params.cfg,
-        target: params.target,
-        text: reply.text,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        maxLinesPerMessage: params.maxLinesPerMessage,
-        replyTo: resolveReplyTo(),
-        binding,
-        chunkMode: params.chunkMode,
-        username: persona.username,
-        avatarUrl: persona.avatarUrl,
-        channelId,
-        request,
-        retryConfig,
-      });
-      // Additional media items are sent as regular attachments (voice is single-file only).
       await sendMediaWithLeadingCaption({
-        mediaUrls: reply.mediaUrls.slice(1),
-        caption: "",
-        send: async ({ mediaUrl }) => {
+        mediaUrls: reply.mediaUrls,
+        caption: reply.text,
+        send: async ({ mediaUrl, caption }) => {
           const replyTo = resolveReplyTo();
           await sendWithRetry(
             () =>
-              sendMessageDiscord(params.target, "", {
+              sendMessageDiscord(params.target, caption ?? "", {
                 cfg: params.cfg,
                 token: params.token,
                 rest: params.rest,
@@ -367,30 +517,30 @@ export async function deliverDiscordReply(params: {
           );
         },
       });
-      continue;
+      deliveredAny = true;
+      
+      emitMessageSentHooks({
+        hookRunner,
+        enabled: hasMessageSentHooks,
+        sessionKeyForInternalHooks: params.sessionKey,
+        chatId: params.target,
+        accountId: params.accountId,
+        content: contentForSentHook,
+        success: true,
+      });
+    } catch (err) {
+      emitMessageSentHooks({
+        hookRunner,
+        enabled: hasMessageSentHooks,
+        sessionKeyForInternalHooks: params.sessionKey,
+        chatId: params.target,
+        accountId: params.accountId,
+        content: contentForSentHook,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
-
-    await sendMediaWithLeadingCaption({
-      mediaUrls: reply.mediaUrls,
-      caption: reply.text,
-      send: async ({ mediaUrl, caption }) => {
-        const replyTo = resolveReplyTo();
-        await sendWithRetry(
-          () =>
-            sendMessageDiscord(params.target, caption ?? "", {
-              cfg: params.cfg,
-              token: params.token,
-              rest: params.rest,
-              mediaUrl,
-              accountId: params.accountId,
-              mediaLocalRoots: params.mediaLocalRoots,
-              replyTo,
-            }),
-          retryConfig,
-        );
-      },
-    });
-    deliveredAny = true;
   }
 
   if (binding && deliveredAny) {
