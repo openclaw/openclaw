@@ -260,6 +260,8 @@ export async function updateNpmInstalledPlugins(params: {
   dryRun?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  /** Current openclaw core version for engine compatibility checks. */
+  coreVersion?: string;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -361,6 +363,7 @@ export async function updateNpmInstalledPlugins(params: {
                 dryRun: true,
                 expectedPluginId: pluginId,
                 expectedIntegrity,
+                coreVersion: params.coreVersion,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                   pluginId,
                   dryRun: true,
@@ -458,6 +461,7 @@ export async function updateNpmInstalledPlugins(params: {
               mode: "update",
               expectedPluginId: pluginId,
               expectedIntegrity,
+              coreVersion: params.coreVersion,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                 pluginId,
                 dryRun: false,

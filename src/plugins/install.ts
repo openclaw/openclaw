@@ -7,6 +7,11 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import {
+  formatEngineIncompatibleError,
+  resolveCompatibleVersion,
+} from "../infra/npm-engine-resolve.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   resolvePackageExtensionEntries,
@@ -710,6 +715,10 @@ export async function installPluginFromNpmSpec(params: {
   expectedPluginId?: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  /** Current openclaw core version. When set, engine compatibility is checked. */
+  coreVersion?: string;
+  /** Skip engine compatibility check even when coreVersion is set. */
+  ignoreEngine?: boolean;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
@@ -717,7 +726,7 @@ export async function installPluginFromNpmSpec(params: {
     defaultLogger,
   );
   const expectedPluginId = params.expectedPluginId;
-  const spec = params.spec.trim();
+  let spec = params.spec.trim();
   const specError = runtime.validateRegistryNpmSpec(spec);
   if (specError) {
     return {
@@ -725,6 +734,42 @@ export async function installPluginFromNpmSpec(params: {
       error: specError,
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
+  }
+
+  // Engine-aware version resolution: when coreVersion is set and the spec does
+  // not pin an exact version, query the registry for the latest compatible version.
+  if (params.coreVersion && !params.ignoreEngine) {
+    const parsed = parseRegistryNpmSpec(spec);
+    if (parsed && parsed.selectorKind !== "exact-version") {
+      const engineResult = await resolveCompatibleVersion({
+        packageName: parsed.name,
+        coreVersion: params.coreVersion,
+        allowPrerelease: parsed.selectorIsPrerelease,
+        timeoutMs,
+      });
+      if (!engineResult.ok) {
+        // Registry unreachable — fall back to existing behavior with a warning
+        logger.warn?.(`Engine compatibility check skipped: ${engineResult.error}`);
+      } else if (engineResult.version === null) {
+        // No compatible version found — block installation
+        return {
+          ok: false,
+          error: formatEngineIncompatibleError({
+            packageName: parsed.name,
+            coreVersion: params.coreVersion,
+            latestVersion: engineResult.latestVersion,
+            latestRange: engineResult.latestRange,
+          }),
+        };
+      } else {
+        // Rewrite spec to pin the compatible version
+        const newSpec = `${parsed.name}@${engineResult.version}`;
+        if (newSpec !== spec) {
+          logger.info?.(`Engine compatibility: resolved ${spec} to ${newSpec}`);
+          spec = newSpec;
+        }
+      }
+    }
   }
 
   logger.info?.(`Downloading ${spec}…`);

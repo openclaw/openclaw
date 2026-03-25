@@ -17,6 +17,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { VERSION } from "../version.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -231,7 +232,7 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: { link?: boolean; pin?: boolean; marketplace?: string };
+  opts: { link?: boolean; pin?: boolean; marketplace?: string; ignoreEngine?: boolean };
 }) {
   const shorthand = !params.opts.marketplace
     ? await resolveMarketplaceInstallShortcut(params.raw)
@@ -486,6 +487,7 @@ export async function runPluginInstallCommand(params: {
   const result = await installPluginFromNpmSpec({
     spec: raw,
     logger: createPluginInstallLogger(),
+    coreVersion: params.opts.ignoreEngine ? undefined : VERSION,
   });
   if (!result.ok) {
     const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({

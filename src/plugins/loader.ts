@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { satisfiesRange } from "../infra/semver-range.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clearMemoryPromptSection,
@@ -14,6 +15,7 @@ import {
   restoreMemoryPromptSection,
 } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
+import { VERSION } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import {
@@ -979,6 +981,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!enableState.enabled) {
       record.status = "disabled";
       record.error = enableState.reason;
+    }
+
+    // Engine compatibility warning: warn if the installed plugin declares an
+    // engines.openclaw range that the running core version does not satisfy.
+    const engineRange = candidate.engineOpenclawRange;
+    if (engineRange && VERSION && !satisfiesRange(VERSION, engineRange)) {
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `Plugin requires openclaw ${engineRange}, but running ${VERSION}. The plugin may not work correctly.`,
+      });
     }
 
     if (record.format === "bundle") {

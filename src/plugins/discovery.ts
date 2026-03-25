@@ -45,6 +45,8 @@ export type PluginCandidate = {
   packageManifest?: OpenClawPackageManifest;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
+  /** engines.openclaw range from package.json (used for compatibility warnings). */
+  engineOpenclawRange?: string;
 };
 
 export type PluginDiscoveryResult = {
@@ -315,6 +317,18 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
+function extractEngineOpenclawRange(manifest: PackageManifest | null): string | undefined {
+  if (!manifest) {
+    return undefined;
+  }
+  const engines = (manifest as Record<string, unknown>).engines;
+  if (!engines || typeof engines !== "object") {
+    return undefined;
+  }
+  const openclaw = (engines as Record<string, unknown>).openclaw;
+  return typeof openclaw === "string" ? openclaw.trim() || undefined : undefined;
+}
+
 function readPackageManifest(dir: string, rejectHardlinks = true): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
@@ -416,6 +430,7 @@ function addCandidate(params: {
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
+    engineOpenclawRange: extractEngineOpenclawRange(manifest),
   });
 }
 

@@ -23,6 +23,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { VERSION } from "../version.js";
 import {
   applySlotSelectionForPlugin,
   createPluginInstallLogger,
@@ -715,9 +716,15 @@ export function registerPluginsCli(program: Command) {
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; marketplace?: string }) => {
-      await runPluginInstallCommand({ raw, opts });
-    });
+    .option("--ignore-engine", "Skip engine compatibility check", false)
+    .action(
+      async (
+        raw: string,
+        opts: { link?: boolean; pin?: boolean; marketplace?: string; ignoreEngine?: boolean },
+      ) => {
+        await runPluginInstallCommand({ raw, opts });
+      },
+    );
 
   plugins
     .command("update")
@@ -725,6 +732,7 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option("--ignore-engine", "Skip engine compatibility check", false)
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       await runPluginUpdateCommand({ id, opts });
     });

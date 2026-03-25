@@ -6,6 +6,7 @@ import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { VERSION } from "../version.js";
 import {
   extractInstalledNpmHookPackageName,
   extractInstalledNpmPackageName,
@@ -89,7 +90,7 @@ function resolveHookPackUpdateSelection(params: {
 
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean };
+  opts: { all?: boolean; dryRun?: boolean; ignoreEngine?: boolean };
 }) {
   const cfg = loadConfig();
   const logger = {
@@ -121,6 +122,7 @@ export async function runPluginUpdateCommand(params: {
     pluginIds: pluginSelection.pluginIds,
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
+    coreVersion: params.opts.ignoreEngine ? undefined : VERSION,
     logger,
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;
