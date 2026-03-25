@@ -6,7 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { redactImageDataForDiagnostics } from "./payload-redaction.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
@@ -198,14 +198,14 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.prompt = payload.prompt;
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = payload.system;
+      event.system = sanitizeDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = redactImageDataForDiagnostics(payload.options) as Record<string, unknown>;
+      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
     }
     if (payload.model) {
-      event.model = payload.model;
+      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
     }
 
     const messages = payload.messages;
@@ -216,7 +216,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = redactImageDataForDiagnostics(messages) as AgentMessage[];
+        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
       }
     }
 

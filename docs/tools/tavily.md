@@ -122,4 +122,8 @@ Tips:
 | Search with depth, topic, AI answers | `tavily_search`  |
 | Extract content from specific URLs   | `tavily_extract` |
 
-See [Web Search](/tools/web) for the full provider setup and comparison.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Firecrawl](/tools/firecrawl) -- search + scraping with content extraction
+- [Exa Search](/tools/exa-search) -- neural search with content extraction

@@ -10,7 +10,6 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { loadCombinedSessionStoreForGateway } from "../../gateway/session-utils.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -23,7 +22,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
@@ -43,7 +41,9 @@ import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
+  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -103,24 +103,6 @@ function resolveSessionEntry(params: {
   }
 
   return null;
-}
-
-function resolveSessionKeyFromSessionId(params: {
-  cfg: OpenClawConfig;
-  sessionId: string;
-  agentId?: string;
-}): string | null {
-  const trimmed = params.sessionId.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const { store } = loadCombinedSessionStoreForGateway(params.cfg);
-  const matches = Object.entries(store).filter(
-    (entry): entry is [string, SessionEntry] =>
-      entry[1]?.sessionId === trimmed &&
-      (!params.agentId || resolveAgentIdFromSessionKey(entry[0]) === params.agentId),
-  );
-  return resolvePreferredSessionKeyForSessionIdMatches(matches, trimmed) ?? null;
 }
 
 function resolveStoreScopedRequesterKey(params: {
@@ -329,16 +311,27 @@ export function createSessionStatusTool(opts?: {
         !resolved &&
         (requestedKeyRaw === "current" || shouldResolveSessionIdInput(requestedKeyRaw))
       ) {
-        const resolvedKey = resolveSessionKeyFromSessionId({
-          cfg,
-          sessionId: requestedKeyRaw,
-          agentId: a2aPolicy.enabled ? undefined : requesterAgentId,
+        const resolvedSession = await resolveSessionReference({
+          sessionKey: requestedKeyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: effectiveRequesterKey,
+          restrictToSpawned: opts?.sandboxed === true,
         });
-        if (resolvedKey) {
+        if (resolvedSession.ok && resolvedSession.resolvedViaSessionId) {
+          const visibleSession = await resolveVisibleSessionReference({
+            resolvedSession,
+            requesterSessionKey: effectiveRequesterKey,
+            restrictToSpawned: opts?.sandboxed === true,
+            visibilitySessionKey: requestedKeyRaw,
+          });
+          if (!visibleSession.ok) {
+            throw new Error("Session status visibility is restricted to the current session tree.");
+          }
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(resolvedKey));
-          requestedKeyRaw = resolvedKey;
-          agentId = resolveAgentIdFromSessionKey(resolvedKey);
+          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          requestedKeyRaw = visibleSession.key;
+          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           store = loadSessionStore(storePath);
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -353,6 +346,8 @@ export function createSessionStatusTool(opts?: {
             mainKey,
             requesterInternalKey: storeScopedRequesterKey,
           });
+        } else if (!resolvedSession.ok && opts?.sandboxed === true) {
+          throw new Error("Session status visibility is restricted to the current session tree.");
         }
       }
 
@@ -484,6 +479,10 @@ export function createSessionStatusTool(opts?: {
           model: agentModel,
         },
         agentId,
+        explicitConfiguredContextTokens:
+          typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+            ? agentDefaults.contextTokens
+            : undefined,
         sessionEntry: resolved.entry,
         sessionKey: resolved.key,
         sessionStorePath: storePath,

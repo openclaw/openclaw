@@ -141,6 +141,7 @@ export function createDiscordSetupWizardBase(handlers: {
       },
     ],
     groupAccess: createAccountScopedGroupAccessSection({
+      channel,
       label: "Discord channels",
       placeholder: "My Server/#general, guildId/channelId, #support",
       currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
@@ -172,6 +173,7 @@ export function createDiscordSetupWizardBase(handlers: {
       }) => setDiscordGuildChannelAllowlist(cfg, accountId, resolved as never),
     }),
     allowFrom: createAccountScopedAllowFromSection({
+      channel,
       credentialInputKey: "token",
       helpTitle: "Discord allowlist",
       helpLines: [

@@ -43,14 +43,14 @@ export default definePluginEntry({
 });
 ```
 
-| Field | Type | Required | Default |
-| --- | --- | --- | --- |
-| `id` | `string` | Yes | — |
-| `name` | `string` | Yes | — |
-| `description` | `string` | Yes | — |
-| `kind` | `string` | No | — |
-| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No | Empty object schema |
-| `register` | `(api: OpenClawPluginApi) => void` | Yes | — |
+| Field          | Type                                                             | Required | Default             |
+| -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`           | `string`                                                         | Yes      | —                   |
+| `name`         | `string`                                                         | Yes      | —                   |
+| `description`  | `string`                                                         | Yes      | —                   |
+| `kind`         | `string`                                                         | No       | —                   |
+| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `register`     | `(api: OpenClawPluginApi) => void`                               | Yes      | —                   |
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
@@ -79,15 +79,15 @@ export default defineChannelPluginEntry({
 });
 ```
 
-| Field | Type | Required | Default |
-| --- | --- | --- | --- |
-| `id` | `string` | Yes | — |
-| `name` | `string` | Yes | — |
-| `description` | `string` | Yes | — |
-| `plugin` | `ChannelPlugin` | Yes | — |
-| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No | Empty object schema |
-| `setRuntime` | `(runtime: PluginRuntime) => void` | No | — |
-| `registerFull` | `(api: OpenClawPluginApi) => void` | No | — |
+| Field          | Type                                                             | Required | Default             |
+| -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`           | `string`                                                         | Yes      | —                   |
+| `name`         | `string`                                                         | Yes      | —                   |
+| `description`  | `string`                                                         | Yes      | —                   |
+| `plugin`       | `ChannelPlugin`                                                  | Yes      | —                   |
+| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `setRuntime`   | `(runtime: PluginRuntime) => void`                               | No       | —                   |
+| `registerFull` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
 
 - `setRuntime` is called during registration so you can store the runtime reference
   (typically via `createPluginRuntimeStore`).

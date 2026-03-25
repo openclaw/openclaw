@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import type { PluginRecord } from "../plugins/registry.js";
@@ -58,6 +59,44 @@ export type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
 };
+
+function resolvePluginUninstallId(params: {
+  rawId: string;
+  config: OpenClawConfig;
+  plugins: PluginRecord[];
+}): { pluginId: string; plugin?: PluginRecord } {
+  const rawId = params.rawId.trim();
+  const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
+  if (plugin) {
+    return { pluginId: plugin.id, plugin };
+  }
+
+  for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
+    if (
+      install.spec === rawId ||
+      install.resolvedSpec === rawId ||
+      install.resolvedName === rawId ||
+      install.marketplacePlugin === rawId
+    ) {
+      return { pluginId };
+    }
+  }
+
+  const requestedClawHub = parseClawHubPluginSpec(rawId);
+  if (requestedClawHub) {
+    for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
+      const installedClawHubName =
+        install.clawhubPackage ??
+        parseClawHubPluginSpec(install.spec ?? "")?.name ??
+        parseClawHubPluginSpec(install.resolvedSpec ?? "")?.name;
+      if (installedClawHubName === requestedClawHub.name) {
+        return { pluginId };
+      }
+    }
+  }
+
+  return { pluginId: rawId };
+}
 
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
@@ -546,8 +585,11 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
       }
 
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
-      const pluginId = plugin?.id ?? id;
+      const { plugin, pluginId } = resolvePluginUninstallId({
+        rawId: id,
+        config: cfg,
+        plugins: report.plugins,
+      });
       const hasEntry = pluginId in (cfg.plugins?.entries ?? {});
       const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
 
