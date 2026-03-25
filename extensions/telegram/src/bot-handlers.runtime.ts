@@ -1489,16 +1489,29 @@ export const registerTelegramHandlers = ({
         }
 
         if (modelCallback.type === "select") {
+          // Compact Telegram callbacks omit the provider to stay under the 64-byte
+          // callback_data cap, so resolve them against the full provider/model set
+          // shown in the UI instead of the narrower configured subset.
+          const shouldUseConfiguredSubsetFirst = Boolean(modelCallback.provider);
           let selection = resolveModelSelection({
             callback: modelCallback,
-            providers: configuredModelData.providers,
-            byProvider: configuredModelData.byProvider,
+            providers: shouldUseConfiguredSubsetFirst ? configuredModelData.providers : providers,
+            byProvider: shouldUseConfiguredSubsetFirst
+              ? configuredModelData.byProvider
+              : byProvider,
           });
           let selectionAllowed =
             selection.kind === "resolved" &&
-            Boolean(configuredModelData.byProvider.get(selection.provider)?.has(selection.model));
+            Boolean(
+              (shouldUseConfiguredSubsetFirst ? configuredModelData.byProvider : byProvider)
+                .get(selection.provider)
+                ?.has(selection.model),
+            );
 
-          if (!selectionAllowed || selection.kind !== "resolved") {
+          if (
+            shouldUseConfiguredSubsetFirst &&
+            (!selectionAllowed || selection.kind !== "resolved")
+          ) {
             modelData = await telegramDeps.buildModelsProviderData(
               runtimeCfg,
               sessionState.agentId,

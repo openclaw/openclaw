@@ -750,6 +750,70 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
+  it("does not resolve compact model callbacks through a narrower configured subset", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+    buildModelsProviderDataMock.mockImplementationOnce(async (_cfg: OpenClawConfig) => ({
+      byProvider: new Map([
+        ["anthropic", new Set([modelId])],
+        ["openai", new Set([modelId])],
+      ]),
+      providers: ["anthropic", "openai"],
+      resolvedDefault: { provider: "openai", model: modelId },
+    }));
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        agents: {
+          defaults: {
+            model: `openai/${modelId}`,
+            models: {
+              [`openai/${modelId}`]: {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-compact-3",
+        data: `mdl_sel/${modelId}`,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 17,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+      `Could not resolve model "${modelId}".`,
+    );
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-3");
+  });
+
   it("includes sender identity in group envelope headers", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

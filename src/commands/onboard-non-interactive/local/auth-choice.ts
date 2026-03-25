@@ -1,3 +1,4 @@
+import { resolveOpenClawAgentDir } from "../../../agents/agent-paths.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -39,7 +40,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     env: process.env,
   });
   let nextConfig = params.nextConfig;
-  const agentDir = resolveAgentDir(nextConfig, resolveDefaultAgentId(nextConfig));
+  const defaultAgentId = resolveDefaultAgentId(nextConfig);
+  const hasAgentDirEnvOverride =
+    Boolean(process.env.OPENCLAW_AGENT_DIR?.trim()) ||
+    Boolean(process.env.PI_CODING_AGENT_DIR?.trim());
+  const agentDir = hasAgentDirEnvOverride
+    ? resolveOpenClawAgentDir()
+    : resolveAgentDir(nextConfig, defaultAgentId);
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
     runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
