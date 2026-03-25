@@ -4,7 +4,7 @@ import {
   killSubagentRunAdmin,
   resolveSubagentController,
 } from "../agents/subagent-control.js";
-import { getSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
+import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { loadConfig } from "../config/config.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
@@ -112,7 +112,7 @@ export async function handleSessionKillHttpRequest(
 
   let killed = false;
   if (!allowAdminKill && requesterSessionKey) {
-    const runEntry = getSubagentRunByChildSessionKey(canonicalKey);
+    const runEntry = getLatestSubagentRunByChildSessionKey(canonicalKey);
     if (runEntry) {
       const result = await killControlledSubagentRun({
         cfg,

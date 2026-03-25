@@ -10,7 +10,7 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import {
-  getSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -257,20 +257,38 @@ function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
 ): string[] | undefined {
-  const childSessionKeys = new Set(
-    listSubagentRunsForController(controllerSessionKey)
-      .map((entry) => entry.childSessionKey)
-      .filter((value) => typeof value === "string" && value.trim().length > 0),
-  );
+  const childSessionKeys = new Set<string>();
+  for (const entry of listSubagentRunsForController(controllerSessionKey)) {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    childSessionKeys.add(childSessionKey);
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry || key === controllerSessionKey) {
       continue;
     }
     const spawnedBy = entry.spawnedBy?.trim();
     const parentSessionKey = entry.parentSessionKey?.trim();
-    if (spawnedBy === controllerSessionKey || parentSessionKey === controllerSessionKey) {
-      childSessionKeys.add(key);
+    if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
+      continue;
     }
+    const latest = getLatestSubagentRunByChildSessionKey(key);
+    if (latest) {
+      const latestControllerSessionKey =
+        latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+      if (latestControllerSessionKey !== controllerSessionKey) {
+        continue;
+      }
+    }
+    childSessionKeys.add(key);
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
@@ -1055,7 +1073,7 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getSubagentRunByChildSessionKey(key);
+  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
@@ -1247,6 +1265,12 @@ export function listSessionsFromStore(params: {
       }
       if (key === "unknown" || key === "global") {
         return false;
+      }
+      const latest = getLatestSubagentRunByChildSessionKey(key);
+      if (latest) {
+        const latestControllerSessionKey =
+          latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+        return latestControllerSessionKey === spawnedBy;
       }
       return entry?.spawnedBy === spawnedBy;
     })

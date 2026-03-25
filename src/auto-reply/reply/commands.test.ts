@@ -1463,6 +1463,134 @@ describe("handleCommands /allowlist", () => {
       });
     }
   });
+
+  describe("operator.admin scope gating", () => {
+    it("blocks /allowlist add from internal gateway clients without operator.admin", async () => {
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: ["123"] } },
+      } as OpenClawConfig;
+      const params = buildPolicyParams("/allowlist add dm channel=telegram 789", cfg, {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write"],
+      });
+      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("requires operator.admin");
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+      expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+    });
+
+    it("allows /allowlist add from internal gateway clients with operator.admin", async () => {
+      validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+        ok: true,
+        config,
+      }));
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        valid: true,
+        parsed: {
+          channels: { telegram: { allowFrom: ["123"] } },
+        },
+      });
+      addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+        changed: true,
+        allowFrom: ["123", "789"],
+      });
+
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: ["123"] } },
+      } as OpenClawConfig;
+      const params = buildPolicyParams("/allowlist add dm channel=telegram 789", cfg, {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write", "operator.admin"],
+      });
+      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("DM allowlist added");
+    });
+
+    it("blocks /allowlist remove from internal gateway clients without operator.admin", async () => {
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: ["123", "789"] } },
+      } as OpenClawConfig;
+      const params = buildPolicyParams("/allowlist remove dm channel=telegram 789", cfg, {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write"],
+      });
+      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("requires operator.admin");
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+      expect(removeChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+    });
+
+    it("allows /allowlist remove from internal gateway clients with operator.admin", async () => {
+      validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+        ok: true,
+        config,
+      }));
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        valid: true,
+        parsed: {
+          channels: { telegram: { allowFrom: ["123", "789"] } },
+        },
+      });
+      removeChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+        changed: true,
+        allowFrom: ["123"],
+      });
+
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: ["123", "789"] } },
+      } as OpenClawConfig;
+      const params = buildPolicyParams("/allowlist remove dm channel=telegram 789", cfg, {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write", "operator.admin"],
+      });
+      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("DM allowlist removed");
+    });
+
+    it("keeps /allowlist list accessible to internal operator.write clients", async () => {
+      readChannelAllowFromStoreMock.mockResolvedValueOnce(["456"]);
+
+      const cfg = {
+        commands: { text: true },
+        channels: { telegram: { allowFrom: ["123"] } },
+      } as OpenClawConfig;
+      const params = buildPolicyParams("/allowlist list dm channel=telegram", cfg, {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write"],
+      });
+      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("Channel: telegram");
+    });
+  });
 });
 
 describe("/models command", () => {
@@ -2016,6 +2144,68 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Run: run-1");
     expect(result.reply?.text).toContain("Status: done");
+  });
+
+  it("does not resolve moved child rows from a stale older parent", async () => {
+    const now = Date.now();
+    const oldParentKey = "agent:main:subagent:cmd-old-parent";
+    const newParentKey = "agent:main:subagent:cmd-new-parent";
+    const childSessionKey = "agent:main:subagent:cmd-shared-child";
+    addSubagentRunForTests({
+      runId: "run-old-parent",
+      childSessionKey: oldParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent",
+      childSessionKey: newParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent",
+      cleanup: "keep",
+      createdAt: now - 50_000,
+      startedAt: now - 50_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-stale-old-parent",
+      childSessionKey,
+      requesterSessionKey: oldParentKey,
+      requesterDisplayKey: oldParentKey,
+      controllerSessionKey: oldParentKey,
+      task: "stale old parent child",
+      cleanup: "keep",
+      createdAt: now - 40_000,
+      startedAt: now - 40_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-current-new-parent",
+      childSessionKey,
+      requesterSessionKey: newParentKey,
+      requesterDisplayKey: newParentKey,
+      controllerSessionKey: newParentKey,
+      task: "current new parent child",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents info 1", cfg);
+    params.sessionKey = oldParentKey;
+    params.ctx.SessionKey = oldParentKey;
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Invalid subagent index: 1");
   });
 
   it("kills subagents via /kill alias without a confirmation reply", async () => {
