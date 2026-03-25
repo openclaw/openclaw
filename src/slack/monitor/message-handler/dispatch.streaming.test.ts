@@ -11,6 +11,7 @@ import {
   resolveSlackStreamingThreadHint,
   settleSlackDispatchAfterRun,
   shouldApplySlackFinalReplyGuards,
+  shouldSkipSlackReplyDelivery,
   shouldForceSlackDraftBoundary,
 } from "./dispatch.js";
 
@@ -184,6 +185,14 @@ describe("slack suppressed final delivery accounting", () => {
     expect(shouldApplySlackFinalReplyGuards("tool")).toBe(false);
     expect(shouldApplySlackFinalReplyGuards("block")).toBe(false);
     expect(shouldApplySlackFinalReplyGuards("final")).toBe(true);
+  });
+
+  it("skips tool and block deliveries in final-only Slack threads", () => {
+    expect(shouldSkipSlackReplyDelivery({ kind: "tool", finalOnlyReplies: true })).toBe(true);
+    expect(shouldSkipSlackReplyDelivery({ kind: "block", finalOnlyReplies: true })).toBe(true);
+    expect(shouldSkipSlackReplyDelivery({ kind: "final", finalOnlyReplies: true })).toBe(false);
+    expect(shouldSkipSlackReplyDelivery({ kind: "tool", finalOnlyReplies: false })).toBe(false);
+    expect(shouldSkipSlackReplyDelivery({ kind: "block", finalOnlyReplies: false })).toBe(false);
   });
 
   it("treats empty non-media finals as suppressed", () => {

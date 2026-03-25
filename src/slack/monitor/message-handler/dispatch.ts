@@ -54,6 +54,13 @@ export function shouldApplySlackFinalReplyGuards(kind: ReplyDispatchKind): boole
   return kind === "final";
 }
 
+export function shouldSkipSlackReplyDelivery(params: {
+  kind: ReplyDispatchKind;
+  finalOnlyReplies: boolean;
+}): boolean {
+  return params.finalOnlyReplies && params.kind !== "final";
+}
+
 export function didSlackDispatchDeliverAnyReply(params: {
   deliveredReplyCount: number;
   queuedFinal: boolean;
@@ -560,6 +567,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (incomingPayload, info) => {
+      if (
+        shouldSkipSlackReplyDelivery({
+          kind: info.kind,
+          finalOnlyReplies,
+        })
+      ) {
+        const skipMessage = `slack: skipped non-final ${info.kind} reply in final-only thread`;
+        if (shouldLogVerbose()) {
+          logVerbose(skipMessage);
+        } else {
+          runtime.log?.(skipMessage);
+        }
+        return;
+      }
       const inboundText =
         message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody;
       const shouldGuardFinalReply = shouldApplySlackFinalReplyGuards(info.kind);
