@@ -11,7 +11,7 @@ describe("twilioApiRequest", () => {
   it("posts form bodies with basic auth and parses json", async () => {
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ sid: "CA123" }), { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
@@ -47,7 +47,7 @@ describe("twilioApiRequest", () => {
       new Response(null, { status: 204 }),
       new Response("missing", { status: 404 }),
     ];
-    globalThis.fetch = vi.fn(async () => responses.shift()!) as typeof fetch;
+    globalThis.fetch = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
@@ -74,7 +74,7 @@ describe("twilioApiRequest", () => {
   it("throws twilio api errors for non-ok responses", async () => {
     globalThis.fetch = vi.fn(
       async () => new Response("bad request", { status: 400 }),
-    ) as typeof fetch;
+    ) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
