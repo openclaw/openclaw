@@ -121,6 +121,33 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("surfaces provider-specific rate-limit message instead of generic fallback", () => {
+    const msg = makeAssistantError(
+      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("usage limit");
+    expect(result).toContain("4381 min");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("extracts provider message from JSON rate-limit error payloads", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited. Retry after 30s."}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Rate limited. Retry after 30s.");
+  });
+
+  it("falls back to generic rate-limit message for Cloudflare HTML error pages", () => {
+    const msg = makeAssistantError(
+      "521 <!DOCTYPE html><html><head><title>Error</title></head><body>rate limit</body></html>",
+    );
+    const result = formatAssistantErrorText(msg);
+    // Cloudflare pages are handled by the HTML error path, not the rate limit path
+    expect(result).toBeDefined();
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

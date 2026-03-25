@@ -82,9 +82,9 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
-  it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
+  it("surfaces provider-specific rate limit message from Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "⚠️ Rate limit exceeded",
     );
   });
 

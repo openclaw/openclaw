@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
@@ -55,9 +56,46 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+/**
+ * Extract a human-readable provider-specific message from a raw rate-limit error.
+ * Handles JSON error payloads, HTTP-status-prefixed strings, and plain text.
+ * Returns `undefined` when the raw text is an HTML error page or too short to be useful,
+ * so callers can fall back to a generic message.
+ */
+function extractProviderRateLimitMessage(raw: string): string | undefined {
+  // Try to extract a specific message from JSON error payloads
+  const info = parseApiErrorInfo(raw);
+  if (info?.message?.trim()) {
+    return info.message.trim();
+  }
+
+  // Strip common error prefixes (e.g. "Error: ", "OpenAI API error: ")
+  const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
+  const candidate = withoutPrefix || raw;
+
+  // Skip HTML/Cloudflare error pages — fall back to generic message
+  if (isCloudflareOrHtmlErrorPage(raw)) {
+    return undefined;
+  }
+
+  // Strip leading HTTP status code (e.g. "429 Rate limit exceeded" → "Rate limit exceeded")
+  const status = extractLeadingHttpStatus(candidate);
+  const messageText = status?.rest?.trim() || candidate;
+
+  if (!messageText || messageText.length < 5) {
+    return undefined;
+  }
+
+  return messageText;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    // Surface the provider-specific rate-limit message when available so users
+    // see actionable details (wait time, which limit was hit, etc.) instead of
+    // a generic fallback.
+    const providerMessage = extractProviderRateLimitMessage(raw);
+    return providerMessage ? `⚠️ ${providerMessage}` : RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
