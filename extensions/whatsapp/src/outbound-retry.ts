@@ -6,8 +6,8 @@ import {
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 
 const log = createSubsystemLogger("gateway/channels/whatsapp").child("send-retry");
 
@@ -45,16 +45,17 @@ export function withWhatsAppSendRetry<T>(
 }
 
 // Account-level retry takes precedence; falls back to channel-level.
-// Resolves the effective account id (including the default account) so that
-// channels.whatsapp.accounts.<default-id>.retry is honored even when no
-// explicit accountId is passed by the caller. Uses case-insensitive lookup
-// via resolveAccountEntry to match WhatsApp account resolution elsewhere.
+// Uses DEFAULT_ACCOUNT_ID as the no-accountId fallback to match the actual send
+// path (resolveWebAccountId in active-listener.ts), ensuring retry config is
+// always read from the same account that will execute the send.
+// Uses case-insensitive lookup via resolveAccountEntry to match WhatsApp account
+// resolution elsewhere.
 export function resolveWhatsAppRetryConfig(
   cfg: OpenClawConfig | undefined,
   accountId?: string | null,
 ): RetryConfig | undefined {
   const root = cfg?.channels?.whatsapp;
-  const effectiveAccountId = accountId?.trim() || (cfg && resolveDefaultWhatsAppAccountId(cfg));
+  const effectiveAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
   if (effectiveAccountId) {
     const accountCfg = resolveAccountEntry(root?.accounts, effectiveAccountId);
     if (accountCfg?.retry !== undefined) return accountCfg.retry;
