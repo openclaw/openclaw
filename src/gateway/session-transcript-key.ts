@@ -93,13 +93,46 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
   }
 
   if (matchingEntries.length > 0) {
-    const firstSessionId = matchingEntries[0]?.[1].sessionId;
-    const sameSessionMatches = matchingEntries.filter(
-      (entry): entry is [string, SessionEntry] => entry[1].sessionId === firstSessionId,
+    const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
+    for (const entry of matchingEntries) {
+      const sessionId = entry[1].sessionId;
+      if (!sessionId) {
+        continue;
+      }
+      const group = matchesBySessionId.get(sessionId);
+      if (group) {
+        group.push(entry);
+      } else {
+        matchesBySessionId.set(sessionId, [entry]);
+      }
+    }
+
+    const resolvedMatches = Array.from(matchesBySessionId.entries())
+      .map(([sessionId, matches]) => {
+        const resolvedKey =
+          resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) ?? matches[0]?.[0];
+        const resolvedEntry = resolvedKey
+          ? matches.find(([key]) => key === resolvedKey)?.[1]
+          : undefined;
+        return resolvedKey && resolvedEntry
+          ? {
+              key: resolvedKey,
+              updatedAt: resolvedEntry.updatedAt ?? 0,
+            }
+          : undefined;
+      })
+      .filter((match): match is { key: string; updatedAt: number } => match !== undefined);
+
+    const sortedResolvedMatches = [...resolvedMatches].toSorted(
+      (a, b) => b.updatedAt - a.updatedAt,
     );
+    const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
     const resolvedKey =
-      resolvePreferredSessionKeyForSessionIdMatches(sameSessionMatches, firstSessionId) ??
-      matchingEntries[0]?.[0];
+      resolvedMatches.length === 1
+        ? freshestMatch?.key
+        : (freshestMatch?.updatedAt ?? 0) > (secondFreshestMatch?.updatedAt ?? 0)
+          ? freshestMatch?.key
+          : undefined;
     if (resolvedKey) {
       TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
       return resolvedKey;
