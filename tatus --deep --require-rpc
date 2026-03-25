@@ -1,0 +1,82 @@
+[0;4m [0m[0;4m [0m[0;4mUNIT                                                 [0m[0;4m [0m[0;4mLOAD  [0m[0;4m [0m[0;4mACTIVE[0m[0;4m [0m[0;4mSUB    [0m[0;4m [0m[0;4mDESCRIPTION                                                          [0m
+  accounts-daemon.service                               loaded active running Accounts Service
+  alsa-restore.service                                  loaded active exited  Save/Restore Sound Card State
+  apparmor.service                                      loaded active exited  Load AppArmor profiles
+  apport.service                                        loaded active exited  automatic crash report generation
+  avahi-daemon.service                                  loaded active running Avahi mDNS/DNS-SD Stack
+  bluetooth.service                                     loaded active running Bluetooth service
+  bolt.service                                          loaded active running Thunderbolt system service
+  colord.service                                        loaded active running Manage, Install and Generate Color Profiles
+  console-setup.service                                 loaded active exited  Set console font and keymap
+  containerd.service                                    loaded active running containerd container runtime
+  cron.service                                          loaded active running Regular background program processing daemon
+  cups-browsed.service                                  loaded active running Make remote CUPS printers available locally
+  cups.service                                          loaded active running CUPS Scheduler
+  dbus.service                                          loaded active running D-Bus System Message Bus
+  docker.service                                        loaded active running Docker Application Container Engine
+  fwupd.service                                         loaded active running Firmware update daemon
+  gdm.service                                           loaded active running GNOME Display Manager
+  gnome-remote-desktop.service                          loaded active running GNOME Remote Desktop
+  iio-sensor-proxy.service                              loaded active running IIO Sensor Proxy service
+  kerneloops.service                                    loaded active running Tool to automatically collect and submit kernel crash signatures
+  keyboard-setup.service                                loaded active exited  Set the console keyboard layout
+  kmod-static-nodes.service                             loaded active exited  Create List of Static Device Nodes
+  ModemManager.service                                  loaded active running Modem Manager
+  NetworkManager-wait-online.service                    loaded active exited  Network Manager Wait Online
+  NetworkManager.service                                loaded active running Network Manager
+  nvidia-persistenced.service                           loaded active running NVIDIA Persistence Daemon
+  ollama.service                                        loaded active running Ollama LLM runtime
+  openvpn.service                                       loaded active exited  OpenVPN service
+  plymouth-quit-wait.service                            loaded active exited  Hold until boot process finishes up
+  plymouth-read-write.service                           loaded active exited  Tell Plymouth To Write Out Runtime Data
+  plymouth-start.service                                loaded active exited  Show Plymouth Boot Screen
+  polkit.service                                        loaded active running Authorization Manager
+  power-profiles-daemon.service                         loaded active running Power Profiles daemon
+  rsyslog.service                                       loaded active running System Logging Service
+  rtkit-daemon.service                                  loaded active running RealtimeKit Scheduling Policy Service
+  setvtrgb.service                                      loaded active exited  Set console scheme
+  snap.canonical-livepatch.canonical-livepatchd.service loaded active running Service for snap application canonical-livepatch.canonical-livepatchd
+  snapd.apparmor.service                                loaded active exited  Load AppArmor profiles managed internally by snapd
+  snapd.seeded.service                                  loaded active exited  Wait until snapd is fully seeded
+  snapd.service                                         loaded active running Snap Daemon
+  switcheroo-control.service                            loaded active running Switcheroo Control Proxy service
+  sysstat.service                                       loaded active exited  Resets System Activity Logs
+  systemd-backlight@backlight:intel_backlight.service   loaded active exited  Load/Save Screen Backlight Brightness of backlight:intel_backlight
+  systemd-backlight@leds:dell::kbd_backlight.service    loaded active exited  Load/Save Screen Backlight Brightness of leds:dell::kbd_backlight
+  systemd-binfmt.service                                loaded active exited  Set Up Additional Binary Formats
+  systemd-fsck@dev-disk-by\x2duuid-643F\x2d4F02.service loaded active exited  File System Check on /dev/disk/by-uuid/643F-4F02
+  systemd-journal-flush.service                         loaded active exited  Flush Journal to Persistent Storage
+  systemd-journald.service                              loaded active running Journal Service
+  systemd-logind.service                                loaded active running User Login Management
+  systemd-modules-load.service                          loaded active exited  Load Kernel Modules
+  systemd-oomd.service                                  loaded active running Userspace Out-Of-Memory (OOM) Killer
+  systemd-random-seed.service                           loaded active exited  Load/Save OS Random Seed
+  systemd-remount-fs.service                            loaded active exited  Remount Root and Kernel File Systems
+  systemd-resolved.service                              loaded active running Network Name Resolution
+  systemd-sysctl.service                                loaded active exited  Apply Kernel Variables
+  systemd-timesyncd.service                             loaded active running Network Time Synchronization
+  systemd-tmpfiles-setup-dev-early.service              loaded active exited  Create Static Device Nodes in /dev gracefully
+  systemd-tmpfiles-setup-dev.service                    loaded active exited  Create Static Device Nodes in /dev
+  systemd-tmpfiles-setup.service                        loaded active exited  Create Volatile Files and Directories
+  systemd-udev-trigger.service                          loaded active exited  Coldplug All udev Devices
+  systemd-udevd.service                                 loaded active running Rule-based Manager for Device Events and Files
+  systemd-update-utmp.service                           loaded active exited  Record System Boot/Shutdown in UTMP
+  systemd-user-sessions.service                         loaded active exited  Permit User Sessions
+  thermald.service                                      loaded active running Thermal Daemon Service
+  ubuntu-fan.service                                    loaded active exited  Ubuntu FAN network setup
+  udisks2.service                                       loaded active running Disk Manager
+  ufw.service                                           loaded active exited  Uncomplicated firewall
+  unattended-upgrades.service                           loaded active running Unattended Upgrades Shutdown
+  upower.service                                        loaded active running Daemon for power management
+  user-runtime-dir@1000.service                         loaded active exited  User Runtime Directory /run/user/1000
+  user@1000.service                                     loaded active running User Manager for UID 1000
+  v4l2-relayd.service                                   loaded active exited  v4l2-relay daemon service
+  v4l2-relayd@default.service                           loaded active running v4l2-relay daemon service for default
+  wpa_supplicant.service                                loaded active running WPA supplicant
+
+[0;38;5;245mLegend: LOAD   → Reflects whether the unit definition was properly loaded.[0m
+[0;38;5;245m        ACTIVE → The high-level unit activation state, i.e. generalization of SUB.[0m
+[0;38;5;245m        SUB    → The low-level unit activation state, values depend on unit type.[0m
+
+[0;1;39m74 loaded units listed.[0m [0;38;5;245mPass --all to see loaded but inactive units, too.[0m
+[0;38;5;245mTo show all installed unit files use 'systemctl list-unit-files'.[0m
