@@ -490,7 +490,16 @@ export async function handleOpenAiHttpRequest(
   let resolvedModel = modelOverride;
   if (routerConfig?.enabled) {
     router = new ModelRouter(routerConfig);
-    resolvedModel = router.getCurrentModel();
+    const routerModel = router.getCurrentModel();
+    // Validate router-selected model against allowlist
+    const validated = await resolveOpenAiCompatModelOverride({ req, agentId, model: routerModel });
+    if (validated.errorMessage) {
+      sendJson(res, 400, {
+        error: { message: validated.errorMessage, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    resolvedModel = routerModel;
   }
 
   const runId = `chatcmpl_${randomUUID()}`;
@@ -597,6 +606,18 @@ export async function handleOpenAiHttpRequest(
         finishReason: null,
       });
       return;
+    }
+
+    // Record signals for router escalation
+    if (router) {
+      if (evt.stream === "tool") {
+        router.recordToolCall();
+      }
+      if (evt.stream === "lifecycle" && evt.data?.phase === "error") {
+        const rawError = evt.data?.error;
+        const errorMsg = typeof rawError === "string" ? rawError : "unknown";
+        router.recordError(errorMsg);
+      }
     }
 
     if (evt.stream === "lifecycle") {
