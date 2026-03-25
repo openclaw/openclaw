@@ -403,4 +403,47 @@ describe("TwilioProvider", () => {
     expect(sendMark).not.toHaveBeenCalled();
     expect(synthesizeForTelephony).not.toHaveBeenCalled();
   });
+
+  it("enforces synthesis timeout when pre-audio streaming fallback switches to buffered synthesis", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-prefallback", "MZ-prefallback");
+
+      const sendAudio = vi.fn();
+      const sendMark = vi.fn();
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(new AbortController().signal);
+        },
+        sendAudio,
+        sendMark,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
+        streamForTelephony: async function* () {
+          throw new Error("stream bootstrap failed");
+        },
+      });
+
+      const playExpectation = expect(
+        provider.playTts({
+          callId: "call-prefallback",
+          providerCallId: "CA-prefallback",
+          text: "Fallback timeout",
+        }),
+      ).rejects.toThrow("Telephony TTS synthesis timed out after 8000ms");
+      await vi.advanceTimersByTimeAsync(8_100);
+      await playExpectation;
+      expect(sendAudio).not.toHaveBeenCalled();
+      expect(sendMark).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

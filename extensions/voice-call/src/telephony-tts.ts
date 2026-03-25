@@ -1,3 +1,4 @@
+import { resolveOpenAITtsInstructions } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { hasVoiceCallSecretInput, resolveVoiceCallSecretInputString } from "./secret-input.js";
@@ -175,8 +176,9 @@ async function* streamOpenAITelephony(
   if (openai?.speed !== undefined) {
     body.speed = openai.speed;
   }
-  if (openai?.instructions) {
-    body.instructions = openai.instructions;
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, openai?.instructions);
+  if (effectiveInstructions) {
+    body.instructions = effectiveInstructions;
   }
 
   const response = await fetch(`${baseUrl}/audio/speech`, {
