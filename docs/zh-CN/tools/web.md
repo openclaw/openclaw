@@ -18,7 +18,7 @@ x-i18n:
 
 OpenClaw 提供两个轻量级 Web 工具：
 
-- `web_search` — 通过 Brave Search API、Firecrawl Search、Gemini with Google Search grounding、Grok、Kimi 或 Perplexity Search API 搜索网络。
+- `web_search` — 通过 Brave Search API、Bocha Search API、Firecrawl Search、Gemini with Google Search grounding、Grok、Kimi 或 Perplexity Search API 搜索网络。
 - `web_fetch` — HTTP 获取 + 可读性提取（HTML → markdown/文本）。
 
 这些**不是**浏览器自动化。对于 JS 密集型网站或需要登录的情况，请使用[浏览器工具](/tools/browser)。
@@ -36,6 +36,7 @@ OpenClaw 提供两个轻量级 Web 工具：
 | 提供商                | 结果形式           | 说明                                            | API 密钥                                    |
 | --------------------- | ------------------ | ----------------------------------------------- | ------------------------------------------- |
 | **Brave Search API**  | 结构化结果 + 摘要  | 支持 Brave `llm-context` 模式                   | `BRAVE_API_KEY`                             |
+| **Bocha Search API**  | 结构化结果 + 摘要  | 高质量实时网页搜索，支持结构化结果              | `BOCHA_API_KEY`                             |
 | **Firecrawl Search**  | 结构化结果 + 摘要  | Firecrawl 专用搜索控制请使用 `firecrawl_search` | `FIRECRAWL_API_KEY`                         |
 | **Gemini**            | AI 综合答案 + 引用 | 使用 Google Search grounding                    | `GEMINI_API_KEY`                            |
 | **Grok**              | AI 综合答案 + 引用 | 使用 xAI 实时网络搜索                           | `XAI_API_KEY`                               |
@@ -51,7 +52,7 @@ OpenClaw 提供两个轻量级 Web 工具：
   tools: {
     web: {
       search: {
-        provider: "brave", // 或 "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity"
+        provider: "brave", // 或 "bocha" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity"
       },
     },
   },

@@ -259,6 +259,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/bocha: {}
+
   extensions/brave: {}
 
   extensions/byteplus: {}

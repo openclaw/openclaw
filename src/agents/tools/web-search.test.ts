@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { __testing as bochaTesting } from "../../../extensions/bocha/src/bocha-web-search-provider.js";
 import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
 import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
 import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
@@ -29,6 +30,7 @@ const { resolveGrokApiKey, resolveGrokModel, resolveGrokInlineCitations, extract
   xaiTesting;
 const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCitations } =
   moonshotTesting;
+const { normalizeFreshness: normalizeBochaFreshness } = bochaTesting;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
@@ -36,6 +38,36 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+describe("web_search freshness normalization", () => {
+  it("normalizes brave freshness", () => {
+    expect(normalizeFreshness("pd", "brave")).toBe("pd");
+    expect(normalizeFreshness("day", "brave")).toBe("pd");
+    expect(normalizeFreshness("2024-01-01to2024-01-02", "brave")).toBe("2024-01-01to2024-01-02");
+    expect(normalizeFreshness("2024-01-01..2024-01-02", "brave")).toBe("2024-01-01to2024-01-02");
+  });
+
+  it("normalizes bocha freshness", () => {
+    expect(normalizeBochaFreshness("noLimit", "bocha")).toBe("noLimit");
+    expect(normalizeBochaFreshness("oneDay", "bocha")).toBe("oneDay");
+    expect(normalizeBochaFreshness("pd", "bocha")).toBe("oneDay");
+    expect(normalizeBochaFreshness("day", "bocha")).toBe("oneDay");
+    expect(normalizeBochaFreshness("pw", "bocha")).toBe("oneWeek");
+    expect(normalizeBochaFreshness("week", "bocha")).toBe("oneWeek");
+    expect(normalizeBochaFreshness("pm", "bocha")).toBe("oneMonth");
+    expect(normalizeBochaFreshness("month", "bocha")).toBe("oneMonth");
+    expect(normalizeBochaFreshness("py", "bocha")).toBe("oneYear");
+    expect(normalizeBochaFreshness("year", "bocha")).toBe("oneYear");
+    expect(normalizeBochaFreshness("2024-01-01..2024-01-02", "bocha")).toBe(
+      "2024-01-01..2024-01-02",
+    );
+    expect(normalizeBochaFreshness("2024-01-01to2024-01-02", "bocha")).toBe(
+      "2024-01-01..2024-01-02",
+    );
+    expect(normalizeBochaFreshness("2024-01-01", "bocha")).toBe("2024-01-01");
+    expect(normalizeBochaFreshness("invalid", "bocha")).toBe("noLimit");
+  });
+});
 
 describe("web_search perplexity compatibility routing", () => {
   it("detects API key prefixes", () => {

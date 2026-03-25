@@ -71,6 +71,7 @@ describe("bundled web search metadata", () => {
 
   it("keeps bundled web search compat ids aligned with bundled manifests", () => {
     expect(resolveBundledWebSearchPluginIds({})).toEqual([
+      "bocha",
       "brave",
       "duckduckgo",
       "exa",
@@ -92,6 +93,7 @@ describe("bundled web search metadata", () => {
   });
 
   it("keeps bundled web search provider-to-plugin ids aligned with bundled contracts", () => {
+    expect(resolveBundledWebSearchPluginId("bocha")).toBe("bocha");
     expect(resolveBundledWebSearchPluginId("brave")).toBe("brave");
     expect(resolveBundledWebSearchPluginId("exa")).toBe("exa");
     expect(resolveBundledWebSearchPluginId("firecrawl")).toBe("firecrawl");
