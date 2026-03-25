@@ -93,6 +93,7 @@ export type AgentsProps = {
   toolsEffective: ToolsEffectiveState;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
+  modelCatalogLoading: boolean;
   modelCatalog: ModelCatalogEntry[];
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
@@ -248,6 +249,7 @@ export function renderAgents(props: AgentsProps) {
                           configLoading: props.config.loading,
                           configSaving: props.config.saving,
                           configDirty: props.config.dirty,
+                          modelCatalogLoading: props.modelCatalogLoading,
                           modelCatalog: props.modelCatalog,
                           onConfigReload: props.onConfigReload,
                           onConfigSave: props.onConfigSave,

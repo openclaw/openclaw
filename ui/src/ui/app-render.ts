@@ -76,6 +76,7 @@ import {
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import { ensureModelCatalog, refreshModelCatalog } from "./controllers/models.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
@@ -989,9 +990,10 @@ export function renderApp(state: AppViewState) {
                   },
                   runtimeSessionKey: state.sessionKey,
                   runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
+                  modelCatalogLoading: state.chatModelsLoading,
                   modelCatalog: state.chatModelCatalog ?? [],
                   onRefresh: async () => {
-                    await loadAgents(state);
+                    await Promise.all([loadAgents(state), refreshModelCatalog(state)]);
                     const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
                     if (agentIds.length > 0) {
                       void loadAgentIdentities(state, agentIds);
@@ -1046,6 +1048,9 @@ export function renderApp(state: AppViewState) {
                     state.toolsEffectiveLoading = false;
                     state.toolsEffectiveLoadingKey = null;
                     void loadAgentIdentity(state, agentId);
+                    if (state.agentsPanel === "overview") {
+                      void ensureModelCatalog(state);
+                    }
                     if (state.agentsPanel === "files") {
                       void loadAgentFiles(state, agentId);
                     }
@@ -1064,6 +1069,9 @@ export function renderApp(state: AppViewState) {
                   },
                   onSelectPanel: (panel) => {
                     state.agentsPanel = panel;
+                    if (panel === "overview") {
+                      void ensureModelCatalog(state);
+                    }
                     if (panel === "files" && resolvedAgentId) {
                       if (state.agentFilesList?.agentId !== resolvedAgentId) {
                         state.agentFilesList = null;

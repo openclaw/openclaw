@@ -1,3 +1,5 @@
+/* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayAgentRow } from "../types.ts";
@@ -81,6 +83,15 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
       error: null,
       result: null,
     },
+    toolsEffective: {
+      loading: false,
+      error: null,
+      result: null,
+    },
+    runtimeSessionKey: "main",
+    runtimeSessionMatchesSelectedAgent: false,
+    modelCatalogLoading: false,
+    modelCatalog: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
     onSelectPanel: () => undefined,
@@ -213,5 +224,110 @@ describe("agents overview primary model select (browser)", () => {
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-4.1-mini)",
     );
+  });
+
+  it("shows a loading state instead of a partial catalog while models hydrate", async () => {
+    const container = createContainer();
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "qa",
+          modelCatalogLoading: true,
+          modelCatalog: [],
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: "openai/gpt-4.1-mini",
+                },
+                list: [{ id: "qa", model: "openai/gpt-4.1" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+    await flushRender();
+
+    const select = getPrimaryModelSelect(container);
+    const options = Array.from(select.options).map((option) => option.textContent?.trim());
+
+    expect(select.disabled).toBe(true);
+    expect(select.value).toBe("openai/gpt-4.1");
+    expect(options).toContain("Current (openai/gpt-4.1)");
+    expect(options).toContain("Loading models...");
+  });
+
+  it("hydrates the full catalog without losing the selected value", async () => {
+    const container = createContainer();
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "qa",
+          modelCatalogLoading: true,
+          modelCatalog: [],
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: "openai/gpt-4.1-mini",
+                },
+                list: [{ id: "qa", model: "openai/gpt-4.1" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+    await flushRender();
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "qa",
+          modelCatalogLoading: false,
+          modelCatalog: [
+            { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+            { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+            { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+          ],
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: "openai/gpt-4.1-mini",
+                },
+                list: [{ id: "qa", model: "openai/gpt-4.1" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+    await flushRender();
+
+    const select = getPrimaryModelSelect(container);
+    const optionValues = Array.from(select.options).map((option) => option.value);
+
+    expect(select.disabled).toBe(false);
+    expect(select.value).toBe("openai/gpt-4.1");
+    expect(optionValues).toContain("openai/gpt-4.1");
+    expect(optionValues).toContain("openai/gpt-4.1-mini");
+    expect(optionValues).toContain("anthropic/claude-opus-4-6");
+    expect(select.selectedOptions[0]?.textContent?.trim()).not.toBe("");
   });
 });

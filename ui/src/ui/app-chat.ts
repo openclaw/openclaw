@@ -6,7 +6,7 @@ import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
+import { refreshModelCatalog } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
@@ -373,17 +373,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
 }
 
 async function refreshChatModels(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
-  }
+  await refreshModelCatalog(host);
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

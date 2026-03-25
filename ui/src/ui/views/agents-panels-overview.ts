@@ -30,6 +30,7 @@ export function renderAgentOverview(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  modelCatalogLoading: boolean;
   modelCatalog: ModelCatalogEntry[];
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -64,6 +65,7 @@ export function renderAgentOverview(params: {
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const catalogHydrating = params.modelCatalogLoading && params.modelCatalog.length === 0;
   const optionCurrent = isDefault
     ? (entryPrimary ?? defaultPrimary ?? undefined)
     : (entryPrimary ?? undefined);
@@ -148,7 +150,7 @@ export function renderAgentOverview(params: {
                   }
                 });
               })}
-              ?disabled=${disabled}
+              ?disabled=${disabled || catalogHydrating}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
@@ -163,7 +165,18 @@ export function renderAgentOverview(params: {
                     </option>
                   `
               }
-              ${buildModelOptions(configForm, optionCurrent, params.modelCatalog)}
+              ${
+                catalogHydrating
+                  ? html`
+                      ${
+                        selectValue
+                          ? html`<option value=${selectValue}>Current (${selectValue})</option>`
+                          : nothing
+                      }
+                      <option disabled value="__loading_models__">Loading models...</option>
+                    `
+                  : buildModelOptions(configForm, optionCurrent, params.modelCatalog)
+              }
             </select>
           </label>
           <div class="field">
