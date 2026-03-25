@@ -12,6 +12,8 @@ export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
+  createRequestySystemCacheWrapper,
+  createRequestyWrapper,
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
 export {
