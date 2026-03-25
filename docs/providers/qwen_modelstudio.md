@@ -2,7 +2,7 @@
 title: "Qwen / Model Studio"
 summary: "Alibaba Cloud Model Studio setup (Standard pay-as-you-go and Coding Plan, dual region endpoints)"
 read_when:
-  - You want to use Alibaba Cloud Model Studio (Qwen) with OpenClaw
+  - You want to use Qwen (Alibaba Cloud Model Studio) with OpenClaw
   - You need the API key env var for Model Studio
   - You want to use the Standard (pay-as-you-go) or Coding Plan endpoint
 ---
@@ -57,8 +57,8 @@ After onboarding, set a default model:
 | -------------------------- | ------ | --------------------------------- | ------------------------------------------------ |
 | Standard (pay-as-you-go)   | China  | `modelstudio-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`      |
 | Standard (pay-as-you-go)   | Global | `modelstudio-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
-| Coding Plan (subscription) | China  | `modelstudio-api-key-cn`          | `coding.dashscope.aliyuncs.com`                  |
-| Coding Plan (subscription) | Global | `modelstudio-api-key`             | `coding-intl.dashscope.aliyuncs.com`             |
+| Coding Plan (subscription) | China  | `modelstudio-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
+| Coding Plan (subscription) | Global | `modelstudio-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
 
 The provider auto-selects the endpoint based on your auth choice. You can
 override with a custom `baseUrl` in config.
@@ -72,7 +72,7 @@ override with a custom `baseUrl` in config.
 
 - **qwen3.5-plus** (default) — Qwen 3.5 Plus
 - **qwen3-coder-plus**, **qwen3-coder-next** — Qwen coding models
-- **GLM-5**, **GLM-4.7** — GLM models via Alibaba
+- **GLM-5** — GLM models via Alibaba
 - **Kimi K2.5** — Moonshot AI via Alibaba
 - **MiniMax-M2.5** — MiniMax via Alibaba
 
