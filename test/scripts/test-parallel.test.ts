@@ -136,6 +136,8 @@ describe("scripts/test-parallel lane planning", () => {
         ...process.env,
         CI: "",
         OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
       },
       encoding: "utf8",
     });
