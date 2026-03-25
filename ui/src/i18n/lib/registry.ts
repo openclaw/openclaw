@@ -68,6 +68,12 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   return DEFAULT_LOCALE;
 }
 
+const RTL_LOCALES: ReadonlySet<Locale> = new Set(["ar"] satisfies Locale[]);
+
+export function isRtlLocale(locale: Locale): boolean {
+  return RTL_LOCALES.has(locale);
+}
+
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
   if (!isLazyLocale(locale)) {
     return null;

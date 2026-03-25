@@ -4,6 +4,7 @@ import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   isSupportedLocale,
+  isRtlLocale,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "./registry.ts";
@@ -56,10 +57,17 @@ class I18nManager {
     return resolveNavigatorLocale(language ?? "");
   }
 
+  private applyDocumentDirection(locale: Locale) {
+    if (typeof globalThis.document?.documentElement?.dir === "string") {
+      globalThis.document.documentElement.dir = isRtlLocale(locale) ? "rtl" : "ltr";
+    }
+  }
+
   private loadLocale() {
     const initialLocale = this.resolveInitialLocale();
     if (initialLocale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
+      this.applyDocumentDirection(DEFAULT_LOCALE);
       return;
     }
     // Use the normal locale setter so startup locale loading follows the same
@@ -92,6 +100,7 @@ class I18nManager {
 
     this.locale = locale;
     this.persistLocale(locale);
+    this.applyDocumentDirection(locale);
     this.notify();
   }
 

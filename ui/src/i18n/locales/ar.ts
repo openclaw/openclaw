@@ -37,7 +37,8 @@ export const ar: TranslationMap = {
     skills: "المهارات",
     nodes: "العُقد",
     chat: "المحادثة",
-    config: "الإعدادات",    communications: "الاتصالات",
+    config: "الإعدادات",
+    communications: "الاتصالات",
     appearance: "المظهر",
     automation: "الأتمتة",
     infrastructure: "البنية التحتية",
@@ -93,7 +94,8 @@ export const ar: TranslationMap = {
       sessionsHint: "مفاتيح الجلسات الأخيرة التي تتبعها البوابة.",
       cron: "المجدولة",
       cronNext: "الإيقاظ التالي {time}",
-    },    notes: {
+    },
+    notes: {
       title: "ملاحظات",
       subtitle: "تذكيرات سريعة لإعدادات التحكم عن بُعد.",
       tailscaleTitle: "خدمة Tailscale",
@@ -105,8 +107,7 @@ export const ar: TranslationMap = {
     },
     auth: {
       required: "هذه البوابة تتطلب مصادقة. أضف رمزًا أو كلمة مرور، ثم اضغط اتصال.",
-      failed:
-        "فشلت المصادقة. أعد نسخ رابط مُرمّز بـ {command}، أو حدّث الرمز، ثم اضغط اتصال.",
+      failed: "فشلت المصادقة. أعد نسخ رابط مُرمّز بـ {command}، أو حدّث الرمز، ثم اضغط اتصال.",
     },
     pairing: {
       hint: "هذا الجهاز يحتاج موافقة اقتران من مضيف البوابة.",
@@ -174,7 +175,8 @@ export const ar: TranslationMap = {
     de: "Deutsch (الألمانية)",
     es: "Español (الإسبانية)",
     ar: "العربية (Arabic)",
-  },  cron: {
+  },
+  cron: {
     summary: {
       enabled: "مفعّل",
       yes: "نعم",
@@ -233,7 +235,8 @@ export const ar: TranslationMap = {
       deliveryNotDelivered: "لم يتم التسليم",
       deliveryUnknown: "غير معروف",
       deliveryNotRequested: "لم يُطلب",
-    },    form: {
+    },
+    form: {
       editJob: "تعديل المهمة",
       newJob: "مهمة جديدة",
       updateSubtitle: "تحديث المهمة المجدولة المحددة.",
@@ -279,13 +282,11 @@ export const ar: TranslationMap = {
       payloadKind: "ماذا يجب تشغيله؟",
       systemEvent: "نشر رسالة في الخط الزمني الرئيسي",
       agentTurn: "تشغيل مهمة المساعد (معزولة)",
-      systemEventHelp:
-        "يرسل نصك إلى الخط الزمني الرئيسي للبوابة (جيد للتذكيرات/المحفزات).",
+      systemEventHelp: "يرسل نصك إلى الخط الزمني الرئيسي للبوابة (جيد للتذكيرات/المحفزات).",
       agentTurnHelp: "يبدأ تشغيل المساعد في جلسته الخاصة باستخدام الأمر الخاص بك.",
       timeoutSeconds: "المهلة (ثوانٍ)",
       timeoutPlaceholder: "اختياري، مثلاً 90",
-      timeoutHelp:
-        "اختياري. اتركه فارغًا لاستخدام سلوك المهلة الافتراضي للبوابة.",
+      timeoutHelp: "اختياري. اتركه فارغًا لاستخدام سلوك المهلة الافتراضي للبوابة.",
       mainTimelineMessage: "رسالة الخط الزمني الرئيسي",
       assistantTaskPrompt: "أمر مهمة المساعد",
       deliverySection: "التسليم",
@@ -304,8 +305,7 @@ export const ar: TranslationMap = {
       toPlaceholder: "+966... أو معرّف المحادثة",
       toHelp: "تجاوز المستلم اختياري (معرّف محادثة، هاتف، أو معرّف مستخدم).",
       advanced: "متقدم",
-      advancedHelp:
-        "تجاوزات اختيارية لضمانات التسليم، تشتيت الجدول، والتحكم في النموذج.",
+      advancedHelp: "تجاوزات اختيارية لضمانات التسليم، تشتيت الجدول، والتحكم في النموذج.",
       deleteAfterRun: "حذف بعد التشغيل",
       deleteAfterRunHelp: "الأفضل للتذكيرات لمرة واحدة التي يجب تنظيفها تلقائيًا.",
       clearAgentOverride: "مسح تجاوز الوكيل",
@@ -332,7 +332,8 @@ export const ar: TranslationMap = {
       saveChanges: "حفظ التغييرات",
       addJob: "إضافة مهمة",
       cancel: "إلغاء",
-    },    jobList: {
+    },
+    jobList: {
       allJobs: "جميع المهام",
       selectJob: "(حدد مهمة)",
       enabled: "مفعّلة",

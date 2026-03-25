@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
+  isRtlLocale,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "../../ui/src/i18n/lib/registry.ts";
@@ -35,6 +36,12 @@ describe("ui i18n locale registry", () => {
     expect(resolveNavigatorLocale("ar-EG")).toBe("ar");
   });
 
+  it("identifies RTL locales", () => {
+    expect(isRtlLocale("ar")).toBe(true);
+    expect(isRtlLocale("en")).toBe(false);
+    expect(isRtlLocale("de")).toBe(false);
+  });
+
   it("loads lazy locale translations from the registry", async () => {
     const de = await loadLazyLocaleTranslation("de");
     const es = await loadLazyLocaleTranslation("es");
@@ -47,8 +54,25 @@ describe("ui i18n locale registry", () => {
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     const ar = await loadLazyLocaleTranslation("ar");
-    expect(getNestedTranslation(ar, "common", "health")).toBe("\u0627\u0644\u062d\u0627\u0644\u0629");
-    expect(getNestedTranslation(ar, "languages", "ar")).toBe("\u0627\u0644\u0639\u0631\u0628\u064a\u0629 (Arabic)");
+    expect(getNestedTranslation(ar, "common", "health")).toBe(
+      "\u0627\u0644\u062d\u0627\u0644\u0629",
+    );
+    expect(getNestedTranslation(ar, "languages", "ar")).toBe(
+      "\u0627\u0644\u0639\u0631\u0628\u064a\u0629 (Arabic)",
+    );
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
+  });
+
+  it("every lazy locale includes a languages.ar entry", async () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      if (locale === "en") {
+        continue;
+      }
+      const map = await loadLazyLocaleTranslation(locale);
+      expect(
+        getNestedTranslation(map, "languages", "ar"),
+        `${locale} is missing languages.ar`,
+      ).toBeDefined();
+    }
   });
 });
