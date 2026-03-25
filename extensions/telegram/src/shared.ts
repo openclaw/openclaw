@@ -1,3 +1,4 @@
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -18,7 +19,6 @@ import {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
-  resolveTelegramAccountConfig,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 
@@ -85,7 +85,10 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   if (!hasConfiguredAccounts) {
     return false;
   }
-  return !resolveTelegramAccountConfig(cfg, accountId);
+  // Use resolveNormalizedAccountEntry (same as resolveTelegramToken in token.ts)
+  // instead of resolveAccountEntry to handle keys that require full normalization
+  // (e.g. "Carey Notifications" → "carey-notifications").
+  return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 }
 
 export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
@@ -138,7 +141,10 @@ export function createTelegramPluginBase(params: {
           return false;
         }
         const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
-        if (!inspected.configured) {
+        // Gate on actually available token, not just "configured" — the latter
+        // includes "configured_unavailable" (unreadable tokenFile, unresolved
+        // SecretRef) which would pass here but fail at runtime.
+        if (!inspected.token?.trim()) {
           return false;
         }
         return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
@@ -148,7 +154,10 @@ export function createTelegramPluginBase(params: {
           return `not configured: unknown accountId "${account.accountId}" in multi-bot setup`;
         }
         const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
-        if (!inspected.configured) {
+        if (!inspected.token?.trim()) {
+          if (inspected.tokenStatus === "configured_unavailable") {
+            return `not configured: token ${inspected.tokenSource} is configured but unavailable`;
+          }
           return "not configured";
         }
         const ownerAccountId = findTelegramTokenOwnerAccountId({
@@ -179,7 +188,7 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            inspected.configured &&
+            !!inspected.token?.trim() &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
         };

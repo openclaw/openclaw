@@ -529,6 +529,44 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unknown accountId");
   });
 
+  // Regression: multi-bot guard must use full normalization (same as resolveTelegramToken)
+  // so that account keys like "Carey Notifications" resolve to "carey-notifications".
+  it("multi-bot guard normalizes account keys with spaces and mixed case", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            "Carey Notifications": { botToken: "carey-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // "carey-notifications" is the normalized form of "Carey Notifications"
+    const account = resolveAccount(cfg, "carey-notifications");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: configured_unavailable token (e.g. unreadable tokenFile) should
+  // NOT be reported as configured — runtime would fail to authenticate.
+  it("reports not configured when token is configured_unavailable", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile: "/nonexistent/path/to/token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    // tokenFile is configured but file doesn't exist → configured_unavailable
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+  });
+
   it("does not crash startup when a resolved account token is undefined", async () => {
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: false,
