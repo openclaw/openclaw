@@ -673,7 +673,9 @@ export async function importMigrateArchive(
         try {
           mergeContent = JSON5.parse(raw);
         } catch (err) {
-          throw new Error(`Import aborted: config payload is not valid JSON/JSON5: ${String(err)}`);
+          throw new Error(`Import aborted: config payload is not valid JSON/JSON5: ${String(err)}`, {
+            cause: err,
+          });
         }
         if (
           typeof mergeContent !== "object" ||
