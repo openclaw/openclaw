@@ -203,6 +203,22 @@ describe("CronService persists delivered status", () => {
     cron.stop();
   });
 
+  it("persists not-requested for webhook mode job with delivered=false", async () => {
+    // mode='webhook' also has requested=false in resolveCronDeliveryPlan (delivery happens
+    // outside dispatchCronDelivery), so delivered=false means not-attempted, not a failure.
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("webhook-not-delivered"),
+        delivery: { mode: "webhook" as const, to: "https://example.com/hook" },
+      },
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
   it("emits delivered in the finished event", async () => {
     let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
     await runIsolatedJobAndReadState({
