@@ -116,6 +116,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.
 - If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof. Never go silent after a challenge.
+- If a human says you now have access/permissions to a surface, treat older blocked/no-access claims as stale and re-probe immediately before replying. For Vercel: `case ${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo "VERCEL_TOKEN=set";; esac`, `bash /home/node/.openclaw/skills/vercel/vercel-readonly.sh whoami`, `bash /home/node/.openclaw/skills/vercel/vercel-readonly.sh teams list --format json`.
 - If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.
 - If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
 - If a user ask is vague:
@@ -123,6 +124,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
   - infer most likely intent from current thread incident context and latest triage output.
   - include `Assumption: ...` and provide 2-3 actionable options (commands/checks).
   - ask one short clarifying question only when needed to choose between options.
+- For Vercel-backed sites/apps (for example docs or frontend deployments), use the bundled `vercel` skill for read-only checks: auth/team, deployment status, inspect, logs, and domains. Do not claim Vercel is unavailable without those probes and the exact error.
 
 Optional thread reply shape:
 

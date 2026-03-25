@@ -71,6 +71,7 @@ Every text output you produce becomes a visible message to the user. Intermediat
 - If a human says commits must be signed, treat that as mandatory. Use only the GitHub-signed commit path (`autofix-pr.sh`, `scripts/committer`, or equivalent verified API flow). Never create a local unsigned commit first and "fix it later".
 - No root-cause ranking before one successful live check. Access/runtime failures alone are not enough evidence for hypotheses.
 - When the operator corrects your approach or tells you to change behavior, apply the correction immediately in the current context. Do not ask permission to act — the correction itself is the authorization. Investigate, act, and report findings.
+- If a human says you now have access/permissions to a tool or surface, treat prior blocked/no-access claims as stale immediately. Re-probe the newly granted surface before answering. For Vercel, run `case ${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo "VERCEL_TOKEN=set";; esac`, `bash ./skills/vercel/vercel-readonly.sh whoami`, and `bash ./skills/vercel/vercel-readonly.sh teams list --format json` before reusing any earlier Vercel limitation claim.
 - If a human explicitly says stop, ignore this thread, or don't answer this thread, abort immediately, clear queued follow-ups, and do not send a substantive reply.
 - Latent corruption investigation: when a corrupt/truncated data file predates the current alert window, investigate what activated the code path that reads it. Check for: recent deploys, pod restarts, config syncs, feature flag toggles, or compaction threshold changes since the file's last-modified timestamp. Include the activation trigger in the RCA.
 - Self-referential incident: when the bot is triaging an alert about its own pod (openclaw-sre), note this in the Status line ("Self-referential incident — runtime responsiveness may be degraded during investigation") and prioritize fast, minimal evidence collection.
@@ -187,6 +188,7 @@ Shared packages: `@repo/web3` (wagmi/viem), `@repo/ui` (components), `@repo/util
 - Always search for existing fix PRs before creating a new one — a recent merged PR may already contain the fix but not yet be deployed (check ArgoCD sync status)
 - `pods.metrics.k8s.io` is Forbidden for the incident-readonly SA — do not retry it
 - Before posting a Slack reply, verify it contains at least one concrete finding, validation fact, or next action — do not send empty progress chatter
+- The runtime image bundles the `vercel` skill and Vercel CLI. If a human mentions Vercel access, team membership, deploy status, preview failure, or `TEAM_ACCESS_REQUIRED`, use the Vercel probes instead of saying access is unavailable.
 
 ## Companion Skills
 
@@ -291,6 +293,7 @@ Check active modes: run the corresponding script with `check` argument.
 - Use `references/single-vault-incidents.md` for single-vault GraphQL data incidents.
 - Use `references/indexer-freshness-incidents.md` for recurring indexer freshness alerts.
 - Use `references/consumer-frontend-guide.md` for consumer app wallet/frontend investigations.
+- Use `skills/vercel/SKILL.md` plus `bash ./skills/vercel/vercel-readonly.sh ...` for Vercel auth, team, deployment, build-status, and domain checks on Vercel-backed apps/sites.
 - Use `references/erpc-operations.md` for eRPC config, routing, and wrapper usage.
 - Use `references/grafana-operations.md` for Grafana dashboard discovery and editing.
 - Use `references/api-wrappers-guide.md` for all SRE API wrapper script reference.

@@ -514,6 +514,7 @@ required_bundled_skills=(
   sre-consumer-frontend
   sre-sentinel
   sre-verify
+  vercel
 )
 
 for skill_name in "${required_bundled_skills[@]}"; do

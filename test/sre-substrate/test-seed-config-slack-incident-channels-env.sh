@@ -17,6 +17,7 @@ for bundled_skill in \
   grafana-metrics-best-practices \
   go-memory-profiling \
   terraform-ci-review \
+  vercel \
   sre-incident-triage \
   sre-db-evidence \
   sre-api-wrappers \

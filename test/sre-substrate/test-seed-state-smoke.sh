@@ -17,6 +17,7 @@ for bundled_skill in \
   grafana-metrics-best-practices \
   go-memory-profiling \
   terraform-ci-review \
+  vercel \
   sre-incident-triage \
   sre-db-evidence \
   sre-api-wrappers \
@@ -110,3 +111,5 @@ test -f "$STATE_DIR/skills/sre-auto-remediation/SKILL.md"
 test -f "$STATE_DIR/skills/sre-consumer-frontend/SKILL.md"
 test -f "$STATE_DIR/skills/sre-sentinel/SKILL.md"
 test -f "$STATE_DIR/skills/sre-verify/SKILL.md"
+test -f "$STATE_DIR/skills/vercel/SKILL.md"
+test -x "$STATE_DIR/skills/vercel/vercel-readonly.sh"

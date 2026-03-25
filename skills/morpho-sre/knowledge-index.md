@@ -18,6 +18,7 @@ Runtime model: the container assumes a shared repo root. Start with
 | Infra architecture + ops docs                                 | `morpho-infra/docs/`                                 | Most operational knowledge already lives here                                                 |
 | Infra/service ownership map                                   | `openclaw-sre/skills/morpho-sre/repo-ownership.json` | Repo boundaries, validation hints, rollout ownership                                          |
 | Prime frontend apps (curator, delegate, liquidation, markets) | `prime-monorepo/apps/*`                              | All prime/curator/delegate/liquidation/markets-v2 frontend apps and shared `@repo/*` packages |
+| Vercel-backed apps/sites and deploy evidence                  | `skills/vercel/` + linked repo `.vercel/*`           | Read-only auth/team/deployment/build/domain checks for docs and frontend properties           |
 | Seeded incident dossiers                                      | `openclaw-sre/skills/morpho-sre/*.md`                | Markdown dossiers baked into the runtime image to bootstrap incident knowledge                |
 | Incident dossiers (runtime)                                   | `~/.openclaw/state/sre-dossiers/`                    | Runtime-distilled prior incidents for recall, may extend the seeded dossiers                  |
 | Session summaries                                             | `~/.openclaw/state/sre-index/session-summaries/`     | Recent triage memory                                                                          |
@@ -61,12 +62,20 @@ Runtime model: the container assumes a shared repo root. Start with
   Frontend user-path, replay, issue-group, and release correlation surface for consumer app incidents.
 - `frontend-project-resolver.sh`
   Prompt-to-project inference surface for frontend incidents spanning multiple PostHog and Sentry projects.
+- `skills/vercel/SKILL.md`
+  Read-only Vercel inspection surface. Use when a human mentions Vercel access, preview/prod deploy failures, deploy seat checks, `TEAM_ACCESS_REQUIRED`, domains, or a site not reflecting a merged PR.
+- `bash ./skills/vercel/vercel-readonly.sh whoami`
+  First live Vercel auth probe. Confirms CLI + token access before any Vercel limitation claim.
+- `bash ./skills/vercel/vercel-readonly.sh teams list --format json`
+  Confirms reachable teams/scopes after an access grant or token change.
 - `morpho-infra/docs/operations/erpc-operations.md`
   eRPC metrics, commands, failure checks.
 - `morpho-infra/docs/services/api-endpoints.md`
   Service URLs, Vault paths, endpoint ownership clues.
 - `morpho-infra/docs/services/platform.md`
   Platform service inventory.
+- `morpho-org/morpho-documentation-v2`
+  Docs site source repo (`docs.morpho.org`) for content fixes and Vercel deploy follow-up.
 - `morpho-infra/docs/architecture/alerting.md`
   Alert routing model.
 - `morpho-infra/docs/architecture/erpc.md`
@@ -118,12 +127,16 @@ investigation.
   Start `references/indexer-freshness-playbook.md`, then `morpho-infra/docs/guides/observability-stack-onboarding.md`, then the closest indexing dossier.
 - Consumer app frontend / JS error / replay / conversion drop:
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
+- Vercel preview/prod deploy failure, merged PR not live, or Vercel seat/access issue:
+  Start `skills/vercel/SKILL.md`, then `bash ./skills/vercel/vercel-readonly.sh whoami`, `teams list --format json`, `ls --format json --scope <team-slug>`, `inspect <deployment-url>`, then the linked app/site repo (`morpho-documentation-v2` for `docs.morpho.org`, `prime-monorepo` for prime apps).
 - Customer support thread / Intercom ticket / inbox conversation:
   Start `intercom-api.sh`, then match the surfaced entity to the product flow,
   then continue with `frontend-project-resolver.sh`, `sentry-api.sh`, or
   `consumer-bug-preflight.sh` as needed.
 - Curator / delegate / liquidation / markets-v2 frontend bug:
   Start `prime-monorepo/apps/<app>` (see SKILL.md "Prime Monorepo App Mapping" for app→path table), then `frontend-project-resolver.sh`, then matching PostHog/Sentry project, then `morpho-infra/docs/operations/incident-response.md`.
+- Docs site content/deploy issue (`docs.morpho.org`):
+  Start `morpho-org/morpho-documentation-v2`, then Vercel read-only probes, then the repo's CI/deploy settings and linked project metadata.
 - Consumer wallet / approval / permit / repay failure:
   Start `consumer-bug-preflight.sh`, then `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`, then matching PostHog/Sentry probes, then Linear / GitHub known-issue search, then Foundry/Tenderly checks.
 - Sentry RPC revert / ABI encoding mismatch / SDK interface regression:

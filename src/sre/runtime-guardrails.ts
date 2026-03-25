@@ -6,12 +6,13 @@ import {
   EXACT_ARTIFACT_RE,
   extractInlineJsonTextValue,
   extractResolverFamily,
+  matchesAccessGrant,
   matchesHumanCorrection,
 } from "./patterns.js";
 
 type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
 type TranscriptPreview = { line: number; preview: string; rawText: string };
-type HumanCorrectionPreview = { line: number; preview: string };
+type HumanCorrectionPreview = { line: number; preview: string; rawText: string };
 type AssistantTextLine = { line: number; text: string };
 type TranscriptScan = {
   sawRetrievalDoc: boolean;
@@ -37,6 +38,7 @@ const RETRIEVAL_DOC_RE =
 const DB_DATA_PLAYBOOK_RE = /db-data-incident-playbook\.md$/i;
 const DEFAULT_OPENCLAW_STATE_DIR = "/home/node/.openclaw";
 const SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME = "single-vault-graphql-evidence.sh";
+const VERCEL_READONLY_SCRIPT_NAME = "vercel-readonly.sh";
 const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT = path.join(
   DEFAULT_OPENCLAW_STATE_DIR,
   "skills",
@@ -44,6 +46,18 @@ const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT = path.join(
   "scripts",
   SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME,
 );
+const DEFAULT_VERCEL_READONLY_SCRIPT = path.join(
+  DEFAULT_OPENCLAW_STATE_DIR,
+  "skills",
+  "vercel",
+  VERCEL_READONLY_SCRIPT_NAME,
+);
+// Match the retained prompt/transcript signal budget so routing helpers and
+// regex scanners reason over the same bounded slice of evidence.
+const GUARDRAIL_SIGNAL_MAX_CHARS = 4_000;
+const MAX_ASSISTANT_LINES_FOR_VERCEL_CONTEXT = 20;
+const VERCEL_SURFACE_RE = /\bvercel\b/i;
+const NEGATED_VERCEL_CONTEXT_RE = /\b(?:non[-\s]?vercel|not vercel|unrelated to vercel)\b/i;
 const RESOLVER_TOKEN_RE = {
   vaultByAddress: /\bvaultByAddress\b/,
   vaultV2ByAddress: /\bvaultV2ByAddress\b/,
@@ -82,6 +96,50 @@ function cleanLine(text: string, maxChars = 220): string {
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
 }
 
+// Keep retained transcript/prompt snippets aligned with the 4k signal scanners.
+function sliceGuardrailSignalText(text: string): string {
+  return text.length <= GUARDRAIL_SIGNAL_MAX_CHARS
+    ? text
+    : text.slice(0, GUARDRAIL_SIGNAL_MAX_CHARS);
+}
+
+function buildVercelContextText(params: {
+  humanCorrectionText: string;
+  prompt: string;
+  assistantTextLines: AssistantTextLine[];
+}): string {
+  const prefixText = sliceGuardrailSignalText(
+    [
+      sliceGuardrailSignalText(params.humanCorrectionText),
+      sliceGuardrailSignalText(params.prompt),
+    ].join("\n"),
+  );
+  if (prefixText.length >= GUARDRAIL_SIGNAL_MAX_CHARS) {
+    return prefixText;
+  }
+
+  // slice(-N) intentionally clamps when fewer assistant lines exist.
+  const assistantTail = params.assistantTextLines
+    .slice(-MAX_ASSISTANT_LINES_FOR_VERCEL_CONTEXT)
+    .map((entry) => sliceGuardrailSignalText(entry.text));
+  if (assistantTail.length === 0) {
+    return prefixText;
+  }
+
+  const separatorBudget = 1;
+  const tailBudget = GUARDRAIL_SIGNAL_MAX_CHARS - prefixText.length - separatorBudget;
+  if (tailBudget <= 0) {
+    return prefixText;
+  }
+
+  const assistantTailText = assistantTail.join("\n");
+  const boundedAssistantTail =
+    assistantTailText.length <= tailBudget
+      ? assistantTailText
+      : assistantTailText.slice(assistantTailText.length - tailBudget);
+  return `${prefixText}\n${boundedAssistantTail}`;
+}
+
 function hasPromptGuardrailSignal(prompt: string): boolean {
   return (
     DATA_INCIDENT_RE.test(prompt) ||
@@ -97,6 +155,21 @@ function formatInlineCode(text: string): string {
   );
   const fence = "`".repeat(longestBacktickRun + 1);
   return `${fence}${text}${fence}`;
+}
+
+/**
+ * POSIX-safe single-arg quoting for display commands rendered into prompts.
+ * Handles single quotes via close-quote, escaped quote, reopen-quote.
+ * Example: foo'bar -> 'foo'"'"'bar'
+ */
+export function shellEscapeSingleArg(value: string): string {
+  const singleQuoteEscape = `'"'"'`;
+  return `'${value.replace(/'/g, singleQuoteEscape)}'`;
+}
+
+function buildReadonlyBashCommand(scriptPath: string, ...args: string[]): string {
+  const renderedArgs = [scriptPath, ...args].map(shellEscapeSingleArg).join(" ");
+  return formatInlineCode(`bash ${renderedArgs}`);
 }
 
 function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
@@ -176,6 +249,71 @@ function singleVaultGraphqlEvidenceScriptPath(): string {
   return defaultSingleVaultGraphqlEvidenceScriptPath();
 }
 
+/**
+ * Returns the display path for the read-only Vercel helper.
+ *
+ * Invalid overrides fail closed to the seeded helper or bare helper name. This
+ * path is rendered into operator guidance, so fallback stays quiet instead of
+ * emitting warnings into prompts or Slack-visible transcripts. The bare helper
+ * name is the last-resort fallback so copied commands still stay readable even
+ * when no executable helper is present yet.
+ */
+function resolveVercelReadonlyScriptPath(): string {
+  const configuredSkillDir = process.env.OPENCLAW_VERCEL_SKILL_DIR?.trim();
+  if (configuredSkillDir && path.isAbsolute(configuredSkillDir)) {
+    const configuredScriptPath = path.join(
+      path.resolve(configuredSkillDir),
+      VERCEL_READONLY_SCRIPT_NAME,
+    );
+    if (isExecutablePath(configuredScriptPath)) {
+      return configuredScriptPath;
+    }
+  }
+
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  const normalizedStateDir =
+    stateDir && path.isAbsolute(stateDir) ? path.resolve(stateDir) : DEFAULT_OPENCLAW_STATE_DIR;
+  const helperPath = path.join(normalizedStateDir, "skills", "vercel", VERCEL_READONLY_SCRIPT_NAME);
+  if (isExecutablePath(helperPath)) {
+    return helperPath;
+  }
+  if (
+    helperPath !== DEFAULT_VERCEL_READONLY_SCRIPT &&
+    isExecutablePath(DEFAULT_VERCEL_READONLY_SCRIPT)
+  ) {
+    return DEFAULT_VERCEL_READONLY_SCRIPT;
+  }
+  return VERCEL_READONLY_SCRIPT_NAME;
+}
+
+// Validates the Vercel token is present and non-empty before running CLI probes.
+// The shell `case` word treats `${VERCEL_TOKEN-}` as data, not executable code,
+// so this stays data-only while still rejecting empty/whitespace-only values.
+// Deliberately avoid pinning a vendor token format here; prompt probes only
+// need a safe presence check. Length/charset checks would be vendor guesses
+// that risk false negatives for future token formats.
+function buildVercelTokenProbeCommand(): string {
+  return formatInlineCode(
+    `case \${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo "VERCEL_TOKEN=set";; esac`,
+  );
+}
+
+function buildVercelAccessGuidance(): string[] {
+  const helperPath = resolveVercelReadonlyScriptPath();
+  const vercelWhoamiCommand = buildReadonlyBashCommand(helperPath, "whoami");
+  const vercelTeamsCommand = buildReadonlyBashCommand(
+    helperPath,
+    "teams",
+    "list",
+    "--format",
+    "json",
+  );
+  const vercelTokenCommand = buildVercelTokenProbeCommand();
+  return [
+    `- A human says Vercel access is now available. Treat older Vercel blocked/no-access claims as stale and rerun ${vercelTokenCommand}, ${vercelWhoamiCommand}, and ${vercelTeamsCommand} before replying.`,
+  ];
+}
+
 function scanTranscriptLines(lines: string[]): TranscriptScan {
   const scan: TranscriptScan = {
     sawRetrievalDoc: false,
@@ -207,15 +345,16 @@ function scanTranscriptLines(lines: string[]): TranscriptScan {
 
     if (line.includes('"role":"user"')) {
       const text = extractInlineJsonTextValue(line) ?? "";
-      const preview = cleanLine(text);
-      if (matchesHumanCorrection(text)) {
-        scan.latestHumanCorrection = { line: lineNo, preview };
+      const signalText = sliceGuardrailSignalText(text);
+      const preview = cleanLine(signalText);
+      if (matchesHumanCorrection(signalText)) {
+        scan.latestHumanCorrection = { line: lineNo, preview, rawText: signalText };
       }
-      if (DATA_INCIDENT_RE.test(text)) {
-        scan.latestDataIncidentText = text;
+      if (DATA_INCIDENT_RE.test(signalText)) {
+        scan.latestDataIncidentText = signalText;
       }
-      if (EXACT_ARTIFACT_RE.test(text)) {
-        scan.latestUserArtifact = { line: lineNo, preview, rawText: text };
+      if (EXACT_ARTIFACT_RE.test(signalText)) {
+        scan.latestUserArtifact = { line: lineNo, preview, rawText: signalText };
       }
     }
 
@@ -239,13 +378,14 @@ function scanTranscriptLines(lines: string[]): TranscriptScan {
 }
 
 function buildPromptArtifact(prompt: string): TranscriptPreview | undefined {
-  if (!EXACT_ARTIFACT_RE.test(prompt)) {
+  const signalText = sliceGuardrailSignalText(prompt);
+  if (!EXACT_ARTIFACT_RE.test(signalText)) {
     return undefined;
   }
   return {
     line: Number.POSITIVE_INFINITY,
-    preview: cleanLine(prompt),
-    rawText: prompt,
+    preview: cleanLine(signalText),
+    rawText: signalText,
   };
 }
 
@@ -255,20 +395,25 @@ function resolveGuardrailSignals(params: {
   latestUserArtifact?: TranscriptPreview;
   latestHumanCorrection?: HumanCorrectionPreview;
 }): GuardrailSignals {
-  const promptHasHumanCorrection = matchesHumanCorrection(params.prompt);
-  const promptArtifact = buildPromptArtifact(params.prompt);
+  const promptSignalText = sliceGuardrailSignalText(params.prompt);
+  const promptHasHumanCorrection = matchesHumanCorrection(promptSignalText);
+  const promptArtifact = buildPromptArtifact(promptSignalText);
   const currentUserArtifact = promptArtifact ?? params.latestUserArtifact;
   const currentHumanCorrection = promptHasHumanCorrection
-    ? { line: Number.POSITIVE_INFINITY, preview: cleanLine(params.prompt) }
+    ? {
+        line: Number.POSITIVE_INFINITY,
+        preview: cleanLine(promptSignalText),
+        rawText: promptSignalText,
+      }
     : params.latestHumanCorrection;
-  const currentArtifactText = currentUserArtifact?.rawText ?? params.prompt;
+  const currentArtifactText = currentUserArtifact?.rawText ?? promptSignalText;
 
   return {
     promptHasHumanCorrection,
     currentUserArtifact,
     currentHumanCorrection,
     hasDataIncidentSignal: DATA_INCIDENT_RE.test(
-      `${params.prompt}\n${params.latestDataIncidentText ?? ""}\n${currentArtifactText}`,
+      `${promptSignalText}\n${params.latestDataIncidentText ?? ""}\n${currentArtifactText}`,
     ),
     hasExactArtifactSignal: EXACT_ARTIFACT_RE.test(currentArtifactText),
     userResolver: extractResolverFamily(currentArtifactText),
@@ -379,6 +524,23 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     guidance.push(
       `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${guardrailSignals.currentHumanCorrection.preview}"`,
     );
+    if (matchesAccessGrant(guardrailSignals.currentHumanCorrection.rawText)) {
+      const vercelContextText = buildVercelContextText({
+        humanCorrectionText: guardrailSignals.currentHumanCorrection.rawText,
+        prompt: params.prompt,
+        assistantTextLines: transcriptScan.assistantTextLines,
+      });
+      if (
+        VERCEL_SURFACE_RE.test(vercelContextText) &&
+        !NEGATED_VERCEL_CONTEXT_RE.test(vercelContextText)
+      ) {
+        guidance.push(...buildVercelAccessGuidance());
+      } else {
+        guidance.push(
+          "- A human says access/permissions are now available. Treat older blocked/no-access claims as stale and rerun a live probe on that surface before replying.",
+        );
+      }
+    }
   }
 
   if (

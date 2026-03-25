@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSreRuntimeGuardrailContext,
   buildSreRuntimeGuardrailContextFromTranscript,
+  shellEscapeSingleArg,
 } from "./runtime-guardrails.js";
+
+describe("shellEscapeSingleArg", () => {
+  it("round-trips shell edge cases", () => {
+    const samples = ["", "'", `mix'"quotes`, "x".repeat(1_024), "line\n\tbreak", "deja vu déjà"];
+
+    for (const sample of samples) {
+      const result = spawnSync("/bin/sh", ["-c", `printf '%s' ${shellEscapeSingleArg(sample)}`], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(sample);
+    }
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -32,6 +48,292 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("switch to blocked mode");
   });
 
+  it("forces a fresh Vercel probe after an access grant correction", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the docs deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("case ${VERCEL_TOKEN-} in ''|*[[:space:]]*)");
+    expect(context).toContain('echo "VERCEL_TOKEN=set"');
+    expect(context).not.toContain("\\${VERCEL_TOKEN:-}");
+    expect(context).not.toContain(`printf '%s' "$VERCEL_TOKEN"`);
+    expect(context).not.toContain("grep -Eq '^[^[:space:]]+$'");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("uses thread context when the access grant does not restate Vercel", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Access granted."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the Vercel docs deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("keeps recent assistant Vercel context after long noisy thread history", () => {
+    const noisyAssistantLines = Array.from(
+      { length: 30 },
+      (_, index) =>
+        `{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"noise ${index} ${"x".repeat(220)}"}]}}`,
+    ).join("\n");
+    const transcriptText = `
+${noisyAssistantLines}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"This still looks like a Vercel deploy issue."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Access granted."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("keeps generic reprobe guidance when Vercel is only mentioned as a negated context", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"This looks unrelated to Vercel so far."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Access granted."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check whether GitHub access is fixed",
+      transcriptText,
+    });
+
+    expect(context).toContain("A human says access/permissions are now available.");
+    expect(context).not.toContain("Vercel access is now available");
+    expect(context).not.toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("lets negated Vercel context win when both negated and plain mentions appear", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"This looks like a non-vercel vercel issue so far."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Access granted."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("A human says access/permissions are now available.");
+    expect(context).not.toContain("Vercel access is now available");
+  });
+
+  it("keeps Vercel reprobe guidance when the grant only appears outside the preview window", () => {
+    const previewOverflowPrefix = "heads up ".repeat(Math.ceil(240 / "heads up ".length));
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"${previewOverflowPrefix}You now have access to Vercel."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the docs deploy is not live",
+      transcriptText,
+    });
+
+    expect(previewOverflowPrefix.length).toBeGreaterThan(220);
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("keeps Vercel prompt context when assistant tail exhausts the 4k budget", () => {
+    const noisyAssistantLines = Array.from(
+      { length: 20 },
+      (_, index) =>
+        `{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"tail ${index} ${"x".repeat(260)}"}]}}`,
+    ).join("\n");
+    const transcriptText = `
+${noisyAssistantLines}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Access granted."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the Vercel docs deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("ignores exact artifacts that only appear beyond the retained signal window", () => {
+    const beyondSignalWindowPrefix = "artifact padding ".repeat(
+      Math.ceil(4_100 / "artifact padding ".length),
+    );
+    const transcriptText = `
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"${beyondSignalWindowPrefix}query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } }"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "investigate this report",
+      transcriptText,
+    });
+
+    expect(beyondSignalWindowPrefix.length).toBeGreaterThan(4_000);
+    expect(context).toBeUndefined();
+  });
+
+  it("keeps Vercel reprobe guidance for mixed and case-insensitive access grants", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to VERCEL but not to GitHub."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the docs deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("Vercel access is now available");
+    expect(context).toContain("bash 'vercel-readonly.sh' 'whoami'");
+    expect(context).toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("keeps non-Vercel grants on the generic reprobe path", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to clevercel sandbox."}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "check why the deploy is not live",
+      transcriptText,
+    });
+
+    expect(context).toContain("A human says access/permissions are now available.");
+    expect(context).not.toContain("Vercel access is now available");
+    expect(context).not.toContain("'teams' 'list' '--format' 'json'");
+  });
+
+  it("renders the Vercel helper path from state-dir or env overrides", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vercel-helper-"));
+    const helperPath = path.join(tmpDir, "custom-vercel-skill", "vercel-readonly.sh");
+    await fs.mkdir(path.dirname(helperPath), { recursive: true });
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("OPENCLAW_VERCEL_SKILL_DIR", path.dirname(helperPath));
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      });
+
+      expect(context).toContain(helperPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("shell-quotes Vercel helper overrides before rendering guidance commands", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vercel-helper-"));
+    const helperPath = path.join(tmpDir, "custom vercel's skill", "vercel-readonly.sh");
+    await fs.mkdir(path.dirname(helperPath), { recursive: true });
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("OPENCLAW_VERCEL_SKILL_DIR", path.dirname(helperPath));
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      });
+
+      expect(shellEscapeSingleArg(helperPath)).toContain(`'"'"'`);
+      expect(context).toContain(`bash ${shellEscapeSingleArg(helperPath)} 'whoami'`);
+      expect(context).toContain("'teams' 'list' '--format' 'json'");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shell-escaped Vercel helper paths safe for repeated quote sentinels", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vercel-helper-"));
+    const helperPath = path.join(tmpDir, `custom'"'"'skill`, "vercel-readonly.sh");
+    await fs.mkdir(path.dirname(helperPath), { recursive: true });
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("OPENCLAW_VERCEL_SKILL_DIR", path.dirname(helperPath));
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      });
+
+      expect(helperPath).toContain(`'"'"'`);
+      expect(context).toContain(`bash ${shellEscapeSingleArg(helperPath)} 'whoami'`);
+      expect(context).toContain("'teams' 'list' '--format' 'json'");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the seeded Vercel helper for invalid overrides", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vercel-state-"));
+    const helperPath = path.join(tmpDir, "skills", "vercel", "vercel-readonly.sh");
+    await fs.mkdir(path.dirname(helperPath), { recursive: true });
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+    try {
+      vi.stubEnv("OPENCLAW_VERCEL_SKILL_DIR", "relative/helper");
+      const relativeOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      });
+      expect(relativeOverrideContext).toContain(helperPath);
+
+      vi.stubEnv("OPENCLAW_VERCEL_SKILL_DIR", path.join(tmpDir, "missing-vercel-skill"));
+      const missingOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      });
+      expect(missingOverrideContext).toContain(helperPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses guidance for non-sre agents", () => {
     const context = buildSreRuntimeGuardrailContextFromTranscript({
       agentId: "main",
@@ -39,6 +341,22 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
       transcriptText: "{}",
     });
     expect(context).toBeUndefined();
+  });
+
+  it("ignores malformed transcript lines without throwing", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I do not have Vercel access from this environment."}]}}
+{invalid json line}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"You now have access to Vercel."}]}}
+`;
+
+    expect(() =>
+      buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "check why the docs deploy is not live",
+        transcriptText,
+      }),
+    ).not.toThrow();
   });
 
   it("does not add retrieval guidance when retrieval docs were already read", () => {

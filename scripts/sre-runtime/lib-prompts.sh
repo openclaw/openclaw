@@ -16,6 +16,13 @@ progress_only_reply_any_slack_rule_marker() {
   printf '%s\n' '__PROGRESS_ONLY_REPLY_ANY_SLACK_RULE__'
 }
 
+shell_quote_single_arg() {
+  local value="${1:-}"
+  local single_quote_escape
+  single_quote_escape="'\"'\"'"
+  printf "'%s'" "${value//\'/$single_quote_escape}"
+}
+
 build_progress_only_reply_rule() {
   local scope_suffix="${1:-}"
   # Reuse the same banned-phrase sentence across seeded prompts. Pass a
@@ -28,7 +35,11 @@ EOF
 
 build_monitoring_incident_prompt() {
   local skill_dir
+  local vercel_skill_dir
+  local vercel_helper
   skill_dir="${OPENCLAW_SRE_SKILL_DIR:-/home/node/.openclaw/skills/morpho-sre}"
+  vercel_skill_dir="${OPENCLAW_VERCEL_SKILL_DIR:-/home/node/.openclaw/skills/vercel}"
+  vercel_helper="$(shell_quote_single_arg "${vercel_skill_dir}/vercel-readonly.sh")"
   cat <<EOF
 Monitoring incident intake mode:
 - Scope: configured monitoring incident channels for this runtime.
@@ -51,8 +62,10 @@ Monitoring incident intake mode:
 - After the summary, include concise evidence, likely cause, mitigation, validation checks, next actions, suggested PRs, and the Linear ticket when follow-up work is needed when they materially help the operator.
 - For recurring indexer freshness alerts on the same workload, treat them as one ongoing RCA until disproved; answer with primary trigger, local amplifier, and the next discriminating checks.
 - If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
+- If a human says you now have access/permissions to a surface, treat older blocked/no-access claims as stale and re-probe immediately before replying. For Vercel: \`case \${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo "VERCEL_TOKEN=set";; esac\`, \`bash ${vercel_helper} whoami\`, \`bash ${vercel_helper} teams list --format json\`.
 - Before claiming repo/tool access is unavailable, run one live probe (\`gh repo view ...\` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run \`gh repo view <owner/repo>\` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
+- For Vercel-backed sites/apps, the Vercel CLI is available via the bundled \`vercel\` skill. Use \`${vercel_helper}\` for read-only auth/team/deployment/build/domain checks before saying Vercel is unavailable.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile \`_fetchMerklSingleRates()\` / the merged reward row before stale-row theories or PRs.
 - If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix.

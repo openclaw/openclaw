@@ -34,7 +34,22 @@ to_lower() {
 
 # Keep in sync with src/sre/patterns.ts HUMAN_CORRECTION_RE. Curated parity is
 # enforced in src/sre/patterns.test.ts because Bash callers cannot import TS.
-HUMAN_CORRECTION_GREP_RE="this is wrong|that is wrong|you're wrong|you are wrong|this is not the issue|that is not the issue|this is not correct|that is not correct|this is not right|that is not right|this is not accurate|that is not accurate|does not look like|not a ui problem|(the )?actual issue is|(the )?main issue is|the bug is|the issue is actually|the issue is[^.!?]{0,80}(instead of|rather than)|miscommunication|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory"
+HUMAN_CORRECTION_GREP_PHRASES="this is wrong|that is wrong|you're wrong|you are wrong|this is not the issue|that is not the issue|this is not correct|that is not correct|this is not right|that is not right|this is not accurate|that is not accurate|does not look like|not a ui problem|(the )?actual issue is|(the )?main issue is|the bug is|the issue is actually|the issue is[^.!?]{0,80}(instead of|rather than)|miscommunication|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory"
+HUMAN_CORRECTION_GREP_ACCESS_SPACE="[[:blank:]]+"
+HUMAN_CORRECTION_GREP_ACCESS_TARGET_START="[^?[:space:]]"
+HUMAN_CORRECTION_GREP_ACCESS_TARGET_CONTINUE="[^?]{0,118}"
+HUMAN_CORRECTION_GREP_ACCESS_TARGET_END="[^?[:space:]]"
+HUMAN_CORRECTION_GREP_ACCESS_SURFACE="${HUMAN_CORRECTION_GREP_ACCESS_SPACE}${HUMAN_CORRECTION_GREP_ACCESS_TARGET_START}(${HUMAN_CORRECTION_GREP_ACCESS_TARGET_CONTINUE}${HUMAN_CORRECTION_GREP_ACCESS_TARGET_END})?"
+HUMAN_CORRECTION_GREP_ACCESS_PRESENT="you now have access to${HUMAN_CORRECTION_GREP_ACCESS_SURFACE}"
+HUMAN_CORRECTION_GREP_ACCESS_SIMPLE="you have access to${HUMAN_CORRECTION_GREP_ACCESS_SURFACE}"
+HUMAN_CORRECTION_GREP_PERMISSION_SCOPE="(${HUMAN_CORRECTION_GREP_ACCESS_SPACE}(for|to)${HUMAN_CORRECTION_GREP_ACCESS_SURFACE})?"
+HUMAN_CORRECTION_GREP_PERMISSIONS_PRESENT="you now have permissions${HUMAN_CORRECTION_GREP_PERMISSION_SCOPE}"
+HUMAN_CORRECTION_GREP_PERMISSIONS_SIMPLE="you have permissions${HUMAN_CORRECTION_GREP_PERMISSION_SCOPE}"
+HUMAN_CORRECTION_GREP_GRANTED_SCOPE="(${HUMAN_CORRECTION_GREP_ACCESS_SPACE}to${HUMAN_CORRECTION_GREP_ACCESS_SURFACE})?"
+HUMAN_CORRECTION_GREP_GRANTED="access granted${HUMAN_CORRECTION_GREP_GRANTED_SCOPE}"
+HUMAN_CORRECTION_GREP_ACCESS_CLAUSES="${HUMAN_CORRECTION_GREP_ACCESS_PRESENT}|${HUMAN_CORRECTION_GREP_ACCESS_SIMPLE}|${HUMAN_CORRECTION_GREP_PERMISSIONS_PRESENT}|${HUMAN_CORRECTION_GREP_PERMISSIONS_SIMPLE}|${HUMAN_CORRECTION_GREP_GRANTED}"
+HUMAN_CORRECTION_GREP_ACCESS_GRANTS="(^|[.!?:;][[:space:]]*|<@[^>[:space:]]+>[[:space:]]*|((btw|fyi|heads up|update),?[[:space:]]+))(${HUMAN_CORRECTION_GREP_ACCESS_CLAUSES})($|[.!:;!])"
+HUMAN_CORRECTION_GREP_RE="${HUMAN_CORRECTION_GREP_PHRASES}|${HUMAN_CORRECTION_GREP_ACCESS_GRANTS}"
 
 validate_local_file_path() {
   local value="${1:-}"

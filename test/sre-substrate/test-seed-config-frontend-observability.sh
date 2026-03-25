@@ -19,6 +19,26 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
+  any(.agents.list[]; .id=="sre" and ((.skills // []) | index("vercel")))
+' "$CONFIG" >/dev/null
+
+jq -e '
+  any(.agents.list[]; .id=="sre-verifier" and ((.skills // []) | index("vercel")))
+' "$CONFIG" >/dev/null
+
+jq -e '
+  ([.agents.list[] | select(((.skills // []) | index("vercel")) != null) | .id] | sort) == ["sre", "sre-verifier"]
+' "$CONFIG" >/dev/null
+
+jq -e '
+  (.channels.slack.channels["#bug-report"].skills // []) | index("vercel")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  ([.channels.slack.channels | to_entries[] | select(((.value.skills // []) | index("vercel")) != null) | .key] | sort) == ["#bug-report", "#platform-monitoring", "#public-api-monitoring", "#staging-infra-monitoring"]
+' "$CONFIG" >/dev/null
+
+jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt | contains("/home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh")
 ' "$CONFIG" >/dev/null
 
@@ -27,8 +47,16 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, Intercom, or Foundry access")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, Intercom, Foundry, or Vercel access")
 ' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("/home/node/.openclaw/skills/vercel/vercel-readonly.sh whoami")
+' "$CONFIG" >/dev/null
+
+jq -r '
+  .channels.slack.channels["#bug-report"].systemPrompt
+' "$CONFIG" | grep -F "case \${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo \"VERCEL_TOKEN=set\";; esac" >/dev/null
 
 jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt | contains("__PROGRESS_ONLY_REPLY_ANY_SLACK_RULE__")
@@ -161,6 +189,10 @@ TEST_PROGRESS_ONLY_RULE="$(build_progress_only_reply_rule)"
 TEST_PROGRESS_ONLY_RULE_MARKER="$(progress_only_reply_rule_marker)"
 TEST_PROGRESS_ONLY_ANY_SLACK_RULE="$(build_progress_only_reply_rule ' in any Slack context.')"
 TEST_PROGRESS_ONLY_ANY_SLACK_RULE_MARKER="$(progress_only_reply_any_slack_rule_marker)"
+
+printf '%s\n' "$TEST_PROMPT" | grep -F "If a human says you now have access/permissions to a surface" >/dev/null
+printf '%s\n' "$TEST_PROMPT" | grep -F "case \${VERCEL_TOKEN-} in ''|*[[:space:]]*) ;; *) echo \"VERCEL_TOKEN=set\";; esac" >/dev/null
+printf '%s\n' "$TEST_PROMPT" | grep -F "bash '/home/node/.openclaw/skills/vercel/vercel-readonly.sh' whoami" >/dev/null
 
 TMP_PROMPT_CONFIG="$(mktemp)"
 trap 'rm -f "$TMP_CONFIG" "$TMP_PROMPT_CONFIG"' EXIT
