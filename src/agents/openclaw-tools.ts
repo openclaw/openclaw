@@ -131,7 +131,9 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
-  // Auto-disable github_read if MCP zread server is configured (native MCP replaces MCPorter).
+  // github_read is available only when the native MCP zai-zread server is NOT already
+  // registered (which would provide the same tools directly). When zread tools are present
+  // via native MCP, suppress the wrapper to avoid duplicates.
   const mcpHasZread = options?.mcpTools?.some(
     (t) => t.name.includes("zread") || t.name.includes("search_doc"),
   );
@@ -139,13 +141,6 @@ export function createOpenClawTools(
   if (mcpHasZread) {
     console.log(
       "[mcp] github_read auto-disabled — zai-zread MCP server provides equivalent tools natively",
-    );
-  } else if (
-    options?.config?.tools?.mcp?.servers &&
-    Object.keys(options.config.tools.mcp.servers).length > 0
-  ) {
-    console.log(
-      "[mcp] github_read is deprecated — add zai-zread to tools.mcp.servers to migrate to native MCP client",
     );
   }
   const messageTool = options?.disableMessageTool

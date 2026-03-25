@@ -43,7 +43,7 @@
 ## Key Lessons
 
 1. **Cross-agent session access** — requires both `tools.sessions.visibility=all` AND `tools.agentToAgent.enabled=true` (two separate configs)
-2. **MCP configuration** — native MCP in OpenClaw, configured at `~/.openclaw/mcp/servers.yaml` (NOT mcporter port method)
+2. **MCP configuration** — native MCP in OpenClaw, configured at `~/.openclaw/mcp/servers.yaml`; all MCP calls go through the gateway's native `mcp_search` tool (mcporter is fully deprecated and removed)
 3. **Email checking** — never use browser; use MCP tools only
 4. **Verbosity** — user prefers short responses
 5. **Skills check** — use `openclaw skills list` CLI, not filesystem search

@@ -71,16 +71,12 @@ Core skill additions should be rare and require a strong product or security rea
 
 ### MCP Support
 
-OpenClaw supports MCP through `mcporter`: https://github.com/steipete/mcporter
+OpenClaw has first-class native MCP client support built into the gateway runtime.
 
-This keeps MCP integration flexible and decoupled from core runtime:
-
-- add or change MCP servers without restarting the gateway
-- keep core tool/context surface lean
-- reduce MCP churn impact on core stability and security
-
-For now, we prefer this bridge model over building first-class MCP runtime into core.
-If there is an MCP server or feature `mcporter` does not support yet, please open an issue there.
+Configure MCP servers under `tools.mcp.servers` in your config. Connected servers are
+exposed to the agent via the `mcp_search` meta-tool (Tier 2 / search mode) or as
+individual AgentTools (Tier 1 / direct mode). Server state is stored in SQLite
+(`op1_mcp_servers`) — no external middleware required.
 
 ### Setup
 
@@ -102,7 +98,6 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
-- First-class MCP runtime in core when `mcporter` already provides the integration path
 - Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 

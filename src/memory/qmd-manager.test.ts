@@ -151,8 +151,8 @@ describe("QmdMemoryManager", () => {
   afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
-    delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
-    delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
+    // Note: __openclawMcporterDaemonStart / __openclawMcporterColdStartWarned removed
+    // — mcporter is fully deprecated; QMD no longer uses mcporter-backed search paths.
   });
 
   it("debounces back-to-back sync calls", async () => {

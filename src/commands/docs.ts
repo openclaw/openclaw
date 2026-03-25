@@ -1,58 +1,12 @@
-import { hasBinary } from "../agents/skills.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.SearchOpenClaw";
+const SEARCH_MCP_URL = "https://docs.openclaw.ai/mcp";
+const SEARCH_TOOL_NAME = "SearchOpenClaw";
 const SEARCH_TIMEOUT_MS = 30_000;
 const DEFAULT_SNIPPET_MAX = 220;
-
-type DocResult = {
-  title: string;
-  link: string;
-  snippet?: string;
-};
-
-type NodeRunner = {
-  cmd: string;
-  args: string[];
-};
-
-type ToolRunOptions = {
-  input?: string;
-  timeoutMs?: number;
-};
-
-function resolveNodeRunner(): NodeRunner {
-  if (hasBinary("pnpm")) {
-    return { cmd: "pnpm", args: ["dlx"] };
-  }
-  if (hasBinary("npx")) {
-    return { cmd: "npx", args: ["-y"] };
-  }
-  throw new Error("Missing pnpm or npx; install a Node package runner.");
-}
-
-async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  const runner = resolveNodeRunner();
-  const argv = [runner.cmd, ...runner.args, tool, ...toolArgs];
-  return await runCommandWithTimeout(argv, {
-    timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-    input: options.input,
-  });
-}
-
-async function runTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  if (hasBinary(tool)) {
-    return await runCommandWithTimeout([tool, ...toolArgs], {
-      timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-      input: options.input,
-    });
-  }
-  return await runNodeTool(tool, toolArgs, options);
-}
 
 function extractLine(lines: string[], prefix: string): string | undefined {
   const line = lines.find((value) => value.startsWith(prefix));
@@ -171,21 +125,48 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     return;
   }
 
-  const payload = JSON.stringify({ query });
-  const res = await runTool(
-    "mcporter",
-    ["call", SEARCH_TOOL, "--args", payload, "--output", "text"],
-    { timeoutMs: SEARCH_TIMEOUT_MS },
-  );
-
-  if (res.code !== 0) {
-    const err = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
-    runtime.error(`Docs search failed: ${err}`);
+  // Call the docs MCP search endpoint directly via native HTTP (no mcporter dependency).
+  let rawOutput: string;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(SEARCH_MCP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: SEARCH_TOOL_NAME, arguments: { query } },
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = (await response.json()) as {
+        result?: { content?: Array<{ type: string; text?: string }> };
+        error?: { message?: string };
+      };
+      if (json.error) {
+        throw new Error(json.error.message ?? "MCP error");
+      }
+      const textParts = (json.result?.content ?? [])
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text as string);
+      rawOutput = textParts.join("\n");
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    runtime.error(`Docs search failed: ${msg}`);
     runtime.exit(1);
     return;
   }
 
-  const results = parseSearchOutput(res.stdout);
+  const results = parseSearchOutput(rawOutput);
   if (isRich()) {
     renderRichResults(query, results, runtime);
     return;
