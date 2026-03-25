@@ -131,13 +131,19 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("rejects invalid status timeout without calling status command", async () => {
-    await runCli(["status", "--timeout", "nope"]);
+    for (const timeout of ["nope", "10ms", "1000abc", "1e3"]) {
+      await runCli(["status", "--timeout", timeout]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--timeout must be a positive integer (milliseconds)",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(statusCommand).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        "--timeout must be a positive integer (milliseconds)",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(statusCommand).not.toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      resetRuntimeCapture();
+      runtime.exit.mockImplementation(() => {});
+    }
   });
 
   it("runs health command with parsed timeout", async () => {
