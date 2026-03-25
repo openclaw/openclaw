@@ -41,11 +41,12 @@ await web_fetch({ url: "https://example.com/article" });
     header. Blocks private/internal hostnames and re-checks redirects.
   </Step>
   <Step title="Extract">
-    Runs Readability (main-content extraction) on the HTML response.
+    Runs Defuddle (main-content extraction) on the HTML response, with
+    Readability as a fallback if Defuddle returns no content.
   </Step>
   <Step title="Fallback (optional)">
-    If Readability fails and Firecrawl is configured, retries through the
-    Firecrawl API with bot-circumvention mode.
+    If both Defuddle and Readability fail and Firecrawl is configured, retries
+    through the Firecrawl API with bot-circumvention mode.
   </Step>
   <Step title="Cache">
     Results are cached for 15 minutes (configurable) to reduce repeated
@@ -67,7 +68,7 @@ await web_fetch({ url: "https://example.com/article" });
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
-        readability: true, // use Readability extraction
+        readability: true, // use Defuddle + Readability content extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
       },
     },
@@ -77,7 +78,7 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## Firecrawl fallback
 
-If Readability extraction fails, `web_fetch` can fall back to
+If Defuddle and Readability extraction both fail, `web_fetch` can fall back to
 [Firecrawl](/tools/firecrawl) for bot-circumvention and better extraction:
 
 ```json5

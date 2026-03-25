@@ -374,7 +374,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await expect(
       tool?.execute?.("call", { url: "https://example.com/readability-off" }),
-    ).rejects.toThrow("Readability disabled");
+    ).rejects.toThrow("content extraction disabled");
   });
 
   it("throws when readability is empty and firecrawl fails", async () => {
@@ -391,7 +391,9 @@ describe("web_fetch extraction fallbacks", () => {
     const tool = createFirecrawlTool();
     await expect(
       executeFetch(tool, { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability, Firecrawl, and basic HTML cleanup returned no content");
+    ).rejects.toThrow(
+      "Defuddle, Readability, Firecrawl, and basic HTML cleanup returned no content",
+    );
   });
 
   it("falls back to basic HTML cleanup after readability and before giving up", async () => {
