@@ -609,6 +609,62 @@ function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | 
 }
 
 /**
+ * Match a target name against active subagent sessions by key/label only.
+ * Unlike resolveKillTargets, this does NOT match by agent id (avoiding
+ * false positives for common words like "main") and filters to active
+ * sessions (no endedAt) so stale subagents are not targeted.
+ */
+function resolveSteerSubagent(
+  sessions: GatewaySessionRow[],
+  currentSessionKey: string,
+  target: string,
+): string[] {
+  const normalizedTarget = target.trim().toLowerCase();
+  if (!normalizedTarget) {
+    return [];
+  }
+  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
+  const currentAgentId =
+    currentParsed?.agentId ??
+    (normalizedCurrentSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
+  const sessionIndex = buildSessionIndex(sessions);
+
+  const keys = new Set<string>();
+  for (const session of sessions) {
+    const key = session?.key?.trim();
+    if (!key || !isSubagentSessionKey(key)) {
+      continue;
+    }
+    // P1: skip ended sessions so stale subagents are not targeted
+    if (session.endedAt) {
+      continue;
+    }
+    const normalizedKey = key.toLowerCase();
+    const parsed = parseAgentSessionKey(normalizedKey);
+    const belongsToCurrentSession = isWithinCurrentSessionSubtree(
+      normalizedKey,
+      normalizedCurrentSessionKey,
+      sessionIndex,
+      currentAgentId,
+      parsed?.agentId,
+    );
+    if (!belongsToCurrentSession) {
+      continue;
+    }
+    // P2: match only on subagent key suffix or label, not agent id
+    const isMatch =
+      normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
+      normalizedKey === `subagent:${normalizedTarget}` ||
+      (session.label ?? "").toLowerCase() === normalizedTarget;
+    if (isMatch) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
+/**
  * Resolve an optional subagent target from the first word of args.
  * Returns the resolved session key and the remaining message, or
  * falls back to the current session key with the full args as message.
@@ -630,7 +686,7 @@ async function resolveSteerTarget(
     // target a single session, so "all good now" should not match subagents.
     if (rest && maybeTarget.toLowerCase() !== "all") {
       const sessions = await client.request<SessionsListResult>("sessions.list", {});
-      const matched = resolveKillTargets(sessions?.sessions ?? [], sessionKey, maybeTarget);
+      const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
         return { key: matched[0], message: rest, label: maybeTarget };
       }
