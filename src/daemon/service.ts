@@ -27,7 +27,9 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartResult,
   GatewayServiceStageArgs,
+  GatewayServiceState,
 } from "./service-types.js";
 import {
   installSystemdService,
@@ -47,7 +49,9 @@ export type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartResult,
   GatewayServiceStageArgs,
+  GatewayServiceState,
 } from "./service-types.js";
 
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
@@ -71,6 +75,71 @@ export type GatewayService = {
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
+
+function mergeGatewayServiceEnv(
+  baseEnv: GatewayServiceEnv,
+  command: GatewayServiceCommandConfig | null,
+): GatewayServiceEnv {
+  if (!command?.environment) {
+    return baseEnv;
+  }
+  return {
+    ...baseEnv,
+    ...command.environment,
+  };
+}
+
+export async function readGatewayServiceState(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceState> {
+  const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  const env = mergeGatewayServiceEnv(baseEnv, command);
+  const [loaded, runtime] = await Promise.all([
+    service.isLoaded({ env }).catch(() => false),
+    service.readRuntime(env).catch(() => undefined),
+  ]);
+  return {
+    installed: command !== null,
+    loaded,
+    running: runtime?.status === "running",
+    env,
+    command,
+    runtime,
+  };
+}
+
+export async function startGatewayService(
+  service: GatewayService,
+  args: GatewayServiceControlArgs,
+): Promise<GatewayServiceStartResult> {
+  const state = await readGatewayServiceState(service, { env: args.env });
+  if (!state.loaded && !state.installed) {
+    return {
+      outcome: "missing-install",
+      state,
+    };
+  }
+
+  try {
+    const restartResult = await service.restart({ ...args, env: state.env });
+    const nextState = await readGatewayServiceState(service, { env: state.env });
+    return {
+      outcome: restartResult.outcome === "scheduled" ? "scheduled" : "started",
+      state: nextState,
+    };
+  } catch (err) {
+    const nextState = await readGatewayServiceState(service, { env: state.env });
+    if (!nextState.installed) {
+      return {
+        outcome: "missing-install",
+        state: nextState,
+      };
+    }
+    throw err;
+  }
+}
 
 export function describeGatewayServiceRestart(
   serviceNoun: string,
