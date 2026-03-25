@@ -93,9 +93,9 @@ Why this set matters:
 
 Planning note:
 
-- Keep `/v1/models` as a flat `provider/model` list for client compatibility.
-- Treat agent and sub-agent selection as separate OpenClaw routing concerns, not pseudo-model entries.
-- When you need agent-scoped filtering, pass `x-openclaw-agent-id` on both model-list and request calls.
+- `/v1/models` is agent-first: it returns `openclaw`, `openclaw/default`, and `openclaw/<agentId>`.
+- `openclaw/default` is the stable alias that always maps to the configured default agent.
+- Use `x-openclaw-model` when you want a backend provider/model override; otherwise the selected agent's normal model and embedding setup stays in control.
 
 All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
 
