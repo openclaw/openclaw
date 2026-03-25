@@ -118,8 +118,11 @@ export class AgentMemoSearchManager implements MemorySearchManager {
         return items.map(
           (item): MemorySearchResult => ({
             path: item.id ?? item.metadata?.path ?? "",
-            startLine: typeof item.metadata?.start_line === "number" ? item.metadata.start_line : 0,
-            endLine: typeof item.metadata?.end_line === "number" ? item.metadata.end_line : 0,
+            startLine: typeof item.metadata?.start_line === "number" ? item.metadata.start_line : 1,
+            endLine:
+              typeof item.metadata?.end_line === "number"
+                ? Math.max(item.metadata.end_line, item.metadata?.start_line ?? 1)
+                : 1,
             score: item.score ?? item.similarity ?? 0,
             snippet: item.content ?? item.text ?? "",
             source: "memory",
@@ -160,7 +163,7 @@ export class AgentMemoSearchManager implements MemorySearchManager {
         const lines = fullText.split("\n");
         // memory_get uses 1-based line numbers (consistent with other managers)
         const from = Math.max((params.from ?? 1) - 1, 0);
-        const count = params.lines;
+        const count = params.lines != null ? Math.max(params.lines, 1) : undefined;
         const sliced = count != null ? lines.slice(from, from + count) : lines.slice(from);
         return { text: sliced.join("\n"), path: params.relPath };
       },

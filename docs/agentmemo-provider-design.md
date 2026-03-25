@@ -3,7 +3,7 @@
 **Author:** Karl Yang (yxjsxy)  
 **Date:** 2026-03-25  
 **Status:** Draft / PR Ready  
-**Linked project:** https://github.com/yxjsxy/agentMemo
+**Linked project:** [agentMemo](https://github.com/yxjsxy/agentMemo)
 
 ---
 
