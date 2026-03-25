@@ -80,7 +80,7 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 
 ## Compaction vs pruning
 
-- **Compaction**: summarises and **persists** in JSONL.
+- **Compaction**: summarizes and **persists** in JSONL.
 - **Session pruning**: trims old **tool results** only, **in-memory**, per request.
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
