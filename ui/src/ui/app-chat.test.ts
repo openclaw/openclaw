@@ -136,10 +136,12 @@ describe("handleSendChat", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
+    const onSlashAction = vi.fn();
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       sessionKey: "main",
       chatMessage: "/model gpt-5-mini",
+      onSlashAction,
     });
 
     await handleSendChat(host);
@@ -152,6 +154,7 @@ describe("handleSendChat", () => {
       kind: "qualified",
       value: "openai/gpt-5-mini",
     });
+    expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 });
 

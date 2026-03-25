@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { loadTestRunnerBehavior } from "../scripts/test-runner-manifest.mjs";
+import {
+  loadChannelTimingManifest,
+  loadTestRunnerBehavior,
+} from "../scripts/test-runner-manifest.mjs";
 
 describe("loadTestRunnerBehavior", () => {
   it("loads channel isolated entries from the behavior manifest", () => {
@@ -15,5 +18,12 @@ describe("loadTestRunnerBehavior", () => {
     const behavior = loadTestRunnerBehavior();
 
     expect(behavior.channels.isolatedPrefixes).toContain("extensions/discord/src/monitor/");
+  });
+
+  it("loads channel timing metadata from the timing manifest", () => {
+    const timings = loadChannelTimingManifest();
+
+    expect(timings.config).toBe("vitest.channels.config.ts");
+    expect(Object.keys(timings.files).length).toBeGreaterThan(0);
   });
 });

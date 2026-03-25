@@ -10,6 +10,7 @@ import {
   installPluginFromMarketplace,
   installPluginFromNpmSpec,
   loadConfig,
+  readConfigFileSnapshot,
   parseClawHubPluginSpec,
   recordHookInstall,
   recordPluginInstall,
@@ -45,6 +46,36 @@ describe("plugins cli install", () => {
         plugin: "alpha",
       }),
     );
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for unrelated invalid config before installer side effects", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfig.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: '{ "models": { "default": 123 } }',
+      parsed: { models: { default: 123 } },
+      resolved: { models: { default: 123 } },
+      valid: false,
+      config: { models: { default: 123 } },
+      hash: "mock",
+      issues: [{ path: "models.default", message: "invalid model ref" }],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "alpha"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Config invalid; run `openclaw doctor --fix` before installing plugins.",
+    );
+    expect(installPluginFromMarketplace).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 

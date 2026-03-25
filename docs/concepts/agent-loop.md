@@ -92,6 +92,13 @@ These run inside the agent loop or gateway pipeline:
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
 
+Hook decision rules for outbound/tool guards:
+
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear a prior block.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
+
 See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
 
 ## Streaming + partial replies
