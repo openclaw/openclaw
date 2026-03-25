@@ -523,11 +523,15 @@ describe("plugin sdk alias helpers", () => {
 
     // Use externalPluginRoot as cwd so process.cwd() fallback cannot accidentally
     // resolve to the fixture root — only the moduleUrl hint can bridge the gap.
+    // Pass "" for argv1: undefined would trigger the STARTUP_ARGV1 default (the vitest
+    // runner binary, inside the openclaw repo), which resolves before moduleUrl is checked.
+    // An empty string is falsy so resolveTrustedOpenClawRootFromArgvHint returns null,
+    // meaning only the moduleUrl hint can bridge the gap.
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
           externalPluginEntry,
-          undefined, // no argv1
+          "", // explicitly disable argv1 (empty string bypasses STARTUP_ARGV1 default)
           loaderModuleUrl,
         ),
       ),
