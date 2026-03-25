@@ -72,14 +72,32 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
+  identity?: { name?: string | null; emoji?: string | null };
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread, identity } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    const header = identity
+      ? {
+          title: identity.emoji
+            ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+            : (identity.name ?? ""),
+          template: "blue" as const,
+        }
+      : undefined;
+    return sendStructuredCardFeishu({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+      header: header?.title ? header : undefined,
+    });
   }
 
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
@@ -99,8 +117,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
     mediaLocalRoots,
+    identity,
   }) => {
     const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    const replyInThread = threadId != null && !replyToId;
     const feishuData = payload.channelData?.feishu as
       | { card?: Record<string, unknown> }
       | undefined;
@@ -115,7 +135,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           card: feishuData.card,
           accountId: accountId ?? undefined,
           replyToMessageId,
-          replyInThread: threadId != null && !replyToId,
+          replyInThread,
         }),
       );
     }
@@ -175,6 +195,29 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     if (!text?.trim()) {
       return attachChannelToResult("feishu", { messageId: "" });
     }
+
+    // Apply the same local-image auto-upload shim as sendText, so that channelData
+    // payloads whose text is a local image path upload correctly rather than leaking the path.
+    const localImagePath = normalizePossibleLocalImagePath(text);
+    if (localImagePath) {
+      try {
+        return attachChannelToResult(
+          "feishu",
+          await sendMediaFeishu({
+            cfg,
+            to,
+            mediaUrl: localImagePath,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            mediaLocalRoots,
+          }),
+        );
+      } catch (err) {
+        console.error(`[feishu] sendPayload local image path auto-send failed:`, err);
+        // fall through to plain text as last resort
+      }
+    }
+
     return attachChannelToResult(
       "feishu",
       await sendOutboundText({
@@ -183,6 +226,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
+        replyInThread,
+        identity: identity ?? undefined,
       }),
     );
   },

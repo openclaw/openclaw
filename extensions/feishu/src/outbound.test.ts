@@ -33,6 +33,13 @@ vi.mock("./runtime.js", () => ({
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
 
+async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
+  const file = path.join(dir, `sample${ext}`);
+  await fs.writeFile(file, "image-data");
+  return { dir, file };
+}
+
 function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
@@ -46,13 +53,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   beforeEach(() => {
     resetOutboundMocks();
   });
-
-  async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
-    const file = path.join(dir, `sample${ext}`);
-    await fs.writeFile(file, "image-data");
-    return { dir, file };
-  }
 
   it("sends an absolute existing local image path as media", async () => {
     const { dir, file } = await createTmpImage();
@@ -299,7 +299,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     resetOutboundMocks();
   });
 
-  it("uses markdown cards for captions when renderMode=card", async () => {
+  it("uses structured cards for captions when renderMode=card", async () => {
     const result = await feishuOutbound.sendMedia?.({
       cfg: {
         channels: {
@@ -314,7 +314,8 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    // sendOutboundText now uses sendStructuredCardFeishu (supports replyInThread + header)
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -329,6 +330,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       }),
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
   });
 
@@ -533,6 +535,78 @@ describe("feishuOutbound.sendPayload", () => {
       expect.objectContaining({ mediaUrl: "https://example.com/image2.png" }),
     );
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+
+  it("passes identity header to sendStructuredCardFeishu in card mode text fallback", async () => {
+    await sendPayload({
+      cfg: {
+        channels: { feishu: { renderMode: "card" } },
+      } as any,
+      to: "chat_1",
+      text: "hello from agent",
+      accountId: "main",
+      identity: { name: "DailyBot", emoji: "📊" },
+      payload: { channelData: {} },
+    } as any);
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello from agent",
+        header: expect.objectContaining({ title: "📊 DailyBot" }),
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("passes replyInThread to sendStructuredCardFeishu in card mode text fallback", async () => {
+    await sendPayload({
+      cfg: {
+        channels: { feishu: { renderMode: "card" } },
+      } as any,
+      to: "chat_1",
+      text: "hello",
+      accountId: "main",
+      threadId: "om_thread_1",
+      payload: { channelData: {} },
+    } as any);
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        replyToMessageId: "om_thread_1",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("auto-uploads local image path text in sendPayload fallback", async () => {
+    const { dir, file } = await createTmpImage();
+    try {
+      const result = await sendPayload({
+        cfg: {} as any,
+        to: "chat_1",
+        text: file,
+        accountId: "main",
+        mediaLocalRoots: [dir],
+        payload: { channelData: {} },
+      } as any);
+
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("short-circuits without sending when payload has no text, media, or card", async () => {
