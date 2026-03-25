@@ -66,6 +66,7 @@ export async function createGatewayRuntimeState(params: {
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
+  pinChannelRegistry?: boolean;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
   canvasHostEnabled: boolean;
@@ -101,7 +102,11 @@ export async function createGatewayRuntimeState(params: {
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
-  pinActivePluginChannelRegistry(params.pluginRegistry);
+  if (params.pinChannelRegistry !== false) {
+    pinActivePluginChannelRegistry(params.pluginRegistry);
+  } else {
+    releasePinnedPluginChannelRegistry();
+  }
   try {
     let canvasHost: CanvasHostHandler | null = null;
     if (params.canvasHostEnabled) {
