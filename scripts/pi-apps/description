@@ -1,0 +1,8 @@
+OpenClaw is your own personal AI assistant framework.
+Running locally on your Raspberry Pi 5, it allows you to automate tasks, manage files, and interact with various AI models while maintaining full sovereignty over your data.
+- Built-in Browser Automation
+- Parallel Task Execution
+- Multi-platform Messaging (Telegram/WhatsApp)
+- Self-Healing Architecture
+- Native Desktop Control (xdotool/wmctrl)
+- Full Internet Connectivity & Messaging

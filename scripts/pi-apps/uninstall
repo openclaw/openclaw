@@ -1,0 +1,6 @@
+#!/bin/bash
+echo "🦞 Uninstalling OpenClaw..."
+rm -rf "$HOME/openclaw"
+rm "$HOME/.local/share/applications/openclaw.desktop"
+sed -i '/alias openclaw/d' "$HOME/.bashrc"
+echo "✅ OpenClaw removed."

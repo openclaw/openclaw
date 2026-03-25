@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# OpenClaw Installer for Raspberry Pi 5 (ARM64)
+# Designed for Pi-Apps and general Linux usage
+
+echo "🦞 Starting OpenClaw Installation..."
+
+# 1. Update and Install System Dependencies
+sudo apt update
+sudo apt install -y git curl build-essential python3 python3-pip libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev xdotool wmctrl scrot
+
+# 2. Install Node.js (v20+ recommended)
+if ! command -v node &> /dev/null || [[ $(node -v | cut -d'.' -f1) != "v20" ]]; then
+    echo "📦 Installing Node.js v20..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt install -y nodejs
+fi
+
+# 3. Clone OpenClaw
+INSTALL_DIR="$HOME/openclaw"
+if [ -d "$INSTALL_DIR" ]; then
+    echo "🔄 Updating existing OpenClaw installation..."
+    cd "$INSTALL_DIR"
+    git pull
+else
+    echo "📂 Cloning OpenClaw..."
+    git clone https://github.com/openclaw/openclaw.git "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+fi
+
+# 4. Install Dependencies and Build
+echo "🏗️  Building OpenClaw (this may take a few minutes on Pi)..."
+npm install
+npm run build
+
+# 5. Create Desktop Entry
+# Create Desktop Entry in Programming & Accessories
+INSTALL_DIR_ESC=$(echo "$INSTALL_DIR" | sed "s///\//g")
+sed "s/%INSTALL_DIR%/$INSTALL_DIR_ESC/g" desktop_template > "$HOME/.local/share/applications/openclaw.desktop"
+# Also copy to Chrome Apps area if it exists (usually a subfolder of applications)
+# Create Web UI Dashboard Entry
+cp desktop_template_web "$HOME/.local/share/applications/openclaw-web.desktop" 2>/dev/null || wget -qO "$HOME/.local/share/applications/openclaw-web.desktop" https://raw.githubusercontent.com/jhawpetoss6-collab/pi-apps-openclaw/main/openclaw-web-ui.desktop
+cp "$HOME/.local/share/applications/openclaw-web.desktop" "$HOME/.local/share/applications/chrome-apps/openclaw-web.desktop"
+
+mkdir -p "$HOME/.local/share/applications/chrome-apps"
+cp "$HOME/.local/share/applications/openclaw.desktop" "$HOME/.local/share/applications/chrome-apps/openclaw.desktop"
+
+
+# 6. Create CLI alias
+echo "alias openclaw='cd $INSTALL_DIR && npm start'" >> "$HOME/.bashrc"
+
+# 7. Setup Self-Updating (Cron job every 4 hours)
+cp "$INSTALL_DIR/openclaw-updater" "$HOME/.local/bin/openclaw-updater" 2>/dev/null || cp openclaw-updater "$HOME/.local/bin/openclaw-updater"
+(crontab -l 2>/dev/null | grep -v "openclaw-updater"; echo "0 */4 * * * $HOME/.local/bin/openclaw-updater >> $HOME/.openclaw/updater.log 2>&1") | crontab -
+
+echo "✅ OpenClaw installed successfully!"
+echo "🚀 You can launch it from the Application Menu or by typing 'openclaw' in the terminal."

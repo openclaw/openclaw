@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# OpenClaw Self-Updater for Raspberry Pi 5
+# Designed to be run as a cron job or at startup
+
+INSTALL_DIR="/opt/openclaw"
+if [ ! -d "$INSTALL_DIR" ]; then
+    INSTALL_DIR="$HOME/openclaw"
+fi
+
+echo "🦞 Checking for OpenClaw updates..."
+
+cd "$INSTALL_DIR" || exit 1
+
+# Fetch the latest changes from the main branch
+git fetch origin main
+
+# Check if we are behind the remote
+LOCAL=$(git rev-parse @)
+REMOTE=$(git rev-parse @{u})
+
+if [ "$LOCAL" != "$REMOTE" ]; then
+    echo "🔄 New version detected! Updating..."
+    
+    # Stash any local changes to ensure a clean pull
+    git stash
+    git pull origin main
+    git stash pop
+    
+    # Re-install dependencies and rebuild if package.json changed
+    if git diff --name-only @{1} @{0} | grep -q "package.json"; then
+        echo "🏗️  Dependencies changed. Rebuilding..."
+        npm install --omit=dev
+        npm run build
+    fi
+    
+    echo "✅ OpenClaw updated to the latest version."
+    
+    # Restart the service if it's running under systemd
+    if systemctl is-active --quiet openclaw; then
+        echo "🔄 Restarting OpenClaw service..."
+        sudo systemctl restart openclaw
+    fi
+else
+    echo "✨ OpenClaw is already up to date."
+fi
