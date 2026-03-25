@@ -250,4 +250,38 @@ describe("createOpenClawTools plugin context", () => {
     await tool.execute("call1", {});
     expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: 77 });
   });
+
+  it("preserves decimal-like string agentThreadId as string for exact thread tokens", async () => {
+    const slackTs = "1719341020.000200";
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const threadTool: AnyAgentTool = {
+      name: "plugin-message-thread-decimal-string",
+      label: "plugin-message-thread-decimal-string",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { messageThreadId: { type: "string" } },
+      },
+      execute: executeMock,
+    };
+
+    resolvePluginToolsMock.mockReturnValue([threadTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: slackTs,
+    });
+    const tool = tools.find((candidate) => candidate.name === threadTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    await tool.execute("call1", {});
+    expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: slackTs });
+  });
 });

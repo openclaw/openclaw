@@ -63,10 +63,8 @@ function normalizeMessageThreadIdForInjection(value: unknown): string | number |
       return trimmed;
     }
   }
-  const parsed = Number(trimmed);
-  if (Number.isFinite(parsed)) {
-    return parsed;
-  }
+  // Non-integer IDs can be exact string tokens (e.g. Slack ts values). Preserve
+  // lexical identity instead of coercing through Number(...) and losing fidelity.
   return trimmed;
 }
 
