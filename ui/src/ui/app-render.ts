@@ -1342,12 +1342,17 @@ export function renderApp(state: AppViewState) {
                         delete item.default;
                       }
                     });
-                    let index = list.findIndex((item) => item.id === agentId);
+                    let index = list.findIndex(
+                      (item) =>
+                        typeof item.id === "string" &&
+                        item.id.toLowerCase() === agentId.toLowerCase(),
+                    );
                     if (index < 0) {
-                      list.push({ id: agentId });
-                      index = list.length - 1;
+                      list.push({ id: agentId, default: true });
+                    } else {
+                      list[index].id = agentId;
+                      list[index].default = true;
                     }
-                    list[index].default = true;
                     updateConfigFormValue(state, ["agents", "list"], list);
                   },
                 }),
