@@ -16,10 +16,6 @@ import {
 
 /**
  * Platforms where bots can see each other's messages natively.
- * Transcript feature is a no-op on these platforms.
- */
-/**
- * Platforms where bots can see each other's messages natively.
  * - slack: OAuth scopes grant full channel history
  * - discord: Bots see all messages in channels they have access to
  * - mattermost: Similar to Slack

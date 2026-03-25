@@ -5,7 +5,7 @@
  * so agents can see what their peers have said in the group.
  */
 
-import { readFile, stat } from "fs/promises";
+import { readFile, stat, writeFile } from "fs/promises";
 import {
   resolveMultiAgentTranscriptConfig,
   platformNeedsTranscript,
@@ -68,7 +68,7 @@ async function readTranscriptEntries(
         const lines = block.split("\n");
         const headerLine = lines[0];
         const headerMatch = headerLine?.match(
-          /^### (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) - (\w+)/,
+          /^### (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) - ([\w-]+)/,
         );
         if (headerMatch) {
           const [, date, time, agentId] = headerMatch;
@@ -194,8 +194,6 @@ export async function pruneTranscript(
   }
 
   // Rewrite file with only recent entries
-  const { writeFile } = await import("fs/promises");
-
   if (format === "json") {
     const content = recentEntries
       .map((e) =>
