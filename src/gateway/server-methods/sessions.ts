@@ -19,6 +19,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import {
+  hasInternalHookListeners,
   triggerInternalHook,
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
@@ -899,20 +900,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const hookContext: SessionPatchHookContext = structuredClone({
-      sessionEntry: applied.entry,
-      patch: p,
-      cfg,
-    });
-    const hookEvent: SessionPatchHookEvent = {
-      type: "session",
-      action: "patch",
-      sessionKey: target.canonicalKey ?? key,
-      context: hookContext,
-      timestamp: new Date(),
-      messages: [],
-    };
-    void triggerInternalHook(hookEvent);
+    if (hasInternalHookListeners("session", "patch")) {
+      const hookContext: SessionPatchHookContext = structuredClone({
+        sessionEntry: applied.entry,
+        patch: p,
+        cfg,
+      });
+      const hookEvent: SessionPatchHookEvent = {
+        type: "session",
+        action: "patch",
+        sessionKey: target.canonicalKey ?? key,
+        context: hookContext,
+        timestamp: new Date(),
+        messages: [],
+      };
+      void triggerInternalHook(hookEvent);
+    }
 
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
