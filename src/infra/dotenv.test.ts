@@ -152,6 +152,31 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks path-override vars (OPENCLAW_AGENT_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_AGENT_DIR=./evil-agent",
+            "PI_CODING_AGENT_DIR=./evil-coding",
+            "OPENCLAW_OAUTH_DIR=./evil-oauth",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_AGENT_DIR;
+        delete process.env.PI_CODING_AGENT_DIR;
+        delete process.env.OPENCLAW_OAUTH_DIR;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+      });
+    });
+  });
+
   it("still allows trusted global .env to set non-workspace runtime vars", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
