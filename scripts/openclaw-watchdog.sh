@@ -146,7 +146,7 @@ while true; do
     log "Gateway is DOWN (HTTP ${LAST_STATUS_CODE})."
 
     if [[ $restart_attempts -lt $MAX_RESTART_ATTEMPTS ]]; then
-      ((restart_attempts++))
+      ((restart_attempts++)) || true
       restart_gateway $restart_attempts
 
       # Wait for restart to take effect before checking again

@@ -569,7 +569,7 @@ export function addGatewayWatchdogCommand(gatewayCommand: Command): Command {
     )
     .option("--gateway-url <url>", "Gateway health URL (default: http://localhost:18789)")
     .option("--token <token>", "Gateway auth token (default: OPENCLAW_GATEWAY_TOKEN env)")
-    .option("--max-attempts <n>", "Max restart attempts (default: 3)", parseInt, 3)
+    .option("--max-attempts <n>", "Max restart attempts (default: 3)", (val) => parseInt(val, 10), 3)
     .option("--no-notify", "Disable desktop notifications")
     .action(async (opts) => {
       const args = [
@@ -592,29 +592,45 @@ export function addGatewayWatchdogCommand(gatewayCommand: Command): Command {
       console.log(`Starting OpenClaw watchdog (interval: ${opts.interval}min)…`);
       console.log(`Script: ${scriptPath}`);
 
-      const child = spawn("bash", args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          OPENCLAW_GATEWAY_URL:
-            opts.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? "http://localhost:18789",
-          OPENCLAW_GATEWAY_TOKEN: opts.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
-        },
-      });
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn("bash", args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            OPENCLAW_GATEWAY_URL:
+              opts.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? "http://localhost:18789",
+            OPENCLAW_GATEWAY_TOKEN: opts.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
+          },
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to spawn watchdog: ${err}`);
+        process.exit(1);
+        return;
+      }
 
       child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
       child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
 
+      let ownSignal = false;
+      const handleSignal = () => {
+        ownSignal = true;
+        child.kill("SIGTERM");
+      };
+      process.on("SIGINT", handleSignal);
+      process.on("SIGTERM", handleSignal);
+
       child.on("close", (code) => {
+        process.removeListener("SIGINT", handleSignal);
+        process.removeListener("SIGTERM", handleSignal);
+        if (ownSignal) {
+          return; // Clean signal-initiated exit
+        }
         if (code === 0) {
           return;
         }
         defaultRuntime.error(`Watchdog exited with code ${code ?? "unknown"}`);
         process.exit(code ?? 1);
       });
-
-      // Forward interrupt signals so Ctrl+C stops the watchdog cleanly.
-      process.on("SIGINT", () => child.kill("SIGTERM"));
-      process.on("SIGTERM", () => child.kill("SIGTERM"));
     });
 }
