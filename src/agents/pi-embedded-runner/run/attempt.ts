@@ -904,6 +904,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
         {
           modelId: params.modelId,
+          providerId: providerIdForNumCtx,
           providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
           toolFallback: fallbackProviderConfig?.toolFallback,
           reactProfile: fallbackProviderConfig?.reactProfile,

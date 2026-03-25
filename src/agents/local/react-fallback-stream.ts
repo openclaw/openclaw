@@ -195,6 +195,7 @@ export function wrapStreamFnWithReActFallback(
   nativeStreamFn: StreamFn,
   config: {
     modelId: string;
+    providerId: string;
     providerType: string;
     toolFallback?: "react" | "none" | "auto";
     reactProfile?: "minimal" | "verbose";
@@ -212,14 +213,14 @@ export function wrapStreamFnWithReActFallback(
 
     let currentStatus = "native";
     if (isLocal && configDir) {
-      currentStatus = await getModelCapability(configDir, config.providerType, config.modelId);
+      currentStatus = await getModelCapability(configDir, config.providerId, config.modelId);
       if (currentStatus === "unknown") {
         // Trigger background probe for all new models
         queueMicrotask(() =>
           runBackgroundCapabilityProbe({
             streamFn: nativeStreamFn,
-            modelId: config.modelId,
-            providerId: config.providerType,
+            model: model,
+            providerId: config.providerId,
             configDir,
           }),
         );
@@ -272,9 +273,9 @@ export function wrapStreamFnWithReActFallback(
             }
 
             if (hasNativeToolCall) {
-              await updateModelCapability(configDir, config.providerType, config.modelId, "native");
+              await updateModelCapability(configDir, config.providerId, config.modelId, "native");
             } else if (hasReActAction) {
-              await updateModelCapability(configDir, config.providerType, config.modelId, "react");
+              await updateModelCapability(configDir, config.providerId, config.modelId, "react");
             }
             wrappedStream.end();
           } catch {

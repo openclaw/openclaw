@@ -57,6 +57,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn(fixtureText);
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "deepseek-r1",
+      providerId: "deepseek-r1",
       providerType: "lmstudio",
       toolFallback: "react",
     });
@@ -109,6 +110,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn(fixtureText);
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "llama3",
+      providerId: "llama3",
       providerType: "ollama",
       toolFallback: "react",
     });
@@ -153,6 +155,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn("Native Output Here");
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "qwen2-coder",
+      providerId: "qwen2-coder",
       providerType: "openai-compatible",
       toolFallback: "auto", // Auto delegates to discovery
     });
@@ -182,6 +185,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn(fixtureText);
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "llama3",
+      providerId: "llama3",
       providerType: "ollama",
       toolFallback: "react",
     });
@@ -226,6 +230,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn(fixtureText);
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "llama3",
+      providerId: "llama3",
       providerType: "ollama",
       toolFallback: "react",
     });
@@ -263,6 +268,7 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     const nativeStreamFn = createMockNativeStreamFn(fixtureText);
     const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
       modelId: "deepseek-r1",
+      providerId: "deepseek-r1",
       providerType: "lmstudio",
       toolFallback: "react",
     });

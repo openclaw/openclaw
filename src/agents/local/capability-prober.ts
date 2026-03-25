@@ -7,11 +7,12 @@ import { updateModelCapability } from "./capabilities-cache.js";
  */
 export async function runBackgroundCapabilityProbe(params: {
   streamFn: StreamFn;
-  modelId: string;
+  model: unknown;
   providerId: string;
   configDir: string;
 }): Promise<void> {
-  const { streamFn, modelId, providerId, configDir } = params;
+  const { streamFn, model, providerId, configDir } = params;
+  const modelId = (model as Record<string, unknown>).id as string;
 
   try {
     const dummyTools = [
@@ -39,10 +40,9 @@ export async function runBackgroundCapabilityProbe(params: {
       tools: dummyTools,
     };
 
-    const modelObj = { id: modelId, api: "", provider: "" }; // Minimal model object
     const stream = await streamFn(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      modelObj as unknown as any,
+      model as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       context as unknown as any,
       {},
