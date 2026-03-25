@@ -21,8 +21,9 @@ import { renderIMessageCard } from "./channels.imessage.ts";
 import { renderNostrCard } from "./channels.nostr.ts";
 import {
   channelEnabled,
+  formatNullableBoolean,
   renderChannelAccountCount,
-  resolveChannelConfigured,
+  resolveChannelDisplayState,
 } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
@@ -187,11 +188,9 @@ function renderGenericChannelCard(
   channelAccounts: Record<string, ChannelAccountSnapshot[]>,
 ) {
   const label = resolveChannelLabel(props.snapshot, key);
-  const status = props.snapshot?.channels?.[key] as Record<string, unknown> | undefined;
-  const configured = resolveChannelConfigured(key, props);
-  const running = typeof status?.running === "boolean" ? status.running : undefined;
-  const connected = typeof status?.connected === "boolean" ? status.connected : undefined;
-  const lastError = typeof status?.lastError === "string" ? status.lastError : undefined;
+  const displayState = resolveChannelDisplayState(key, props);
+  const lastError =
+    typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
   const accounts = channelAccounts[key] ?? [];
   const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
 
@@ -212,15 +211,15 @@ function renderGenericChannelCard(
             <div class="status-list" style="margin-top: 16px;">
               <div>
                 <span class="label">Configured</span>
-                <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+                <span>${formatNullableBoolean(displayState.configured)}</span>
               </div>
               <div>
                 <span class="label">Running</span>
-                <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+                <span>${formatNullableBoolean(displayState.running)}</span>
               </div>
               <div>
                 <span class="label">Connected</span>
-                <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
+                <span>${formatNullableBoolean(displayState.connected)}</span>
               </div>
             </div>
           `
