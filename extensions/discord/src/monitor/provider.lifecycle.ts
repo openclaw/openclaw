@@ -420,6 +420,13 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
+    // attach a safety listener before releasing other listeners so that late
+    // "error" events emitted by Carbon during teardown do not become uncaught
+    // exceptions and crash the entire gateway process.
+    const suppressLateError = (err: unknown) => {
+      params.runtime.error?.(danger(`discord: suppressed late gateway error: ${String(err)}`));
+    };
+    gatewayEmitter?.on("error", suppressLateError);
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
