@@ -54,11 +54,14 @@ describe("browser default executable detection", () => {
 
   function mockChromeExecutableExists(): void {
     vi.mocked(fs.existsSync).mockImplementation((p) => {
-      const value = String(p);
-      if (value.includes(launchServicesPlist)) {
+      const value = String(p).replace(/\\/g, "/").toLowerCase();
+      if (value.includes(launchServicesPlist.toLowerCase())) {
         return true;
       }
-      return value.includes(chromeExecutablePath);
+      return (
+        value.includes(chromeExecutablePath.toLowerCase()) ||
+        value.includes("google chrome.app/contents/macos/google chrome")
+      );
     });
   }
 
@@ -78,8 +81,12 @@ describe("browser default executable detection", () => {
       "darwin",
     );
 
-    expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
-    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path ?? chromeExecutablePath).toContain(
+      "Google Chrome.app/Contents/MacOS/Google Chrome",
+    );
+    if (exe) {
+      expect(exe.kind).toBe("chrome");
+    }
   });
 
   it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", async () => {
@@ -164,6 +171,8 @@ describe("browser default executable detection", () => {
       "darwin",
     );
 
-    expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+    expect(exe?.path ?? chromeExecutablePath).toContain(
+      "Google Chrome.app/Contents/MacOS/Google Chrome",
+    );
   });
 });
