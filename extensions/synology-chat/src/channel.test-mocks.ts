@@ -75,6 +75,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
+  sendToChannel: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
   resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
@@ -110,6 +111,9 @@ export function makeSecurityAccount(
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],
+    groupPolicy: "disabled" as const,
+    groupAllowFrom: [],
+    channels: {},
     rateLimitPerMinute: 30,
     botName: "Bot",
     allowInsecureSsl: false,

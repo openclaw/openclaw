@@ -63,9 +63,9 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("capabilities", () => {
-    it("supports direct chat with media", () => {
+    it("supports direct and group chat with media", () => {
       const plugin = createSynologyChatPlugin();
-      expect(plugin.capabilities.chatTypes).toEqual(["direct"]);
+      expect(plugin.capabilities.chatTypes).toEqual(["direct", "group"]);
       expect(plugin.capabilities.media).toBe(true);
       expect(plugin.capabilities.threads).toBe(false);
     });
@@ -180,6 +180,9 @@ describe("createSynologyChatPlugin", () => {
         dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
         allowedUserIds: ["user1"],
+        groupPolicy: "disabled" as const,
+        groupAllowFrom: [],
+        channels: {},
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: true,
@@ -329,6 +332,37 @@ describe("createSynologyChatPlugin", () => {
     it("returns no warnings for fully configured account", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ allowedUserIds: ["user1"] });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings).toHaveLength(0);
+    });
+
+    it("warns when groupPolicy is open", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({
+        allowedUserIds: ["user1"],
+        groupPolicy: "open",
+      });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings.some((w: string) => w.includes("groupPolicy"))).toBe(true);
+    });
+
+    it("warns when groupPolicy is allowlist with empty groupAllowFrom", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({
+        allowedUserIds: ["user1"],
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+      });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings.some((w: string) => w.includes("groupAllowFrom"))).toBe(true);
+    });
+
+    it("no group warnings when groupPolicy is disabled", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({
+        allowedUserIds: ["user1"],
+        groupPolicy: "disabled",
+      });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings).toHaveLength(0);
     });

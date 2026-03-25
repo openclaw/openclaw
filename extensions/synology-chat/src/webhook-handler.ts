@@ -13,6 +13,7 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import * as synologyClient from "./client.js";
+import { evaluateSynologyChatGroupAccess } from "./group-access.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -329,13 +330,17 @@ function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayloa
 }
 
 /** Send a JSON response. */
-function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
+export function respondJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: Record<string, unknown>,
+) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
 }
 
 /** Send a no-content ACK. */
-function respondNoContent(res: ServerResponse) {
+export function respondNoContent(res: ServerResponse) {
   res.writeHead(204);
   res.end();
 }
@@ -374,7 +379,7 @@ type AuthorizedSynologyWebhook = {
   preview: string;
 };
 
-async function parseWebhookPayloadRequest(params: {
+export async function parseWebhookPayloadRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   log?: WebhookHandlerDeps["log"];
@@ -402,7 +407,12 @@ async function parseWebhookPayloadRequest(params: {
   return { ok: true, payload };
 }
 
-function authorizeSynologyWebhook(params: {
+/** Detect whether the payload originates from a group/channel context. */
+function isGroupMessage(payload: SynologyWebhookPayload): boolean {
+  return typeof payload.channel_id === "string" && payload.channel_id.trim().length > 0;
+}
+
+export function authorizeSynologyWebhook(params: {
   req: IncomingMessage;
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
@@ -426,27 +436,47 @@ function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 401, error: "Invalid token" };
   }
 
-  const auth = authorizeUserForDm(
-    params.payload.user_id,
-    params.account.dmPolicy,
-    params.account.allowedUserIds,
-  );
-  if (!auth.allowed) {
-    if (auth.reason === "disabled") {
-      return { ok: false, statusCode: 403, error: "DMs are disabled" };
-    }
-    if (auth.reason === "allowlist-empty") {
+  // Route authorization based on message context: group vs DM
+  if (isGroupMessage(params.payload)) {
+    const groupAuth = evaluateSynologyChatGroupAccess({
+      account: params.account,
+      senderId: params.payload.user_id,
+      channelId: params.payload.channel_id,
+      channelName: params.payload.channel_name,
+    });
+    if (!groupAuth.allowed) {
+      if (groupAuth.reason === "group-policy-disabled") {
+        // Silent drop — same behavior as Telegram
+        return { ok: false, statusCode: 403, error: "Group messages are disabled" };
+      }
       params.log?.warn(
-        "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
+        `Blocked group message from ${params.payload.user_id} in channel ${params.payload.channel_id ?? params.payload.channel_name}: ${groupAuth.reason}`,
       );
-      return {
-        ok: false,
-        statusCode: 403,
-        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
-      };
+      return { ok: false, statusCode: 403, error: "User not authorized for group" };
     }
-    params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
-    return { ok: false, statusCode: 403, error: "User not authorized" };
+  } else {
+    const auth = authorizeUserForDm(
+      params.payload.user_id,
+      params.account.dmPolicy,
+      params.account.allowedUserIds,
+    );
+    if (!auth.allowed) {
+      if (auth.reason === "disabled") {
+        return { ok: false, statusCode: 403, error: "DMs are disabled" };
+      }
+      if (auth.reason === "allowlist-empty") {
+        params.log?.warn(
+          "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
+        );
+        return {
+          ok: false,
+          statusCode: 403,
+          error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+        };
+      }
+      params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
+      return { ok: false, statusCode: 403, error: "User not authorized" };
+    }
   }
 
   if (!params.rateLimiter.check(params.payload.user_id)) {
@@ -455,10 +485,10 @@ function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
   }
 
-  return { ok: true, commandAuthorized: auth.allowed };
+  return { ok: true, commandAuthorized: true };
 }
 
-function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
+export function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
   let cleanText = sanitizeInput(payload.text);
   if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
     cleanText = cleanText.slice(payload.trigger_word.length).trim();
@@ -549,15 +579,20 @@ async function processAuthorizedSynologyWebhook(params: {
       log: params.log,
     });
 
+    const isGroup = isGroupMessage(params.message.payload);
+    const chatType = isGroup ? "group" : "direct";
+
     const deliverPromise = params.deliver({
       body: params.message.body,
       from: authorizedWebhookUserId,
       senderName: params.message.payload.username,
       provider: "synology-chat",
-      chatType: "direct",
+      chatType,
       accountId: params.account.accountId,
       commandAuthorized: params.message.commandAuthorized,
-      chatUserId: deliveryUserId,
+      chatUserId: isGroup ? undefined : deliveryUserId,
+      channelId: params.message.payload.channel_id,
+      channelName: params.message.payload.channel_name,
     });
     const timeoutPromise = new Promise<null>((_, reject) =>
       setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
