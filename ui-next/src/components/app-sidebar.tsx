@@ -20,6 +20,7 @@ import {
   Monitor,
   Package,
   Plug,
+  Puzzle,
   Radio,
   ScrollText,
   Settings,
@@ -107,6 +108,12 @@ const navData = {
       url: "/usage",
       icon: TrendingUp,
       subtitle: "Token and cost analytics",
+    },
+    {
+      title: "Plugins",
+      url: "/plugins",
+      icon: Puzzle,
+      subtitle: "Manage bundled and installed extensions",
     },
   ],
   agent: [

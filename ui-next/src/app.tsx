@@ -104,6 +104,9 @@ const ActivityPage = lazy(() =>
 const BudgetsPage = lazy(() =>
   import("@/pages/orchestration/budgets").then((m) => ({ default: m.BudgetsPage })),
 );
+const PluginsPage = lazy(() =>
+  import("@/pages/plugins").then((m) => ({ default: m.PluginsPage })),
+);
 const HubPage = lazy(() => import("@/pages/hub").then((m) => ({ default: m.HubPage })));
 const DocsPage = lazy(() => import("@/pages/docs").then((m) => ({ default: m.DocsPage })));
 const OpenClawDocsPage = lazy(() =>
@@ -292,6 +295,14 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <CommandsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/plugins"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <PluginsPage />
                 </Suspense>
               }
             />

@@ -33,6 +33,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/config": "Config",
   "/debug": "Debug",
   "/logs": "Logs",
+  "/plugins": "Plugins",
 };
 
 // Full-height pages get no padding and overflow-hidden
