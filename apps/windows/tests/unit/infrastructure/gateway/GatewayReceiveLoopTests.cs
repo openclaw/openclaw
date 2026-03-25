@@ -18,6 +18,7 @@ public sealed class GatewayReceiveLoopTests
     private readonly GatewayConnection _connection = GatewayConnection.Create("openclaw-control-ui");
     private readonly InMemoryWorkActivityStore _workActivity = new();
     private readonly ISettingsRepository _settings = Substitute.For<ISettingsRepository>();
+    private readonly IGatewayEndpointStore _endpointStore = Substitute.For<IGatewayEndpointStore>();
     private readonly ISender _sender = Substitute.For<ISender>();
     private readonly GatewayReceiveLoopHostedService _service;
 
@@ -26,9 +27,16 @@ public sealed class GatewayReceiveLoopTests
         _settings.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AppSettings.WithDefaults(@"C:\AppData\OpenClaw")));
 
+        _endpointStore.CurrentState.Returns(
+            new GatewayEndpointState.Ready(
+                OpenClawWindows.Domain.Settings.ConnectionMode.Local,
+                new Uri("ws://127.0.0.1:18789"),
+                Token: null,
+                Password: null));
+
         _service = new GatewayReceiveLoopHostedService(
-            _ws, _router, _connection, _workActivity, _settings, _sender, TimeProvider.System,
-            NullLogger<GatewayReceiveLoopHostedService>.Instance);
+            _ws, _router, _connection, _workActivity, _settings, _endpointStore, _sender,
+            TimeProvider.System, NullLogger<GatewayReceiveLoopHostedService>.Instance);
 
         _ws.SendAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));

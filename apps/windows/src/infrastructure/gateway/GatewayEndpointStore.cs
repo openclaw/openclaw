@@ -399,15 +399,15 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
             }
             return null;
         }
-        // Local: gateway.auth.token
-        if (root.GetValueOrDefault("gateway") is Dictionary<string, object?> lgw &&
-            lgw.GetValueOrDefault("auth") is Dictionary<string, object?> auth &&
-            auth.GetValueOrDefault("token") is string lt)
-        {
-            var trimmed = lt.Trim();
-            return trimmed.Length > 0 ? trimmed : null;
-        }
-        return null;
+        // Local: gateway.auth.token — suppressed when auth.mode=password so callers
+        // naturally fall through to the password credential.
+        if (root.GetValueOrDefault("gateway") is not Dictionary<string, object?> lgw) return null;
+        if (lgw.GetValueOrDefault("auth") is not Dictionary<string, object?> auth) return null;
+        var mode = (auth.GetValueOrDefault("mode") as string)?.Trim().ToLowerInvariant();
+        if (mode == "password") return null;
+        var lt = auth.GetValueOrDefault("token") as string;
+        var tok = lt?.Trim();
+        return string.IsNullOrEmpty(tok) ? null : tok;
     }
 
     private static string? ResolveConfigPassword(bool isRemote, Dictionary<string, object?> root)

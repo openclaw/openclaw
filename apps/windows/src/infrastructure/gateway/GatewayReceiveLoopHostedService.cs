@@ -21,6 +21,7 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
     private readonly GatewayConnection _connection;
     private readonly IWorkActivityStore _workActivity;
     private readonly ISettingsRepository _settings;
+    private readonly IGatewayEndpointStore _endpointStore;
     private readonly ISender _sender;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<GatewayReceiveLoopHostedService> _logger;
@@ -38,6 +39,7 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
         GatewayConnection connection,
         IWorkActivityStore workActivity,
         ISettingsRepository settings,
+        IGatewayEndpointStore endpointStore,
         ISender sender,
         TimeProvider timeProvider,
         ILogger<GatewayReceiveLoopHostedService> logger)
@@ -47,6 +49,7 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
         _connection = connection;
         _workActivity = workActivity;
         _settings = settings;
+        _endpointStore = endpointStore;
         _sender = sender;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -210,37 +213,14 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
         var id = Guid.NewGuid().ToString();
         _connectRequestId = id;  // set before sending so the res handler can match it
 
-        // Extract auth token: first try settings URI user-info (ws://token@host:port),
-        // then fall back to ~/.openclaw/openclaw.json → gateway.auth.token.
+        // Resolve auth from endpoint store — handles env-var overrides, local/remote
+        // precedence, and auth.mode selection (token suppressed when mode=password).
         string? token = null;
-        try
-        {
-            var s = await _settings.LoadAsync(ct).ConfigureAwait(false);
-            var rawUri = s.GatewayEndpointUri;
-            if (!string.IsNullOrWhiteSpace(rawUri) &&
-                Uri.TryCreate(rawUri.Trim(), UriKind.Absolute, out var parsedUri) &&
-                !string.IsNullOrEmpty(parsedUri.UserInfo))
-            {
-                token = Uri.UnescapeDataString(parsedUri.UserInfo.Split(':')[0]);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not read gateway token from settings");
-        }
-
-        // Fallback: read token from gateway config file (covers auto-resolved URIs
-        // that don't embed the token in user-info).
-        if (string.IsNullOrEmpty(token))
-        {
-            token = Domain.Config.OpenClawConfigFile.ReadGatewayAuthToken();
-        }
-
-        // Read password for deployments using gateway.auth.mode=password.
         string? password = null;
-        if (string.IsNullOrEmpty(token))
+        if (_endpointStore.CurrentState is GatewayEndpointState.Ready endpointReady)
         {
-            password = Domain.Config.OpenClawConfigFile.GatewayPassword();
+            token    = endpointReady.Token;
+            password = endpointReady.Password;
         }
 
         _logger.LogInformation("Sending connect: tokenPresent={HasToken} passwordPresent={HasPw}",

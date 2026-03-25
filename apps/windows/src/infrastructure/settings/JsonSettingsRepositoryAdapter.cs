@@ -69,8 +69,11 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
                     return fromGateway;
                 }
             }
-            _logger.LogWarning("Remote mode: gateway unavailable on load, returning defaults");
-            return DefaultSettings();
+            // Fall back to local file so persisted settings (mode, endpoint, etc.) are
+            // preserved across restarts — returning defaults would wipe them and prevent
+            // the reconnect coordinator from recovering the remote configuration.
+            _logger.LogWarning("Remote mode: gateway unavailable on load, falling back to local file");
+            return await LoadLocalAsync(ct);
         }
 
         // Non-remote: always read from local file.
@@ -243,14 +246,17 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
     private static string InjectTokenIntoUri(string? existingUri, string token)
     {
         // Default to loopback if no URI is configured yet
-        var host = "127.0.0.1:18789";
+        var scheme = "ws";
+        var host   = "127.0.0.1:18789";
         if (!string.IsNullOrWhiteSpace(existingUri) &&
             Uri.TryCreate(existingUri.Trim(), UriKind.Absolute, out var parsed))
         {
+            // Preserve original scheme (ws/wss) — dropping it silently downgrades TLS.
+            scheme = parsed.Scheme;
             var port = parsed.Port > 0 ? parsed.Port : 18789;
             host = $"{parsed.Host}:{port}";
         }
-        return $"ws://{token}@{host}";
+        return $"{scheme}://{token}@{host}";
     }
 
     private static AppSettings MapFromDto(AppSettingsDto dto)

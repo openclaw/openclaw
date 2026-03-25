@@ -31,6 +31,7 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
     private readonly IPermissionManager                      _permissions;
     private readonly GatewayTlsPinStore                      _pinStore;
     private readonly IKeypairStorage                         _keypairStorage;
+    private readonly IGatewayEndpointStore                   _endpointStore;
     private readonly IMediator                               _mediator;
     private readonly IGatewayRpcChannel                      _rpc;
     private readonly INodeRuntimeContext                     _nodeRuntime;
@@ -51,6 +52,7 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         IPermissionManager                  permissions,
         GatewayTlsPinStore                  pinStore,
         IKeypairStorage                     keypairStorage,
+        IGatewayEndpointStore               endpointStore,
         IMediator                           mediator,
         IGatewayRpcChannel                  rpc,
         INodeRuntimeContext                 nodeRuntime,
@@ -60,6 +62,7 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         _permissions    = permissions;
         _pinStore       = pinStore;
         _keypairStorage = keypairStorage;
+        _endpointStore  = endpointStore;
         _mediator       = mediator;
         _rpc            = rpc;
         _nodeRuntime    = nodeRuntime;
@@ -385,28 +388,15 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         Dictionary<string, bool> permissions,
         CancellationToken        ct)
     {
-        // Read auth token — same logic as the control channel in GatewayReceiveLoopHostedService
+        // Resolve auth from endpoint store — same source as the control channel.
+        // Handles env-var overrides, local/remote precedence, and auth.mode selection.
         string? token = null;
-        try
-        {
-            var s = await _settings.LoadAsync(ct).ConfigureAwait(false);
-            var rawUri = s.GatewayEndpointUri;
-            if (!string.IsNullOrWhiteSpace(rawUri) &&
-                Uri.TryCreate(rawUri.Trim(), UriKind.Absolute, out var parsedUri) &&
-                !string.IsNullOrEmpty(parsedUri.UserInfo))
-            {
-                token = Uri.UnescapeDataString(parsedUri.UserInfo.Split(':')[0]);
-            }
-        }
-        catch { /* fallback below */ }
-
-        if (string.IsNullOrEmpty(token))
-            token = Domain.Config.OpenClawConfigFile.ReadGatewayAuthToken();
-
-        // Read password for deployments using gateway.auth.mode=password.
         string? password = null;
-        if (string.IsNullOrEmpty(token))
-            password = Domain.Config.OpenClawConfigFile.GatewayPassword();
+        if (_endpointStore.CurrentState is GatewayEndpointState.Ready endpointReady)
+        {
+            token    = endpointReady.Token;
+            password = endpointReady.Password;
+        }
 
         // Load or create device Ed25519 keypair
         var kpResult = await _keypairStorage.LoadAsync(ct);
