@@ -93,6 +93,9 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
       setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
     },
     createTool: (ctx) => {
+      // NOTE: The plugin config path (plugins.entries.xai.config.webSearch) is the canonical config for
+      // new installs. If both legacy searchConfig.grok.* and plugin config values are set, we
+      // intentionally let plugin config take precedence.
       const mergedSearchConfig = mergeScopedSearchConfig(
         ctx.searchConfig,
         "grok",
