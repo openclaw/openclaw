@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
 import java.time.Instant
@@ -102,13 +104,28 @@ class LocationCaptureManager(private val context: Context) {
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
     return withTimeout(timeoutMs.coerceAtLeast(1)) {
       suspendCancellableCoroutine { cont ->
-        val signal = CancellationSignal()
-        cont.invokeOnCancellation { signal.cancel() }
-        manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
-          if (location != null) {
-            cont.resume(location)
-          } else {
-            cont.resumeWithException(IllegalStateException("LOCATION_UNAVAILABLE: no fix"))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          val signal = CancellationSignal()
+          cont.invokeOnCancellation { signal.cancel() }
+          manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
+            if (location != null) {
+              cont.resume(location)
+            } else {
+              cont.resumeWithException(IllegalStateException("LOCATION_UNAVAILABLE: no fix"))
+            }
+          }
+        } else {
+          val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+              manager.removeUpdates(this)
+              if (cont.isActive) {
+                cont.resume(location)
+              }
+            }
+          }
+          manager.requestSingleUpdate(resolved, listener, context.mainLooper)
+          cont.invokeOnCancellation {
+            manager.removeUpdates(listener)
           }
         }
       }
