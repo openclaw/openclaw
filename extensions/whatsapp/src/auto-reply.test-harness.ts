@@ -25,6 +25,7 @@ type MockWebListener = {
   sendPoll: () => Promise<{ messageId: string }>;
   sendReaction: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
+  lookupPnLidEntry: () => Promise<null>;
 };
 
 export const TEST_NET_IP = "203.0.113.10";
@@ -184,6 +185,7 @@ export function createMockWebListener(): MockWebListener {
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => undefined),
     sendComposingTo: vi.fn(async () => undefined),
+    lookupPnLidEntry: vi.fn(async () => null),
   };
 }
 

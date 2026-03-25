@@ -8,6 +8,28 @@ export type ActiveWebSendOptions = {
   fileName?: string;
 };
 
+/**
+ * Result of a LID/PhoneNumber lookup.
+ * Mirrors WPPConnect's getPnLidEntry API.
+ */
+export type PnLidEntryResult = {
+  /** The LID (Linked ID) for the contact */
+  lid: string;
+  /** The phone number in E.164 format (e.g. "+1234567890") */
+  phoneNumber: string | null;
+  /** Cached contact info if available */
+  contact?: {
+    /** Display name (pushName) */
+    name?: string | null;
+    /** Profile picture URL if available */
+    profilePictureUrl?: string | null;
+    /** Whether the contact is a business account */
+    isBusiness?: boolean;
+    /** Contact's WA ID */
+    waId?: string;
+  };
+};
+
 export type ActiveWebListener = {
   sendMessage: (
     to: string,
@@ -25,6 +47,12 @@ export type ActiveWebListener = {
     participant?: string,
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
+  /**
+   * Lookup LID/PhoneNumber mapping and contact information.
+   * Accepts a phone number JID (e.g. "123456@s.whatsapp.net") or LID (e.g. "123@lid").
+   * Returns the corresponding LID, phone number, and cached contact info.
+   */
+  lookupPnLidEntry: (phoneOrLid: string) => Promise<PnLidEntryResult | null>;
   close?: () => Promise<void>;
 };
 

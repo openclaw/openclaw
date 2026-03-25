@@ -7,6 +7,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import type { PnLidEntryResult } from "../active-listener.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -180,6 +181,59 @@ export async function monitorWebInbox(options: {
       logVerbose(`Failed to fetch group metadata for ${jid}: ${String(err)}`);
       return { expires: Date.now() + GROUP_META_TTL_MS };
     }
+  };
+
+  /**
+   * Lookup LID/PhoneNumber mapping and contact information.
+   * Mirrors WPPConnect's getPnLidEntry API.
+   */
+  const lookupPnLidEntry = async (phoneOrLid: string): Promise<PnLidEntryResult | null> => {
+    // Check if it's a LID format (e.g. "123@lid" or "123@hosted.lid")
+    // Mirrors the pattern used in resolveJidToE164 for consistency
+    const isLid = /(@lid|@hosted\.lid)$/i.test(phoneOrLid);
+    // Check if it's a phone JID format (e.g. "123@s.whatsapp.net")
+    const isPhoneJid = /@\/?s\.whatsapp\.net$/i.test(phoneOrLid);
+
+    let lid: string;
+    let phoneJid: string;
+
+    if (isLid) {
+      // Input is LID, need to look up the phone JID
+      lid = phoneOrLid;
+      if (!lidLookup) {
+        return null;
+      }
+      try {
+        const pnJid = await lidLookup.getPNForLID(lid);
+        if (!pnJid) {
+          return null;
+        }
+        phoneJid = pnJid;
+      } catch (err) {
+        logVerbose(`LID lookup failed for ${lid}: ${String(err)}`);
+        return null;
+      }
+    } else if (isPhoneJid) {
+      // Input is phone JID, need to extract LID and phone
+      phoneJid = phoneOrLid;
+      // For phone JIDs, we don't have a direct LID lookup without additional API
+      // We'll return what we have and note that LID is not available
+      lid = "";
+    } else {
+      // Plain phone number - normalize it
+      const e164 = jidToE164(phoneOrLid) ?? phoneOrLid;
+      lid = "";
+      phoneJid = `${e164.replace(/^\+/, "")}@s.whatsapp.net`;
+    }
+
+    // Convert phone JID to E.164 format
+    const phoneNumber = jidToE164(phoneJid);
+
+    return {
+      lid,
+      phoneNumber,
+      contact: undefined, // Contact info not available via this API
+    };
   };
 
   type NormalizedInboundMessage = {
@@ -532,7 +586,8 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
-    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
+    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo/lookupPnLidEntry)
     ...sendApi,
+    lookupPnLidEntry,
   } as const;
 }

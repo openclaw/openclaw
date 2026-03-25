@@ -23,6 +23,7 @@ describe("web outbound", () => {
   const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
+  const lookupPnLidEntry = vi.fn(async () => null);
 
   beforeAll(async () => {
     vi.resetModules();
@@ -38,6 +39,7 @@ describe("web outbound", () => {
       sendMessage,
       sendPoll,
       sendReaction,
+      lookupPnLidEntry,
     });
   });
 
@@ -186,6 +188,7 @@ describe("web outbound", () => {
       sendMessage,
       sendPoll,
       sendReaction,
+      lookupPnLidEntry,
     });
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("img"),

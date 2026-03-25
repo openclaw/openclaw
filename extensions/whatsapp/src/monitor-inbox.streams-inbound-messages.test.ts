@@ -268,4 +268,82 @@ describe("web monitor inbox", () => {
       },
     });
   });
+
+  it("lookupPnLidEntry returns LID mapping for LID input", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("888:0@s.whatsapp.net");
+
+    const result = await listener.lookupPnLidEntry("777@lid");
+
+    expect(getPNForLID).toHaveBeenCalledWith("777@lid");
+    expect(result).toEqual({
+      lid: "777@lid",
+      phoneNumber: "+888",
+      contact: undefined,
+    });
+
+    await listener.close();
+  });
+
+  it("lookupPnLidEntry handles @hosted.lid format", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("555:0@s.whatsapp.net");
+
+    const result = await listener.lookupPnLidEntry("444@hosted.lid");
+
+    expect(getPNForLID).toHaveBeenCalledWith("444@hosted.lid");
+    expect(result).toEqual({
+      lid: "444@hosted.lid",
+      phoneNumber: "+555",
+      contact: undefined,
+    });
+
+    await listener.close();
+  });
+
+  it("lookupPnLidEntry handles phone JID input", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener } = await startInboxMonitor(onMessage);
+
+    const result = await listener.lookupPnLidEntry("999@s.whatsapp.net");
+
+    expect(result).toEqual({
+      lid: "",
+      phoneNumber: "+999",
+      contact: undefined,
+    });
+
+    await listener.close();
+  });
+
+  it("lookupPnLidEntry handles plain phone number input", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener } = await startInboxMonitor(onMessage);
+
+    const result = await listener.lookupPnLidEntry("+861381234567");
+
+    expect(result).toEqual({
+      lid: "",
+      phoneNumber: "+861381234567",
+      contact: undefined,
+    });
+
+    await listener.close();
+  });
 });
