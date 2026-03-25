@@ -352,8 +352,9 @@ export async function getReplyFromConfig(
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/)
-      ?? command.commandBodyNormalized.match(/^(new|reset)$/i);
+    const resetMatch =
+      command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/) ??
+      command.commandBodyNormalized.match(/^(new|reset)$/i);
     if (!resetMatch) {
       return;
     }

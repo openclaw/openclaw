@@ -159,8 +159,9 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   if (HANDLERS === null) {
     HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/)
-    ?? params.command.commandBodyNormalized.match(/^(new|reset)$/i);
+  const resetMatch =
+    params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/) ??
+    params.command.commandBodyNormalized.match(/^(new|reset)$/i);
   const resetRequested = Boolean(resetMatch);
   if (resetRequested && !params.command.isAuthorizedSender) {
     logVerbose(

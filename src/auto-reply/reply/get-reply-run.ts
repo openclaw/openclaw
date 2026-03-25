@@ -307,8 +307,8 @@ export async function runPreparedReply(
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const isWholeMessageCommand = command.commandBodyNormalized.trim() === rawBodyTrimmed;
-  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(rawBodyTrimmed)
-    || /^(new|reset)$/i.test(rawBodyTrimmed);
+  const isResetOrNewCommand =
+    /^\/(new|reset)(?:\s|$)/.test(rawBodyTrimmed) || /^(new|reset)$/i.test(rawBodyTrimmed);
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
