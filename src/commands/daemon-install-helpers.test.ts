@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeStateDirDotEnv } from "../config/test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
@@ -85,9 +84,15 @@ function mockNodeGatewayPlanFixture(
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
 }
 
+function writeStateDirDotEnv(home: string, contents: string) {
+  const stateDir = path.join(home, ".openclaw");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, ".env"), contents, "utf-8");
+}
+
 describe("buildGatewayInstallPlan", () => {
   // Prevent tests from reading the developer's real ~/.openclaw/.env when
-  // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
+  // passing env objects that rely on HOME for state-dir resolution.
   let isolatedHome: string;
   beforeEach(() => {
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
@@ -157,7 +162,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
   });
 
-  it("merges config env vars into the environment", async () => {
+  it("does not snapshot config env vars into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -179,15 +184,13 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    // Config env vars should be present
-    expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
-    expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
-    // Service environment vars should take precedence
+    expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
+    expect(plan.environment.CUSTOM_VAR).toBeUndefined();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
-  it("drops dangerous config env vars before service merge", async () => {
+  it("ignores config env vars even when they are otherwise valid", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -209,10 +212,10 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.SAFE_KEY).toBe("safe-value");
+    expect(plan.environment.SAFE_KEY).toBeUndefined();
   });
 
-  it("does not include empty config env values", async () => {
+  it("keeps service env values without mixing in config env vars", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
@@ -229,11 +232,12 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.VALID_KEY).toBeUndefined();
     expect(plan.environment.EMPTY_KEY).toBeUndefined();
   });
 
-  it("drops whitespace-only config env values", async () => {
+  it("ignores inline config env keys as well as vars entries", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
@@ -250,11 +254,11 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.VALID_KEY).toBeUndefined();
     expect(plan.environment.TRIMMED_KEY).toBeUndefined();
   });
 
-  it("keeps service env values over config env vars", async () => {
+  it("does not let config env override service metadata fields", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/Users/service",
@@ -280,25 +284,10 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("merges env-backed auth-profile refs into the service environment", async () => {
+  it("does not snapshot env-backed auth-profile refs into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
       },
     });
 
@@ -309,26 +298,31 @@ describe("buildGatewayInstallPlan", () => {
       },
       port: 3000,
       runtime: "node",
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+          },
+        },
+      },
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_TOKEN).toBeUndefined();
   });
 
-  it("skips unresolved auth-profile env refs", async () => {
+  it("still leaves unresolved auth-profile env refs out of the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
       },
     });
 
@@ -336,6 +330,16 @@ describe("buildGatewayInstallPlan", () => {
       env: {},
       port: 3000,
       runtime: "node",
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
@@ -353,10 +357,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("merges .env file vars into the install plan", async () => {
-    await writeStateDirDotEnv("BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
-    });
+  it("does not merge .env file vars into the install plan", async () => {
+    writeStateDirDotEnv(tmpDir, "BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\n");
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
 
     const plan = await buildGatewayInstallPlan({
@@ -365,15 +367,13 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       runtime: "node",
     });
 
-    expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
-    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("config env vars override .env file vars", async () => {
-    await writeStateDirDotEnv("MY_KEY=from-dotenv\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
-    });
+  it("still does not snapshot config env vars when a .env file exists", async () => {
+    writeStateDirDotEnv(tmpDir, "MY_KEY=from-dotenv\n");
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
@@ -389,13 +389,11 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.MY_KEY).toBe("from-config");
+    expect(plan.environment.MY_KEY).toBeUndefined();
   });
 
-  it("service env overrides .env file vars", async () => {
-    await writeStateDirDotEnv("HOME=/from-dotenv\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
-    });
+  it("service env overrides stay intact without copying .env file vars", async () => {
+    writeStateDirDotEnv(tmpDir, "HOME=/from-dotenv\n");
     mockNodeGatewayPlanFixture({
       serviceEnvironment: { HOME: "/from-service" },
     });

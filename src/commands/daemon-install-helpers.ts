@@ -1,9 +1,5 @@
-import {
-  loadAuthProfileStoreForSecretsRuntime,
-  type AuthProfileStore,
-} from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -24,53 +20,6 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-}): Record<string, string> {
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
-  const entries: Record<string, string> = {};
-
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (!ref || ref.source !== "env") {
-      continue;
-    }
-    const value = params.env[ref.id]?.trim();
-    if (!value) {
-      continue;
-    }
-    entries[ref.id] = value;
-  }
-
-  return entries;
-}
-
-function buildGatewayInstallEnvironment(params: {
-  env: Record<string, string | undefined>;
-  config?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  serviceEnvironment: Record<string, string | undefined>;
-}): Record<string, string | undefined> {
-  const environment: Record<string, string | undefined> = {
-    ...collectDurableServiceEnvVars({
-      env: params.env,
-      config: params.config,
-    }),
-    ...collectAuthProfileServiceEnvVars({
-      env: params.env,
-      authStore: params.authStore,
-    }),
-  };
-  Object.assign(environment, params.serviceEnvironment);
-  return environment;
-}
-
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -78,10 +27,14 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
-  /** Full config to extract env vars from (env vars + inline env keys). */
+  /** Full config is still used during install-time validation elsewhere. */
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
+  void params.config;
+  // authStore is accepted for caller compatibility, but env-backed auth refs are
+  // intentionally no longer snapshotted into service metadata during install.
+  void params.authStore;
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
@@ -112,22 +65,7 @@ export async function buildGatewayInstallPlan(params: {
     // a version-manager bin directory that isn't covered by static PATH guesses.
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
-
-  // Merge env sources into the service environment in ascending priority:
-  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
-  //   2. Config env vars              (openclaw.json env.vars + inline keys)
-  //   3. Auth-profile env refs        (credential store → env var lookups)
-  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
-  return {
-    programArguments,
-    workingDirectory,
-    environment: buildGatewayInstallEnvironment({
-      env: params.env,
-      config: params.config,
-      authStore: params.authStore,
-      serviceEnvironment,
-    }),
-  };
+  return { programArguments, workingDirectory, environment: serviceEnvironment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
