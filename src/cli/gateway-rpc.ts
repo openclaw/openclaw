@@ -39,7 +39,7 @@ export async function callGatewayFromCli(
         method,
         params,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        timeoutMs: Number(opts.timeout ?? 600_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),

@@ -78,3 +78,11 @@ openclaw cron add \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+## `cron run` timeout
+
+`openclaw cron run <id>` waits for the job to complete before returning. The default timeout is **600,000ms (10 minutes)** — aligned with `agents.defaults.timeoutSeconds`. Use `--timeout <ms>` to override. To wait indefinitely for long-running jobs:
+
+```bash
+openclaw cron run <id> --timeout 0
+```
