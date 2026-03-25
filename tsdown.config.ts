@@ -21,6 +21,15 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
       if (log.code === "PLUGIN_TIMINGS") {
         return;
       }
+      // Suppress [EVAL] warnings from bottleneck's intentional eval usage
+      // (obfuscation to prevent bundlers from inlining optional Redis modules).
+      if (
+        log.code === "EVAL" &&
+        typeof (log as Record<string, unknown>).id === "string" &&
+        ((log as Record<string, unknown>).id as string).includes("bottleneck")
+      ) {
+        return;
+      }
       if (typeof previousOnLog === "function") {
         previousOnLog(level, log, defaultHandler);
         return;
