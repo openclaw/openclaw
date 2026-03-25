@@ -1,0 +1,33 @@
+{
+  "$schema": "../robot-config.schema.json",
+  "id": "abb-irb-120",
+  "version": "1.0.0",
+  "manufacturer": "ABB",
+  "model": "IRB 120",
+  "description": "ABB IRB 120 safety profile for real robot control",
+  "dof": 6,
+  "joints": [
+    { "index": 0, "id": "joint0", "label": "J1", "type": "revolute", "min": -165.0, "max": 165.0, "speed": 250.0, "home": 0.0, "unit": "deg" },
+    { "index": 1, "id": "joint1", "label": "J2", "type": "revolute", "min": -110.0, "max": 110.0, "speed": 250.0, "home": 0.0, "unit": "deg" },
+    { "index": 2, "id": "joint2", "label": "J3", "type": "revolute", "min": -110.0, "max": 70.0, "speed": 250.0, "home": 0.0, "unit": "deg" },
+    { "index": 3, "id": "joint3", "label": "J4", "type": "revolute", "min": -160.0, "max": 160.0, "speed": 320.0, "home": 0.0, "unit": "deg" },
+    { "index": 4, "id": "joint4", "label": "J5", "type": "revolute", "min": -120.0, "max": 120.0, "speed": 320.0, "home": 0.0, "unit": "deg" },
+    { "index": 5, "id": "joint5", "label": "J6", "type": "revolute", "min": -400.0, "max": 400.0, "speed": 420.0, "home": 0.0, "unit": "deg" }
+  ],
+  "dhParameters": [
+    { "jointId": "joint0", "d": 0.290, "thetaOffsetDeg": 0.0, "a": 0.000, "alphaDeg": -90.0 },
+    { "jointId": "joint1", "d": 0.000, "thetaOffsetDeg": -90.0, "a": 0.270, "alphaDeg": 0.0 },
+    { "jointId": "joint2", "d": 0.000, "thetaOffsetDeg": 0.0, "a": 0.070, "alphaDeg": -90.0 },
+    { "jointId": "joint3", "d": 0.302, "thetaOffsetDeg": 0.0, "a": 0.000, "alphaDeg": 90.0 },
+    { "jointId": "joint4", "d": 0.000, "thetaOffsetDeg": 0.0, "a": 0.000, "alphaDeg": -90.0 },
+    { "jointId": "joint5", "d": 0.072, "thetaOffsetDeg": 0.0, "a": 0.000, "alphaDeg": 0.0 }
+  ],
+  "presets": {
+    "home": [0, 0, 0, 0, 0, 0]
+  },
+  "safety": {
+    "realSafeSpeedCap": 25,
+    "realMaxJointDelta": 35,
+    "tabletopMinTcpZ": 0.12
+  }
+}

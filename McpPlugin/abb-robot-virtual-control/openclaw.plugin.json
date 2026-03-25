@@ -1,0 +1,20 @@
+{
+  "id": "abb-robot-virtual-control",
+  "channels": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "wsBridgePort": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "WebSocket bridge port for virtual viewer (default: 9877)"
+      },
+      "defaultRobot": {
+        "type": "string",
+        "description": "Virtual robot id for viewer registration"
+      }
+    }
+  }
+}

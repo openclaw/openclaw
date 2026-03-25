@@ -1,0 +1,24 @@
+{
+  "id": "abb-robot-real-control",
+  "channels": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "controllerHost": {
+        "type": "string",
+        "description": "Default ABB controller host"
+      },
+      "controllerPort": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "Default ABB controller port (default: 7000)"
+      },
+      "bridgeDllPath": {
+        "type": "string",
+        "description": "Optional override path to ABBBridge.dll"
+      }
+    }
+  }
+}

@@ -4,6 +4,8 @@ description: >
   Virtual ABB viewer operation skill. Use ONLY for the 3D kinematic viewer via
   ws-bridge simulation. For RobotStudio or physical robot control, use
   abb-robot-real-control instead — RobotStudio uses the real PC SDK plugin.
+  Available actions: connect, disconnect, get_status, get_joints, set_joints,
+  movj, go_home, list_robots, get_version.
 ---
 
 # ABB Virtual Control Skill

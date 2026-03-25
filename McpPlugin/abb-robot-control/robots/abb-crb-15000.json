@@ -1,0 +1,581 @@
+{
+  "$schema": "../robot-config.schema.json",
+  "id": "abb-crb-15000",
+  "version": "1.0.0",
+  "manufacturer": "ABB",
+  "model": "CRB 15000",
+  "description": "ABB CRB 15000 - 6-DOF serial robot arm",
+  "dof": 6,
+  "mechanismType": "serial_6dof",
+  "joints": [
+    {
+      "index": 0,
+      "id": "joint0",
+      "label": "J1 - Base Rotation",
+      "type": "revolute",
+      "min": -180.0,
+      "max": 180.0,
+      "speed": 250.0,
+      "home": 0.0,
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "unit": "deg"
+    },
+    {
+      "index": 1,
+      "id": "joint1",
+      "label": "J2 - Shoulder",
+      "type": "revolute",
+      "min": -180.0,
+      "max": 180.0,
+      "speed": 250.0,
+      "home": 0.0,
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "unit": "deg"
+    },
+    {
+      "index": 2,
+      "id": "joint2",
+      "label": "J3 - Elbow",
+      "type": "revolute",
+      "min": -180.0,
+      "max": 180.0,
+      "speed": 250.0,
+      "home": 0.0,
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "unit": "deg"
+    },
+    {
+      "index": 3,
+      "id": "joint3",
+      "label": "J4 - Forearm Roll",
+      "type": "revolute",
+      "min": -225.0,
+      "max": 85.0,
+      "speed": 320.0,
+      "home": 0.0,
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "unit": "deg"
+    },
+    {
+      "index": 4,
+      "id": "joint4",
+      "label": "J5 - Wrist Pitch",
+      "type": "revolute",
+      "min": -180.0,
+      "max": 180.0,
+      "speed": 320.0,
+      "home": 0.0,
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "unit": "deg"
+    },
+    {
+      "index": 5,
+      "id": "joint5",
+      "label": "J6 - Flange Roll",
+      "type": "revolute",
+      "min": -180.0,
+      "max": 180.0,
+      "speed": 420.0,
+      "home": 0.0,
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "unit": "deg"
+    }
+  ],
+  "dhParameters": [
+    {
+      "jointId": "joint0",
+      "d": 0.0,
+      "theta": 0.0,
+      "a": 0.0,
+      "alpha": 0.0
+    },
+    {
+      "jointId": "joint1",
+      "d": 10.0,
+      "theta": 0.0,
+      "a": 0.0,
+      "alpha": 0.0
+    },
+    {
+      "jointId": "joint2",
+      "d": 0.0,
+      "theta": 0.0,
+      "a": 0.0,
+      "alpha": 0.0
+    },
+    {
+      "jointId": "joint3",
+      "d": 0.0,
+      "theta": 0.0,
+      "a": 10.0,
+      "alpha": 0.0
+    },
+    {
+      "jointId": "joint4",
+      "d": 0.0,
+      "theta": 0.0,
+      "a": 10.0,
+      "alpha": 0.0
+    },
+    {
+      "jointId": "joint5",
+      "d": 0.0,
+      "theta": 0.0,
+      "a": -0.001,
+      "alpha": 0.0
+    }
+  ],
+  "linkOffsets": [
+    {
+      "jointId": "joint0",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "jointId": "joint1",
+      "translation": [
+        0.0,
+        0.0,
+        10.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "jointId": "joint2",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "jointId": "joint3",
+      "translation": [
+        10.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "jointId": "joint4",
+      "translation": [
+        10.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "jointId": "joint5",
+      "translation": [
+        -0.001,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "gravity": [
+    0.0,
+    0.0,
+    9.81
+  ],
+  "glbFile": "ABB-CRB-15000.glb",
+  "presets": {
+    "home": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "ready": [
+      0,
+      -30,
+      60,
+      0,
+      30,
+      0
+    ],
+    "inspect": [
+      0,
+      -45,
+      90,
+      0,
+      -45,
+      0
+    ],
+    "pick_low": [
+      0,
+      30,
+      90,
+      0,
+      -30,
+      0
+    ],
+    "stretch_up": [
+      0,
+      -90,
+      0,
+      0,
+      0,
+      0
+    ],
+    "stretch_fwd": [
+      0,
+      0,
+      -90,
+      0,
+      90,
+      0
+    ],
+    "tuck": [
+      0,
+      90,
+      -90,
+      0,
+      0,
+      0
+    ],
+    "wave": [
+      45,
+      -30,
+      60,
+      0,
+      30,
+      0
+    ],
+    "salute": [
+      0,
+      -60,
+      0,
+      0,
+      60,
+      0
+    ],
+    "dance_a": [
+      90,
+      -30,
+      60,
+      45,
+      30,
+      0
+    ],
+    "dance_b": [
+      -90,
+      -30,
+      60,
+      -45,
+      30,
+      0
+    ]
+  },
+  "sequences": {
+    "wave_sequence": {
+      "description": "Friendly wave motion",
+      "steps": [
+        {
+          "joints": [
+            45.0,
+            -30.0,
+            60.0,
+            0.0,
+            30.0,
+            0.0
+          ],
+          "durationMs": 800
+        },
+        {
+          "joints": [
+            45.0,
+            -30.0,
+            60.0,
+            0.0,
+            60.0,
+            0.0
+          ],
+          "durationMs": 400
+        },
+        {
+          "joints": [
+            45.0,
+            -30.0,
+            60.0,
+            0.0,
+            10.0,
+            0.0
+          ],
+          "durationMs": 400
+        },
+        {
+          "joints": [
+            45.0,
+            -30.0,
+            60.0,
+            0.0,
+            60.0,
+            0.0
+          ],
+          "durationMs": 400
+        },
+        {
+          "joints": [
+            45.0,
+            -30.0,
+            60.0,
+            0.0,
+            10.0,
+            0.0
+          ],
+          "durationMs": 400
+        },
+        {
+          "joints": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 800
+        }
+      ]
+    },
+    "dance_sequence": {
+      "description": "Playful dance motion",
+      "steps": [
+        {
+          "joints": [
+            90.0,
+            -30.0,
+            60.0,
+            45.0,
+            30.0,
+            0.0
+          ],
+          "durationMs": 600
+        },
+        {
+          "joints": [
+            -90.0,
+            -30.0,
+            60.0,
+            -45.0,
+            30.0,
+            0.0
+          ],
+          "durationMs": 600
+        },
+        {
+          "joints": [
+            90.0,
+            -30.0,
+            60.0,
+            45.0,
+            30.0,
+            0.0
+          ],
+          "durationMs": 600
+        },
+        {
+          "joints": [
+            -90.0,
+            -30.0,
+            60.0,
+            -45.0,
+            30.0,
+            0.0
+          ],
+          "durationMs": 600
+        },
+        {
+          "joints": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 800
+        }
+      ]
+    },
+    "nod_sequence": {
+      "description": "Nodding yes motion",
+      "steps": [
+        {
+          "joints": [
+            0.0,
+            -20.0,
+            40.0,
+            0.0,
+            40.0,
+            0.0
+          ],
+          "durationMs": 600
+        },
+        {
+          "joints": [
+            0.0,
+            -20.0,
+            40.0,
+            0.0,
+            60.0,
+            0.0
+          ],
+          "durationMs": 300
+        },
+        {
+          "joints": [
+            0.0,
+            -20.0,
+            40.0,
+            0.0,
+            40.0,
+            0.0
+          ],
+          "durationMs": 300
+        },
+        {
+          "joints": [
+            0.0,
+            -20.0,
+            40.0,
+            0.0,
+            60.0,
+            0.0
+          ],
+          "durationMs": 300
+        },
+        {
+          "joints": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 600
+        }
+      ]
+    },
+    "inspect_sequence": {
+      "description": "Inspection scan motion",
+      "steps": [
+        {
+          "joints": [
+            -45.0,
+            -45.0,
+            90.0,
+            0.0,
+            -45.0,
+            0.0
+          ],
+          "durationMs": 700
+        },
+        {
+          "joints": [
+            -45.0,
+            -45.0,
+            90.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 500
+        },
+        {
+          "joints": [
+            45.0,
+            -45.0,
+            90.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 1000
+        },
+        {
+          "joints": [
+            45.0,
+            -45.0,
+            90.0,
+            0.0,
+            -45.0,
+            0.0
+          ],
+          "durationMs": 500
+        },
+        {
+          "joints": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "durationMs": 800
+        }
+      ]
+    }
+  }
+}

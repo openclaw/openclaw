@@ -3,6 +3,7 @@ name: abb-robot-virtual-control
 description: >
   ABB虚拟视图操作技能。仅适用于通过ws-bridge的3D运动学视图仿真工作流。
   不支持物理机器人操作。如需控制RobotStudio或真实机器人，请使用abb-robot-real-control技能。
+  支持操作：connect、disconnect、get_status、get_joints、set_joints、movj、go_home、list_robots、get_version。
 ---
 
 # ABB虚拟控制技能

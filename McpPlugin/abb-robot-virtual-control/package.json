@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/abb-robot-virtual-control",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for virtual ABB robot viewer control",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "dependencies": {
+    "ws": "^8.17.1"
+  }
+}

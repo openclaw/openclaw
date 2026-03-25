@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "JhM1eBNnx3E=",
+  "success": true,
+  "projectFilePath": "D:\\OpenClaw\\Develop\\openclaw\\extensions\\abb-robot-control\\src\\ABBBridge.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\HB\\.nuget\\packages\\microsoft.netframework.referenceassemblies\\1.0.3\\microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
+    "C:\\Users\\HB\\.nuget\\packages\\microsoft.netframework.referenceassemblies.net48\\1.0.3\\microsoft.netframework.referenceassemblies.net48.1.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}
