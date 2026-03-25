@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import * as directoryLive from "./directory-live.js";
+import {
+  resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
+} from "./group-policy.js";
 import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
 
@@ -103,5 +107,79 @@ describe("resolveDiscordTarget", () => {
 describe("normalizeDiscordMessagingTarget", () => {
   it("defaults raw numeric ids to channels", () => {
     expect(normalizeDiscordMessagingTarget("123")).toBe("channel:123");
+  });
+});
+
+describe("discord group policy", () => {
+  it("prefers channel policy, then guild policy, with sender-specific overrides", () => {
+    const discordCfg = {
+      channels: {
+        discord: {
+          token: "discord-test",
+          guilds: {
+            guild1: {
+              requireMention: false,
+              tools: { allow: ["message.guild"] },
+              toolsBySender: {
+                "id:user:guild-admin": { allow: ["sessions.list"] },
+              },
+              channels: {
+                "123": {
+                  requireMention: true,
+                  tools: { allow: ["message.channel"] },
+                  toolsBySender: {
+                    "id:user:channel-admin": { deny: ["exec"] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    expect(
+      resolveDiscordGroupRequireMention({ cfg: discordCfg, groupSpace: "guild1", groupId: "123" }),
+    ).toBe(true);
+    expect(
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "missing",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "123",
+        senderId: "user:channel-admin",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "123",
+        senderId: "user:someone",
+      }),
+    ).toEqual({ allow: ["message.channel"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "missing",
+        senderId: "user:guild-admin",
+      }),
+    ).toEqual({ allow: ["sessions.list"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "missing",
+        senderId: "user:someone",
+      }),
+    ).toEqual({ allow: ["message.guild"] });
   });
 });
