@@ -1,20 +1,37 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  type AuthProfileStore,
-  ensureAuthProfileStore,
-  resolveApiKeyForProfile,
-} from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { CHUTES_TOKEN_ENDPOINT } from "./chutes-oauth.js";
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+}));
+
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
+let resolveApiKeyForProfile: typeof import("./auth-profiles.js").resolveApiKeyForProfile;
+let resetFileLockStateForTest: typeof import("../infra/file-lock.js").resetFileLockStateForTest;
 
 describe("auth-profiles (chutes)", () => {
   let tempDir: string | null = null;
 
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore, resolveApiKeyForProfile } =
+      await import("./auth-profiles.js"));
+    ({ resetFileLockStateForTest } = await import("../infra/file-lock.js"));
+    clearRuntimeAuthProfileStoreSnapshots();
+    resetFileLockStateForTest();
+  });
+
   afterEach(async () => {
     vi.unstubAllGlobals();
+    clearRuntimeAuthProfileStoreSnapshots();
+    resetFileLockStateForTest();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true });
       tempDir = null;

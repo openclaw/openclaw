@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -20,7 +21,14 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
+import {
+  buildToolsEffectiveRequestKey,
+  loadAgents,
+  loadToolsCatalog,
+  loadToolsEffective,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  saveAgentsConfig,
+} from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -323,6 +331,10 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const toolsPanelUsesActiveSession = Boolean(
+    resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
+  );
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -966,6 +978,14 @@ export function renderApp(state: AppViewState) {
                     error: state.toolsCatalogError,
                     result: state.toolsCatalogResult,
                   },
+                  toolsEffective: {
+                    loading: state.toolsEffectiveLoading,
+                    error: state.toolsEffectiveError,
+                    result: state.toolsEffectiveResult,
+                  },
+                  runtimeSessionKey: state.sessionKey,
+                  runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
+                  modelCatalog: state.chatModelCatalog ?? [],
                   onRefresh: async () => {
                     await loadAgents(state);
                     const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
@@ -985,6 +1005,12 @@ export function renderApp(state: AppViewState) {
                     }
                     if (state.agentsPanel === "tools" && refreshedAgentId) {
                       void loadToolsCatalog(state, refreshedAgentId);
+                      if (refreshedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId: refreshedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
                     }
                     if (state.agentsPanel === "channels") {
                       void loadChannels(state, false);
@@ -1010,12 +1036,23 @@ export function renderApp(state: AppViewState) {
                     state.toolsCatalogResult = null;
                     state.toolsCatalogError = null;
                     state.toolsCatalogLoading = false;
+                    state.toolsEffectiveResult = null;
+                    state.toolsEffectiveResultKey = null;
+                    state.toolsEffectiveError = null;
+                    state.toolsEffectiveLoading = false;
+                    state.toolsEffectiveLoadingKey = null;
                     void loadAgentIdentity(state, agentId);
                     if (state.agentsPanel === "files") {
                       void loadAgentFiles(state, agentId);
                     }
                     if (state.agentsPanel === "tools") {
                       void loadToolsCatalog(state, agentId);
+                      if (agentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
                     }
                     if (state.agentsPanel === "skills") {
                       void loadAgentSkills(state, agentId);
@@ -1044,6 +1081,27 @@ export function renderApp(state: AppViewState) {
                         state.toolsCatalogError
                       ) {
                         void loadToolsCatalog(state, resolvedAgentId);
+                      }
+                      if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
+                          agentId: resolvedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
+                        if (
+                          state.toolsEffectiveResultKey !== toolsRequestKey ||
+                          state.toolsEffectiveError
+                        ) {
+                          void loadToolsEffective(state, {
+                            agentId: resolvedAgentId,
+                            sessionKey: state.sessionKey,
+                          });
+                        }
+                      } else {
+                        state.toolsEffectiveResult = null;
+                        state.toolsEffectiveResultKey = null;
+                        state.toolsEffectiveError = null;
+                        state.toolsEffectiveLoading = false;
+                        state.toolsEffectiveLoadingKey = null;
                       }
                     }
                     if (panel === "channels") {
@@ -1184,22 +1242,23 @@ export function renderApp(state: AppViewState) {
                     const basePath = ["agents", "list", index, "model"];
                     if (!modelId) {
                       removeConfigFormValue(state, basePath);
-                      return;
-                    }
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state, basePath, next);
                     } else {
-                      updateConfigFormValue(state, basePath, modelId);
+                      const entry = Array.isArray(list)
+                        ? (list[index] as { model?: unknown })
+                        : undefined;
+                      const existing = entry?.model;
+                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                        const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                        const next = {
+                          primary: modelId,
+                          ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                        };
+                        updateConfigFormValue(state, basePath, next);
+                      } else {
+                        updateConfigFormValue(state, basePath, modelId);
+                      }
                     }
+                    void refreshVisibleToolsEffectiveForCurrentSession(state);
                   },
                   onModelFallbacksChange: (agentId, fallbacks) => {
                     const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
@@ -1278,16 +1337,21 @@ export function renderApp(state: AppViewState) {
                   report: state.skillsReport,
                   error: state.skillsError,
                   filter: state.skillsFilter,
+                  statusFilter: state.skillsStatusFilter,
                   edits: state.skillEdits,
                   messages: state.skillMessages,
                   busyKey: state.skillsBusyKey,
+                  detailKey: state.skillsDetailKey,
                   onFilterChange: (next) => (state.skillsFilter = next),
+                  onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
                   onRefresh: () => loadSkills(state, { clearMessages: true }),
                   onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
                   onEdit: (key, value) => updateSkillEdit(state, key, value),
                   onSaveKey: (key) => saveSkillApiKey(state, key),
                   onInstall: (skillKey, name, installId) =>
                     installSkill(state, skillKey, name, installId),
+                  onDetailOpen: (key) => (state.skillsDetailKey = key),
+                  onDetailClose: () => (state.skillsDetailKey = null),
                 }),
               )
             : nothing

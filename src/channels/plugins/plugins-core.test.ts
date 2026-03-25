@@ -27,6 +27,8 @@ import {
 } from "../../../extensions/whatsapp/src/directory-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { LineProbeResult } from "../../plugin-sdk/line.js";
+import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -76,6 +78,8 @@ describe("channel plugin registry", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it("sorts channel plugins by configured order", () => {
@@ -616,6 +620,8 @@ describe("channel plugin loader", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it("loads channel plugins from the active registry", async () => {
