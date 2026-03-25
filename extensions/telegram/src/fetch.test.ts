@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -58,10 +58,14 @@ let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -218,7 +222,6 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 

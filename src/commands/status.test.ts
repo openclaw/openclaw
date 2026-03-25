@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -139,6 +140,40 @@ function createDefaultProbeGatewayResult(): ProbeGatewayResult {
   };
 }
 
+function createDefaultSecurityAuditResult() {
+  return {
+    ts: 0,
+    summary: { critical: 1, warn: 1, info: 2 },
+    findings: [
+      {
+        checkId: "test.critical",
+        severity: "critical",
+        title: "Test critical finding",
+        detail: "Something is very wrong\nbut on two lines",
+        remediation: "Do the thing",
+      },
+      {
+        checkId: "test.warn",
+        severity: "warn",
+        title: "Test warning finding",
+        detail: "Something is maybe wrong",
+      },
+      {
+        checkId: "test.info",
+        severity: "info",
+        title: "Test info finding",
+        detail: "FYI only",
+      },
+      {
+        checkId: "test.info2",
+        severity: "info",
+        title: "Another info finding",
+        detail: "More FYI",
+      },
+    ],
+  };
+}
+
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
   const prevValue = process.env[key];
   process.env[key] = value;
@@ -175,37 +210,7 @@ const mocks = vi.hoisted(() => ({
     scope: "per-sender",
     agents: [{ id: "main", name: "Main" }],
   }),
-  runSecurityAudit: vi.fn().mockResolvedValue({
-    ts: 0,
-    summary: { critical: 1, warn: 1, info: 2 },
-    findings: [
-      {
-        checkId: "test.critical",
-        severity: "critical",
-        title: "Test critical finding",
-        detail: "Something is very wrong\nbut on two lines",
-        remediation: "Do the thing",
-      },
-      {
-        checkId: "test.warn",
-        severity: "warn",
-        title: "Test warning finding",
-        detail: "Something is maybe wrong",
-      },
-      {
-        checkId: "test.info",
-        severity: "info",
-        title: "Test info finding",
-        detail: "FYI only",
-      },
-      {
-        checkId: "test.info2",
-        severity: "info",
-        title: "Another info finding",
-        detail: "More FYI",
-      },
-    ],
-  }),
+  runSecurityAudit: vi.fn().mockResolvedValue(createDefaultSecurityAuditResult()),
   buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
@@ -266,6 +271,13 @@ vi.mock("../config/sessions/types.js", async (importOriginal) => {
           ? entry.totalTokens
           : undefined,
     ),
+  };
+});
+vi.mock("../channels/config-presence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
+  return {
+    ...actual,
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   };
 });
 vi.mock("../channels/plugins/index.js", () => ({
@@ -461,38 +473,10 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
-    mocks.runSecurityAudit.mockResolvedValue({
-      ts: 0,
-      summary: { critical: 1, warn: 1, info: 2 },
-      findings: [
-        {
-          checkId: "test.critical",
-          severity: "critical",
-          title: "Test critical finding",
-          detail: "Something is very wrong\nbut on two lines",
-          remediation: "Do the thing",
-        },
-        {
-          checkId: "test.warn",
-          severity: "warn",
-          title: "Test warning finding",
-          detail: "Something is maybe wrong",
-        },
-        {
-          checkId: "test.info",
-          severity: "info",
-          title: "Test info finding",
-          detail: "FYI only",
-        },
-        {
-          checkId: "test.info2",
-          severity: "info",
-          title: "Another info finding",
-          detail: "More FYI",
-        },
-      ],
-    });
+    mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     runtimeLogMock.mockClear();
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
@@ -500,13 +484,7 @@ describe("statusCommand", () => {
   it("prints JSON when requested", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
@@ -561,13 +539,7 @@ describe("statusCommand", () => {
 
   it("prints formatted lines otherwise", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
