@@ -493,8 +493,12 @@ enum OpenClawConfigFile {
             return
         }
 
-        let backup = self.readConfigFingerprint(at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
-        let clobberedPath = self.persistClobberedSnapshot(data: data, configURL: configURL, observedAt: observedAt)
+        let backup = self.readConfigFingerprint(
+            at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
+        let clobberedPath = self.persistClobberedSnapshot(
+            data: data,
+            configURL: configURL,
+            observedAt: observedAt)
         self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
         self.appendConfigObserveAudit([
             "phase": "read",
