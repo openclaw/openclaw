@@ -48,6 +48,7 @@ function detectChatProvider(model: string): ChatProvider {
   if (
     model.startsWith("gpt") ||
     model.startsWith("o1-") ||
+    model === "o1" ||
     model.startsWith("o3-") ||
     model === "o3"
   ) {

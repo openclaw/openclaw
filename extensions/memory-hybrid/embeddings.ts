@@ -30,7 +30,11 @@ export function vectorDimsForModel(model: string): number {
 export type EmbeddingProvider = "openai" | "google";
 
 export function detectProvider(model: string): EmbeddingProvider {
-  if (model.startsWith("text-embedding-3") || model.startsWith("text-embedding-ada")) {
+  if (
+    model.startsWith("text-embedding-3") ||
+    model.startsWith("text-embedding-ada") ||
+    model === "text-embedding-004"
+  ) {
     return "openai";
   }
   return "google";

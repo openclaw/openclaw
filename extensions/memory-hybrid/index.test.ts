@@ -413,5 +413,18 @@ describe("Provider Switching", () => {
       chatModel: "o3",
     });
     expect(cfg2.chatProvider).toBe("openai");
+
+    const cfg3 = memoryConfigSchema.parse({
+      embedding: { apiKey: "key", model: "gemini-embedding-001" },
+      chatModel: "o1",
+    });
+    expect(cfg3.chatProvider).toBe("openai");
+  });
+
+  test("should detect text-embedding-004 as OpenAI", () => {
+    const cfg = memoryConfigSchema.parse({
+      embedding: { apiKey: "key", model: "text-embedding-004" },
+    });
+    expect(cfg.embedding.provider).toBe("openai");
   });
 });
