@@ -71,4 +71,69 @@ describe("doctor repair sequencing", () => {
     expect(result.warningNotes[0]).not.toContain("\u001B");
     expect(result.warningNotes[0]).not.toContain("\r");
   });
+
+  it("repairs stale bundled plugin path references before later config repairs", async () => {
+    const stalePath = "/pkg/extensions/acpx";
+    const nextPath = "/pkg/dist/extensions/acpx";
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          plugins: {
+            load: { paths: [stalePath] },
+            installs: {
+              acpx: {
+                source: "path",
+                spec: "acpx",
+                sourcePath: stalePath,
+                installPath: stalePath,
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        candidate: {
+          plugins: {
+            load: { paths: [stalePath] },
+            installs: {
+              acpx: {
+                source: "path",
+                spec: "acpx",
+                sourcePath: stalePath,
+                installPath: stalePath,
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      bundledPluginPathOptions: {
+        bundledSources: new Map([
+          [
+            "acpx",
+            {
+              pluginId: "acpx",
+              localPath: nextPath,
+            },
+          ],
+        ]),
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    });
+
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.candidate.plugins?.load?.paths).toEqual([nextPath]);
+    expect(result.state.candidate.plugins?.installs?.acpx).toMatchObject({
+      source: "path",
+      spec: "acpx",
+      sourcePath: nextPath,
+      installPath: nextPath,
+    });
+    expect(result.changeNotes).toEqual([
+      expect.stringContaining("plugins.installs.acpx.sourcePath"),
+    ]);
+    expect(result.changeNotes[0]).toContain("plugins.installs.acpx.installPath");
+    expect(result.changeNotes[0]).toContain("plugins.load.paths[0]");
+  });
 });
