@@ -21,6 +21,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -419,17 +420,21 @@ export async function spawnSubagentDirect(
   });
   if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
     if (requesterRuntime.sandboxed) {
+      const requesterSandboxCfg = resolveSandboxConfigForAgent(cfg, requesterRuntime.agentId);
+      if (!requesterSandboxCfg.dangerouslyAllowUnsandboxedSubagentSpawn) {
+        return {
+          status: "forbidden",
+          error:
+            "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent, use the same agent runtime, or set agents.sandbox.dangerouslyAllowUnsandboxedSubagentSpawn=true only when you fully trust this runtime.",
+        };
+      }
+    } else {
       return {
         status: "forbidden",
         error:
-          "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent or use the same agent runtime.",
+          'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
       };
     }
-    return {
-      status: "forbidden",
-      error:
-        'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
-    };
   }
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;

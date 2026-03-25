@@ -26,6 +26,12 @@ export type AgentSandboxConfig = {
    * - "all": allow session tools to target any session
    */
   sessionToolsVisibility?: "spawned" | "all";
+  /**
+   * Dangerous override: allow sandboxed agents to spawn unsandboxed subagents.
+   * Default behavior blocks this to prevent sandbox escapes via child agent processes.
+   * Enable only when the target agent is trusted and cannot be made sandboxed.
+   */
+  dangerouslyAllowUnsandboxedSubagentSpawn?: boolean;
   /** Container/workspace scope for sandbox isolation. */
   scope?: "session" | "agent" | "shared";
   /** Legacy alias for scope ("session" when true, "shared" when false). */

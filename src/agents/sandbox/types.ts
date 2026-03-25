@@ -78,6 +78,11 @@ export type SandboxConfig = {
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
+  /**
+   * Dangerous override: allow sandboxed agents to spawn unsandboxed subagents.
+   * Default: false.
+   */
+  dangerouslyAllowUnsandboxedSubagentSpawn?: boolean;
 };
 
 export type SandboxBrowserContext = {

@@ -332,4 +332,34 @@ describe("sandbox browser binds config", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  it("accepts dangerouslyAllowUnsandboxedSubagentSpawn in sandbox config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            dangerouslyAllowUnsandboxedSubagentSpawn: true,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts dangerouslyAllowUnsandboxedSubagentSpawn in per-agent sandbox config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "orchestrator",
+            sandbox: {
+              dangerouslyAllowUnsandboxedSubagentSpawn: true,
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
 });

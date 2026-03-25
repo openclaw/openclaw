@@ -382,6 +382,10 @@ export const FIELD_HELP: Record<string, string> = {
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
+  "agents.defaults.sandbox.dangerouslyAllowUnsandboxedSubagentSpawn":
+    "DANGEROUS break-glass override that allows sandboxed agents to spawn unsandboxed subagents via sessions_spawn. This can allow sandbox escapes through child agent processes.",
+  "agents.list[].sandbox.dangerouslyAllowUnsandboxedSubagentSpawn":
+    "Per-agent DANGEROUS override that allows this sandboxed agent to spawn unsandboxed subagents.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
