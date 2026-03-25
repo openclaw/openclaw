@@ -8,6 +8,14 @@ primary_region = 'iad'
 
 [build]
 
+[processes]
+  # Override the default CMD so the gateway listens on 0.0.0.0:3000.
+  # --bind lan   → listen on 0.0.0.0 (required for Fly.io proxy to reach the app)
+  # --port 3000  → match internal_port below
+  # --auth trusted-proxy → Fly.io's proxy layer is the auth boundary; skips the
+  #                        "non-loopback bind requires auth" guard
+  app = "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 3000 --auth trusted-proxy"
+
 [http_service]
   internal_port = 3000
   force_https = true
