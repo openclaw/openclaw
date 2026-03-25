@@ -1,13 +1,48 @@
 {
   "agent": "raymond",
-  "ran_at": "2026-03-22T00:20:00-07:00",
+  "ran_at": "2026-03-25T12:27:00-07:00",
   "timezone": "America/Los_Angeles",
   "mode": "pr-ops",
   "repos_processed": [
-    "openclaw/openclaw",
-    "block/goose"
+    "block/goose",
+    "openai/codex",
+    "meta-llama/llama-stack",
+    "microsoft/autogen",
+    "openclaw/openclaw"
   ],
   "quotas": {
+    "block/goose": {
+      "prs_today": 1,
+      "daily_max_prs": 1,
+      "commits_today": 2,
+      "daily_max_commits": 3,
+      "open_prs": 2,
+      "max_open_prs": 2
+    },
+    "openai/codex": {
+      "prs_today": 0,
+      "daily_max_prs": 1,
+      "commits_today": 0,
+      "daily_max_commits": 3,
+      "open_prs": 0,
+      "max_open_prs": 2
+    },
+    "meta-llama/llama-stack": {
+      "prs_today": 0,
+      "daily_max_prs": 1,
+      "commits_today": 0,
+      "daily_max_commits": 3,
+      "open_prs": 0,
+      "max_open_prs": 2
+    },
+    "microsoft/autogen": {
+      "prs_today": 0,
+      "daily_max_prs": 1,
+      "commits_today": 0,
+      "daily_max_commits": 3,
+      "open_prs": 0,
+      "max_open_prs": 2
+    },
     "openclaw/openclaw": {
       "prs_today": 0,
       "daily_max_prs": 1,
@@ -15,57 +50,50 @@
       "daily_max_commits": 10,
       "open_prs": 0,
       "max_open_prs": 5
-    },
-    "block/goose": {
-      "prs_today": 0,
-      "daily_max_prs": 1,
-      "commits_today": 0,
-      "daily_max_commits": 3,
-      "open_prs": 2,
-      "max_open_prs": 2
     }
   },
   "inflight_prs_advanced": 0,
-  "new_prs_opened": 0,
+  "new_prs_opened": 1,
   "inflight_prs": [
     {
       "repo": "openclaw/openclaw",
       "pr_number": 48455,
       "url": "https://github.com/openclaw/openclaw/pull/48455",
-      "status": "ci_failing",
-      "notes": "CI failures: build-smoke, check, check-additional, 3 windows shards. mergeable_state=unknown. Bot review comments from chatgpt-codex-connector suggesting design concerns (disable persistence, crash-reporting path, update restart preflight). xkonjin positive review from Mar 16. Needs: rebase onto main, address CI failures, potentially respond to bot-raised design concerns. Knuth task."
+      "status": "ci_green_awaiting_review",
+      "notes": "CI green, waiting 9 days for maintainer review. No action needed yet."
     },
     {
       "repo": "block/goose",
       "pr_number": 7996,
       "url": "https://github.com/block/goose/pull/7996",
-      "status": "ci_failing",
-      "notes": "Refactor commit pushed Mar 21 (extract markers into constants) per DOsinga's feedback. But CI still failing: Rust format check + DCO check. Knuth needs to fix formatting and add DCO sign-off."
+      "status": "ci_green_awaiting_rereview",
+      "notes": "Refactored per DOsinga feedback. CI green. Waiting for re-review."
     },
+    {
+      "repo": "block/goose",
+      "pr_number": 8121,
+      "url": "https://github.com/block/goose/pull/8121",
+      "status": "just_opened",
+      "notes": "New PR for Bedrock null toolUse.input fix. Closes #8050."
+    }
+  ],
+  "merged_this_round": [
     {
       "repo": "block/goose",
       "pr_number": 7888,
       "url": "https://github.com/block/goose/pull/7888",
-      "status": "approved_awaiting_merge",
-      "notes": "APPROVED by DOsinga. CI all green. mergeable_state=clean. Waiting for maintainer to merge. No action needed."
+      "title": "fix: prioritize predefined model context_limit over canonical registry"
     }
   ],
   "issues_scanned": {
-    "openclaw/openclaw": 0,
-    "block/goose": 0
+    "openclaw/openclaw": "10 bugs checked, all had competing PRs",
+    "openai/codex": "10 bugs checked, all complex (sandbox/extension/Windows)",
+    "block/goose": "15 issues checked, #8050 selected (score 9)",
+    "meta-llama/llama-stack": "0 open bugs",
+    "microsoft/autogen": "0 open bugs"
   },
-  "opportunities_evaluated": [],
   "blockers": [
-    {
-      "repo": "openclaw/openclaw",
-      "pr": 48455,
-      "blocker": "CI failures + mergeable_state unknown. Needs rebase and CI fix. Knuth task."
-    },
-    {
-      "repo": "block/goose",
-      "pr": 7996,
-      "blocker": "Rust format check + DCO check failing after refactor commit. Knuth task."
-    }
+    "No Supabase creds — cannot sync os_submissions/os_activity_log"
   ],
-  "notes": "No new PRs opened — no opportunities above score threshold (8). block/goose at max_open_prs (2/2). openclaw/openclaw has quota but no scan this round (Linus hasn't surfaced new high-score opportunities). All action items are Knuth tasks: fix CI on #48455 and #7996. #7888 in great shape, just awaiting maintainer merge."
+  "notes": "block/goose #7888 merged! Opened #8121 for Bedrock null input fix (clean 1-file change). openclaw #48455 waiting 9 days — will gentle ping next round if still no review. openai/codex, llama-stack, autogen have quota but no suitable opportunities this round."
 }

@@ -2,7 +2,7 @@
   "repos": {
     "openclaw/openclaw": {
       "enabled": true,
-      "priority": 1,
+      "priority": 2,
       "url": "https://github.com/openclaw/openclaw",
       "daily_max_commits": 10,
       "daily_max_prs": 1,
@@ -35,6 +35,61 @@
       ],
       "cooldown_hours": 12,
       "notes": "次要仓库，低频高质量"
+    },
+    "openai/codex": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/openai/codex",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test",
+        "refactor"
+      ],
+      "cooldown_hours": 12,
+      "notes": "OpenAI CLI coding agent，TypeScript"
+    },
+    "meta-llama/llama-stack": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/meta-llama/llama-stack",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "Meta LLM 工具链，Python"
+    },
+    "microsoft/autogen": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/microsoft/autogen",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "Microsoft 多 agent 框架，Python"
     }
   },
   "global": {
