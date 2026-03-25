@@ -79,26 +79,32 @@ export function parseReActResponse(
     cleanedText = cleanedText.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
   }
 
-  // 2. Extract Tool Calls
   const toolCalls: ReActParsedResponse["toolCalls"] = [];
+  const actionMarker = "Action:";
+  let lastIndex = 0;
+  let textOutput = "";
 
-  // Split by Action: marker to handle multiple calls and nested JSON safely
-  const actionSplitRegex = /Action:\s*/gi;
-  const parts = cleanedText.split(actionSplitRegex);
+  while (true) {
+    const actionIndex = cleanedText.indexOf(actionMarker, lastIndex);
+    if (actionIndex === -1) {
+      textOutput += cleanedText.substring(lastIndex);
+      break;
+    }
 
-  let textOutput = parts[0] ?? "";
+    // Append text leading up to the Action: marker
+    textOutput += cleanedText.substring(lastIndex, actionIndex);
 
-  for (let i = 1; i < parts.length; i++) {
-    const part = parts[i];
+    // Look for JSON after Action:
+    const part = cleanedText.substring(actionIndex + actionMarker.length);
     let braceCount = 0;
+    let jsonStartIndex = -1;
     let jsonEndIndex = -1;
-    let foundFirstBrace = false;
 
     let inString = false;
     let stringChar = "";
     let isEscaped = false;
 
-    // A robust brace counter to locate the exact end of the JSON object, respecting strings
+    // Sequential scan to find the FIRST balanced JSON object
     for (let j = 0; j < part.length; j++) {
       const char = part[j];
 
@@ -106,7 +112,6 @@ export function parseReActResponse(
         isEscaped = false;
         continue;
       }
-
       if (char === "\\") {
         isEscaped = true;
         continue;
@@ -118,7 +123,6 @@ export function parseReActResponse(
         }
         continue;
       }
-
       if (char === '"' || char === "'") {
         inString = true;
         stringChar = char;
@@ -126,21 +130,23 @@ export function parseReActResponse(
       }
 
       if (char === "{") {
+        if (jsonStartIndex === -1) {
+          jsonStartIndex = j;
+        }
         braceCount++;
-        foundFirstBrace = true;
       } else if (char === "}") {
-        braceCount--;
-        if (foundFirstBrace && braceCount === 0) {
-          jsonEndIndex = j;
-          break;
+        if (jsonStartIndex !== -1) {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEndIndex = j;
+            break;
+          }
         }
       }
     }
 
-    if (jsonEndIndex !== -1) {
-      const jsonStr = part.substring(0, jsonEndIndex + 1);
-      const trailingText = part.substring(jsonEndIndex + 1);
-
+    if (jsonStartIndex !== -1 && jsonEndIndex !== -1) {
+      const jsonStr = part.substring(jsonStartIndex, jsonEndIndex + 1);
       try {
         const parsed = JSON.parse(jsonStr);
         if (parsed.tool && parsed.args) {
@@ -149,20 +155,18 @@ export function parseReActResponse(
             name: parsed.tool,
             arguments: parsed.args,
           });
-          // Valid tool call parsed, append any trailing text but hide the JSON
-          textOutput += trailingText;
-        } else {
-          // Valid JSON but not a tool call, restore it
-          textOutput += "Action: " + part;
+          // Move lastIndex to after the JSON block
+          lastIndex = actionIndex + actionMarker.length + jsonEndIndex + 1;
+          continue;
         }
       } catch {
-        // Invalid JSON, restore it
-        textOutput += "Action: " + part;
+        // Fall through to treatment as normal text if JSON is invalid
       }
-    } else {
-      // No valid braces found, restore it
-      textOutput += "Action: " + part;
     }
+
+    // If no valid JSON found, treat "Action:" as normal text and move past it
+    textOutput += actionMarker;
+    lastIndex = actionIndex + actionMarker.length;
   }
 
   return {

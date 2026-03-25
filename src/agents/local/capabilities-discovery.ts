@@ -73,7 +73,9 @@ export function isLocalProvider(providerType: string): boolean {
     type === "llama.cpp" ||
     type === "lmstudio" ||
     type === "local" ||
-    type.includes("openai-compatible") || // Usually local wrappers
+    type.includes("openai-compatible") ||
+    type.includes("openai-responses") ||
+    type.includes("openai-completions") ||
     type.includes("self-hosted")
   );
 }
