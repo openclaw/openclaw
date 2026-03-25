@@ -159,14 +159,6 @@ async function main() {
       const finalDoc = matter.stringify(finalBody, parsed.data);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, finalDoc, "utf-8");
-
-      try {
-        const { simpleGit } = await import("simple-git");
-        const git = simpleGit();
-        await git.add(targetPath);
-        await git.commit(`docs(i18n): translate ${file} [skip ci]`);
-      } catch {}
-
       await saveProgress(PROGRESS_FILE, file);
       console.log(`✅ [完成] ${file} 翻譯成功！`);
     } catch (err: unknown) {
