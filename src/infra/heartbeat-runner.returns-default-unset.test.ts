@@ -30,9 +30,6 @@ import {
 } from "./outbound/targets.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
-
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 

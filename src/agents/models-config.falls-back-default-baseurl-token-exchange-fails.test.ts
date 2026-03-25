@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_COPILOT_API_BASE_URL } from "../../extensions/github-copilot/token.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { DEFAULT_COPILOT_API_BASE_URL } from "./github-copilot-token.js";
 import {
   installModelsConfigTestHooks,
   mockCopilotTokenExchangeSuccess,

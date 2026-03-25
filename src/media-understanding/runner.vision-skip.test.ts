@@ -31,12 +31,22 @@ let runCapability: typeof import("./runner.js").runCapability;
 describe("runCapability image skip", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doMock("../agents/model-catalog.js", async () => {
+      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
+        "../agents/model-catalog.js",
+      );
+      return {
+        ...actual,
+        loadModelCatalog,
+      };
+    });
     ({
       buildProviderRegistry,
       createMediaAttachmentCache,
       normalizeMediaAttachments,
       runCapability,
     } = await import("./runner.js"));
+    loadModelCatalog.mockClear();
   });
 
   it("skips image understanding when the active model supports vision", async () => {

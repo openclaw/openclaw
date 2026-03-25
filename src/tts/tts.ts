@@ -24,7 +24,11 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import {
+  OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
+} from "../plugins/provider-model-defaults.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -54,8 +58,6 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
-const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -68,10 +70,10 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   speed: 1.0,
 };
 
-const TELEGRAM_OUTPUT = {
+const OPUS_OUTPUT = {
   openai: "opus" as const,
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
+  // Opus @ 48kHz/64kbps is a good voice message tradeoff.
   elevenlabs: "opus_48000_64",
   extension: ".opus",
   voiceCompatible: true,
@@ -515,12 +517,12 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+/** Channels that require opus audio */
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
-    return TELEGRAM_OUTPUT;
+  if (channelId && OPUS_CHANNELS.has(channelId)) {
+    return OPUS_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
@@ -694,7 +696,7 @@ export async function synthesizeSpeech(params: {
 
   const { config, providers } = setup;
   const channelId = resolveChannelId(params.channel);
-  const target = channelId && VOICE_BUBBLE_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
 
@@ -825,6 +827,10 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
+  // Compaction notices are informational UI signals — never synthesise them as speech.
+  if (params.payload.isCompactionNotice) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
@@ -942,7 +948,7 @@ export async function maybeApplyTtsToPayload(params: {
 
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
-      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
+      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,

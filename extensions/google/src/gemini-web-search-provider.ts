@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "openclaw/plugin-sdk/provider-google";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -27,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
@@ -245,7 +246,8 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "gemini",
     label: "Gemini (Google Search)",
-    hint: "Google Search grounding · AI-synthesized",
+    hint: "Requires Google Gemini API key · Google Search grounding",
+    credentialLabel: "Google Gemini API key",
     envVars: ["GEMINI_API_KEY"],
     placeholder: "AIza...",
     signupUrl: "https://aistudio.google.com/apikey",

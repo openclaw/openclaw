@@ -1,5 +1,6 @@
 import {
   createAllowFromSection,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
@@ -26,6 +27,31 @@ import {
 } from "./setup-core.js";
 
 const channel = "telegram" as const;
+
+function ensureTelegramDefaultGroupMentionGate(
+  cfg: OpenClawConfig,
+  accountId: string,
+): OpenClawConfig {
+  const resolved = resolveTelegramAccount({ cfg, accountId });
+  const wildcardGroup = resolved.config.groups?.["*"];
+  if (wildcardGroup?.requireMention !== undefined) {
+    return cfg;
+  }
+  return patchChannelConfigForAccount({
+    cfg,
+    channel,
+    accountId,
+    patch: {
+      groups: {
+        ...resolved.config.groups,
+        "*": {
+          ...wildcardGroup,
+          requireMention: true,
+        },
+      },
+    },
+  });
+}
 
 function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
   const merged = mergeTelegramAccountConfig(cfg, accountId);
@@ -67,7 +93,8 @@ const dmPolicy: ChannelSetupDmPolicy = {
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Telegram",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
@@ -79,7 +106,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         const account = inspectTelegramAccount({ cfg, accountId });
         return account.configured;
       }),
-  },
+  }),
+  prepare: async ({ cfg, accountId, credentialValues }) => ({
+    cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
+    credentialValues,
+  }),
   credentials: [
     {
       inputKey: "token",

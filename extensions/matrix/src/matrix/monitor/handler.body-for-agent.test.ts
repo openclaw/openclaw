@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setMatrixRuntime } from "../../runtime.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import {
   createMatrixHandlerTestHarness,
@@ -9,22 +9,10 @@ import type { MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler inbound body formatting", () => {
   beforeEach(() => {
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: () => false,
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as never);
+    installMatrixMonitorTestRuntime({
+      matchesMentionPatterns: () => false,
+      saveMediaBuffer: vi.fn(),
+    });
   });
 
   it("records thread metadata for group thread messages", async () => {

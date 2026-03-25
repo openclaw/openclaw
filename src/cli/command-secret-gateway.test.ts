@@ -19,6 +19,7 @@ vi.mock("../utils/message-channel.js", () => ({
 let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
 });
 

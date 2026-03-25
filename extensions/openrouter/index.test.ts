@@ -1,6 +1,9 @@
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../test/helpers/extensions/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -9,36 +12,12 @@ const LIVE_MODEL_ID =
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-function registerOpenRouterPlugin() {
-  const providers: unknown[] = [];
-  const speechProviders: unknown[] = [];
-  const mediaProviders: unknown[] = [];
-  const imageProviders: unknown[] = [];
-
-  plugin.register(
-    createTestPluginApi({
-      id: "openrouter",
-      name: "OpenRouter Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-      registerSpeechProvider: (provider) => {
-        speechProviders.push(provider);
-      },
-      registerMediaUnderstandingProvider: (provider) => {
-        mediaProviders.push(provider);
-      },
-      registerImageGenerationProvider: (provider) => {
-        imageProviders.push(provider);
-      },
-    }),
-  );
-
-  return { providers, speechProviders, mediaProviders, imageProviders };
-}
+const registerOpenRouterPlugin = () =>
+  registerProviderPlugin({
+    plugin,
+    id: "openrouter",
+    name: "OpenRouter Provider",
+  });
 
 describe("openrouter plugin", () => {
   it("registers the expected provider surfaces", () => {
@@ -62,11 +41,7 @@ describe("openrouter plugin", () => {
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
     const { providers } = registerOpenRouterPlugin();
-    const provider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      providers.find((entry) => (entry as any).id === "openrouter");
-
-    expect(provider).toBeDefined();
+    const provider = requireRegisteredProvider(providers, "openrouter");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const resolved = (provider as any).resolveDynamicModel?.({
@@ -78,6 +53,9 @@ describeLive("openrouter plugin live", () => {
         },
       },
     });
+    if (!resolved) {
+      throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
+    }
 
     expect(resolved).toMatchObject({
       provider: "openrouter",
@@ -88,10 +66,10 @@ describeLive("openrouter plugin live", () => {
 
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,
-      baseURL: resolved?.baseUrl,
+      baseURL: resolved.baseUrl,
     });
     const response = await client.chat.completions.create({
-      model: resolved?.id ?? LIVE_MODEL_ID,
+      model: resolved.id,
       messages: [{ role: "user", content: "Reply with exactly OK." }],
       max_tokens: 16,
     });

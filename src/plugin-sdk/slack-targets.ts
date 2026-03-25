@@ -1,6 +1,5 @@
 export {
-  parseSlackTarget,
-  resolveSlackChannelId,
-  type SlackTarget,
-  type SlackTargetKind,
-} from "../../extensions/slack/api.js";
+  looksLikeSlackTargetId,
+  normalizeSlackMessagingTarget,
+} from "../channels/plugins/normalize/slack.js";
+export { parseSlackTarget, resolveSlackChannelId } from "../../extensions/slack/src/targets.js";

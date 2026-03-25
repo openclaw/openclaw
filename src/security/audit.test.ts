@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
@@ -27,7 +28,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram" | "zalouser";
+  id: "discord" | "slack" | "synology-chat" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -57,7 +58,27 @@ function stubChannelPlugin(params: {
           );
           return enabled ? ["default"] : [];
         }),
-      inspectAccount: params.inspectAccount,
+      inspectAccount:
+        params.inspectAccount ??
+        ((cfg, accountId) => {
+          const resolvedAccountId =
+            typeof accountId === "string" && accountId ? accountId : "default";
+          let account: { config?: Record<string, unknown> } | undefined;
+          try {
+            account = params.resolveAccount(cfg, resolvedAccountId) as
+              | { config?: Record<string, unknown> }
+              | undefined;
+          } catch {
+            return null;
+          }
+          const config = account?.config ?? {};
+          return {
+            accountId: resolvedAccountId,
+            enabled: params.isEnabled?.(account, cfg) ?? true,
+            configured: params.isConfigured?.(account, cfg) ?? true,
+            config,
+          };
+        }),
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? true,
       isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
@@ -131,6 +152,30 @@ const zalouserPlugin = stubChannelPlugin({
   },
 });
 
+const synologyChatPlugin = stubChannelPlugin({
+  id: "synology-chat",
+  label: "Synology Chat",
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.["synology-chat"]?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  inspectAccount: () => null,
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.["synology-chat"] ?? {};
+    const account = cfg.channels?.["synology-chat"]?.accounts?.[resolvedAccountId] ?? {};
+    const dangerouslyAllowNameMatching =
+      typeof account.dangerouslyAllowNameMatching === "boolean"
+        ? account.dangerouslyAllowNameMatching
+        : base.dangerouslyAllowNameMatching === true;
+    return {
+      accountId: resolvedAccountId,
+      enabled: true,
+      dangerouslyAllowNameMatching,
+    };
+  },
+});
+
 function successfulProbeResult(url: string) {
   return {
     ok: true,
@@ -147,13 +192,17 @@ function successfulProbeResult(url: string) {
 
 async function audit(
   cfg: OpenClawConfig,
-  extra?: Omit<SecurityAuditOptions, "config">,
+  extra?: Omit<SecurityAuditOptions, "config"> & { preserveExecApprovals?: boolean },
 ): Promise<SecurityAuditReport> {
+  if (!extra?.preserveExecApprovals) {
+    saveExecApprovals({ version: 1, agents: {} });
+  }
+  const { preserveExecApprovals: _preserveExecApprovals, ...options } = extra ?? {};
   return runSecurityAudit({
     config: cfg,
     includeFilesystem: false,
     includeChannelSecurity: false,
-    ...extra,
+    ...options,
   });
 }
 
@@ -222,6 +271,7 @@ describe("security audit", () => {
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
   let sharedInstallMetadataStateDir = "";
+  let previousOpenClawHome: string | undefined;
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -303,6 +353,9 @@ description: test skill
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = path.join(fixtureRoot, "home");
+    await fs.mkdir(process.env.OPENCLAW_HOME, { recursive: true, mode: 0o700 });
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
     sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
@@ -323,6 +376,11 @@ description: test skill
   });
 
   afterAll(async () => {
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
     if (!fixtureRoot) {
       return;
     }
@@ -652,6 +710,45 @@ description: test skill
     );
   });
 
+  it("warns when risky broad-behavior bins are explicitly added to safeBins", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expected: boolean;
+    }> = [
+      {
+        name: "jq configured globally",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["jq"],
+            },
+          },
+        },
+        expected: true,
+      },
+      {
+        name: "jq not configured",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["cut"],
+            },
+          },
+        },
+        expected: false,
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(hasFinding(res, "tools.exec.safe_bins_broad_behavior", "warn"), testCase.name).toBe(
+          testCase.expected,
+        );
+      }),
+    );
+  });
+
   it("evaluates safeBinTrustedDirs risk findings", async () => {
     const riskyGlobalTrustedDirs =
       process.platform === "win32"
@@ -710,6 +807,105 @@ description: test skill
         testCase.assert(res);
       }),
     );
+  });
+
+  it("warns when exec approvals enable autoAllowSkills", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: {
+        autoAllowSkills: true,
+      },
+      agents: {},
+    });
+
+    const res = await audit({}, { preserveExecApprovals: true });
+    expectFinding(res, "tools.exec.auto_allow_skills_enabled", "warn");
+    saveExecApprovals({ version: 1, agents: {} });
+  });
+
+  it("warns when interpreter allowlists are present without strictInlineEval", async () => {
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/python3" }],
+        },
+        ops: {
+          allowlist: [{ pattern: "/usr/local/bin/node" }],
+        },
+      },
+    });
+
+    const res = await audit(
+      {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+      },
+      { preserveExecApprovals: true },
+    );
+    expectFinding(res, "tools.exec.allowlist_interpreter_without_strict_inline_eval", "warn");
+    saveExecApprovals({ version: 1, agents: {} });
+  });
+
+  it("suppresses interpreter allowlist warnings when strictInlineEval is enabled", async () => {
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/python3" }],
+        },
+      },
+    });
+
+    const res = await audit(
+      {
+        tools: {
+          exec: {
+            strictInlineEval: true,
+          },
+        },
+      },
+      { preserveExecApprovals: true },
+    );
+    expectNoFinding(res, "tools.exec.allowlist_interpreter_without_strict_inline_eval");
+    saveExecApprovals({ version: 1, agents: {} });
+  });
+
+  it("flags open channel access combined with exec-enabled scopes", async () => {
+    const res = await audit({
+      channels: {
+        discord: {
+          groupPolicy: "open",
+        },
+      },
+      tools: {
+        exec: {
+          security: "allowlist",
+          host: "gateway",
+        },
+      },
+    });
+
+    expectFinding(res, "security.exposure.open_channels_with_exec", "warn");
+  });
+
+  it("escalates open channel exec exposure when full exec is configured", async () => {
+    const res = await audit({
+      channels: {
+        slack: {
+          dmPolicy: "open",
+        },
+      },
+      tools: {
+        exec: {
+          security: "full",
+        },
+      },
+    });
+
+    expectFinding(res, "tools.exec.security_full_configured", "critical");
+    expectFinding(res, "security.exposure.open_channels_with_exec", "critical");
   });
 
   it("evaluates loopback control UI and logging exposure findings", async () => {
@@ -2443,6 +2639,60 @@ description: test skill
           expect.arrayContaining([expect.objectContaining(testCase.expectFindingMatch)]),
         );
       }
+    });
+  });
+
+  it.each([
+    {
+      name: "audits Synology Chat base dangerous name matching",
+      cfg: {
+        channels: {
+          "synology-chat": {
+            token: "t",
+            incomingUrl: "https://nas.example.com/incoming",
+            dangerouslyAllowNameMatching: true,
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedMatch: {
+        checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+        severity: "info",
+        title: "Synology Chat dangerous name matching is enabled",
+      },
+    },
+    {
+      name: "audits non-default Synology Chat accounts for dangerous name matching",
+      cfg: {
+        channels: {
+          "synology-chat": {
+            token: "t",
+            incomingUrl: "https://nas.example.com/incoming",
+            accounts: {
+              alpha: {
+                token: "a",
+                incomingUrl: "https://nas.example.com/incoming-alpha",
+              },
+              beta: {
+                token: "b",
+                incomingUrl: "https://nas.example.com/incoming-beta",
+                dangerouslyAllowNameMatching: true,
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedMatch: {
+        checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+        severity: "info",
+        title: expect.stringContaining("(account: beta)"),
+      },
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, [synologyChatPlugin]);
+      expect(res.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining(testCase.expectedMatch)]),
+      );
     });
   });
 

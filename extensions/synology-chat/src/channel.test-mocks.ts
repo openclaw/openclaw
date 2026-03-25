@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 export type RegisteredRoute = {
   path: string;
@@ -15,6 +16,19 @@ export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () =
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
   () => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
+export const finalizeInboundContextMock: Mock<
+  (ctx: Record<string, unknown>) => Record<string, unknown>
+> = vi.fn((ctx) => ctx);
+export const resolveAgentRouteMock: Mock<
+  (params: { accountId?: string }) => { agentId: string; sessionKey: string; accountId: string }
+> = vi.fn((params) => {
+  const accountId = params.accountId?.trim() || "default";
+  return {
+    agentId: `agent-${accountId}`,
+    sessionKey: `agent:agent-${accountId}:main`,
+    accountId,
+  };
+});
 
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
@@ -62,20 +76,27 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
+  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
     config: { loadConfig: vi.fn().mockResolvedValue({}) },
     channel: {
+      routing: {
+        resolveAgentRoute: resolveAgentRouteMock,
+      },
       reply: {
+        finalizeInboundContext: finalizeInboundContextMock,
         dispatchReplyWithBufferedBlockDispatcher,
       },
     },
   })),
 }));
 
-export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
+export function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -83,6 +104,9 @@ export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
     incomingUrl: "https://nas/incoming",
     nasHost: "h",
     webhookPath: "/w",
+    webhookPathSource: "default",
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],
     rateLimitPerMinute: 30,

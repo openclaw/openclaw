@@ -23,15 +23,17 @@
 
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import * as piAi from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
   Context,
   Message,
   StopReason,
   TextContent,
   ToolCall,
 } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
   type ContentPart,
@@ -67,6 +69,98 @@ interface WsSession {
 
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
+
+type OpenAIWsStreamDeps = {
+  createManager: (options?: OpenAIWebSocketManagerOptions) => OpenAIWebSocketManager;
+  streamSimple: typeof piAi.streamSimple;
+};
+
+const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
+  createManager: (options) => new OpenAIWebSocketManager(options),
+  streamSimple: (...args) => piAi.streamSimple(...args),
+};
+
+let openAIWsStreamDeps: OpenAIWsStreamDeps = defaultOpenAIWsStreamDeps;
+
+type AssistantMessageEventStreamLike = {
+  push(event: AssistantMessageEvent): void;
+  end(result?: AssistantMessage): void;
+  result(): Promise<AssistantMessage>;
+  [Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent>;
+};
+
+class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLike {
+  private readonly queue: AssistantMessageEvent[] = [];
+  private readonly waiting: Array<(value: IteratorResult<AssistantMessageEvent>) => void> = [];
+  private done = false;
+  private readonly finalResultPromise: Promise<AssistantMessage>;
+  private resolveFinalResult!: (result: AssistantMessage) => void;
+
+  constructor() {
+    this.finalResultPromise = new Promise((resolve) => {
+      this.resolveFinalResult = resolve;
+    });
+  }
+
+  push(event: AssistantMessageEvent): void {
+    if (this.done) {
+      return;
+    }
+    if (event.type === "done") {
+      this.done = true;
+      this.resolveFinalResult(event.message);
+    } else if (event.type === "error") {
+      this.done = true;
+      this.resolveFinalResult(event.error);
+    }
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });
+      return;
+    }
+    this.queue.push(event);
+  }
+
+  end(result?: AssistantMessage): void {
+    this.done = true;
+    if (result) {
+      this.resolveFinalResult(result);
+    }
+    while (this.waiting.length > 0) {
+      const waiter = this.waiting.shift();
+      waiter?.({ value: undefined as unknown as AssistantMessageEvent, done: true });
+    }
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;
+        continue;
+      }
+      if (this.done) {
+        return;
+      }
+      const result = await new Promise<IteratorResult<AssistantMessageEvent>>((resolve) => {
+        this.waiting.push(resolve);
+      });
+      if (result.done) {
+        return;
+      }
+      yield result.value;
+    }
+  }
+
+  result(): Promise<AssistantMessage> {
+    return this.finalResultPromise;
+  }
+}
+
+function createEventStream(): AssistantMessageEventStream {
+  return typeof piAi.createAssistantMessageEventStream === "function"
+    ? piAi.createAssistantMessageEventStream()
+    : (new LocalAssistantMessageEventStream() as unknown as AssistantMessageEventStream);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public registry helpers
@@ -604,7 +698,7 @@ export function createOpenAIWebSocketStreamFn(
   opts: OpenAIWebSocketStreamOptions = {},
 ): StreamFn {
   return (model, context, options) => {
-    const eventStream = createAssistantMessageEventStream();
+    const eventStream = createEventStream();
 
     const run = async () => {
       const transport = resolveWsTransport(options);
@@ -616,7 +710,7 @@ export function createOpenAIWebSocketStreamFn(
       let session = wsRegistry.get(sessionId);
 
       if (!session) {
-        const manager = new OpenAIWebSocketManager(opts.managerOptions);
+        const manager = openAIWsStreamDeps.createManager(opts.managerOptions);
         session = {
           manager,
           lastContextLength: 0,
@@ -938,12 +1032,23 @@ async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
   options: Parameters<StreamFn>[2],
-  eventStream: ReturnType<typeof createAssistantMessageEventStream>,
+  eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
 ): Promise<void> {
   const mergedOptions = signal ? { ...options, signal } : options;
-  const httpStream = streamSimple(model, context, mergedOptions);
+  const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
     eventStream.push(event);
   }
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<OpenAIWsStreamDeps>) {
+    openAIWsStreamDeps = overrides
+      ? {
+          ...defaultOpenAIWsStreamDeps,
+          ...overrides,
+        }
+      : defaultOpenAIWsStreamDeps;
+  },
+};

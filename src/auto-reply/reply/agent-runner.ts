@@ -44,14 +44,19 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  refreshQueuedFollowupSession,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -68,6 +73,7 @@ export async function runReplyAgent(params: {
   shouldSteer: boolean;
   shouldFollowup: boolean;
   isActive: boolean;
+  isRunActive?: () => boolean;
   isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -99,6 +105,7 @@ export async function runReplyAgent(params: {
     shouldSteer,
     shouldFollowup,
     isActive,
+    isRunActive,
     isStreaming,
     opts,
     typing,
@@ -210,13 +217,37 @@ export async function runReplyAgent(params: {
     queueMode: resolvedQueue.mode,
   });
 
+  const queuedRunFollowupTurn = createFollowupRunner({
+    opts,
+    typing,
+    typingMode,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    defaultModel,
+    agentCfgContextTokens,
+  });
+
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    enqueueFollowupRun(
+      queueKey,
+      followupRun,
+      resolvedQueue,
+      "message-id",
+      queuedRunFollowupTurn,
+      false,
+    );
+    // Re-check liveness after enqueue so a stale active snapshot cannot leave
+    // the followup queue idle if the original run already finished.
+    if (!isRunActive?.()) {
+      finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
+    }
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
@@ -312,6 +343,12 @@ export async function runReplyAgent(params: {
     }
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
+    refreshQueuedFollowupSession({
+      key: queueKey,
+      previousSessionId: prevEntry.sessionId,
+      nextSessionId,
+      nextSessionFile,
+    });
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
     defaultRuntime.error(buildLogMessage(nextSessionId));
@@ -673,6 +710,7 @@ export async function runReplyAgent(params: {
     }
 
     if (autoCompactionCount > 0) {
+      const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -681,7 +719,19 @@ export async function runReplyAgent(params: {
         amount: autoCompactionCount,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
+        newSessionId: runResult.meta?.agentMeta?.sessionId,
       });
+      const refreshedSessionEntry =
+        sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
+      if (refreshedSessionEntry) {
+        activeSessionEntry = refreshedSessionEntry;
+        refreshQueuedFollowupSession({
+          key: queueKey,
+          previousSessionId,
+          nextSessionId: refreshedSessionEntry.sessionId,
+          nextSessionFile: refreshedSessionEntry.sessionFile,
+        });
+      }
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
