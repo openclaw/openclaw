@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-bun-push-${{ github.ref_name }}
+  group: ci-bun-push-${{ github.run_id }}
   cancel-in-progress: false
 
 env:

@@ -38,6 +38,53 @@ afterAll(async () => {
   await cleanupMockRuntimeFixtures();
 });
 
+async function expectSessionEnsureFallback(params: {
+  sessionKey: string;
+  env?: Record<string, string>;
+  expectNewAfterStatus: boolean;
+  expectedRecordId?: string;
+}) {
+  const previousEnv = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    previousEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  try {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: params.sessionKey,
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(handle.backend).toBe("acpx");
+    if (params.expectedRecordId) {
+      expect(handle.acpxRecordId).toBe(params.expectedRecordId);
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+    const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+    const newIndex = logs.findIndex((entry) => entry.kind === "new");
+    expect(ensureIndex).toBeGreaterThanOrEqual(0);
+    expect(statusIndex).toBeGreaterThan(ensureIndex);
+    if (params.expectNewAfterStatus) {
+      expect(newIndex).toBeGreaterThan(statusIndex);
+    } else {
+      expect(newIndex).toBe(-1);
+    }
+  } finally {
+    for (const [key, value] of previousEnv.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("AcpxRuntime", () => {
   it("passes the shared ACP adapter contract suite", async () => {
     const fixture = await createMockRuntimeFixture();
@@ -155,87 +202,38 @@ describe("AcpxRuntime", () => {
   });
 
   it("replaces dead named sessions returned by sessions ensure", async () => {
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:dead-session";
-
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBeGreaterThan(statusIndex);
-    } finally {
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-    }
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:dead-session",
+      env: {
+        MOCK_ACPX_STATUS_STATUS: "dead",
+        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
+      },
+      expectNewAfterStatus: true,
+    });
   });
 
   it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "alive";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:ensure-fallback-alive";
-
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBe(-1);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-    }
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:ensure-fallback-alive",
+      env: {
+        MOCK_ACPX_ENSURE_EXIT_1: "1",
+        MOCK_ACPX_STATUS_STATUS: "alive",
+      },
+      expectNewAfterStatus: false,
+      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-alive",
+    });
   });
 
   it("creates a fresh named session when sessions ensure exits and status is dead", async () => {
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const sessionKey = "agent:codex:acp:ensure-fallback-dead";
-
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-      const newIndex = logs.findIndex((entry) => entry.kind === "new");
-      expect(ensureIndex).toBeGreaterThanOrEqual(0);
-      expect(statusIndex).toBeGreaterThan(ensureIndex);
-      expect(newIndex).toBeGreaterThan(statusIndex);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      delete process.env.MOCK_ACPX_STATUS_STATUS;
-      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-    }
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:ensure-fallback-dead",
+      env: {
+        MOCK_ACPX_ENSURE_EXIT_1: "1",
+        MOCK_ACPX_STATUS_STATUS: "dead",
+        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
+      },
+      expectNewAfterStatus: true,
+    });
   });
 
   it("serializes text plus image attachments into ACP prompt blocks", async () => {

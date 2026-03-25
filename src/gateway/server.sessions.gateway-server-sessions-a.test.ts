@@ -1014,6 +1014,55 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.preview prefers the freshest duplicate row for a legacy mixed-case main alias", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+
+    const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
+    const freshTranscriptPath = path.join(dir, "sess-fresh-main.jsonl");
+    await fs.writeFile(
+      staleTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-stale-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "stale preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-fresh-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "fresh preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:work": {
+            sessionId: "sess-stale-main",
+            updatedAt: 1,
+          },
+          "agent:ops:WORK": {
+            sessionId: "sess-fresh-main",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await openClient();
+    const entry = await getMainPreviewEntry(ws);
+    expect(entry?.items[0]?.text).toContain("fresh preview");
+
+    ws.close();
+  });
+
   test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -1087,6 +1136,68 @@ describe("gateway server sessions", () => {
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
 
     ws.close();
+  });
+
+  test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
+      "agent:main:subagent:target": {
+        sessionId: "sess-target-exact",
+        updatedAt: now - 20_000,
+      },
+    };
+    for (let i = 0; i < 9; i += 1) {
+      entries[`agent:main:subagent:noisy-${i}`] = {
+        sessionId: `sess-noisy-${i}`,
+        updatedAt: now - i * 1_000,
+        label: `sess-target-exact noisy ${i}`,
+      };
+    }
+    await writeSessionStore({ entries });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-target-exact",
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+  });
+
+  test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:visible-parent": {
+          sessionId: "sess-visible-parent",
+          updatedAt: now - 3_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:hidden-parent": {
+          sessionId: "sess-hidden-parent",
+          updatedAt: now - 2_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:shared-child-key-filter": {
+          sessionId: "sess-shared-child-key-filter",
+          updatedAt: now - 1_000,
+          spawnedBy: "agent:main:subagent:hidden-parent",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      key: "agent:main:subagent:shared-child-key-filter",
+      spawnedBy: "agent:main:subagent:visible-parent",
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error?.message).toContain(
+      "No session found: agent:main:subagent:shared-child-key-filter",
+    );
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {

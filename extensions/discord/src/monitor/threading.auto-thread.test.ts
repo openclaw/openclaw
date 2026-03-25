@@ -1,5 +1,5 @@
 import { ChannelType } from "@buape/carbon";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 type MaybeCreateDiscordAutoThreadFn = typeof import("./threading.js").maybeCreateDiscordAutoThread;
 
@@ -46,13 +46,19 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   postMock.mockReset();
   getMock.mockReset();
   patchMock.mockReset();
   generateThreadTitleMock.mockReset();
   ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
+});
+
+beforeEach(() => {
+  postMock.mockReset();
+  getMock.mockReset();
+  patchMock.mockReset();
+  generateThreadTitleMock.mockReset();
 });
 
 describe("maybeCreateDiscordAutoThread", () => {

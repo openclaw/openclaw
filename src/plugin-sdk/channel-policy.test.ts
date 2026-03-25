@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import { createRestrictSendersChannelSecurity } from "./channel-policy.js";
 
@@ -37,7 +38,7 @@ describe("createRestrictSendersChannelSecurity", () => {
       allowFrom: ["line:user:abc"],
       policyPath: "channels.line.dmPolicy",
       allowFromPath: "channels.line.",
-      approveHint: "Approve via: openclaw pairing list line / openclaw pairing approve line <code>",
+      approveHint: formatPairingApproveHint("line"),
       normalizeEntry: undefined,
     });
 
