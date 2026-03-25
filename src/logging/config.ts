@@ -3,7 +3,7 @@ import { loadConfig, type OpenClawConfig } from "../config/config.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
-function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
+export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
   return primary === "config" && (secondary === "schema" || secondary === "validate");
 }
