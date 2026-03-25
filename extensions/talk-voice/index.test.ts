@@ -247,6 +247,26 @@ describe("talk-voice plugin", () => {
     expect(result.text).toContain("voice-a");
   });
 
+  it("rejects /voice set from webchat channel with no scopes (TUI/internal)", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
+
+    // gatewayClientScopes omitted — simulates internal webchat session without scopes
+    const result = await command.handler(createCommandContext("set Claudia", "webchat"));
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("allows /voice set from non-gateway channels without scope check", async () => {
     const { command, runtime } = createHarness({
       talk: {
