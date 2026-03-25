@@ -26,10 +26,29 @@ describe("renderSystemdUnavailableHints", () => {
   });
 
   it("renders generic Linux recovery hints outside WSL", () => {
-    expect(renderSystemdUnavailableHints()).toEqual([
+    expect(renderSystemdUnavailableHints({ kind: "generic_unavailable" })).toEqual([
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-      "On a headless server (SSH/no desktop session): run `loginctl enable-linger` to persist your systemd user session across logins.",
+      `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+    ]);
+  });
+
+  it("adds headless recovery hints only for user bus/session failures", () => {
+    expect(renderSystemdUnavailableHints({ kind: "user_bus_unavailable" })).toEqual([
+      "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
+      "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
       "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
+      `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+    ]);
+  });
+
+  it("skips headless recovery hints when container context is known", () => {
+    expect(
+      renderSystemdUnavailableHints({
+        kind: "user_bus_unavailable",
+        container: true,
+      }),
+    ).toEqual([
+      "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
       `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
     ]);
   });
