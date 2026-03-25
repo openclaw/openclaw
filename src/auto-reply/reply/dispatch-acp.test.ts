@@ -40,6 +40,9 @@ const ttsMocks = vi.hoisted(() => ({
     return params.payload;
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  resolveTtsConfigForAccount: vi.fn(
+    (_cfg: OpenClawConfig, _channel: string, _accountId?: string) => ({ mode: "final" }),
+  ),
 }));
 
 const sessionMetaMocks = vi.hoisted(() => ({
@@ -74,6 +77,8 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId?: string) =>
+    ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
@@ -102,6 +107,7 @@ function createDispatcher(): {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
+    getDeliveredCounts: vi.fn(() => counts),
     markComplete: vi.fn(),
   };
   return { dispatcher, counts };
@@ -134,6 +140,7 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  ttsChannel?: string;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
 }) {
@@ -153,6 +160,7 @@ async function runDispatch(params: {
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
       : {}),
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
@@ -264,6 +272,8 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAccount.mockReset();
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "final" });
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
@@ -467,16 +477,40 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("delivers final fallback text even when routed block text already existed", async () => {
+  it("does not duplicate routed block text with a final fallback reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
     const { result } = await runRoutedAcpTextTurn("CODEX_OK");
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    expectSecondRoutedPayload({ text: "CODEX_OK" });
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the final fallback for Feishu block replies that may be internally dropped", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello");
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "hello" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    const { dispatcher, counts } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      ttsChannel: "feishu",
+      ctxOverrides: {
+        Provider: "feishu",
+        Surface: "feishu",
+      },
+    });
+
+    expect(result?.counts.final).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello" }),
+    );
   });
 
   it("does not add text fallback when final TTS already delivered audio", async () => {
@@ -489,7 +523,6 @@ describe("tryDispatchAcpReply", () => {
     const { result } = await runRoutedAcpTextTurn("Task completed");
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
     expectSecondRoutedPayload({
       mediaUrl: "https://example.com/final.mp3",

@@ -80,6 +80,7 @@ export type ReplyDispatcher = {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  getDeliveredCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
 };
 
@@ -125,6 +126,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const deliveredCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -165,6 +171,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        deliveredCounts[kind] += 1;
       })
       .catch((err) => {
         options.onError?.(err, { kind });
@@ -213,6 +220,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getDeliveredCounts: () => ({ ...deliveredCounts }),
     markComplete,
   };
 }

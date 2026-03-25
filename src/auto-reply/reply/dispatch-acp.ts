@@ -21,6 +21,8 @@ import {
   normalizeAttachmentPath,
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
+import { normalizeAccountId, normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   maybeApplyTtsToPayload,
@@ -191,6 +193,69 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+function shouldUseFeishuCard(text: string): boolean {
+  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+function didRenderedFeishuBlocksReachUser(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  text: string;
+}): boolean {
+  const channelConfig = params.cfg.channels?.feishu as
+    | {
+        renderMode?: "auto" | "raw" | "card";
+        streaming?: boolean;
+        defaultAccount?: string;
+        accounts?: Record<
+          string,
+          {
+            renderMode?: "auto" | "raw" | "card";
+            streaming?: boolean;
+          }
+        >;
+      }
+    | undefined;
+  const defaultAccountId =
+    params.accountId == null
+      ? normalizeOptionalAccountId(channelConfig?.defaultAccount)
+      : undefined;
+  const accountConfig = resolveNormalizedAccountEntry(
+    channelConfig?.accounts,
+    defaultAccountId ?? normalizeAccountId(params.accountId),
+    normalizeAccountId,
+  );
+  const renderMode = accountConfig?.renderMode ?? channelConfig?.renderMode ?? "auto";
+  const streamingEnabled = accountConfig?.streaming ?? channelConfig?.streaming ?? true;
+  if (!streamingEnabled || renderMode === "raw") {
+    return false;
+  }
+  return renderMode === "card" || shouldUseFeishuCard(params.text);
+}
+
+function didAccumulatedBlocksReachUser(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+  text: string;
+  deliveredBlockReply: boolean;
+}): boolean {
+  if (!params.deliveredBlockReply) {
+    return false;
+  }
+  const channel = String(params.channel ?? "")
+    .trim()
+    .toLowerCase();
+  if (channel !== "feishu") {
+    return true;
+  }
+  return didRenderedFeishuBlocksReachUser({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    text: params.text,
+  });
+}
+
 async function finalizeAcpTurnOutput(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -203,12 +268,15 @@ async function finalizeAcpTurnOutput(params: {
 }): Promise<boolean> {
   let queuedFinal = false;
   const ttsMode =
-    (params.ttsChannel && params.accountId
+    (params.ttsChannel
       ? resolveTtsConfigForAccount(params.cfg, params.ttsChannel, params.accountId)
       : resolveTtsConfig(params.cfg)
     ).mode ?? "final";
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+  if (hasAccumulatedBlockText) {
+    await params.delivery.syncDispatcherDeliveryState();
+  }
 
   let finalMediaDelivered = false;
   if (ttsMode === "final" && hasAccumulatedBlockText) {
@@ -242,6 +310,13 @@ async function finalizeAcpTurnOutput(params: {
   const shouldDeliverTextFallback =
     ttsMode !== "all" &&
     hasAccumulatedBlockText &&
+    !didAccumulatedBlocksReachUser({
+      cfg: params.cfg,
+      channel: params.ttsChannel,
+      accountId: params.accountId,
+      text: accumulatedBlockText,
+      deliveredBlockReply: params.delivery.hasDeliveredBlockReply(),
+    }) &&
     !finalMediaDelivered &&
     !params.delivery.hasDeliveredFinalReply();
   if (shouldDeliverTextFallback) {

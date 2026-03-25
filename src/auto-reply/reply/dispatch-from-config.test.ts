@@ -240,12 +240,23 @@ type DispatchReplyArgs = Parameters<
 >[0];
 
 function createDispatcher(): ReplyDispatcher {
+  const counts = { tool: 0, block: 0, final: 0 };
   return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
+    sendToolResult: vi.fn(() => {
+      counts.tool += 1;
+      return true;
+    }),
+    sendBlockReply: vi.fn(() => {
+      counts.block += 1;
+      return true;
+    }),
+    sendFinalReply: vi.fn(() => {
+      counts.final += 1;
+      return true;
+    }),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ ...counts })),
+    getDeliveredCounts: vi.fn(() => ({ ...counts })),
     markComplete: vi.fn(),
   };
 }
@@ -371,6 +382,10 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
+      mode: "final",
+    });
+    ttsMocks.resolveTtsConfigForAccount.mockClear();
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({
       mode: "final",
     });
   });
@@ -1014,9 +1029,7 @@ describe("dispatchReplyFromConfig", () => {
     const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "hello world" }),
-    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
@@ -1164,10 +1177,12 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(blockCalls).toHaveLength(1);
+    expect(blockCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(2);
-    expect(finalCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
-    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(finalCalls.length).toBe(1);
+    const noticePayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(noticePayload?.text).toContain("Session ids resolved");
     expect(noticePayload?.text).toContain("agent session id: inner-123");
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
@@ -1248,10 +1263,12 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(blockCalls).toHaveLength(1);
+    expect(blockCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(2);
-    expect(finalCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
-    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(finalCalls.length).toBe(1);
+    const noticePayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(noticePayload?.text).toContain("Session ids resolved");
     expect(noticePayload?.text).toContain("agent session id: inner-123");
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
@@ -1649,9 +1666,59 @@ describe("dispatchReplyFromConfig", () => {
       .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
       .filter(Boolean);
     expect(blockTexts).toEqual(["What do you want to work on?"]);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "What do you want to work on?" }),
-    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("uses default-account TTS mode for Feishu ACP block-only fallback when AccountId is missing", async () => {
+    setNoAbort();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "all" });
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "Default" },
+      { type: "text_delta", text: " account" },
+      { type: "text_delta", text: " streaming." },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      AccountId: undefined,
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "default account mode",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(ttsMocks.resolveTtsConfigForAccount).toHaveBeenCalledWith(cfg, "feishu", undefined);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("generates final-mode TTS audio after ACP block streaming completes", async () => {
@@ -2101,7 +2168,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
       expect.objectContaining({

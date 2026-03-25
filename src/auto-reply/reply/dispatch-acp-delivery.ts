@@ -27,6 +27,7 @@ type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
+  deliveredBlockReply: boolean;
   deliveredFinalReply: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
@@ -34,6 +35,7 @@ type AcpDispatchDeliveryState = {
 
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
+  syncDispatcherDeliveryState: () => Promise<void>;
   deliver: (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
@@ -41,6 +43,7 @@ export type AcpDispatchDeliveryCoordinator = {
   ) => Promise<boolean>;
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
+  hasDeliveredBlockReply: () => boolean;
   hasDeliveredFinalReply: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
@@ -62,6 +65,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
     blockCount: 0,
+    deliveredBlockReply: false,
     deliveredFinalReply: false,
     routedCounts: {
       tool: 0,
@@ -181,6 +185,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           messageId: result.messageId,
         });
       }
+      if (kind === "block") {
+        state.deliveredBlockReply = true;
+      }
       if (kind === "final") {
         state.deliveredFinalReply = true;
       }
@@ -194,17 +201,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         : kind === "block"
           ? params.dispatcher.sendBlockReply(ttsPayload)
           : params.dispatcher.sendFinalReply(ttsPayload);
-    if (kind === "final" && delivered) {
-      state.deliveredFinalReply = true;
-    }
     return delivered;
   };
 
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
+    syncDispatcherDeliveryState: async () => {
+      await params.dispatcher.waitForIdle();
+      const deliveredCounts = params.dispatcher.getDeliveredCounts();
+      if (deliveredCounts.block > 0) {
+        state.deliveredBlockReply = true;
+      }
+      if (deliveredCounts.final > 0) {
+        state.deliveredFinalReply = true;
+      }
+    },
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
+    hasDeliveredBlockReply: () => state.deliveredBlockReply,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {

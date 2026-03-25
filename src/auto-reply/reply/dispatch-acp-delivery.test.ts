@@ -16,12 +16,23 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 function createDispatcher(): ReplyDispatcher {
+  const counts = { tool: 0, block: 0, final: 0 };
   return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
+    sendToolResult: vi.fn(() => {
+      counts.tool += 1;
+      return true;
+    }),
+    sendBlockReply: vi.fn(() => {
+      counts.block += 1;
+      return true;
+    }),
+    sendFinalReply: vi.fn(() => {
+      counts.final += 1;
+      return true;
+    }),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ ...counts })),
+    getDeliveredCounts: vi.fn(() => ({ ...counts })),
     markComplete: vi.fn(),
   };
 }
@@ -68,9 +79,38 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
 
     await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+    await coordinator.syncDispatcherDeliveryState();
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(true);
     expect(coordinator.getRoutedCounts().final).toBe(0);
+  });
+
+  it("syncs dispatcher-delivered block state after queued sends settle", async () => {
+    const dispatcher = createDispatcher();
+    (dispatcher.getDeliveredCounts as ReturnType<typeof vi.fn>).mockReturnValue({
+      tool: 0,
+      block: 1,
+      final: 0,
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    expect(coordinator.hasDeliveredBlockReply()).toBe(false);
+
+    await coordinator.syncDispatcherDeliveryState();
+
+    expect(dispatcher.waitForIdle).toHaveBeenCalled();
+    expect(coordinator.hasDeliveredBlockReply()).toBe(true);
   });
 
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
