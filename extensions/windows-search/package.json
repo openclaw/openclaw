@@ -4,12 +4,12 @@
   "private": true,
   "description": "OpenClaw Windows File Search plugin",
   "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ]
-  },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.48"
   }
 }

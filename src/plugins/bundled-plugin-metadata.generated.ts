@@ -3919,6 +3919,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "windows-search",
+    idHint: "windows-search-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/windows-search-plugin",
+    packageVersion: "1.0.0",
+    packageDescription: "OpenClaw Windows File Search plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "windows-search",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
     dirName: "xai",
     idHint: "xai-plugin",
     source: {
