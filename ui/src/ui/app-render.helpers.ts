@@ -561,16 +561,22 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
+  const normalizedModel = nextModel
+    ? normalizeChatModelOverrideValue(
+        createChatModelOverride(nextModel),
+        state.chatModelCatalog ?? [],
+      ) || nextModel
+    : "";
   state.lastError = null;
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
-    [targetSessionKey]: createChatModelOverride(nextModel),
+    [targetSessionKey]: createChatModelOverride(normalizedModel),
   };
   try {
     await state.client.request("sessions.patch", {
       key: targetSessionKey,
-      model: nextModel || null,
+      model: normalizedModel || null,
     });
     void refreshVisibleToolsEffectiveForCurrentSession(state);
     await refreshSessionOptions(state);

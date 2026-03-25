@@ -819,21 +819,25 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
+  it("normalizes bare picker values to the catalog provider/model key", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: false,
       } satisfies Partial<Response>),
     );
-    const { state, request } = createChatHeaderState();
-    state.agentsPanel = "tools";
-    state.agentsSelectedId = "main";
-    state.toolsEffectiveResultKey = "main:main";
-    state.toolsEffectiveResult = {
-      agentId: "main",
-      profile: "coding",
-      groups: [],
+    const { state, request } = createChatHeaderState({
+      models: [
+        { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
+        { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "vllm" },
+      ],
+    });
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: "anthropic", model: "claude-haiku-4-5", contextTokens: null },
+      sessions: [],
     };
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -843,15 +847,19 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
 
-    modelSelect!.value = "openai/gpt-5-mini";
+    const bareOption = document.createElement("option");
+    bareOption.value = "gpt-5-mini";
+    bareOption.textContent = "gpt-5-mini";
+    modelSelect!.append(bareOption);
+
+    modelSelect!.value = "gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "vllm/gpt-5-mini",
     });
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 

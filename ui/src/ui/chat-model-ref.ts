@@ -25,6 +25,9 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }

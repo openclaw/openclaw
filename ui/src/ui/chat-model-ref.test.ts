@@ -99,4 +99,10 @@ describe("chat-model-ref helpers", () => {
       reason: "ambiguous",
     });
   });
+
+  it("keeps already-qualified model refs even when provider differs", () => {
+    expect(resolveServerChatModelValue("vllm/gpt-5-mini", "anthropic")).toBe(
+      "vllm/gpt-5-mini",
+    );
+  });
 });
