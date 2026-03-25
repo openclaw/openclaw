@@ -89,7 +89,7 @@ async function resolveRequestedChannel(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  send: async ({ params, respond, context }) => {
+  send: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateSendParams(p)) {
       respond(
@@ -263,6 +263,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
@@ -332,7 +333,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       inflightMap.delete(dedupeKey);
     }
   },
-  poll: async ({ params, respond, context }) => {
+  poll: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validatePollParams(p)) {
       respond(
@@ -444,6 +445,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         threadId,
         silent: request.silent,
         isAnonymous: request.isAnonymous,
+        gatewayClientScopes: client?.connect?.scopes ?? [],
       });
       const payload: Record<string, unknown> = {
         runId: idem,
