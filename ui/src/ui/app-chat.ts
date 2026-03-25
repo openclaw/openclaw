@@ -318,6 +318,7 @@ async function dispatchSlashCommand(
       ...host.chatModelOverrides,
       [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
+    host.onSlashAction?.("refresh-tools-effective");
   }
 
   if (result.action === "refresh") {
