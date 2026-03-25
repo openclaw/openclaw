@@ -7,6 +7,8 @@
 
 /** Minimal ConversationReference shape for proactive messaging */
 export type StoredConversationReference = {
+  /** Timestamp when this reference was last seen/updated. */
+  lastSeenAt?: string;
   /** Activity ID from the last message */
   activityId?: string;
   /** User who sent the message */
