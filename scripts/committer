@@ -3,6 +3,7 @@
 set -euo pipefail
 # Disable glob expansion to handle brackets in file paths
 set -f
+
 usage() {
   printf 'Usage: %s [--force] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
   exit 2
@@ -143,6 +144,89 @@ run_git_with_lock_retry() {
   return 1
 }
 
+staged_index_backup=''
+staged_index_existed=false
+restore_staged_index_on_exit=false
+
+cleanup_staged_index_backup() {
+  if [[ -n "$staged_index_backup" && -e "$staged_index_backup" ]]; then
+    if [[ "$restore_staged_index_on_exit" == true ]]; then
+      restore_staged_index
+    fi
+    rm -f "$staged_index_backup"
+  fi
+}
+
+backup_staged_index() {
+  local index_path
+
+  # The helper temporarily clears the whole index before restaging only the
+  # requested paths, so the backup must snapshot the full staged state.
+  index_path="$(git rev-parse --git-path index)"
+  staged_index_backup="$(mktemp "${TMPDIR:-/tmp}/openclaw-committer-index.XXXXXX")"
+  if [[ -e "$index_path" ]]; then
+    cp "$index_path" "$staged_index_backup"
+    staged_index_existed=true
+  else
+    : >"$staged_index_backup"
+    staged_index_existed=false
+  fi
+  restore_staged_index_on_exit=true
+}
+
+restore_staged_index() {
+  local index_path
+
+  if [[ -z "$staged_index_backup" || ! -e "$staged_index_backup" ]]; then
+    return 0
+  fi
+
+  index_path="$(git rev-parse --git-path index)"
+  if [[ "$staged_index_existed" == true ]]; then
+    cp "$staged_index_backup" "$index_path"
+  else
+    rm -f "$index_path"
+  fi
+}
+
+discard_staged_index_backup() {
+  restore_staged_index_on_exit=false
+  cleanup_staged_index_backup
+  staged_index_backup=''
+  staged_index_existed=false
+}
+
+extract_signed_commit_metadata() {
+  local response="${1:-}"
+  local metadata commit_url
+
+  if ! metadata="$(printf '%s' "$response" | jq -er '
+    .data.createCommitOnBranch.commit
+    | [.url, .oid]
+    | if (.[0] | type == "string" and length > 0) and (.[1] | type == "string" and length > 0)
+      then @tsv
+      else error("missing commit metadata")
+      end
+  ' 2>/dev/null)"; then
+    commit_url="$(printf '%s' "$response" | jq -r '.data.createCommitOnBranch.commit.url // empty' 2>/dev/null || true)"
+    if [[ -n "$commit_url" ]]; then
+      printf 'Error: failed to parse signed API commit metadata; remote commit may exist at %s. Inspect it, sync the branch manually before retrying, and note the requested files remain staged for recovery.\n' \
+        "$commit_url" >&2
+      return 1
+    fi
+    printf 'Error: failed to parse signed API commit metadata; remote outcome unknown, leaving requested files staged.\n' >&2
+    return 1
+  fi
+
+  printf '%s\n' "$metadata"
+}
+
+trap cleanup_staged_index_backup EXIT
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/committer-signed-api.sh
+source "$script_dir/lib/committer-signed-api.sh"
+
 for file in "${files[@]}"; do
   if [ ! -e "$file" ]; then
     if ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
@@ -152,21 +236,55 @@ for file in "${files[@]}"; do
   fi
 done
 
-run_git_with_lock_retry "unstaging files" git restore --staged :/
-run_git_with_lock_retry "staging files" git add --force -- "${files[@]}"
+require_command gh
+require_command jq
+
+repo_slug="$(resolve_repo_slug)"
+current_branch="$(resolve_current_branch)"
+current_head_oid="$(git rev-parse HEAD)"
+remote_head_oid="$(ensure_remote_branch_for_api_commit "$repo_slug" "$current_branch" "$current_head_oid")"
+
+backup_staged_index
+if ! run_git_with_lock_retry "unstaging files" git reset --quiet HEAD; then
+  restore_staged_index
+  discard_staged_index_backup
+  printf 'Error: failed to unstage files; restored previous staged state.\n' >&2
+  exit 1
+fi
+if ! run_git_with_lock_retry "staging files" git add --force -- "${files[@]}"; then
+  restore_staged_index
+  discard_staged_index_backup
+  printf 'Error: failed to stage requested files; restored previous staged state.\n' >&2
+  exit 1
+fi
 
 if git diff --staged --quiet; then
+  restore_staged_index
+  discard_staged_index_backup
   printf 'Warning: no staged changes detected for: %s\n' "${files[*]}" >&2
   exit 1
 fi
 
-committed=false
-if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
-  committed=true
-fi
+signed_commit_response="$(create_api_signed_commit "$repo_slug" "$current_branch" "$commit_message" "$remote_head_oid")" || {
+  restore_staged_index
+  discard_staged_index_backup
+  printf 'Error: signed API commit failed before creating a remote commit; restored previous staged state.\n' >&2
+  exit 1
+}
+signed_commit_metadata="$(extract_signed_commit_metadata "$signed_commit_response")" || {
+  # Metadata parsing happens after the API call returns, so the remote commit may
+  # already exist. Keep the requested files staged for manual inspection/recovery.
+  discard_staged_index_backup
+  exit 1
+}
+IFS=$'\t' read -r signed_commit_url signed_commit_oid <<<"$signed_commit_metadata"
 
-if [ "$committed" = false ]; then
+discard_staged_index_backup
+if ! sync_local_branch_to_signed_commit "$current_branch" "$current_head_oid" "$signed_commit_oid"; then
+  printf 'Error: remote signed commit exists at %s, but local branch sync failed; inspect the remote commit and sync the branch manually.\n' \
+    "$signed_commit_url" >&2
   exit 1
 fi
 
-printf 'Committed "%s" with %d files\n' "$commit_message" "${#files[@]}"
+printf 'Committed "%s" with %d files via GitHub API: %s\n' \
+  "$commit_message" "${#files[@]}" "$signed_commit_url"
