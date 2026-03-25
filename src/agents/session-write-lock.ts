@@ -176,17 +176,26 @@ type FileHandleInternal = Record<symbol, unknown> & {
 };
 
 function getFileHandleSymbols(handle: fs.FileHandle): {
+  kHandleSym?: symbol;
+  kFdSym?: symbol;
   kHandle?: { releaseFD: () => void };
   kFd?: number;
 } {
   const internal = handle as unknown as FileHandleInternal;
-  const result: { kHandle?: { releaseFD: () => void }; kFd?: number } = {};
+  const result: {
+    kHandleSym?: symbol;
+    kFdSym?: symbol;
+    kHandle?: { releaseFD: () => void };
+    kFd?: number;
+  } = {};
   for (const sym of Object.getOwnPropertySymbols(handle)) {
     const str = sym.toString();
     if (str.includes("kHandle")) {
+      result.kHandleSym = sym;
       result.kHandle = internal[sym] as { releaseFD: () => void };
     }
     if (str.includes("kFd")) {
+      result.kFdSym = sym;
       result.kFd = internal[sym] as number;
     }
   }
@@ -202,16 +211,19 @@ function releaseAllLocksSync(): void {
     const fd = held.handle.fd;
     try {
       const symbols = getFileHandleSymbols(held.handle);
+      const internal = held.handle as unknown as FileHandleInternal;
+
       if (symbols.kHandle?.releaseFD) {
         symbols.kHandle.releaseFD();
       }
       fsSync.closeSync(fd);
-      const fdSym = Object.getOwnPropertySymbols(held.handle).find((s) =>
-        s.toString().includes("kFd"),
-      );
-      if (fdSym) {
-        const internal = held.handle as unknown as FileHandleInternal;
-        internal[fdSym] = -1;
+
+      if (symbols.kFdSym) {
+        internal[symbols.kFdSym] = -1;
+      }
+
+      if (symbols.kHandleSym) {
+        internal[symbols.kHandleSym] = null;
       }
     } catch {
       // Ignore errors during cleanup - best effort
