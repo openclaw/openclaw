@@ -19,6 +19,7 @@ export const NextcloudTalkRoomSchema = z
     allowFrom: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
     ackReaction: z.string().optional(),
+    typingIndicator: z.boolean().optional(),
   })
   .strict();
 
@@ -51,6 +52,7 @@ export const NextcloudTalkAccountSchemaBase = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
     ackReaction: z.string().optional(),
+    typingIndicator: z.boolean().optional(),
     /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
     network: NextcloudTalkNetworkSchema,
     ...ReplyRuntimeConfigSchemaShape,

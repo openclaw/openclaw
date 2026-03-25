@@ -26,6 +26,7 @@ import {
 } from "./policy.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
+import { resolveTypingIndicatorEnabled, sendTypingNextcloudTalk } from "./send-typing.js";
 import { sendMessageNextcloudTalk, sendReactionNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
@@ -422,6 +423,16 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
+  const typingEnabled = resolveTypingIndicatorEnabled({
+    accountTypingIndicator: account.config.typingIndicator,
+    roomTypingIndicator: roomConfig?.typingIndicator,
+  });
+
+  if (typingEnabled) {
+    // Signal that the bot is composing — fire and forget, do not await
+    void sendTypingNextcloudTalk(roomToken, true, { accountId: account.accountId });
+  }
+
   await dispatchInboundReplyWithBase({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -438,12 +449,20 @@ export async function handleNextcloudTalkInbound(params: {
         accountId: account.accountId,
         statusSink,
       });
+      // Stop typing indicator after message is delivered
+      if (typingEnabled) {
+        void sendTypingNextcloudTalk(roomToken, false, { accountId: account.accountId });
+      }
     },
     onRecordError: (err) => {
       runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
     },
     onDispatchError: (err, info) => {
       runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+      // Stop typing indicator on dispatch error too
+      if (typingEnabled) {
+        void sendTypingNextcloudTalk(roomToken, false, { accountId: account.accountId });
+      }
     },
     replyOptions: {
       skillFilter: roomConfig?.skills,

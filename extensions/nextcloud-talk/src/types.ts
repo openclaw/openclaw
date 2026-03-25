@@ -22,11 +22,25 @@ export type NextcloudTalkRoomConfig = {
   systemPrompt?: string;
   /** Emoji to auto-react with on every received message (best-effort acknowledgment). */
   ackReaction?: string;
+  /**
+   * If true, send typing indicators while the bot is processing.
+   * Requires Nextcloud Talk with bot typing indicator support.
+   * Defaults to the account-level typingIndicator setting.
+   */
+  typingIndicator?: boolean;
 };
 
 export type NextcloudTalkNetworkConfig = {
   /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
+};
+
+/** Represents a typing indicator signal sent by the bot. */
+export type NextcloudTalkTypingIndicator = {
+  /** Whether the bot is currently typing (true = started, false = stopped). */
+  typing: boolean;
+  /** Room token. */
+  roomToken: string;
 };
 
 export type NextcloudTalkAccountConfig = {
@@ -86,6 +100,12 @@ export type NextcloudTalkAccountConfig = {
   ackReaction?: string;
   /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
   network?: NextcloudTalkNetworkConfig;
+  /**
+   * If true, send typing indicators while the bot is processing a message.
+   * Requires Nextcloud Talk with bot typing indicator support (Talk 21+).
+   * Default: false.
+   */
+  typingIndicator?: boolean;
 };
 
 export type NextcloudTalkConfig = {
