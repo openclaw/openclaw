@@ -1,5 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectControlUiPackErrors,
   collectExtensionVersionErrors,
@@ -11,6 +13,10 @@ import {
   resolveNpmCommandInvocation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
@@ -263,38 +269,30 @@ describe("collectExtensionVersionErrors", () => {
   });
 
   it("returns no errors when all extensions match the root version", () => {
-    // Skip if extensions directory doesn't exist (sparse checkout)
-    if (!existsSync("extensions")) {
-      return;
+    // Create a temporary directory with mock extensions
+    const tempDir = join(tmpdir(), `ext-test-${Date.now()}`);
+    const extensionsDir = join(tempDir, "extensions");
+
+    mkdirSync(extensionsDir, { recursive: true });
+
+    // Create mock extensions with matching versions
+    const mockVersion = "2026.3.24";
+    for (const name of ["extension-a", "extension-b"]) {
+      const extDir = join(extensionsDir, name);
+      mkdirSync(extDir, { recursive: true });
+      writeFileSync(join(extDir, "package.json"), JSON.stringify({ version: mockVersion }));
     }
 
-    // Create a mock scenario: use the first extension's version as the "root" version
-    // This guarantees at least one extension matches, testing the matching logic
-    const extensionsDir = "extensions";
-    const firstExtension = readdirSync(extensionsDir, { withFileTypes: true }).filter((e) =>
-      e.isDirectory(),
-    )[0];
+    // Mock process.cwd() to return our temp directory
+    vi.spyOn(process, "cwd").mockReturnValue(tempDir);
 
-    if (!firstExtension) {
-      return; // No extensions to test
+    try {
+      const errors = collectExtensionVersionErrors(mockVersion);
+      expect(errors).toHaveLength(0);
+    } finally {
+      // Cleanup
+      vi.spyOn(process, "cwd").mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
-
-    const firstPkgPath = `extensions/${firstExtension.name}/package.json`;
-    if (!existsSync(firstPkgPath)) {
-      return;
-    }
-
-    const firstPkg = JSON.parse(readFileSync(firstPkgPath, "utf8"));
-    if (!firstPkg.version) {
-      return;
-    }
-
-    // Use this extension's version as root version
-    // The function should not report this extension as mismatched
-    const errors = collectExtensionVersionErrors(firstPkg.version);
-
-    // At minimum, this specific extension should NOT be in the error message
-    const hasFirstExtensionError = errors.some((e) => e.includes(firstExtension.name));
-    expect(hasFirstExtensionError).toBe(false);
   });
 });
