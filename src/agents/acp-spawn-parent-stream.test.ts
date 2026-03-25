@@ -267,4 +267,93 @@ describe("startAcpSpawnParentStreamRelay", () => {
       }),
     );
   });
+
+  it("falls back to persisted ACP idle state when completion never reaches the local event bus", () => {
+    readAcpSessionEntryMock
+      .mockReturnValueOnce({
+        acp: {
+          state: "running",
+          lastActivityAt: Date.now(),
+        },
+      })
+      .mockReturnValueOnce({
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now() + 250,
+        },
+      });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-6",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-6",
+      agentId: "codex",
+      noOutputNoticeMs: 0,
+      noOutputPollMs: 250,
+    });
+
+    vi.advanceTimersByTime(500);
+
+    expect(collectedTexts().some((text) => text.includes("codex run completed."))).toBe(true);
+    relay.dispose();
+  });
+
+  it("falls back to persisted ACP error state when completion never reaches the local event bus", () => {
+    readAcpSessionEntryMock
+      .mockReturnValueOnce({
+        acp: {
+          state: "running",
+          lastActivityAt: Date.now(),
+        },
+      })
+      .mockReturnValueOnce({
+        acp: {
+          state: "error",
+          lastActivityAt: Date.now() + 250,
+          lastError: "provider disconnected",
+        },
+      });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-7",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-7",
+      agentId: "codex",
+      noOutputNoticeMs: 0,
+      noOutputPollMs: 250,
+    });
+
+    vi.advanceTimersByTime(500);
+
+    expect(
+      collectedTexts().some((text) => text.includes("run failed: provider disconnected")),
+    ).toBe(true);
+    relay.dispose();
+  });
+
+  it("does not treat stale persisted idle state from before the relay started as completion", () => {
+    readAcpSessionEntryMock.mockReturnValue({
+      acp: {
+        state: "idle",
+        lastActivityAt: Date.now() - 5_000,
+      },
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-8",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-8",
+      agentId: "codex",
+      noOutputNoticeMs: 0,
+      noOutputPollMs: 250,
+      maxRelayLifetimeMs: 1_000,
+    });
+
+    vi.advanceTimersByTime(750);
+
+    expect(collectedTexts().some((text) => text.includes("run completed"))).toBe(false);
+    expect(collectedTexts().some((text) => text.includes("run failed"))).toBe(false);
+
+    relay.dispose();
+  });
 });

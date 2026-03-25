@@ -40,6 +40,33 @@ function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readPersistedAcpRelayState(childSessionKey: string): {
+  state: "idle" | "running" | "error";
+  lastActivityAt?: number;
+  lastError?: string;
+} | null {
+  const normalizedSessionKey = childSessionKey.trim();
+  if (!normalizedSessionKey) {
+    return null;
+  }
+  try {
+    const sessionEntry = readAcpSessionEntry({
+      sessionKey: normalizedSessionKey,
+    });
+    const state = sessionEntry?.acp?.state;
+    if (state !== "idle" && state !== "running" && state !== "error") {
+      return null;
+    }
+    return {
+      state,
+      lastActivityAt: toFiniteNumber(sessionEntry?.acp?.lastActivityAt),
+      lastError: toTrimmedString(sessionEntry?.acp?.lastError),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
   const baseDir = path.dirname(path.resolve(sessionFile));
   return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
@@ -204,7 +231,9 @@ export function startAcpSpawnParentStreamRelay(params: {
   let disposed = false;
   let pendingText = "";
   let lastProgressAt = Date.now();
+  const relayStartedAt = lastProgressAt;
   let stallNotified = false;
+  let sawPersistedRunningState = false;
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
 
@@ -247,7 +276,42 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed || noOutputNoticeMs <= 0) {
+    if (disposed) {
+      return;
+    }
+    // ACP children can finish in a different gateway process, so the local
+    // in-memory event bus may never receive their terminal lifecycle event.
+    const persistedRelayState = readPersistedAcpRelayState(params.childSessionKey);
+    const persistedActivityAt = persistedRelayState?.lastActivityAt;
+    const persistedStateBecameCurrent =
+      persistedActivityAt != null && persistedActivityAt >= relayStartedAt;
+    if (persistedRelayState?.state === "running" && persistedStateBecameCurrent) {
+      sawPersistedRunningState = true;
+    }
+    if (
+      persistedRelayState?.state === "idle" &&
+      (sawPersistedRunningState || persistedStateBecameCurrent)
+    ) {
+      flushPending();
+      emit(`${relayLabel} run completed.`, `${contextPrefix}:done:persisted`);
+      dispose();
+      return;
+    }
+    if (
+      persistedRelayState?.state === "error" &&
+      (sawPersistedRunningState || persistedStateBecameCurrent)
+    ) {
+      flushPending();
+      const errorText = persistedRelayState.lastError;
+      if (errorText) {
+        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error:persisted`);
+      } else {
+        emit(`${relayLabel} run failed.`, `${contextPrefix}:error:persisted`);
+      }
+      dispose();
+      return;
+    }
+    if (noOutputNoticeMs <= 0) {
       return;
     }
     if (stallNotified) {
