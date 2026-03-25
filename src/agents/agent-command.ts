@@ -429,6 +429,10 @@ function runAgentAttempt(params: {
     params.isFallbackRetry &&
     !!params.primaryProvider &&
     params.primaryProvider !== params.providerOverride;
+  // Suppress prompt-based image detection whenever images were intentionally
+  // stripped — cross-provider retries (privacy) and format errors (modality).
+  const shouldSuppressPromptImageDetection =
+    isCrossProviderRetry || (params.isFallbackRetry && params.previousFailureReason === "format");
   const partialExecContext = isCrossProviderRetry
     ? undefined
     : buildPartialExecutionSystemContext(params.previousPartialExecution);
@@ -587,7 +591,7 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    suppressPromptImageDetection: isCrossProviderRetry,
+    suppressPromptImageDetection: shouldSuppressPromptImageDetection,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,

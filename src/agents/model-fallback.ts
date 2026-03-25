@@ -732,7 +732,26 @@ export async function runWithModelFallback<T>(params: {
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
       previousFailureReason = described.reason ?? "unknown";
-      lastPartialExecution = described.partialExecution ?? lastPartialExecution;
+      // Merge partial execution state across attempts: union tool names and OR
+      // the messaging flag so later retries don't lose side-effect history from
+      // earlier failed attempts (e.g. attempt 1 sent a message, attempt 2 only
+      // read a file — the messaging warning must carry forward).
+      if (described.partialExecution) {
+        lastPartialExecution = lastPartialExecution
+          ? {
+              ...lastPartialExecution,
+              toolNames: [
+                ...new Set([
+                  ...lastPartialExecution.toolNames,
+                  ...described.partialExecution.toolNames,
+                ]),
+              ],
+              didSendViaMessagingTool:
+                lastPartialExecution.didSendViaMessagingTool ||
+                described.partialExecution.didSendViaMessagingTool,
+            }
+          : described.partialExecution;
+      }
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,

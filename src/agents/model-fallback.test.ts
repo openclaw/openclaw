@@ -1542,6 +1542,58 @@ describe("runWithModelFallback", () => {
       );
     });
 
+    it("merges partialExecution across multiple failed attempts", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-5",
+              fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("timeout", {
+            reason: "timeout",
+            partialExecution: {
+              hadToolExecution: true as const,
+              toolNames: ["send_message"],
+              didSendViaMessagingTool: true,
+            },
+          }),
+        )
+        .mockRejectedValueOnce(
+          new FailoverError("rate limited", {
+            reason: "rate_limit",
+            partialExecution: {
+              hadToolExecution: true as const,
+              toolNames: ["read_file"],
+              didSendViaMessagingTool: false,
+            },
+          }),
+        )
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(3);
+      // Third call should have merged partialExecution: union of tool names, OR of messaging flag
+      const opts = run.mock.calls[2]?.[2];
+      expect(opts?.previousPartialExecution?.toolNames).toEqual(
+        expect.arrayContaining(["send_message", "read_file"]),
+      );
+      expect(opts?.previousPartialExecution?.didSendViaMessagingTool).toBe(true);
+    });
+
     it("forwards timeout reason after a timeout failure", async () => {
       const cfg = makeCfg();
       const run = vi
