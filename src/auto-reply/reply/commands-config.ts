@@ -1,9 +1,4 @@
-import {
-  authorizeConfigWrite,
-  canBypassConfigWritePolicy,
-  formatConfigWriteDeniedMessage,
-  resolveConfigWriteTargetFromPath,
-} from "../../channels/plugins/config-writes.js";
+import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -22,13 +17,16 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
+import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -42,6 +40,12 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const unauthorized = rejectUnauthorizedCommand(params, "/config");
   if (unauthorized) {
     return unauthorized;
+  }
+  const allowInternalReadOnlyShow =
+    configCommand.action === "show" && isInternalMessageChannel(params.command.channel);
+  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/config");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/config",
@@ -76,20 +80,19 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     }
     parsedWritePath = parsedPath.path;
     const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
-    const writeAuth = authorizeConfigWrite({
+    const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
-      origin: { channelId, accountId: params.ctx.AccountId },
+      channel: params.command.channel,
+      channelId,
+      accountId: params.ctx.AccountId,
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
-      allowBypass: canBypassConfigWritePolicy({
-        channel: params.command.channel,
-        gatewayClientScopes: params.ctx.GatewayClientScopes,
-      }),
     });
-    if (!writeAuth.allowed) {
+    if (deniedText) {
       return {
         shouldContinue: false,
         reply: {
-          text: formatConfigWriteDeniedMessage({ result: writeAuth, fallbackChannelId: channelId }),
+          text: deniedText,
         },
       };
     }
@@ -196,6 +199,10 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
   const unauthorized = rejectUnauthorizedCommand(params, "/debug");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/debug");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/debug",

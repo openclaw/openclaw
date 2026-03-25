@@ -32,6 +32,7 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
   tempDirPrefix: string;
   timeoutMs: number;
   logger?: ArchiveLogger;
+  rootMarkers?: string[];
   onExtracted: (rootDir: string) => Promise<TResult>;
 }): Promise<TResult | { ok: false; error: string }> {
   return await withTempDir(params.tempDirPrefix, async (tmpDir) => {
@@ -52,7 +53,9 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
 
     let rootDir = "";
     try {
-      rootDir = await resolvePackedRootDir(extractDir);
+      rootDir = await resolvePackedRootDir(extractDir, {
+        rootMarkers: params.rootMarkers,
+      });
     } catch (err) {
       return { ok: false, error: String(err) };
     }

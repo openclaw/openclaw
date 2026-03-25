@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -221,59 +224,91 @@ describe("injectTimestamp", () => {
 });
 
 describe("timestampOptsFromConfig", () => {
-  it("extracts timezone from config", () => {
-    const opts = timestampOptsFromConfig({
-      agents: {
-        defaults: {
-          userTimezone: "America/Chicago",
-        },
-      },
+  it.each([
+    {
+      name: "extracts timezone from config",
       // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    expect(opts.timezone).toBe("America/Chicago");
-  });
-
-  it("falls back gracefully with empty config", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const opts = timestampOptsFromConfig({} as any);
-
-    expect(opts.timezone).toBeDefined();
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      expected: "America/Chicago",
+    },
+    {
+      name: "falls back gracefully with empty config",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {} as any,
+      expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+  ])("$name", ({ cfg, expected }) => {
+    expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
-  it("passes through string content", () => {
-    const res = normalizeRpcAttachmentsToChatAttachments([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
-    expect(res).toEqual([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
+  it.each([
+    {
+      name: "passes through string content",
+      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+    },
+    {
+      name: "converts Uint8Array content to base64",
+      attachments: [{ content: new TextEncoder().encode("foo") }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "Zm9v" }],
+    },
+    {
+      name: "converts ArrayBuffer content to base64",
+      attachments: [{ content: new TextEncoder().encode("bar").buffer }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "YmFy" }],
+    },
+    {
+      name: "drops attachments without usable content",
+      attachments: [{ content: undefined }, { mimeType: "image/png" }],
+      expected: [],
+    },
+  ])("$name", ({ attachments, expected }) => {
+    expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
 
-  it("converts Uint8Array content to base64", () => {
-    const bytes = new TextEncoder().encode("foo");
-    const res = normalizeRpcAttachmentsToChatAttachments([{ content: bytes }]);
-    expect(res[0]?.content).toBe("Zm9v");
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
   });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
-  it("rejects null bytes", () => {
-    expect(sanitizeChatSendMessageInput("before\u0000after")).toEqual({
-      ok: false,
-      error: "message must not contain null bytes",
-    });
-  });
-
-  it("strips unsafe control characters while preserving tab/newline/carriage return", () => {
-    const result = sanitizeChatSendMessageInput("a\u0001b\tc\nd\re\u0007f\u007f");
-    expect(result).toEqual({ ok: true, message: "ab\tc\nd\ref" });
-  });
-
-  it("normalizes unicode to NFC", () => {
-    expect(sanitizeChatSendMessageInput("Cafe\u0301")).toEqual({ ok: true, message: "Café" });
+  it.each([
+    {
+      name: "rejects null bytes",
+      input: "before\u0000after",
+      expected: { ok: false as const, error: "message must not contain null bytes" },
+    },
+    {
+      name: "strips unsafe control characters while preserving tab/newline/carriage return",
+      input: "a\u0001b\tc\nd\re\u0007f\u007f",
+      expected: { ok: true as const, message: "ab\tc\nd\ref" },
+    },
+    {
+      name: "normalizes unicode to NFC",
+      input: "Cafe\u0301",
+      expected: { ok: true as const, message: "Café" },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
 });
 
@@ -570,6 +605,31 @@ describe("exec approval handlers", () => {
         env: { A_VAR: "a", Z_VAR: "z" },
       }).binding,
     );
+  });
+
+  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(
+      buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
+    );
+    expect(request["systemRunBinding"]).toBeNull();
   });
 
   it("prefers systemRunPlan canonical command/cwd when present", async () => {

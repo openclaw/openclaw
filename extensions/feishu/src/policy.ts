@@ -1,9 +1,5 @@
-import type {
-  AllowlistMatch,
-  ChannelGroupContext,
-  GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/feishu";
-import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/feishu";
+import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
+import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -111,13 +107,25 @@ export function resolveFeishuReplyPolicy(params: {
   isDirectMessage: boolean;
   globalConfig?: FeishuConfig;
   groupConfig?: FeishuGroupConfig;
+  /**
+   * Effective group policy resolved for this chat. When "open", requireMention
+   * defaults to false so that non-text messages (e.g. images) that cannot carry
+   * @-mentions are still delivered to the agent.
+   */
+  groupPolicy?: string;
 }): { requireMention: boolean } {
   if (params.isDirectMessage) {
     return { requireMention: false };
   }
 
+  // When groupPolicy is "open" and requireMention is not explicitly configured,
+  // default to false: an open group should respond to all messages including
+  // images and files that cannot carry @-mentions.
+  const requireMentionDefault = params.groupPolicy === "open" ? false : true;
   const requireMention =
-    params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
+    params.groupConfig?.requireMention ??
+    params.globalConfig?.requireMention ??
+    requireMentionDefault;
 
   return { requireMention };
 }

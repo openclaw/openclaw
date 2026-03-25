@@ -9,13 +9,15 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/synology-chat";
-import { sendMessage, resolveChatUserId } from "./client.js";
+} from "openclaw/plugin-sdk/webhook-ingress";
+import { sendMessage, resolveLegacyWebhookNameToChatUserId } from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
+const PREAUTH_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 function getRateLimiter(account: ResolvedSynologyChatAccount): RateLimiter {
   let rl = rateLimiters.get(account.accountId);
@@ -49,8 +51,8 @@ async function readBody(req: IncomingMessage): Promise<
 > {
   try {
     const body = await readRequestBodyWithLimit(req, {
-      maxBytes: 1_048_576,
-      timeoutMs: 30_000,
+      maxBytes: PREAUTH_MAX_BODY_BYTES,
+      timeoutMs: PREAUTH_BODY_TIMEOUT_MS,
     });
     return { ok: true, body };
   } catch (err) {
@@ -217,18 +219,7 @@ function respondNoContent(res: ServerResponse) {
 
 export interface WebhookHandlerDeps {
   account: ResolvedSynologyChatAccount;
-  deliver: (msg: {
-    body: string;
-    from: string;
-    senderName: string;
-    provider: string;
-    chatType: string;
-    sessionKey: string;
-    accountId: string;
-    commandAuthorized: boolean;
-    /** Chat API user_id for sending replies (may differ from webhook user_id) */
-    chatUserId?: string;
-  }) => Promise<string | null>;
+  deliver: (msg: import("./inbound-context.js").SynologyInboundMessage) => Promise<string | null>;
   log?: {
     info: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
@@ -248,6 +239,217 @@ export interface WebhookHandlerDeps {
  * 6. Immediately ACKs request (204)
  * 7. Delivers to the agent asynchronously and sends final reply via incomingUrl
  */
+type SynologyWebhookAuthorization =
+  | { ok: false; statusCode: number; error: string }
+  | { ok: true; commandAuthorized: boolean };
+
+type AuthorizedSynologyWebhook = {
+  payload: SynologyWebhookPayload;
+  body: string;
+  commandAuthorized: boolean;
+  preview: string;
+};
+
+async function parseWebhookPayloadRequest(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  log?: WebhookHandlerDeps["log"];
+}): Promise<{ ok: false } | { ok: true; payload: SynologyWebhookPayload }> {
+  const bodyResult = await readBody(params.req);
+  if (!bodyResult.ok) {
+    params.log?.error("Failed to read request body", bodyResult.error);
+    respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
+    return { ok: false };
+  }
+
+  let payload: SynologyWebhookPayload | null = null;
+  try {
+    payload = parsePayload(params.req, bodyResult.body);
+  } catch (err) {
+    params.log?.warn("Failed to parse webhook payload", err);
+    respondJson(params.res, 400, { error: "Invalid request body" });
+    return { ok: false };
+  }
+  if (!payload) {
+    respondJson(params.res, 400, { error: "Missing required fields (token, user_id, text)" });
+    return { ok: false };
+  }
+  return { ok: true, payload };
+}
+
+function authorizeSynologyWebhook(params: {
+  req: IncomingMessage;
+  account: ResolvedSynologyChatAccount;
+  payload: SynologyWebhookPayload;
+  rateLimiter: RateLimiter;
+  log?: WebhookHandlerDeps["log"];
+}): SynologyWebhookAuthorization {
+  if (!validateToken(params.payload.token, params.account.token)) {
+    params.log?.warn(`Invalid token from ${params.req.socket?.remoteAddress}`);
+    return { ok: false, statusCode: 401, error: "Invalid token" };
+  }
+
+  const auth = authorizeUserForDm(
+    params.payload.user_id,
+    params.account.dmPolicy,
+    params.account.allowedUserIds,
+  );
+  if (!auth.allowed) {
+    if (auth.reason === "disabled") {
+      return { ok: false, statusCode: 403, error: "DMs are disabled" };
+    }
+    if (auth.reason === "allowlist-empty") {
+      params.log?.warn(
+        "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
+      );
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+      };
+    }
+    params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
+    return { ok: false, statusCode: 403, error: "User not authorized" };
+  }
+
+  if (!params.rateLimiter.check(params.payload.user_id)) {
+    params.log?.warn(`Rate limit exceeded for user: ${params.payload.user_id}`);
+    return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
+  }
+
+  return { ok: true, commandAuthorized: auth.allowed };
+}
+
+function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
+  let cleanText = sanitizeInput(payload.text);
+  if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
+    cleanText = cleanText.slice(payload.trigger_word.length).trim();
+  }
+  return cleanText;
+}
+
+async function parseAndAuthorizeSynologyWebhook(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  account: ResolvedSynologyChatAccount;
+  rateLimiter: RateLimiter;
+  log?: WebhookHandlerDeps["log"];
+}): Promise<{ ok: false } | { ok: true; message: AuthorizedSynologyWebhook }> {
+  const parsed = await parseWebhookPayloadRequest(params);
+  if (!parsed.ok) {
+    return { ok: false };
+  }
+
+  const authorized = authorizeSynologyWebhook({
+    req: params.req,
+    account: params.account,
+    payload: parsed.payload,
+    rateLimiter: params.rateLimiter,
+    log: params.log,
+  });
+  if (!authorized.ok) {
+    respondJson(params.res, authorized.statusCode, { error: authorized.error });
+    return { ok: false };
+  }
+
+  const cleanText = sanitizeSynologyWebhookText(parsed.payload);
+  if (!cleanText) {
+    respondNoContent(params.res);
+    return { ok: false };
+  }
+  const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
+  return {
+    ok: true,
+    message: {
+      payload: parsed.payload,
+      body: cleanText,
+      commandAuthorized: authorized.commandAuthorized,
+      preview,
+    },
+  };
+}
+
+async function resolveSynologyReplyDeliveryUserId(params: {
+  account: ResolvedSynologyChatAccount;
+  payload: SynologyWebhookPayload;
+  log?: WebhookHandlerDeps["log"];
+}): Promise<string> {
+  if (!params.account.dangerouslyAllowNameMatching) {
+    return params.payload.user_id;
+  }
+
+  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId({
+    incomingUrl: params.account.incomingUrl,
+    mutableWebhookUsername: params.payload.username,
+    allowInsecureSsl: params.account.allowInsecureSsl,
+    log: params.log,
+  });
+  if (resolvedChatApiUserId !== undefined) {
+    return String(resolvedChatApiUserId);
+  }
+  params.log?.warn(
+    `Could not resolve Chat API user_id for "${params.payload.username}" — falling back to webhook user_id ${params.payload.user_id}. Reply delivery may fail.`,
+  );
+  return params.payload.user_id;
+}
+
+async function processAuthorizedSynologyWebhook(params: {
+  account: ResolvedSynologyChatAccount;
+  deliver: WebhookHandlerDeps["deliver"];
+  log?: WebhookHandlerDeps["log"];
+  message: AuthorizedSynologyWebhook;
+}): Promise<void> {
+  const authorizedWebhookUserId = params.message.payload.user_id;
+  let deliveryUserId = authorizedWebhookUserId;
+  try {
+    deliveryUserId = await resolveSynologyReplyDeliveryUserId({
+      account: params.account,
+      payload: params.message.payload,
+      log: params.log,
+    });
+
+    const deliverPromise = params.deliver({
+      body: params.message.body,
+      from: authorizedWebhookUserId,
+      senderName: params.message.payload.username,
+      provider: "synology-chat",
+      chatType: "direct",
+      accountId: params.account.accountId,
+      commandAuthorized: params.message.commandAuthorized,
+      chatUserId: deliveryUserId,
+    });
+    const timeoutPromise = new Promise<null>((_, reject) =>
+      setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
+    );
+    const reply = await Promise.race([deliverPromise, timeoutPromise]);
+    if (!reply) {
+      return;
+    }
+
+    await sendMessage(
+      params.account.incomingUrl,
+      reply,
+      deliveryUserId,
+      params.account.allowInsecureSsl,
+    );
+    const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
+    params.log?.info?.(
+      `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
+    );
+  } catch (err) {
+    const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
+    params.log?.error?.(
+      `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
+    );
+    await sendMessage(
+      params.account.incomingUrl,
+      "Sorry, an error occurred while processing your message.",
+      deliveryUserId,
+      params.account.allowInsecureSsl,
+    );
+  }
+}
+
 export function createWebhookHandler(deps: WebhookHandlerDeps) {
   const { account, deliver, log } = deps;
   const rateLimiter = getRateLimiter(account);
@@ -258,138 +460,28 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       respondJson(res, 405, { error: "Method not allowed" });
       return;
     }
-
-    // Parse body
-    const bodyResult = await readBody(req);
-    if (!bodyResult.ok) {
-      log?.error("Failed to read request body", bodyResult.error);
-      respondJson(res, bodyResult.statusCode, { error: bodyResult.error });
+    const authorized = await parseAndAuthorizeSynologyWebhook({
+      req,
+      res,
+      account,
+      rateLimiter,
+      log,
+    });
+    if (!authorized.ok) {
       return;
     }
 
-    // Parse payload
-    let payload: SynologyWebhookPayload | null = null;
-    try {
-      payload = parsePayload(req, bodyResult.body);
-    } catch (err) {
-      log?.warn("Failed to parse webhook payload", err);
-      respondJson(res, 400, { error: "Invalid request body" });
-      return;
-    }
-    if (!payload) {
-      respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
-      return;
-    }
-
-    // Token validation
-    if (!validateToken(payload.token, account.token)) {
-      log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
-      respondJson(res, 401, { error: "Invalid token" });
-      return;
-    }
-
-    // DM policy authorization
-    const auth = authorizeUserForDm(payload.user_id, account.dmPolicy, account.allowedUserIds);
-    if (!auth.allowed) {
-      if (auth.reason === "disabled") {
-        respondJson(res, 403, { error: "DMs are disabled" });
-        return;
-      }
-      if (auth.reason === "allowlist-empty") {
-        log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
-        respondJson(res, 403, {
-          error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
-        });
-        return;
-      }
-      log?.warn(`Unauthorized user: ${payload.user_id}`);
-      respondJson(res, 403, { error: "User not authorized" });
-      return;
-    }
-
-    // Rate limit
-    if (!rateLimiter.check(payload.user_id)) {
-      log?.warn(`Rate limit exceeded for user: ${payload.user_id}`);
-      respondJson(res, 429, { error: "Rate limit exceeded" });
-      return;
-    }
-
-    // Sanitize input
-    let cleanText = sanitizeInput(payload.text);
-
-    // Strip trigger word
-    if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
-      cleanText = cleanText.slice(payload.trigger_word.length).trim();
-    }
-
-    if (!cleanText) {
-      respondNoContent(res);
-      return;
-    }
-
-    const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
-    log?.info(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+    log?.info(
+      `Message from ${authorized.message.payload.username} (${authorized.message.payload.user_id}): ${authorized.message.preview}`,
+    );
 
     // ACK immediately so Synology Chat won't remain in "Processing..."
     respondNoContent(res);
-
-    // Default to webhook user_id; may be replaced with Chat API user_id below.
-    let replyUserId = payload.user_id;
-
-    // Deliver to agent asynchronously (with 120s timeout to match nginx proxy_read_timeout)
-    try {
-      // Resolve the Chat-internal user_id for sending replies.
-      // Synology Chat outgoing webhooks use a per-integration user_id that may
-      // differ from the global Chat API user_id required by method=chatbot.
-      // We resolve via the user_list API, matching by nickname/username.
-      const chatUserId = await resolveChatUserId(
-        account.incomingUrl,
-        payload.username,
-        account.allowInsecureSsl,
-        log,
-      );
-      if (chatUserId !== undefined) {
-        replyUserId = String(chatUserId);
-      } else {
-        log?.warn(
-          `Could not resolve Chat API user_id for "${payload.username}" — falling back to webhook user_id ${payload.user_id}. Reply delivery may fail.`,
-        );
-      }
-
-      const sessionKey = `synology-chat-${payload.user_id}`;
-      const deliverPromise = deliver({
-        body: cleanText,
-        from: payload.user_id,
-        senderName: payload.username,
-        provider: "synology-chat",
-        chatType: "direct",
-        sessionKey,
-        accountId: account.accountId,
-        commandAuthorized: auth.allowed,
-        chatUserId: replyUserId,
-      });
-
-      const timeoutPromise = new Promise<null>((_, reject) =>
-        setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
-      );
-
-      const reply = await Promise.race([deliverPromise, timeoutPromise]);
-
-      // Send reply back to Synology Chat using the resolved Chat user_id
-      if (reply) {
-        await sendMessage(account.incomingUrl, reply, replyUserId, account.allowInsecureSsl);
-        const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
-        log?.info(`Reply sent to ${payload.username} (${replyUserId}): ${replyPreview}`);
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-      log?.error(`Failed to process message from ${payload.username}: ${errMsg}`);
-      await sendMessage(
-        account.incomingUrl,
-        "Sorry, an error occurred while processing your message.",
-        replyUserId,
-        account.allowInsecureSsl,
-      );
-    }
+    await processAuthorizedSynologyWebhook({
+      account,
+      deliver,
+      log,
+      message: authorized.message,
+    });
   };
 }

@@ -1,9 +1,16 @@
+import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type {
+  ChatCommandDefinition,
+  CommandArgChoice,
+} from "../../../../src/auto-reply/commands-registry.types.js";
 import type { IconName } from "../icons.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 export type SlashCommandDef = {
+  key: string;
   name: string;
+  aliases?: string[];
   description: string;
   args?: string;
   icon?: IconName;
@@ -16,139 +23,167 @@ export type SlashCommandDef = {
   shortcut?: string;
 };
 
-export const SLASH_COMMANDS: SlashCommandDef[] = [
-  // ── Session ──
+const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
+  help: "book",
+  status: "barChart",
+  usage: "barChart",
+  export: "download",
+  export_session: "download",
+  tools: "terminal",
+  skill: "zap",
+  commands: "book",
+  new: "plus",
+  reset: "refresh",
+  compact: "loader",
+  stop: "stop",
+  clear: "trash",
+  focus: "eye",
+  unfocus: "eye",
+  model: "brain",
+  models: "brain",
+  think: "brain",
+  verbose: "terminal",
+  fast: "zap",
+  agents: "monitor",
+  subagents: "folder",
+  kill: "x",
+  steer: "send",
+  tts: "volume2",
+};
+
+const LOCAL_COMMANDS = new Set([
+  "help",
+  "new",
+  "reset",
+  "stop",
+  "compact",
+  "focus",
+  "model",
+  "think",
+  "fast",
+  "verbose",
+  "export-session",
+  "usage",
+  "agents",
+  "kill",
+]);
+
+const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   {
-    name: "new",
-    description: "Start a new session",
-    icon: "circle",
-    category: "session",
-    executeLocal: true,
-  },
-  {
-    name: "reset",
-    description: "Reset current session",
-    icon: "loader",
-    category: "session",
-    executeLocal: true,
-  },
-  {
-    name: "compact",
-    description: "Compact session context",
-    icon: "loader",
-    category: "session",
-    executeLocal: true,
-  },
-  {
-    name: "stop",
-    description: "Stop current run",
-    icon: "x",
-    category: "session",
-    executeLocal: true,
-  },
-  {
+    key: "clear",
     name: "clear",
     description: "Clear chat history",
-    icon: "x",
+    icon: "trash",
     category: "session",
     executeLocal: true,
   },
-  {
-    name: "focus",
-    description: "Toggle focus mode",
-    icon: "search",
-    category: "session",
-    executeLocal: true,
-  },
+];
 
-  // ── Model ──
-  {
-    name: "model",
-    description: "Show or set model",
-    args: "<name>",
-    icon: "brain",
-    category: "model",
-    executeLocal: true,
-  },
-  {
-    name: "think",
-    description: "Set thinking level",
-    args: "<level>",
-    icon: "brain",
-    category: "model",
-    executeLocal: true,
-    argOptions: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
-  },
-  {
-    name: "verbose",
-    description: "Toggle verbose mode",
-    args: "<on|off|full>",
-    icon: "fileCode",
-    category: "model",
-    executeLocal: true,
-    argOptions: ["on", "off", "full"],
-  },
+const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
+  help: "tools",
+  commands: "tools",
+  tools: "tools",
+  skill: "tools",
+  status: "tools",
+  export_session: "tools",
+  usage: "tools",
+  tts: "tools",
+  agents: "agents",
+  subagents: "agents",
+  kill: "agents",
+  steer: "agents",
+  session: "session",
+  stop: "session",
+  reset: "session",
+  new: "session",
+  compact: "session",
+  focus: "session",
+  unfocus: "session",
+  model: "model",
+  models: "model",
+  think: "model",
+  verbose: "model",
+  fast: "model",
+  reasoning: "model",
+  elevated: "model",
+  queue: "model",
+};
 
-  // ── Tools ──
-  {
-    name: "help",
-    description: "Show available commands",
-    icon: "book",
-    category: "tools",
-    executeLocal: true,
-  },
-  {
-    name: "status",
-    description: "Show system status",
-    icon: "barChart",
-    category: "tools",
-    executeLocal: true,
-  },
-  {
-    name: "export",
-    description: "Export session to Markdown",
-    icon: "arrowDown",
-    category: "tools",
-    executeLocal: true,
-  },
-  {
-    name: "usage",
-    description: "Show token usage",
-    icon: "barChart",
-    category: "tools",
-    executeLocal: true,
-  },
+function normalizeUiKey(command: ChatCommandDefinition): string {
+  return command.key.replace(/[:.-]/g, "_");
+}
 
-  // ── Agents ──
-  {
-    name: "agents",
-    description: "List agents",
-    icon: "monitor",
-    category: "agents",
-    executeLocal: true,
-  },
-  {
-    name: "kill",
-    description: "Abort sub-agents",
-    args: "<id|all>",
-    icon: "x",
-    category: "agents",
-    executeLocal: true,
-  },
-  {
-    name: "skill",
-    description: "Run a skill",
-    args: "<name>",
-    icon: "zap",
-    category: "tools",
-  },
-  {
-    name: "steer",
-    description: "Steer a sub-agent",
-    args: "<id> <msg>",
-    icon: "zap",
-    category: "agents",
-  },
+function getSlashAliases(command: ChatCommandDefinition): string[] {
+  return command.textAliases
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.startsWith("/"))
+    .map((alias) => alias.slice(1));
+}
+
+function getPrimarySlashName(command: ChatCommandDefinition): string | null {
+  const aliases = getSlashAliases(command);
+  if (aliases.length === 0) {
+    return null;
+  }
+  return aliases[0] ?? null;
+}
+
+function formatArgs(command: ChatCommandDefinition): string | undefined {
+  if (!command.args?.length) {
+    return undefined;
+  }
+  return command.args
+    .map((arg) => {
+      const token = `<${arg.name}>`;
+      return arg.required ? token : `[${arg.name}]`;
+    })
+    .join(" ");
+}
+
+function choiceToValue(choice: CommandArgChoice): string {
+  return typeof choice === "string" ? choice : choice.value;
+}
+
+function getArgOptions(command: ChatCommandDefinition): string[] | undefined {
+  const firstArg = command.args?.[0];
+  if (!firstArg || typeof firstArg.choices === "function") {
+    return undefined;
+  }
+  const options = firstArg.choices?.map(choiceToValue).filter(Boolean);
+  return options?.length ? options : undefined;
+}
+
+function mapCategory(command: ChatCommandDefinition): SlashCommandCategory {
+  return CATEGORY_OVERRIDES[normalizeUiKey(command)] ?? "tools";
+}
+
+function mapIcon(command: ChatCommandDefinition): IconName | undefined {
+  return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
+}
+
+function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null {
+  const name = getPrimarySlashName(command);
+  if (!name) {
+    return null;
+  }
+  return {
+    key: command.key,
+    name,
+    aliases: getSlashAliases(command).filter((alias) => alias !== name),
+    description: command.description,
+    args: formatArgs(command),
+    icon: mapIcon(command),
+    category: mapCategory(command),
+    executeLocal: LOCAL_COMMANDS.has(command.key),
+    argOptions: getArgOptions(command),
+  };
+}
+
+export const SLASH_COMMANDS: SlashCommandDef[] = [
+  ...buildBuiltinChatCommands()
+    .map(toSlashCommand)
+    .filter((command): command is SlashCommandDef => command !== null),
+  ...UI_ONLY_COMMANDS,
 ];
 
 const CATEGORY_ORDER: SlashCommandCategory[] = ["session", "model", "tools", "agents"];
@@ -164,7 +199,10 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = filter.toLowerCase();
   const commands = lower
     ? SLASH_COMMANDS.filter(
-        (cmd) => cmd.name.startsWith(lower) || cmd.description.toLowerCase().includes(lower),
+        (cmd) =>
+          cmd.name.startsWith(lower) ||
+          cmd.aliases?.some((alias) => alias.toLowerCase().startsWith(lower)) ||
+          cmd.description.toLowerCase().includes(lower),
       )
     : SLASH_COMMANDS;
   return commands.toSorted((a, b) => {
@@ -173,7 +211,6 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
     if (ai !== bi) {
       return ai - bi;
     }
-    // Exact prefix matches first
     if (lower) {
       const aExact = a.name.startsWith(lower) ? 0 : 1;
       const bExact = b.name.startsWith(lower) ? 0 : 1;
@@ -190,10 +227,6 @@ export type ParsedSlashCommand = {
   args: string;
 };
 
-/**
- * Parse a message as a slash command. Returns null if it doesn't match.
- * Supports `/command`, `/command args...`, and `/command: args...`.
- */
 export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) {
@@ -213,7 +246,12 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
     return null;
   }
 
-  const command = SLASH_COMMANDS.find((cmd) => cmd.name === name.toLowerCase());
+  const normalizedName = name.toLowerCase();
+  const command = SLASH_COMMANDS.find(
+    (cmd) =>
+      cmd.name === normalizedName ||
+      cmd.aliases?.some((alias) => alias.toLowerCase() === normalizedName),
+  );
   if (!command) {
     return null;
   }

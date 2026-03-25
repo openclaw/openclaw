@@ -1,10 +1,16 @@
-import { createDedupeCache } from "../../../infra/dedupe.js";
+import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
-const RECENT_QUEUE_MESSAGE_IDS = createDedupeCache({
+/**
+ * Keep queued message-id dedupe shared across bundled chunks so redeliveries
+ * are rejected no matter which chunk receives the enqueue call.
+ */
+const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
+
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_IDS_KEY, {
   ttlMs: 5 * 60 * 1000,
   maxSize: 10_000,
 });
@@ -53,6 +59,8 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -86,10 +94,13 @@ export function enqueueFollowupRun(
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
   // Use the cached callback to restart the drain now.
-  if (!queue.draining) {
+  if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
   return true;

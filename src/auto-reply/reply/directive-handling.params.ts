@@ -32,10 +32,12 @@ export type HandleDirectiveOnlyCoreParams = {
 
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentThinkLevel?: ThinkLevel;
+  currentFastMode?: boolean;
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
   surface?: string;
+  gatewayClientScopes?: string[];
 };
 
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {

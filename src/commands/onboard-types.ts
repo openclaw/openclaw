@@ -1,16 +1,16 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
-export type AuthChoice =
+export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
   | "claude-cli"
   | "token"
   | "chutes"
-  | "vllm"
-  | "ollama"
+  | "deepseek-api-key"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -35,12 +35,10 @@ export type AuthChoice =
   | "zai-global"
   | "zai-cn"
   | "xiaomi-api-key"
-  | "minimax-cloud"
-  | "minimax"
-  | "minimax-api"
-  | "minimax-api-key-cn"
-  | "minimax-api-lightning"
-  | "minimax-portal"
+  | "minimax-global-oauth"
+  | "minimax-global-api"
+  | "minimax-cn-oauth"
+  | "minimax-cn-api"
   | "opencode-zen"
   | "opencode-go"
   | "github-copilot"
@@ -51,16 +49,19 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-standard-api-key-cn"
+  | "modelstudio-standard-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
-export type AuthChoiceGroupId =
+export type AuthChoice = BuiltInAuthChoice | (string & {});
+
+export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
   | "chutes"
-  | "vllm"
-  | "ollama"
+  | "deepseek"
   | "google"
   | "copilot"
   | "openrouter"
@@ -85,6 +86,7 @@ export type AuthChoiceGroupId =
   | "volcengine"
   | "byteplus"
   | "custom";
+export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -93,7 +95,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
-export type SecretInputMode = "plaintext" | "ref"; // pragma: allowlist secret
+export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -101,7 +103,7 @@ export type OnboardOptions = {
   flow?: "quickstart" | "advanced" | "manual";
   workspace?: string;
   nonInteractive?: boolean;
-  /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
+  /** Required for non-interactive setup; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
   reset?: boolean;
   resetScope?: ResetScope;
@@ -114,9 +116,10 @@ export type OnboardOptions = {
   tokenProfileId?: string;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenExpiresIn?: string;
-  /** API key persistence mode for onboarding flows (default: plaintext). */
+  /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
+  deepseekApiKey?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;
@@ -142,6 +145,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioStandardApiKeyCn?: string;
+  modelstudioStandardApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;

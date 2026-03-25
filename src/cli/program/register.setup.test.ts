@@ -1,8 +1,8 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setupCommandMock = vi.fn();
-const onboardCommandMock = vi.fn();
+const setupWizardCommandMock = vi.fn();
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -14,17 +14,30 @@ vi.mock("../../commands/setup.js", () => ({
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
-  onboardCommand: onboardCommandMock,
+  setupWizardCommand: setupWizardCommandMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/setup.js",
+  "../../commands/onboard.js",
+  "../../runtime.js",
+];
+
 let registerSetupCommand: typeof import("./register.setup.js").registerSetupCommand;
 
 beforeAll(async () => {
   ({ registerSetupCommand } = await import("./register.setup.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerSetupCommand", () => {
@@ -37,7 +50,7 @@ describe("registerSetupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupCommandMock.mockResolvedValue(undefined);
-    onboardCommandMock.mockResolvedValue(undefined);
+    setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
   it("runs setup command by default", async () => {
@@ -49,13 +62,13 @@ describe("registerSetupCommand", () => {
       }),
       runtime,
     );
-    expect(onboardCommandMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs onboard command when --wizard is set", async () => {
+  it("runs setup wizard command when --wizard is set", async () => {
     await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
 
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "remote",
         remoteUrl: "wss://example",
@@ -65,10 +78,10 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs onboard command when wizard-only flags are passed explicitly", async () => {
+  it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive"]);
 
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "remote",
         nonInteractive: true,

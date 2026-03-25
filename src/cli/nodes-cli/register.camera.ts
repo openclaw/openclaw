@@ -31,6 +31,12 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
+function getGatewayInvokePayload(raw: unknown): unknown {
+  return typeof raw === "object" && raw !== null
+    ? (raw as { payload?: unknown }).payload
+    : undefined;
+}
+
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 
@@ -60,7 +66,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const devices = Array.isArray(payload.devices) ? payload.devices : [];
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(devices, null, 2));
+            defaultRuntime.writeJson(devices);
             return;
           }
 
@@ -157,9 +163,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
 
             const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-            const res =
-              typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-            const payload = parseCameraSnapPayload(res.payload);
+            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
             const filePath = cameraTempPath({
               kind: "snap",
               facing,
@@ -180,7 +184,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify({ files: results }, null, 2));
+            defaultRuntime.writeJson({ files: results });
             return;
           }
           defaultRuntime.log(results.map((r) => `MEDIA:${shortenHomePath(r.path)}`).join("\n"));
@@ -229,8 +233,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           });
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload = parseCameraClipPayload(res.payload);
+          const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
           const filePath = await writeCameraClipPayloadToFile({
             payload,
             facing,
@@ -238,20 +241,14 @@ export function registerNodesCameraCommands(nodes: Command) {
           });
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify(
-                {
-                  file: {
-                    facing,
-                    path: filePath,
-                    durationMs: payload.durationMs,
-                    hasAudio: payload.hasAudio,
-                  },
-                },
-                null,
-                2,
-              ),
-            );
+            defaultRuntime.writeJson({
+              file: {
+                facing,
+                path: filePath,
+                durationMs: payload.durationMs,
+                hasAudio: payload.hasAudio,
+              },
+            });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);

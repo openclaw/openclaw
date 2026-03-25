@@ -7,6 +7,15 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
   return {
     ...original,
+  };
+});
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
     getOAuthApiKey: () => undefined,
     getOAuthProviders: () => [],
   };

@@ -9,6 +9,7 @@ import {
   setConsoleTimestampPrefix,
   setLoggerOverride,
 } from "../logging.js";
+import { defaultRuntime } from "../runtime.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,
@@ -77,16 +78,19 @@ describe("enableConsoleCapture", () => {
     vi.useRealTimers();
   });
 
-  it("suppresses discord EventQueue slow listener duplicates", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
-    console.warn(
-      "[EventQueue] Slow listener detected: DiscordMessageListener took 12.3 seconds for event MESSAGE_CREATE",
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["DiscordMessageListener", "DiscordReactionListener", "DiscordReactionRemoveListener"])(
+    "suppresses discord EventQueue slow listener duplicates for %s",
+    (listener) => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const warn = vi.fn();
+      console.warn = warn;
+      enableConsoleCapture();
+      console.warn(
+        `[EventQueue] Slow listener detected: ${listener} took 12.3 seconds for event MESSAGE_CREATE`,
+      );
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -98,7 +102,7 @@ describe("enableConsoleCapture", () => {
     expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
   });
 
-  it("leaves JSON output unchanged when timestamp prefix is enabled", () => {
+  it("prefixes JSON console output when timestamp prefix is enabled", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const log = vi.fn();
     console.log = log;
@@ -106,7 +110,24 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
-    expect(log).toHaveBeenCalledWith(payload);
+    expect(log).toHaveBeenCalledTimes(1);
+    const firstArg = String(log.mock.calls[0]?.[0] ?? "");
+    expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(firstArg.endsWith(` ${payload}`)).toBe(true);
+  });
+
+  it("keeps diagnostics on stderr while runtime JSON stays on stdout", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.log("diag");
+    defaultRuntime.writeJson({ ok: true });
+
+    expect(stderrWrite).toHaveBeenCalledWith("diag\n");
+    expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
   it.each([
