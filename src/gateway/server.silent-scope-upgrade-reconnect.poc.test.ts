@@ -159,7 +159,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const approveSpy = vi
       .spyOn(devicePairingModule, "approveDevicePairing")
       .mockImplementation(
-        async (requestId: string, optionsOrBaseDir?: unknown, maybeBaseDir?: unknown) => {
+        async (requestId: string, optionsOrBaseDir?: unknown, _maybeBaseDir?: unknown) => {
           if (simulatedRace) {
             return await forwardApprove(requestId, optionsOrBaseDir);
           }
