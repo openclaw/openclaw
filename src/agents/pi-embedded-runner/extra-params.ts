@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildD0RunTraceparent } from "../../infra/d0-traceparent.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { log } from "./logger.js";
 
@@ -129,6 +130,7 @@ function createDonutAnalyticsContextWrapper(
       ...options?.headers,
       ...(sessionKey ? { "X-Session-Key": sessionKey } : {}),
       ...(threadId ? { "X-Thread-Id": threadId } : {}),
+      ...(threadRunId ? { traceparent: buildD0RunTraceparent(threadRunId) } : {}),
     };
     const onPayload = options?.onPayload;
 
