@@ -869,12 +869,16 @@ export function explainExecutionTarget(request, options = {}) {
         ? ["--isolate=false"]
         : [];
   const [target] = request.fileFilters;
+  const matchedFiles = context.catalog.resolveFilterMatches(target);
+  const normalizedTarget = matchedFiles[0] ?? normalizeRepoPath(target);
   const { memoryHeavyFiles } = resolveUnitHeavyFileGroups(context);
   const unitMemoryIsolatedFiles = [...memoryHeavyFiles].filter(
     (file) => !context.catalog.unitBehaviorOverrideSet.has(file),
   );
-  const classification = context.catalog.classifyTestFile(target, { unitMemoryIsolatedFiles });
-  const targetedUnit = createTargetedUnit(context, classification, [normalizeRepoPath(target)]);
+  const classification = context.catalog.classifyTestFile(normalizedTarget, {
+    unitMemoryIsolatedFiles,
+  });
+  const targetedUnit = createTargetedUnit(context, classification, [normalizedTarget]);
   return {
     runtimeProfile: context.runtime.runtimeProfileName,
     intentProfile: context.runtime.intentProfile,

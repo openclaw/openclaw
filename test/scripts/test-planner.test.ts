@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
@@ -171,6 +172,39 @@ describe("test planner", () => {
 
     expect(explanation.isolate).toBe(true);
     expect(explanation.reasons).toContain("unit-memory-isolated");
+  });
+
+  it("normalizes absolute explain targets before classification", () => {
+    const relativeExplanation = explainExecutionTarget(
+      {
+        mode: "local",
+        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+      },
+      {
+        env: {
+          OPENCLAW_TEST_LOAD_AWARE: "0",
+        },
+      },
+    );
+    const absoluteExplanation = explainExecutionTarget(
+      {
+        mode: "local",
+        fileFilters: [
+          path.join(process.cwd(), "src/infra/outbound/targets.channel-resolution.test.ts"),
+        ],
+      },
+      {
+        env: {
+          OPENCLAW_TEST_LOAD_AWARE: "0",
+        },
+      },
+    );
+
+    expect(absoluteExplanation.file).toBe(relativeExplanation.file);
+    expect(absoluteExplanation.surface).toBe(relativeExplanation.surface);
+    expect(absoluteExplanation.pool).toBe(relativeExplanation.pool);
+    expect(absoluteExplanation.isolate).toBe(relativeExplanation.isolate);
+    expect(absoluteExplanation.reasons).toEqual(relativeExplanation.reasons);
   });
 
   it("does not leak default-plan shard assignments into targeted units with the same id", () => {
