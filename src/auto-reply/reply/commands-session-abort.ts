@@ -110,7 +110,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   if (params.command.commandBodyNormalized !== "/stop") {
     return null;
   }
-  const unauthorizedStop = rejectUnauthorizedCommand(params, "/stop");
+  const unauthorizedStop = requireGatewayClientScopeForInternalChannel(params, "operator.admin");
   if (unauthorizedStop) {
     return unauthorizedStop;
   }
