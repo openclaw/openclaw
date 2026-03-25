@@ -506,10 +506,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
-            const card =
+            const rawCard =
               ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
+            // Reject empty card objects — they pass the typeof check but cause 400 errors from the Feishu API.
+            const card = rawCard && Object.keys(rawCard).length > 0 ? rawCard : undefined;
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             if (card && mediaUrl) {
@@ -596,10 +598,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
+            const rawCard =
               ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
+            const card = rawCard && Object.keys(rawCard).length > 0 ? rawCard : undefined;
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
               cfg: ctx.cfg,
