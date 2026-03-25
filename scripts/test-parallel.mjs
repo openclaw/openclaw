@@ -11,16 +11,19 @@ import {
 } from "./test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
+  formatCapturedOutputTail,
   hasFatalTestRunOutput,
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
   dedupeFilesPreserveOrder,
+  loadChannelTimingManifest,
   loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
   selectUnitHeavyFileGroups,
   packFilesByDuration,
+  packFilesByDurationWithBaseLoads,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -41,8 +44,19 @@ const writeTempJsonArtifact = (name, value) => {
   fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
   return filePath;
 };
+const sanitizeArtifactName = (value) => {
+  const normalized = value
+    .trim()
+    .replace(/[^a-z0-9._-]+/giu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return normalized || "artifact";
+};
 const cleanupTempArtifacts = () => {
   if (tempArtifactDir === null) {
+    return;
+  }
+  if (process.env.OPENCLAW_TEST_KEEP_TEMP_ARTIFACTS === "1") {
+    console.error(`[test-parallel] keeping temp artifacts at ${tempArtifactDir}`);
     return;
   }
   fs.rmSync(tempArtifactDir, { recursive: true, force: true });
@@ -102,9 +116,10 @@ const parsePoolOverride = (value, fallback) => {
   }
   return fallback;
 };
-// Even on low-memory hosts, keep the isolated lane split so files like
-// git-commit.test.ts still get the worker/process isolation they require.
-const shouldSplitUnitRuns = testProfile !== "serial";
+// Even on low-memory or fully serial hosts, keep the unit lane split so
+// long-lived workers do not accumulate the whole unit transform graph.
+const shouldSplitUnitRuns = true;
+const useLowProfileUnitSchedulingDefaults = testProfile === "low" || testProfile === "serial";
 let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -304,6 +319,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const channelTimingManifest = loadChannelTimingManifest();
 const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
@@ -312,26 +328,20 @@ const parseEnvNumber = (name, fallback) => {
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
-const defaultHeavyUnitFileLimit =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 90
-      : testProfile === "low"
-        ? 36
-        : highMemLocalHost
-          ? 80
-          : 60;
-const defaultHeavyUnitLaneCount =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 6
-      : testProfile === "low"
-        ? 4
-        : highMemLocalHost
-          ? 5
-          : 4;
+const defaultHeavyUnitFileLimit = isMacMiniProfile
+  ? 90
+  : useLowProfileUnitSchedulingDefaults
+    ? 36
+    : highMemLocalHost
+      ? 80
+      : 60;
+const defaultHeavyUnitLaneCount = isMacMiniProfile
+  ? 6
+  : useLowProfileUnitSchedulingDefaults
+    ? 4
+    : highMemLocalHost
+      ? 5
+      : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -341,8 +351,7 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const defaultMemoryHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const defaultMemoryHeavyUnitFileLimit = isCI ? 64 : useLowProfileUnitSchedulingDefaults ? 8 : 16;
 const memoryHeavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
   defaultMemoryHeavyUnitFileLimit,
@@ -377,6 +386,29 @@ const unitFastExcludedFiles = [
 ];
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const estimateChannelDurationMs = (file) =>
+  channelTimingManifest.files[file]?.durationMs ?? channelTimingManifest.defaultDurationMs;
+const resolveEntryTimingEstimator = (entry) => {
+  const configIndex = entry.args.findIndex((arg) => arg === "--config");
+  const config = configIndex >= 0 ? (entry.args[configIndex + 1] ?? "") : "";
+  if (config === "vitest.unit.config.ts") {
+    return estimateUnitDurationMs;
+  }
+  if (config === "vitest.channels.config.ts") {
+    return estimateChannelDurationMs;
+  }
+  if (config === "vitest.extensions.config.ts") {
+    return estimateChannelDurationMs;
+  }
+  return null;
+};
+const estimateEntryFilesDurationMs = (entry, files) => {
+  const estimateDurationMs = resolveEntryTimingEstimator(entry);
+  if (!estimateDurationMs) {
+    return files.length * 1_000;
+  }
+  return files.reduce((totalMs, file) => totalMs + estimateDurationMs(file), 0);
+};
 const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
   if (!Number.isFinite(targetDurationMs) || targetDurationMs <= 0 || files.length <= 1) {
     return [files];
@@ -416,23 +448,69 @@ const channelSharedCandidateFiles = allKnownTestFiles.filter(
     channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
     !channelIsolatedFileSet.has(file),
 );
+const defaultExtensionsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
+const extensionsBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_EXTENSIONS_BATCH_TARGET_MS",
+  defaultExtensionsBatchTargetMs,
+);
 const extensionIsolatedEntries = extensionForkIsolatedFiles.map((file) => ({
   name: `extensions-${path.basename(file, ".test.ts")}-isolated`,
   args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
 }));
+// Shared extensions workers can retain a very large transform graph across
+// hundreds of plugin files on forks/non-isolated runs. Recycle that lane in
+// bounded batches so teardown happens before the worker reaches CI memory-cliff
+// territory and starts surfacing spurious worker-shutdown errors.
+const extensionsSharedBatches = splitFilesByDurationBudget(
+  extensionSharedCandidateFiles,
+  extensionsBatchTargetMs,
+  estimateChannelDurationMs,
+);
+const extensionsSharedEntries = extensionsSharedBatches
+  .filter((batch) => batch.length > 0)
+  .map((batch, batchIndex) => ({
+    name:
+      extensionsSharedBatches.length === 1
+        ? "extensions"
+        : `extensions-batch-${String(batchIndex + 1)}`,
+    serialPhase: "extensions",
+    includeFiles: batch,
+    estimatedDurationMs: estimateEntryFilesDurationMs(
+      { args: ["vitest", "run", "--config", "vitest.extensions.config.ts"] },
+      batch,
+    ),
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-extensions-include-${String(batchIndex + 1)}`,
+        batch,
+      ),
+    },
+    args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
+  }));
 const channelIsolatedEntries = channelIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-channels-isolated`,
   args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
 }));
-const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
+const defaultUnitFastLaneCount = testProfile === "low" ? 8 : isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
-const defaultUnitFastBatchTargetMs = isCI && !isWindows ? 45_000 : 0;
+const defaultUnitFastBatchTargetMs = useLowProfileUnitSchedulingDefaults
+  ? 10_000
+  : isCI && !isWindows
+    ? 45_000
+    : highMemLocalHost
+      ? 45_000
+      : 0;
 const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,
+);
+const defaultChannelsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
+const channelsBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_CHANNELS_BATCH_TARGET_MS",
+  defaultChannelsBatchTargetMs,
 );
 // Heap snapshots on current main show long-lived unit-fast workers retaining
 // transformed Vitest/Vite module graphs rather than app objects. Multiple
@@ -454,6 +532,11 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
     .map((batch, batchIndex) => ({
       name: recycledBatches.length === 1 ? laneName : `${laneName}-batch-${String(batchIndex + 1)}`,
       serialPhase: "unit-fast",
+      includeFiles: batch,
+      estimatedDurationMs: estimateEntryFilesDurationMs(
+        { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
+        batch,
+      ),
       env: {
         OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
           `vitest-unit-fast-include-${String(index + 1)}-${String(batchIndex + 1)}`,
@@ -470,6 +553,33 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
       ],
     }));
 });
+// Shared channel workers retain large transformed module graphs across files on
+// threads/non-isolated runs. Recycle that lane in bounded batches so the
+// process gets torn down before unrelated channel files inherit the full graph.
+const channelsSharedBatches = splitFilesByDurationBudget(
+  channelSharedCandidateFiles,
+  channelsBatchTargetMs,
+  estimateChannelDurationMs,
+);
+const channelsSharedEntries = channelsSharedBatches
+  .filter((batch) => batch.length > 0)
+  .map((batch, batchIndex) => ({
+    name:
+      channelsSharedBatches.length === 1 ? "channels" : `channels-batch-${String(batchIndex + 1)}`,
+    serialPhase: "channels",
+    includeFiles: batch,
+    estimatedDurationMs: estimateEntryFilesDurationMs(
+      { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
+      batch,
+    ),
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-channels-include-${String(batchIndex + 1)}`,
+        batch,
+      ),
+    },
+    args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -551,43 +661,14 @@ const baseRuns = [
             ],
           },
         ]),
-  ...(includeExtensionsSuite
-    ? [
-        ...extensionIsolatedEntries,
-        {
-          name: "extensions",
-          env:
-            extensionSharedCandidateFiles.length > 0
-              ? {
-                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-                    "vitest-extensions-include",
-                    extensionSharedCandidateFiles,
-                  ),
-                }
-              : undefined,
-          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
-        },
-      ]
-    : []),
+  ...(includeExtensionsSuite ? [...extensionIsolatedEntries, ...extensionsSharedEntries] : []),
   ...(includeChannelsSuite
     ? [
         ...channelIsolatedEntries.map((entry) => ({
           ...entry,
           args: [...entry.args.slice(0, 5), ...noIsolateArgs, ...entry.args.slice(5)],
         })),
-        {
-          name: "channels",
-          env:
-            channelSharedCandidateFiles.length > 0
-              ? {
-                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-                    "vitest-channels-include",
-                    channelSharedCandidateFiles,
-                  ),
-                }
-              : undefined,
-          args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
-        },
+        ...channelsSharedEntries,
       ]
     : []),
   ...(includeGatewaySuite
@@ -764,6 +845,65 @@ const createPerFileTargetedEntry = (file) => {
     name: `${formatPerFileEntryName(owner, file)}${target.isolated ? "-isolated" : ""}`,
   };
 };
+const rebuildEntryArgsWithFilters = (entryArgs, filters) => {
+  const baseArgs = entryArgs.slice(0, 2);
+  const { optionArgs } = parsePassthroughArgs(entryArgs.slice(2));
+  return [...baseArgs, ...optionArgs, ...filters];
+};
+const createPinnedShardEntry = (entry, files, fixedShardIndex) => {
+  const nextEntry = {
+    ...entry,
+    name: `${entry.name}-shard-${String(fixedShardIndex)}`,
+    fixedShardIndex,
+    estimatedDurationMs: estimateEntryFilesDurationMs(entry, files),
+  };
+  if (Array.isArray(entry.includeFiles) && entry.includeFiles.length > 0) {
+    return {
+      ...nextEntry,
+      includeFiles: files,
+      env: {
+        ...entry.env,
+        OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+          `${sanitizeArtifactName(entry.name)}-shard-${String(fixedShardIndex)}-include`,
+          files,
+        ),
+      },
+      args: rebuildEntryArgsWithFilters(entry.args, []),
+    };
+  }
+  return {
+    ...nextEntry,
+    args: rebuildEntryArgsWithFilters(entry.args, files),
+  };
+};
+const expandEntryAcrossTopLevelShards = (entry) => {
+  if (configuredShardCount === null || shardCount <= 1 || entry.fixedShardIndex !== undefined) {
+    return [entry];
+  }
+  const estimateDurationMs = resolveEntryTimingEstimator(entry);
+  if (!estimateDurationMs) {
+    return [entry];
+  }
+  const candidateFiles =
+    Array.isArray(entry.includeFiles) && entry.includeFiles.length > 0
+      ? entry.includeFiles
+      : getExplicitEntryFilters(entry.args);
+  if (candidateFiles.length <= 1) {
+    return [entry];
+  }
+  const effectiveShardCount = Math.min(shardCount, Math.max(1, candidateFiles.length - 1));
+  if (effectiveShardCount <= 1) {
+    return [entry];
+  }
+  const buckets = packFilesByDurationWithBaseLoads(
+    candidateFiles,
+    effectiveShardCount,
+    estimateDurationMs,
+  );
+  return buckets.flatMap((files, bucketIndex) =>
+    files.length > 0 ? [createPinnedShardEntry(entry, files, bucketIndex + 1)] : [],
+  );
+};
 const targetedEntries = (() => {
   if (passthroughFileFilters.length === 0) {
     return [];
@@ -806,6 +946,74 @@ const targetedEntries = (() => {
     }
     return [createTargetedEntry(owner, false, uniqueFilters)];
   }).flat();
+})();
+if (configuredShardCount !== null && shardCount > 1) {
+  runs = runs.flatMap((entry) => expandEntryAcrossTopLevelShards(entry));
+}
+const estimateTopLevelEntryDurationMs = (entry) => {
+  if (Number.isFinite(entry.estimatedDurationMs) && entry.estimatedDurationMs > 0) {
+    return entry.estimatedDurationMs;
+  }
+  const filters = getExplicitEntryFilters(entry.args);
+  if (filters.length === 0) {
+    return unitTimingManifest.defaultDurationMs;
+  }
+  return filters.reduce((totalMs, file) => {
+    if (isUnitConfigTestFile(file)) {
+      return totalMs + estimateUnitDurationMs(file);
+    }
+    if (channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
+      return totalMs + 3_000;
+    }
+    if (file.startsWith("extensions/")) {
+      return totalMs + 2_000;
+    }
+    return totalMs + 1_000;
+  }, 0);
+};
+const topLevelSingleShardAssignments = (() => {
+  if (shardIndexOverride === null || shardCount <= 1) {
+    return new Map();
+  }
+
+  // Single-file and other non-shardable explicit lanes would otherwise run on
+  // every shard. Assign them to one top-level shard instead.
+  const entriesNeedingAssignment = runs.filter((entry) => {
+    if (entry.fixedShardIndex !== undefined) {
+      return false;
+    }
+    const explicitFilterCount = countExplicitEntryFilters(entry.args);
+    if (explicitFilterCount === null) {
+      return false;
+    }
+    const effectiveShardCount = Math.min(shardCount, Math.max(1, explicitFilterCount - 1));
+    return effectiveShardCount <= 1;
+  });
+
+  const assignmentMap = new Map();
+  const pinnedShardLoadsMs = Array.from({ length: shardCount }, () => 0);
+  for (const entry of runs) {
+    if (entry.fixedShardIndex === undefined) {
+      continue;
+    }
+    const shardArrayIndex = entry.fixedShardIndex - 1;
+    if (shardArrayIndex < 0 || shardArrayIndex >= pinnedShardLoadsMs.length) {
+      continue;
+    }
+    pinnedShardLoadsMs[shardArrayIndex] += estimateTopLevelEntryDurationMs(entry);
+  }
+  const buckets = packFilesByDurationWithBaseLoads(
+    entriesNeedingAssignment,
+    shardCount,
+    estimateTopLevelEntryDurationMs,
+    pinnedShardLoadsMs,
+  );
+  for (const [bucketIndex, bucket] of buckets.entries()) {
+    for (const entry of bucket) {
+      assignmentMap.set(entry, bucketIndex + 1);
+    }
+  }
+  return assignmentMap;
 })();
 // Node 25 local runs still show cross-process worker shutdown contention even
 // after moving the known heavy files into singleton lanes.
@@ -990,11 +1198,15 @@ const memoryTraceEnabled =
     (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
 const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
 const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
-const heapSnapshotIntervalMs = Math.max(
+const requestedHeapSnapshotIntervalMs = Math.max(
   0,
   parseEnvNumber("OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS", 0),
 );
-const heapSnapshotMinIntervalMs = 5000;
+const heapSnapshotMinIntervalMs = 1000;
+const heapSnapshotIntervalMs =
+  requestedHeapSnapshotIntervalMs > 0
+    ? Math.max(heapSnapshotMinIntervalMs, requestedHeapSnapshotIntervalMs)
+    : 0;
 const heapSnapshotEnabled =
   process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
 const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
@@ -1007,6 +1219,13 @@ const heapSnapshotBaseDir = heapSnapshotEnabled
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
 const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
+const getShardLabel = (args) => {
+  const shardIndex = args.findIndex((arg) => arg === "--shard");
+  if (shardIndex < 0) {
+    return "";
+  }
+  return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
+};
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
@@ -1024,6 +1243,19 @@ const runOnce = (entry, extraArgs = []) =>
           ...extraArgs,
         ]
       : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
+    const shardLabel = getShardLabel(extraArgs);
+    const artifactStem = [
+      sanitizeArtifactName(entry.name),
+      shardLabel ? `shard-${sanitizeArtifactName(shardLabel)}` : "",
+      String(startedAt),
+    ]
+      .filter(Boolean)
+      .join("-");
+    const laneLogPath = path.join(ensureTempArtifactDir(), `${artifactStem}.log`);
+    const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
+    laneLogStream.write(`[test-parallel] entry=${entry.name}\n`);
+    laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
+    laneLogStream.write(`[test-parallel] command=${[pnpm, ...args].join(" ")}\n\n`);
     console.log(
       `[test-parallel] start ${entry.name} workers=${maxWorkers ?? "default"} filters=${String(
         countExplicitEntryFilters(entryArgs) ?? "all",
@@ -1216,6 +1448,7 @@ const runOnce = (entry, extraArgs = []) =>
         }, heapSnapshotIntervalMs);
       }
     } catch (err) {
+      laneLogStream.end();
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
       resolve(1);
       return;
@@ -1225,6 +1458,7 @@ const runOnce = (entry, extraArgs = []) =>
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      laneLogStream.write(text);
       logMemoryTraceForText(text);
       process.stdout.write(chunk);
     });
@@ -1232,11 +1466,13 @@ const runOnce = (entry, extraArgs = []) =>
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      laneLogStream.write(text);
       logMemoryTraceForText(text);
       process.stderr.write(chunk);
     });
     child.on("error", (err) => {
       childError = err;
+      laneLogStream.write(`\n[test-parallel] child error: ${String(err)}\n`);
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
     child.on("close", (code, signal) => {
@@ -1248,16 +1484,56 @@ const runOnce = (entry, extraArgs = []) =>
       }
       children.delete(child);
       const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
+      const elapsedMs = Date.now() - startedAt;
       logMemoryTraceSummary();
+      if (resolvedCode !== 0) {
+        const failureTail = formatCapturedOutputTail(output);
+        const failureArtifactPath = writeTempJsonArtifact(`${artifactStem}-failure`, {
+          entry: entry.name,
+          command: [pnpm, ...args],
+          elapsedMs,
+          error: childError ? String(childError) : null,
+          exitCode: resolvedCode,
+          fatalSeen,
+          logPath: laneLogPath,
+          outputTail: failureTail,
+          signal: signal ?? null,
+        });
+        if (failureTail) {
+          console.error(`[test-parallel] failure tail ${entry.name}\n${failureTail}`);
+        }
+        console.error(
+          `[test-parallel] failure artifacts ${entry.name} log=${laneLogPath} meta=${failureArtifactPath}`,
+        );
+      }
+      laneLogStream.write(
+        `\n[test-parallel] done ${entry.name} code=${String(resolvedCode)} signal=${
+          signal ?? "none"
+        } elapsed=${formatElapsedMs(elapsedMs)}\n`,
+      );
+      laneLogStream.end();
       console.log(
-        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
+        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
       );
       resolve(resolvedCode);
     });
   });
 
 const run = async (entry, extraArgs = []) => {
+  if (entry.fixedShardIndex !== undefined) {
+    if (shardIndexOverride !== null && shardIndexOverride !== entry.fixedShardIndex) {
+      return 0;
+    }
+    return runOnce(entry, extraArgs);
+  }
   const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  const topLevelAssignedShard = topLevelSingleShardAssignments.get(entry);
+  if (topLevelAssignedShard !== undefined) {
+    if (shardIndexOverride !== null && shardIndexOverride !== topLevelAssignedShard) {
+      return 0;
+    }
+    return runOnce(entry, extraArgs);
+  }
   // Vitest requires the shard count to stay strictly below the number of
   // resolved test files, so explicit-filter lanes need a `< fileCount` cap.
   const effectiveShardCount =
@@ -1413,7 +1689,10 @@ if (serialPrefixRuns.length > 0) {
   if (failedSerialPrefix !== undefined) {
     process.exit(failedSerialPrefix);
   }
-  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
+  // Low-profile runs favor stability over overlap once we leave the shared
+  // unit-fast batches; the isolated memory-heavy lanes can still trip over
+  // each other when two singleton Vitest processes overlap.
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 1 : undefined;
   const failedDeferredParallel = isMacMiniProfile
     ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
     : deferredRunConcurrency

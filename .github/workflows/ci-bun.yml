@@ -5,14 +5,39 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-bun-push-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ci-bun-push-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  build-bun-artifacts:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build A2UI bundle
+        run: pnpm canvas:a2ui:bundle
+
+      - name: Upload A2UI bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
   bun-checks:
+    needs: [build-bun-artifacts]
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -37,8 +62,11 @@ jobs:
           install-bun: "true"
           use-sticky-disk: "false"
 
-      - name: Build A2UI bundle
-        run: pnpm canvas:a2ui:bundle
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run Bun test shard
         run: ${{ matrix.command }}

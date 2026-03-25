@@ -13,6 +13,7 @@ const {
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
   getLoadWebMediaMock,
+  getChatSpy,
   getLoadConfigMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
@@ -34,6 +35,8 @@ const {
   useSpy,
 } = harness;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -78,21 +81,22 @@ describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveTelegramFetch } = await import("./fetch.js"));
+    ({
+      createTelegramBot: createTelegramBotBase,
+      getTelegramSequentialKey,
+      setTelegramBotRuntimeForTest,
+    } = await import("./bot.js"));
+  });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
   });
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    const {
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey: importedGetTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js");
+  beforeEach(() => {
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
-    getTelegramSequentialKey = importedGetTelegramSequentialKey;
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -496,10 +500,10 @@ describe("createTelegramBot", () => {
         const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
         expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
         expect(pairingText, testCase.name).toContain("Pairing code:");
-        const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-        expect(code, testCase.name).toBeDefined();
-        expect(pairingText, testCase.name).toContain(`openclaw pairing approve telegram ${code}`);
-        expect(pairingText, testCase.name).not.toContain("<code>");
+        expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+        expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
       }
     });
   });
@@ -542,7 +546,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
@@ -629,7 +638,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
@@ -1856,6 +1870,66 @@ describe("createTelegramBot", () => {
         message_thread_id: testCase.expectedTypingThreadId,
       });
     }
+  });
+
+  it("routes General-topic forum messages via getChat when Telegram omits forum metadata", async () => {
+    resetHarnessSpies();
+    sendChatActionSpy.mockClear();
+    getChatSpy.mockResolvedValue({
+      id: -1001234567890,
+      type: "supergroup",
+      is_forum: true,
+      title: "Forum Group",
+    });
+    let dispatchCall:
+      | {
+          ctx: {
+            SessionKey?: unknown;
+            From?: unknown;
+            MessageThreadId?: unknown;
+            IsForum?: unknown;
+          };
+        }
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+      dispatchCall = params as typeof dispatchCall;
+      await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const handler = getMessageHandler();
+    await handler({
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum Group" },
+        from: { id: 12345, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(getChatSpy).toHaveBeenCalledOnce();
+    expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
+    expect(dispatchCall?.ctx).toEqual(
+      expect.objectContaining({
+        SessionKey: expect.stringContaining("telegram:group:-1001234567890:topic:1"),
+        From: "telegram:group:-1001234567890:topic:1",
+        MessageThreadId: 1,
+        IsForum: true,
+      }),
+    );
+    expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
+      message_thread_id: 1,
+    });
   });
   it("threads forum replies only when a topic id exists", async () => {
     const threadCases = [

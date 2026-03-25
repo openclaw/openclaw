@@ -3,12 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
+import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
+export type ClawHubPackageCompatibility = {
+  pluginApiRange?: string;
+  builtWithOpenClawVersion?: string;
+  minGatewayVersion?: string;
+};
 
 export type ClawHubPackageListItem = {
   name: string;
@@ -31,11 +37,7 @@ export type ClawHubPackageDetail = {
   package:
     | (ClawHubPackageListItem & {
         tags?: Record<string, string>;
-        compatibility?: {
-          pluginApiRange?: string;
-          builtWithOpenClawVersion?: string;
-          minGatewayVersion?: string;
-        } | null;
+        compatibility?: ClawHubPackageCompatibility | null;
         capabilities?: {
           executesCode?: boolean;
           runtimeId?: string;
@@ -78,11 +80,7 @@ export type ClawHubPackageVersion = {
     changelog: string;
     distTags?: string[];
     files?: unknown;
-    compatibility?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { compatibility?: infer C }
-        ? C
-        : never
-      : never;
+    compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
         ? C
@@ -162,13 +160,6 @@ export type ClawHubDownloadResult = {
 };
 
 type FetchLike = typeof fetch;
-
-type ComparableSemver = {
-  major: number;
-  minor: number;
-  patch: number;
-  prerelease: string[] | null;
-};
 
 type ClawHubRequestParams = {
   baseUrl?: string;
@@ -281,90 +272,8 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   return undefined;
 }
 
-function parseComparableSemver(version: string | null | undefined): ComparableSemver | null {
-  if (!version) {
-    return null;
-  }
-  const normalized = version.trim();
-  const match = /^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
-    normalized,
-  );
-  if (!match) {
-    return null;
-  }
-  const [, major, minor, patch, prereleaseRaw] = match;
-  if (!major || !minor || !patch) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(major, 10),
-    minor: Number.parseInt(minor, 10),
-    patch: Number.parseInt(patch, 10),
-    prerelease: prereleaseRaw ? prereleaseRaw.split(".").filter(Boolean) : null,
-  };
-}
-
-function comparePrerelease(a: string[] | null, b: string[] | null): number {
-  if (!a?.length && !b?.length) {
-    return 0;
-  }
-  if (!a?.length) {
-    return 1;
-  }
-  if (!b?.length) {
-    return -1;
-  }
-
-  const max = Math.max(a.length, b.length);
-  for (let i = 0; i < max; i += 1) {
-    const ai = a[i];
-    const bi = b[i];
-    if (ai == null && bi == null) {
-      return 0;
-    }
-    if (ai == null) {
-      return -1;
-    }
-    if (bi == null) {
-      return 1;
-    }
-    const aNum = /^[0-9]+$/.test(ai) ? Number.parseInt(ai, 10) : null;
-    const bNum = /^[0-9]+$/.test(bi) ? Number.parseInt(bi, 10) : null;
-    if (aNum != null && bNum != null) {
-      if (aNum !== bNum) {
-        return aNum < bNum ? -1 : 1;
-      }
-      continue;
-    }
-    if (aNum != null) {
-      return -1;
-    }
-    if (bNum != null) {
-      return 1;
-    }
-    if (ai !== bi) {
-      return ai < bi ? -1 : 1;
-    }
-  }
-  return 0;
-}
-
 function compareSemver(left: string, right: string): number | null {
-  const a = parseComparableSemver(left);
-  const b = parseComparableSemver(right);
-  if (!a || !b) {
-    return null;
-  }
-  if (a.major !== b.major) {
-    return a.major < b.major ? -1 : 1;
-  }
-  if (a.minor !== b.minor) {
-    return a.minor < b.minor ? -1 : 1;
-  }
-  if (a.patch !== b.patch) {
-    return a.patch < b.patch ? -1 : 1;
-  }
-  return comparePrerelease(a.prerelease, b.prerelease);
+  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right));
 }
 
 function upperBoundForCaret(version: string): string | null {

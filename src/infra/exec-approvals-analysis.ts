@@ -9,9 +9,16 @@ export {
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
+  resolveApprovalAuditCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
+  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
   type CommandResolution,
+  type ExecutableResolution,
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 
@@ -665,8 +672,9 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
     return null;
   }
   const argv = [...baseArgv];
+  const execution = segment.resolution?.execution;
   const resolvedExecutable =
-    segment.resolution?.resolvedRealPath?.trim() ?? segment.resolution?.resolvedPath?.trim() ?? "";
+    execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
