@@ -157,7 +157,7 @@ export type CompactEmbeddedPiSessionParams = {
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
-  trigger?: "overflow" | "manual";
+  trigger?: "budget" | "overflow" | "manual";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -1324,6 +1324,7 @@ export async function compactEmbeddedPiSession(
           sessionFile: params.sessionFile,
           tokenBudget: ceCtxInfo.tokens,
           currentTokenCount: params.currentTokenCount,
+          compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
           customInstructions: params.customInstructions,
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
