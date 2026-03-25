@@ -840,6 +840,20 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
+    "supportedArchitectures": {
+      "os": [
+        "current",
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "cpu": [
+        "current",
+        "x64",
+        "arm64",
+        "arm"
+      ]
+    },
     "minimumReleaseAge": 2880,
     "overrides": {
       "hono": "4.12.8",
