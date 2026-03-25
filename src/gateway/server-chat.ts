@@ -547,37 +547,24 @@ export function createAgentEventHandler({
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
-    // Slice off text that was already committed to a previous streaming
-    // segment (before a tool-start boundary) so the UI only receives the
-    // portion produced *after* the last tool call.
-    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
-    const displayText = segmentOffset > 0 ? mergedText.slice(segmentOffset) : mergedText;
-    const basePayload = {
+    const payload = {
       runId: clientRunId,
       sessionKey,
       seq,
       state: "delta" as const,
       timestamp: now,
-    };
-    broadcast(
-      "chat",
-      {
-        ...basePayload,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: displayText }],
-          timestamp: now,
-        },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: mergedText }],
+        timestamp: now,
       },
-      { dropIfSlow: true },
-    );
-    // Node/ACP subscribers (e.g. AcpGatewayAgent.handleDeltaEvent) expect
-    // monotonic full-snapshot text so they can compute incremental chunks
-    // via fullText.slice(sentSoFar).  Send the unsegmented mergedText here.
-    nodeSendToSession(sessionKey, "chat", {
-      ...basePayload,
-      message: { role: "assistant", content: [{ type: "text", text: mergedText }], timestamp: now },
-    });
+    };
+    // All subscribers (WS + Node/ACP) receive monotonic full-snapshot text.
+    // Non-segment-aware clients (TUI, ACP) rely on full snapshots to replace
+    // the current assistant text; sending a segment-only slice would cause
+    // pre-tool text to disappear until the final event.
+    broadcast("chat", payload, { dropIfSlow: true });
+    nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
@@ -622,37 +609,22 @@ export function createAgentEventHandler({
     }
 
     const now = Date.now();
-    // Instead of text (trimmed), derive displayText directly from the raw buffer
-    // so the offset arithmetic stays consistent with how segmentOffset was recorded.
     const rawBuffer = chatRunState.buffers.get(clientRunId) ?? "";
-    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
-    const displayText = segmentOffset > 0 ? rawBuffer.slice(segmentOffset) : rawBuffer;
-    const baseFlushPayload = {
+    const payload = {
       runId: clientRunId,
       sessionKey,
       seq,
       state: "delta" as const,
       timestamp: now,
-    };
-    broadcast(
-      "chat",
-      {
-        ...baseFlushPayload,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: displayText }],
-          timestamp: now,
-        },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawBuffer }],
+        timestamp: now,
       },
-      { dropIfSlow: true },
-    );
-    // Node/ACP subscribers expect monotonic full-snapshot text; send
-    // the unsegmented raw buffer so handleDeltaEvent can compute
-    // incremental chunks correctly.
-    nodeSendToSession(sessionKey, "chat", {
-      ...baseFlushPayload,
-      message: { role: "assistant", content: [{ type: "text", text: rawBuffer }], timestamp: now },
-    });
+    };
+    // All subscribers receive monotonic full-snapshot text (see emitChatDelta).
+    broadcast("chat", payload, { dropIfSlow: true });
+    nodeSendToSession(sessionKey, "chat", payload);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
   };
