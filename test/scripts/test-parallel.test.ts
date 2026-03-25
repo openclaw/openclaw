@@ -248,6 +248,18 @@ describe("scripts/test-parallel lane planning", () => {
     ).toThrowError(/Unsupported test profile "macmini"/u);
   });
 
+  it("rejects unknown explicit surface names", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+
+    expect(() =>
+      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--surface", "channel"], {
+        cwd: repoRoot,
+        env: process.env,
+        encoding: "utf8",
+      }),
+    ).toThrowError(/Unsupported --surface value\(s\): channel/u);
+  });
+
   it("rejects wrapper --files values that look like options", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
 

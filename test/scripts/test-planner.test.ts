@@ -110,4 +110,21 @@ describe("test planner", () => {
     expect(explanation.reasons).toContain("base-pinned-manifest");
     expect(explanation.intentProfile).toBe("normal");
   });
+
+  it("uses hotspot-backed memory isolation when explaining unit tests", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "local",
+        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+      },
+      {
+        env: {
+          OPENCLAW_TEST_LOAD_AWARE: "0",
+        },
+      },
+    );
+
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("unit-memory-isolated");
+  });
 });

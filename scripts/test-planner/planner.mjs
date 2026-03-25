@@ -31,9 +31,21 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
+const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "gateway"]);
+
+const validateExplicitSurfaces = (surfaces) => {
+  const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
+  if (invalidSurfaces.length > 0) {
+    throw new Error(
+      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, gateway.`,
+    );
+  }
+};
+
 const buildRequestedSurfaces = (request, env) => {
   const explicit = normalizeSurfaces(request.surfaces ?? []);
   if (explicit.length > 0) {
+    validateExplicitSurfaces(explicit);
     return explicit;
   }
   const surfaces = [];
@@ -186,52 +198,37 @@ const withIncludeFileEnv = (context, unitId, files) => ({
   OPENCLAW_VITEST_INCLUDE_FILE: context.writeTempJsonArtifact(unitId, files),
 });
 
-const buildDefaultUnits = (context, request) => {
-  const {
-    env,
-    runtime,
-    executionBudget,
-    catalog,
-    unitTimingManifest,
-    channelTimingManifest,
-    unitMemoryHotspotManifest,
-  } = context;
-  const noIsolateArgs = context.noIsolateArgs;
-  const selectedSurfaces = buildRequestedSurfaces(request, env);
-  const selectedSurfaceSet = new Set(selectedSurfaces);
-
-  const defaultHeavyUnitFileLimit =
-    runtime.intentProfile === "max"
-      ? Math.max(executionBudget.heavyUnitFileLimit, 90)
-      : executionBudget.heavyUnitFileLimit;
-  const defaultHeavyUnitLaneCount =
-    runtime.intentProfile === "max"
-      ? Math.max(executionBudget.heavyUnitLaneCount, 6)
-      : executionBudget.heavyUnitLaneCount;
+const resolveUnitHeavyFileGroups = (context) => {
+  const { env, runtime, executionBudget, catalog, unitTimingManifest, unitMemoryHotspotManifest } =
+    context;
   const heavyUnitFileLimit = parseEnvNumber(
     env,
     "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
-    defaultHeavyUnitFileLimit,
+    runtime.intentProfile === "max"
+      ? Math.max(executionBudget.heavyUnitFileLimit, 90)
+      : executionBudget.heavyUnitFileLimit,
   );
   const heavyUnitLaneCount = parseEnvNumber(
     env,
     "OPENCLAW_TEST_HEAVY_UNIT_LANES",
-    defaultHeavyUnitLaneCount,
+    runtime.intentProfile === "max"
+      ? Math.max(executionBudget.heavyUnitLaneCount, 6)
+      : executionBudget.heavyUnitLaneCount,
   );
   const heavyUnitMinDurationMs = parseEnvNumber(env, "OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-  const defaultMemoryHeavyUnitFileLimit = executionBudget.memoryHeavyUnitFileLimit;
   const memoryHeavyUnitFileLimit = parseEnvNumber(
     env,
     "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
-    defaultMemoryHeavyUnitFileLimit,
+    executionBudget.memoryHeavyUnitFileLimit,
   );
   const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
     env,
     "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
     unitMemoryHotspotManifest.defaultMinDeltaKb,
   );
-  const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitFiles } =
-    selectUnitHeavyFileGroups({
+  return {
+    heavyUnitLaneCount,
+    ...selectUnitHeavyFileGroups({
       candidates: catalog.allKnownUnitFiles,
       behaviorOverrides: catalog.unitBehaviorOverrideSet,
       timedLimit: heavyUnitFileLimit,
@@ -240,7 +237,21 @@ const buildDefaultUnits = (context, request) => {
       memoryMinDeltaKb: memoryHeavyUnitMinDeltaKb,
       timings: unitTimingManifest,
       hotspots: unitMemoryHotspotManifest,
-    });
+    }),
+  };
+};
+
+const buildDefaultUnits = (context, request) => {
+  const { env, executionBudget, catalog, unitTimingManifest, channelTimingManifest } = context;
+  const noIsolateArgs = context.noIsolateArgs;
+  const selectedSurfaces = buildRequestedSurfaces(request, env);
+  const selectedSurfaceSet = new Set(selectedSurfaces);
+
+  const {
+    heavyUnitLaneCount,
+    memoryHeavyFiles: memoryHeavyUnitFiles,
+    timedHeavyFiles: timedHeavyUnitFiles,
+  } = resolveUnitHeavyFileGroups(context);
   const unitMemoryIsolatedFiles = [...memoryHeavyUnitFiles].filter(
     (file) => !catalog.unitBehaviorOverrideSet.has(file),
   );
@@ -858,7 +869,11 @@ export function explainExecutionTarget(request, options = {}) {
         ? ["--isolate=false"]
         : [];
   const [target] = request.fileFilters;
-  const classification = context.catalog.classifyTestFile(target, { unitMemoryIsolatedFiles: [] });
+  const { memoryHeavyFiles } = resolveUnitHeavyFileGroups(context);
+  const unitMemoryIsolatedFiles = [...memoryHeavyFiles].filter(
+    (file) => !context.catalog.unitBehaviorOverrideSet.has(file),
+  );
+  const classification = context.catalog.classifyTestFile(target, { unitMemoryIsolatedFiles });
   const targetedUnit = createTargetedUnit(context, classification, [normalizeRepoPath(target)]);
   return {
     runtimeProfile: context.runtime.runtimeProfileName,
