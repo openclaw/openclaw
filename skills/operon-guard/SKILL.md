@@ -2,23 +2,23 @@
 name: operon-guard
 description: "Pre-flight trust verification for AI agents. Verify behavior, detect injection vulnerabilities, check for PII leaks, and measure reliability before granting Write/Execute permissions."
 metadata:
-{
-"openclaw":
-{
-"emoji": "🛡️",
-"requires": { "bins": ["operon-guard"] },
-"install":
-[
-{
-"id": "uv",
-"kind": "uv",
-"package": "operon-guard",
-"bins": ["operon-guard"],
-"label": "Install operon-guard (uv)",
-},
-],
-},
-}
+  {
+    "openclaw":
+      {
+        "emoji": "🛡️",
+        "requires": { "bins": ["operon-guard"] },
+        "install":
+          [
+            {
+              "id": "uv",
+              "kind": "uv",
+              "package": "operon-guard",
+              "bins": ["operon-guard"],
+              "label": "Install operon-guard (uv)",
+            },
+          ],
+      },
+  }
 ---
 
 # Operon Guard — Agent Trust Verification
