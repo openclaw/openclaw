@@ -1512,6 +1512,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       // Bound flush requests so a stalled Mattermost API cannot block
       // final delivery forever (ID=2978002394).
       const FLUSH_TIMEOUT_MS = 8_000;
+      const flushAbortController = new AbortController();
       const flushTimeout = new Promise<"timeout">((r) =>
         setTimeout(() => r("timeout"), FLUSH_TIMEOUT_MS),
       );
@@ -1521,9 +1522,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             replyToId: effectiveReplyToId,
           });
+          // Register in patchInflight so awaitInflightBounded can track it
+          patchInflight = sendPromise;
+          patchAbortController = flushAbortController;
+          sendPromise.finally(() => {
+            if (patchInflight === sendPromise) patchInflight = null;
+            if (patchAbortController === flushAbortController) patchAbortController = null;
+          });
           const raceResult = await Promise.race([sendPromise, flushTimeout]);
           if (raceResult === "timeout") {
             logVerboseMessage("mattermost stream-patch flush send timed out, skipping preview");
+            flushAbortController.abort();
             return;
           }
           const result = raceResult;
@@ -1538,10 +1547,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           const patchPromise = patchMattermostPost(blockStreamingClient, {
             postId: streamMessageId,
             message: text,
+            signal: flushAbortController.signal,
+          });
+          // Register in patchInflight so awaitInflightBounded can track it
+          patchInflight = patchPromise;
+          patchAbortController = flushAbortController;
+          patchPromise.finally(() => {
+            if (patchInflight === patchPromise) patchInflight = null;
+            if (patchAbortController === flushAbortController) patchAbortController = null;
           });
           const raceResult = await Promise.race([patchPromise, flushTimeout]);
           if (raceResult === "timeout") {
             logVerboseMessage("mattermost stream-patch flush patch timed out, skipping");
+            flushAbortController.abort();
             return;
           }
           lastSentText = text;
