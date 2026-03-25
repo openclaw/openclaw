@@ -25,6 +25,9 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
 };
 
+// Per-session draft storage (in-memory; cleared on page reload).
+const sessionDraftMap = new Map<string, string>();
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -487,8 +490,16 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  // Save the outgoing draft so it can be restored if the user returns to this session.
+  if (state.chatMessage.trim()) {
+    sessionDraftMap.set(state.sessionKey, state.chatMessage);
+  } else {
+    sessionDraftMap.delete(state.sessionKey);
+  }
+
   state.sessionKey = nextSessionKey;
-  state.chatMessage = "";
+  // Restore any saved draft for the incoming session (empty string if none).
+  state.chatMessage = sessionDraftMap.get(nextSessionKey) ?? "";
   state.chatStream = null;
   // P1: Clear queued chat items from the previous session
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
