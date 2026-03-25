@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - TUI/chat: preserve pending user messages when a slow local run emits an empty final event, but still defer and flush the needed history reload after the newer active run finishes so silent/tool-only runs do not stay incomplete. (#53130) Thanks @joelnishanth.
 - Marketplace/agents: correct the ClawHub skill URL in agent docs and stream marketplace archive downloads to disk so installs avoid excess memory use and fail cleanly on empty responses. (#54160) Thanks @QuinnH496.
 - Gateway/channels: keep channel startup sequential while isolating per-channel boot failures, so one broken channel no longer blocks later channels from starting. (#54215) Thanks @JonathanJing.
+- Discord/gateway supervision: centralize gateway error handling behind a lifetime-owned supervisor so early, active, and late-teardown Carbon gateway errors stay classified consistently and stop surfacing as process-killing teardown crashes.
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Telegram/forum topics: recover `#General` topic `1` routing when Telegram omits forum metadata, including native commands, interactive callbacks, inbound message context, and fallback error replies. (#53699) thanks @huntharo
 - Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
@@ -50,6 +51,13 @@ Docs: https://docs.openclaw.ai
 - Feishu/MSTeams message tool: keep provider-native `card` payloads optional in merged tool schemas so media-only sends stop failing validation before channel runtime dispatch. (#53715) Thanks @lndyzwdxhs.
 - Feishu/startup: keep `requireMention` enforcement strict when bot identity startup probes fail, raise the startup bot-info timeout to 30s, and add cancellable background identity recovery so mention-gated groups recover without noisy fallback. (#43788) Thanks @lefarcen.
 - Plugins: enforce terminal hook decision semantics for tool/message guards (#54241) Thanks @joshavant.
+- Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
+- Telegram/pairing: render pairing codes and approval commands as Telegram-only code blocks while keeping shared pairing replies plain text for other channels. (#52784) Thanks @sumukhj1219.
+- Telegram/native commands: run native slash-command execution against the resolved runtime snapshot so DM commands still reply when fresh config reads surface unresolved SecretRefs. (#53179) Thanks @nimbleenigma.
+- Telegram/photos: preflight Telegram photo dimension and aspect-ratio rules, and fall back to document sends when image metadata is invalid or unavailable so photo uploads stop failing with `PHOTO_INVALID_DIMENSIONS`. (#52545) Thanks @hnshah.
+- Feishu/groups: when `groupPolicy` is `open`, stop implicitly requiring @mentions for unset `requireMention`, so image, file, audio, and other non-text group messages reach the bot unless operators explicitly keep mention gating on. (#54058) Thanks @byungsker.
+- Agents/cron: mark best-effort announce runs as not delivered when any payload fails, and log those partial delivery failures instead of silently reporting success. (#42535) Thanks @MoerAI.
+- CLI/Telegram topics: route `message thread create` through Telegram `topic-create` with the required topic `name` field so Telegram forum topic creation works from the CLI again. (#54336) Thanks @andyliu.
 
 ## 2026.3.23
 
