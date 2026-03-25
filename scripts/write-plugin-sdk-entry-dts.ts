@@ -35,7 +35,6 @@ const entrypoints = [
   "minimax-portal-auth",
   "nextcloud-talk",
   "nostr",
-  "open-prose",
   "phone-control",
   "qwen-portal-auth",
   "synology-chat",
