@@ -6,6 +6,7 @@ import {
   dispatchInboundReplyWithBase,
   logInboundDrop,
   readStoreAllowFromForDmPolicy,
+  resolveAckReaction,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithCommandGate,
@@ -350,19 +351,6 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  // Best-effort acknowledgment reaction — room-level takes precedence over account-level.
-  const ackReaction = roomConfig?.ackReaction ?? account.config.ackReaction;
-  if (ackReaction) {
-    sendReactionNextcloudTalk(roomToken, message.messageId, ackReaction, {
-      accountId: account.accountId,
-      cfg: config,
-    }).catch((err: unknown) => {
-      runtime.error?.(
-        `nextcloud-talk: ack reaction failed for ${message.messageId}: ${String(err)}`,
-      );
-    });
-  }
-
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -372,6 +360,19 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
   });
+
+  // Send ack reaction (fire-and-forget) if configured.
+  const ackEmoji = resolveAckReaction(config as OpenClawConfig, route.agentId, {
+    channel: "nextcloud-talk",
+    accountId: account.accountId,
+  });
+  if (ackEmoji) {
+    sendReactionNextcloudTalk(roomToken, message.messageId, ackEmoji, {
+      accountId: account.accountId,
+    }).catch((err: unknown) => {
+      runtime.log?.(`nextcloud-talk: ack reaction failed: ${String(err)}`);
+    });
+  }
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
   const storePath = core.channel.session.resolveStorePath(
