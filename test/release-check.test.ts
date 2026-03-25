@@ -279,7 +279,7 @@ describe("collectForbiddenPackPaths", () => {
   });
 });
 
-describe("collectMissingPackPaths", () => {
+describe("listBundledPluginBuildEntries / listBundledPluginPackArtifacts", () => {
   it("adds implicit runtime API build entries and pack artifacts for bundled channel plugins", () => {
     expect(bundledPluginBuildEntries).toMatchObject({
       "extensions/discord/runtime-api": path.join("extensions", "discord", "runtime-api.ts"),
@@ -301,7 +301,9 @@ describe("collectMissingPackPaths", () => {
       ]),
     );
   });
+});
 
+describe("collectMissingPackPaths", () => {
   it("requires the shipped channel catalog, control ui, and optional bundled metadata", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
