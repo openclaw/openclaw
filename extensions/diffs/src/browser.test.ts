@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
+
+let PlaywrightDiffScreenshotter: typeof import("./browser.js").PlaywrightDiffScreenshotter;
+let resetSharedBrowserStateForTests: typeof import("./browser.js").resetSharedBrowserStateForTests;
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -19,18 +22,22 @@ describe("PlaywrightDiffScreenshotter", () => {
   let outputPath: string;
   let cleanupRootDir: () => Promise<void>;
 
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
+      await import("./browser.js"));
+  });
+
   beforeEach(async () => {
     vi.useFakeTimers();
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
-    const browserModule = await import("./browser.js");
-    await browserModule.resetSharedBrowserStateForTests();
+    await resetSharedBrowserStateForTests();
   });
 
   afterEach(async () => {
-    const browserModule = await import("./browser.js");
-    await browserModule.resetSharedBrowserStateForTests();
+    await resetSharedBrowserStateForTests();
     vi.useRealTimers();
     await cleanupRootDir();
   });
@@ -131,8 +138,6 @@ describe("PlaywrightDiffScreenshotter", () => {
       boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
     });
     launchMock.mockResolvedValue(browser);
-    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
-
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
       browserIdleMs: 1_000,
@@ -200,7 +205,6 @@ async function createScreenshotterHarness(options?: {
   }> = [];
   const browser = createMockBrowser(pages, options);
   launchMock.mockResolvedValue(browser);
-  const { PlaywrightDiffScreenshotter } = await import("./browser.js");
   const screenshotter = new PlaywrightDiffScreenshotter({
     config: createConfig(),
     browserIdleMs: 1_000,
