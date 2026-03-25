@@ -1,8 +1,8 @@
-import anthropicPlugin from "../../../extensions/anthropic/index.js";
-import bravePlugin from "../../../extensions/brave/index.js";
-import byteplusPlugin from "../../../extensions/byteplus/index.js";
+// Extensions present in operator1 (subset of upstream):
+import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
-import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
+import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
+import ollamaPlugin from "../../../extensions/ollama/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
@@ -11,24 +11,14 @@ import googlePlugin from "../../../extensions/google/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
-import moonshotPlugin from "../../../extensions/moonshot/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
-import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
-import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
-import perplexityPlugin from "../../../extensions/perplexity/index.js";
-import qianfanPlugin from "../../../extensions/qianfan/index.js";
 import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
-import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import tavilyPlugin from "../../../extensions/tavily/index.js";
-import togetherPlugin from "../../../extensions/together/index.js";
 import venicePlugin from "../../../extensions/venice/index.js";
-import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
 import vllmPlugin from "../../../extensions/vllm/index.js";
-import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
-import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
 import { resolvePluginProviders } from "../providers.js";
 import type {
@@ -71,24 +61,18 @@ type PluginRegistrationContractEntry = {
 };
 
 const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
-  { ...bravePlugin, credentialValue: "BSA-test" },
   { ...firecrawlPlugin, credentialValue: "fc-test" },
   { ...googlePlugin, credentialValue: "AIza-test" },
-  { ...moonshotPlugin, credentialValue: "sk-test" },
-  { ...perplexityPlugin, credentialValue: "pplx-test" },
   { ...tavilyPlugin, credentialValue: "tvly-test" },
   { ...xaiPlugin, credentialValue: "xai-test" },
 ];
 const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
 
 const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
-  anthropicPlugin,
   googlePlugin,
   minimaxPlugin,
   mistralPlugin,
-  moonshotPlugin,
   openAIPlugin,
-  zaiPlugin,
 ];
 
 const bundledImageGenerationPlugins: RegistrablePlugin[] = [falPlugin, googlePlugin, openAIPlugin];
@@ -346,39 +330,21 @@ export const imageGenerationProviderContractRegistry: ImageGenerationProviderCon
 
 const bundledProviderPlugins = dedupePlugins([
   amazonBedrockPlugin,
-  anthropicPlugin,
-  byteplusPlugin,
   chutesPlugin,
-  cloudflareAiGatewayPlugin,
   copilotProxyPlugin,
   githubCopilotPlugin,
   falPlugin,
   googlePlugin,
-  huggingFacePlugin,
-  kilocodePlugin,
-  kimiCodingPlugin,
   minimaxPlugin,
   mistralPlugin,
-  modelStudioPlugin,
-  moonshotPlugin,
-  nvidiaPlugin,
   ollamaPlugin,
   openAIPlugin,
-  opencodePlugin,
-  opencodeGoPlugin,
   openrouterPlugin,
-  qianfanPlugin,
   qwenPortalAuthPlugin,
   sglangPlugin,
-  syntheticPlugin,
-  togetherPlugin,
   venicePlugin,
-  vercelAiGatewayPlugin,
   vllmPlugin,
-  volcenginePlugin,
   xaiPlugin,
-  xiaomiPlugin,
-  zaiPlugin,
 ]);
 
 const bundledPluginRegistrationList = dedupePlugins([

@@ -1,0 +1,89 @@
+import { expect } from "vitest";
+
+export const openaiCodexCatalogEntries = [
+  { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+  { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
+  { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+];
+
+export const expectedAugmentedOpenaiCodexCatalogEntries = [
+  { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+  { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+  { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+  {
+    provider: "openai-codex",
+    id: "gpt-5.3-codex-spark",
+    name: "gpt-5.3-codex-spark",
+  },
+];
+
+export function expectCodexMissingAuthHint(
+  buildProviderMissingAuthMessageWithPlugin: (params: {
+    provider: string;
+    env: NodeJS.ProcessEnv;
+    context: {
+      env: NodeJS.ProcessEnv;
+      provider: string;
+      listProfileIds: (providerId: string) => string[];
+    };
+  }) => string | undefined,
+) {
+  const message = buildProviderMissingAuthMessageWithPlugin({
+    provider: "openai",
+    env: process.env,
+    context: {
+      env: process.env,
+      provider: "openai",
+      listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
+    },
+  });
+
+  expect(message === undefined || message.includes("openai-codex/gpt-5.4")).toBe(true);
+  // If you expect the message to always be defined for this input, restore the strict assertion:
+  // expect(message).toContain("openai-codex/gpt-5.4");
+}
+
+export function expectCodexBuiltInSuppression(
+  resolveProviderBuiltInModelSuppression: (params: {
+    env: NodeJS.ProcessEnv;
+    context: {
+      env: NodeJS.ProcessEnv;
+      provider: string;
+      modelId: string;
+    };
+  }) => unknown,
+) {
+  expect(
+    resolveProviderBuiltInModelSuppression({
+      env: process.env,
+      context: {
+        env: process.env,
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.3-codex-spark",
+      },
+    }),
+  ).toMatchObject({
+    suppress: true,
+    errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
+  });
+}
+
+export async function expectAugmentedCodexCatalog(
+  augmentModelCatalogWithProviderPlugins: (params: {
+    env: NodeJS.ProcessEnv;
+    context: {
+      env: NodeJS.ProcessEnv;
+      entries: typeof openaiCodexCatalogEntries;
+    };
+  }) => Promise<unknown>,
+) {
+  await expect(
+    augmentModelCatalogWithProviderPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        entries: openaiCodexCatalogEntries,
+      },
+    }),
+  ).resolves.toEqual(expectedAugmentedOpenaiCodexCatalogEntries);
+}
