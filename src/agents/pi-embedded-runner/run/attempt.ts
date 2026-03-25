@@ -8,6 +8,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -905,6 +907,7 @@ export async function runEmbeddedAttempt(
           providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
           toolFallback: fallbackProviderConfig?.toolFallback,
           reactProfile: fallbackProviderConfig?.reactProfile,
+          configDir: resolveStateDir(),
         }
       );
       const { effectiveExtraParams } = applyExtraParamsToAgent(

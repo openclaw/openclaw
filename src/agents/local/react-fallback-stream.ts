@@ -171,9 +171,11 @@ export function parseReActResponse(
   };
 }
 
-import type { StreamFn, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { getModelCapability, updateModelCapability } from "./capabilities-cache.js";
 import { discoverLocalCapabilities, isLocalProvider } from "./capabilities-discovery.js";
+import { runBackgroundCapabilityProbe } from "./capability-prober.js";
 
 export interface DiscoveryOptions {
   modelId: string;
@@ -190,26 +192,114 @@ export function wrapStreamFnWithReActFallback(
     providerType: string;
     toolFallback?: "react" | "none" | "auto";
     reactProfile?: "minimal" | "verbose";
+    configDir?: string;
   },
 ): StreamFn {
-  return (model, context, options) => {
+  return async (model, context, options) => {
     const capabilities = discoverLocalCapabilities({
       modelId: config.modelId,
       providerType: config.providerType,
     });
 
-    let shouldApplyFallback = false;
     const isLocal = isLocalProvider(config.providerType);
+    const configDir = config.configDir;
 
+    let currentStatus = "native";
+    if (isLocal && configDir) {
+      currentStatus = await getModelCapability(configDir, config.providerType, config.modelId);
+      if (currentStatus === "unknown") {
+        // Trigger background probe for all new models
+        queueMicrotask(() =>
+          runBackgroundCapabilityProbe({
+            streamFn: nativeStreamFn,
+            modelId: config.modelId,
+            providerId: config.providerType,
+            configDir,
+          }),
+        );
+      }
+    }
+
+    let shouldApplyFallback = false;
     if (config.toolFallback === "react") {
       shouldApplyFallback = true;
-    } else if (config.toolFallback !== "none" && isLocal && capabilities.toolFormat === "none") {
+    } else if (config.toolFallback === "none") {
+      shouldApplyFallback = false;
+    } else if (currentStatus === "react") {
+      shouldApplyFallback = true;
+    } else if (isLocal && currentStatus === "unknown" && capabilities.toolFormat === "none") {
+      // Heuristic fallback only if we haven't probed yet and it's a known non-tool-calling model
       shouldApplyFallback = true;
     }
 
     if (!shouldApplyFallback || !context.tools || context.tools.length === 0) {
-      // Pass through natively
-      return nativeStreamFn(model, context, options);
+      const native = await nativeStreamFn(model, context, options);
+
+      // Snoop result even for native pass if unknown to help update cache
+      if (isLocal && configDir && currentStatus === "unknown") {
+        const wrappedStream = createAssistantMessageEventStream();
+
+        const snoop = async () => {
+          try {
+            let hasNativeToolCall = false;
+            let hasReActAction = false;
+            let firstChunkDoneReceived = false;
+
+            for await (const chunk of native) {
+              wrappedStream.push(chunk);
+              if (chunk.type === "done" && !firstChunkDoneReceived) {
+                firstChunkDoneReceived = true;
+                const content = chunk.message.content as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+                if (content.some((p) => p.type === "toolCall")) {
+                  hasNativeToolCall = true;
+                }
+                const textOutput = content
+                  .filter((p) => p.type === "text")
+                  .map((p) => p.text ?? "")
+                  .join("");
+                if (textOutput.includes("Action:") || textOutput.includes("Thought:")) {
+                  hasReActAction = true;
+                }
+              }
+            }
+
+            if (hasNativeToolCall) {
+              await updateModelCapability(configDir, config.providerType, config.modelId, "native");
+            } else if (hasReActAction) {
+              await updateModelCapability(configDir, config.providerType, config.modelId, "react");
+            }
+            wrappedStream.end();
+          } catch {
+            wrappedStream.push({
+              type: "error",
+              reason: "error",
+              error: {
+                role: "assistant",
+                content: [],
+                stopReason: "error",
+                api: "",
+                provider: "",
+                model: "",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                timestamp: Date.now(),
+              },
+            } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+            wrappedStream.end();
+          }
+        };
+
+        queueMicrotask(() => void snoop());
+        return wrappedStream;
+      }
+
+      return native;
     }
 
     // Apply fallback logic
@@ -230,7 +320,7 @@ export function wrapStreamFnWithReActFallback(
         for await (const chunk of native) {
           if (chunk.type === "done") {
             // Intercept done: Extract text parts
-            const textParts = (chunk.message.content as Array<{ type: string; text?: string }>)
+            const textParts = (chunk.message.content as any[]) // eslint-disable-line @typescript-eslint/no-explicit-any
               .filter((p) => p.type === "text")
               .map((p) => p.text ?? "")
               .join("");
@@ -256,7 +346,7 @@ export function wrapStreamFnWithReActFallback(
               });
             }
 
-            (chunk as { message: { content: unknown } }).message.content = newContent;
+            (chunk as any).message.content = newContent; // eslint-disable-line @typescript-eslint/no-explicit-any
             chunk.reason = parsed.toolCalls.length > 0 ? "toolUse" : chunk.reason;
 
             wrappedStream.push(chunk);
@@ -271,7 +361,7 @@ export function wrapStreamFnWithReActFallback(
           reason: "error",
           error: {
             role: "assistant",
-            content: [] as Array<{ type: "text"; text: string }>,
+            content: [],
             stopReason: "error",
             api: "",
             provider: "",
@@ -285,8 +375,8 @@ export function wrapStreamFnWithReActFallback(
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
             timestamp: Date.now(),
-          } as unknown as AgentMessage,
-        });
+          },
+        } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
         wrappedStream.end();
       }
     };
