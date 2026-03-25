@@ -14,6 +14,9 @@ ARG BOUNDARY_VERSION=v0.20.1
 ARG ARGOCD_VERSION=v3.3.2
 ARG SENTRY_CLI_VERSION=3.3.2
 ARG DUNE_CLI_VERSION=0.1.5
+# Pin the Vercel CLI to keep the SRE runtime aligned with the main runtime image.
+# See docs/reference/RELEASING.md for coordinated version bumps.
+ARG OPENCLAW_VERCEL_CLI_VERSION=50.37.0
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -37,11 +40,12 @@ COPY ${OPENCLAW_LOCAL_TARBALL} /tmp/openclaw-local.tgz
 RUN mkdir -p /srv/openclaw/repos/openclaw-sre \
   && if [ -s /tmp/openclaw-local.tgz ]; then \
       tar -xzf /tmp/openclaw-local.tgz -C /srv/openclaw/repos/openclaw-sre --strip-components=1 package; \
-      npm install -g /tmp/openclaw-local.tgz; \
+      npm install -g --no-fund --no-audit /tmp/openclaw-local.tgz; \
     else \
-      npm install -g "openclaw@${OPENCLAW_VERSION}"; \
+      npm install -g --no-fund --no-audit "openclaw@${OPENCLAW_VERSION}"; \
     fi \
-  && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
+  && npm install -g --no-fund --no-audit "@tobilu/qmd@${QMD_VERSION}" "vercel@${OPENCLAW_VERCEL_CLI_VERSION}" \
+  && vercel --version >/dev/null \
   && rm -f /tmp/openclaw-local.tgz
 
 RUN export FOUNDRY_DIR=/opt/foundry \

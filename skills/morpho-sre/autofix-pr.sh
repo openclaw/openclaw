@@ -36,7 +36,7 @@ Env guards:
   AUTO_PR_NOTIFY_USER_ID=<U...>      (default: first SLACK_ALLOWED_USER_IDS value)
   AUTO_PR_NOTIFY_STRICT=1|0          (default: 1)
   AUTO_PR_GIT_USER_NAME=<name>       (default: OpenClaw SRE Bot)
-  AUTO_PR_GIT_USER_EMAIL=<email>     (default: openclaw-sre-bot@morpho.dev)
+  AUTO_PR_GIT_USER_EMAIL=<email>     (default and enforced: 264278285+prd-carapulse[bot]@users.noreply.github.com)
   AUTO_PR_TRACKING_LABEL=<label>     (default: openclaw-sre; empty disables)
   AUTO_PR_LINEAR_TICKET_API=<path>   (default: ./linear-ticket-api.sh next to this script)
   AUTO_PR_LINEAR_CREATE=1|0          (default: 1; create Linear issue when missing)
@@ -62,12 +62,38 @@ for cmd in awk bash base64 curl git gh grep jq node sed tr; do
 done
 
 PR_TITLE_PREFIX="[OPENCLAW-SRE]"
+AUTO_PR_READONLY_BOT_EMAIL='264278285+prd-carapulse[bot]@users.noreply.github.com'
 
 truthy() {
   case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+resolve_auto_pr_git_user_email() {
+  local email="${AUTO_PR_GIT_USER_EMAIL:-$AUTO_PR_READONLY_BOT_EMAIL}"
+  if [[ "$email" != "$AUTO_PR_READONLY_BOT_EMAIL" ]]; then
+    printf 'AUTO_PR_GIT_USER_EMAIL must be %s (got %s)\n' "$AUTO_PR_READONLY_BOT_EMAIL" "$email" >&2
+    return 1
+  fi
+  printf '%s\n' "$email"
+}
+
+ensure_repo_git_identity() {
+  local repo_path="${1:-}"
+  local git_user_name git_user_email
+
+  if [[ -z "$repo_path" || ! -d "$repo_path" ]]; then
+    echo "ensure_repo_git_identity requires a repo path" >&2
+    return 1
+  fi
+
+  git_user_name="${AUTO_PR_GIT_USER_NAME:-OpenClaw SRE Bot}"
+  git_user_email="$(resolve_auto_pr_git_user_email)" || return 1
+
+  git -C "$repo_path" config user.name "$git_user_name"
+  git -C "$repo_path" config user.email "$git_user_email"
 }
 
 ensure_pr_title_prefix() {
@@ -1533,13 +1559,8 @@ if ! git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-# Ensure commits can be authored in ephemeral runtime clones.
-if [[ -z "$(git -C "$REPO_PATH" config --get user.name || true)" ]]; then
-  git -C "$REPO_PATH" config user.name "${AUTO_PR_GIT_USER_NAME:-OpenClaw SRE Bot}"
-fi
-if [[ -z "$(git -C "$REPO_PATH" config --get user.email || true)" ]]; then
-  git -C "$REPO_PATH" config user.email "${AUTO_PR_GIT_USER_EMAIL:-openclaw-sre-bot@morpho.dev}"
-fi
+# Ensure commits in ephemeral runtime clones always use the readonly bot identity.
+ensure_repo_git_identity "$REPO_PATH"
 
 origin_raw="$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || true)"
 if [[ -n "$origin_raw" ]]; then

@@ -15,6 +15,7 @@ sed -n "1,$((END_LINE - 1))p" "$TARGET_SCRIPT" >"$PARTIAL_SCRIPT"
 source "$PARTIAL_SCRIPT"
 
 REPO_SLUG="morpho-org/openclaw-sre"
+READONLY_BOT_EMAIL='264278285+prd-carapulse[bot]@users.noreply.github.com'
 
 reset_auth_state() {
   RESOLVED_AUTH_TOKEN=""
@@ -236,10 +237,42 @@ fi
 rg -F 'AUTO_PR_SIGNED_COMMITS=0 is no longer supported' "$TMP/signed-mode.err" >/dev/null
 unset AUTO_PR_SIGNED_COMMITS
 
+IDENTITY_REPO="$TMP/identity-repo"
+git init "$IDENTITY_REPO" >/dev/null 2>&1
+git -C "$IDENTITY_REPO" config user.name 'wrong bot'
+git -C "$IDENTITY_REPO" config user.email 'carapulse@morpho.org'
+ensure_repo_git_identity "$IDENTITY_REPO"
+test "$(git -C "$IDENTITY_REPO" config user.name)" = 'OpenClaw SRE Bot'
+test "$(git -C "$IDENTITY_REPO" config user.email)" = "$READONLY_BOT_EMAIL"
+
+AUTO_PR_GIT_USER_EMAIL='carapulse@morpho.org'
+if ensure_repo_git_identity "$IDENTITY_REPO" >/dev/null 2>"$TMP/identity.err"; then
+  echo "expected ensure_repo_git_identity to reject non-readonly bot email" >&2
+  exit 1
+fi
+rg -F "AUTO_PR_GIT_USER_EMAIL must be $READONLY_BOT_EMAIL" "$TMP/identity.err" >/dev/null
+unset AUTO_PR_GIT_USER_EMAIL
+
 rg -F 'if declare -F refresh_auth_context >/dev/null 2>&1 && refresh_auth_context 1; then' "$TARGET_SCRIPT" >/dev/null
 rg -F 'if refresh_auth_context 1; then' "$TARGET_SCRIPT" >/dev/null
 
 rg -F 'AUTO_PR_SIGNED_COMMITS=0 is no longer supported' "$TARGET_SCRIPT" >/dev/null
+rg -F 'AUTO_PR_GIT_USER_EMAIL=<email>     (default and enforced: 264278285+prd-carapulse[bot]@users.noreply.github.com)' "$TARGET_SCRIPT" >/dev/null
+rg -F "AUTO_PR_READONLY_BOT_EMAIL='264278285+prd-carapulse[bot]@users.noreply.github.com'" "$TARGET_SCRIPT" >/dev/null
+rg -F 'ensure_repo_git_identity "$REPO_PATH"' "$TARGET_SCRIPT" >/dev/null
+rg -F 'AUTO_PR_GIT_USER_EMAIL must be %s (got %s)\n' "$TARGET_SCRIPT" >/dev/null
+if rg -F 'openclaw-sre-bot@morpho.dev' "$TARGET_SCRIPT" >/dev/null; then
+  echo "unexpected legacy bot email remains in autofix-pr.sh" >&2
+  exit 1
+fi
+if rg -F 'carapulse@morpho.org' "$TARGET_SCRIPT" >/dev/null; then
+  echo "unexpected morpho bot email remains in autofix-pr.sh" >&2
+  exit 1
+fi
+if rg -F 'if [[ -z "$(git -C "$REPO_PATH" config --get user.email || true)" ]]; then' "$TARGET_SCRIPT" >/dev/null; then
+  echo "unexpected conditional git email fallback remains in autofix-pr.sh" >&2
+  exit 1
+fi
 
 if rg -F 'git -C "$REPO_PATH" commit -m "$COMMIT_MSG"' "$TARGET_SCRIPT" >/dev/null; then
   echo "unexpected local git commit fallback remains in autofix-pr.sh" >&2

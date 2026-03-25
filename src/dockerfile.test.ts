@@ -66,4 +66,13 @@ describe("Dockerfile", () => {
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
     );
   });
+
+  it("installs vercel in the runtime image for the bundled skill", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain('ARG OPENCLAW_VERCEL_CLI_VERSION="50.37.0"');
+    expect(dockerfile).toContain(
+      'npm install -g --no-fund --no-audit "vercel@${OPENCLAW_VERCEL_CLI_VERSION}"',
+    );
+    expect(dockerfile).toContain("vercel --version >/dev/null");
+  });
 });

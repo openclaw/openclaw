@@ -113,6 +113,10 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
+# Pin the Vercel CLI for reproducible runtime images; bump intentionally with the
+# SRE runtime image and Dockerfile tests when updating. See
+# docs/reference/RELEASING.md for coordinated version bumps.
+ARG OPENCLAW_VERCEL_CLI_VERSION="50.37.0"
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -161,6 +165,10 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
       sleep $((attempt * 2)); \
     done && \
     chmod -R a+rX "$COREPACK_HOME"
+
+# Keep the bundled read-only Vercel skill usable in container deployments.
+RUN npm install -g --no-fund --no-audit "vercel@${OPENCLAW_VERCEL_CLI_VERSION}" && \
+    vercel --version >/dev/null
 
 # Install additional system packages needed by your skills or extensions.
 # Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
