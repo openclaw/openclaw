@@ -53,7 +53,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
+import { pinActivePluginChannelRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -570,6 +570,8 @@ export async function startGatewayServer(
       baseMethods,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
+  } else {
+    setActivePluginRegistry(emptyPluginRegistry);
   }
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -713,6 +715,7 @@ export async function startGatewayServer(
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
     pluginRegistry,
+    pinChannelRegistry: !minimalTestGateway,
     deps,
     canvasRuntime,
     canvasHostEnabled,
