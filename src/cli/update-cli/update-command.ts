@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -20,6 +21,7 @@ import {
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
+  fetchNpmPackageTargetStatus,
   resolveNpmChannelTag,
   checkUpdateStatus,
 } from "../../infra/update-check.js";
@@ -131,6 +133,38 @@ function tryResolveInvocationCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function resolvePackageRuntimePreflightError(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+    return null;
+  }
+  const target = params.tag.trim();
+  if (!target) {
+    return null;
+  }
+  const status = await fetchNpmPackageTargetStatus({
+    target,
+    timeoutMs: params.timeoutMs,
+  });
+  if (status.error) {
+    return null;
+  }
+  const satisfies = nodeVersionSatisfiesEngine(process.versions.node ?? null, status.nodeEngine);
+  if (satisfies !== false) {
+    return null;
+  }
+  const targetLabel = status.version ?? target;
+  return [
+    `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
+    `The requested package requires ${status.nodeEngine}.`,
+    "Upgrade Node to 22.16+ or Node 24, then rerun `openclaw update`.",
+    "Bare `npm i -g openclaw` can silently install an older compatible release.",
+    "After upgrading Node, use `npm i -g openclaw@latest`.",
+  ].join("\n");
 }
 
 function resolveServiceRefreshEnv(
@@ -879,6 +913,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
+  }
+
+  if (updateInstallKind === "package") {
+    const runtimePreflightError = await resolvePackageRuntimePreflightError({
+      tag,
+      timeoutMs,
+    });
+    if (runtimePreflightError) {
+      defaultRuntime.error(runtimePreflightError);
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   const showProgress = !opts.json && process.stdout.isTTY;
