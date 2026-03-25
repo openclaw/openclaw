@@ -16,7 +16,9 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     },
     resolveAgentDir: () => "/tmp/openclaw/agents/main",
     resolveAgentWorkspaceDir: () => "/tmp/openclaw/workspace/main",
-    resolveAgentIdentity: () => ({ name: "tester" }),
+    resolveAgentIdentity: (_cfg: CoreConfig, agentId?: string) => ({
+      name: agentId === "voicey" ? "voicey" : "tester",
+    }),
     resolveThinkingDefault: () => "off",
     resolveAgentTimeoutMs: () => 30_000,
     ensureAgentWorkspace: async () => {},
@@ -38,7 +40,13 @@ function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) 
   if (!firstCall) {
     throw new Error("voice response generator did not invoke the embedded agent");
   }
-  const args = firstCall[0] as { extraSystemPrompt?: string } | undefined;
+  const args = firstCall[0] as
+    | {
+        extraSystemPrompt?: string;
+        provider?: string;
+        model?: string;
+      }
+    | undefined;
   if (!args?.extraSystemPrompt) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
@@ -50,12 +58,15 @@ async function runGenerateVoiceResponse(
   overrides?: {
     runtime?: CoreAgentDeps;
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
+    voiceConfig?: Record<string, unknown>;
+    coreConfig?: CoreConfig;
   },
 ) {
   const voiceConfig = VoiceCallConfigSchema.parse({
     responseTimeoutMs: 5000,
+    ...(overrides?.voiceConfig ?? {}),
   });
-  const coreConfig = {} as CoreConfig;
+  const coreConfig = overrides?.coreConfig ?? ({} as CoreConfig);
   const runtime = overrides?.runtime ?? createAgentRuntime(payloads).runtime;
 
   const result = await generateVoiceResponse({
@@ -117,5 +128,47 @@ describe("generateVoiceResponse", () => {
     ]);
 
     expect(result.text).toBe("Absolutely. Tell me what you want to do next.");
+  });
+
+  it("uses the selected response agent model before falling back to global defaults", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([{ text: '{"spoken":"Hi."}' }]);
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      voiceConfig: {
+        responseAgent: "voicey",
+      },
+      coreConfig: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-default" } },
+          list: [{ id: "voicey", model: { primary: "anthropic/claude-voice" } }],
+        },
+      } as CoreConfig,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.provider).toBe("anthropic");
+    expect(args.model).toBe("claude-voice");
+  });
+
+  it("supports string agent model config for the selected response agent", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([{ text: '{"spoken":"Hi."}' }]);
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      voiceConfig: {
+        responseAgent: "voicey",
+      },
+      coreConfig: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-default" } },
+          list: [{ id: "voicey", model: "google/gemini-voice" }],
+        },
+      } as CoreConfig,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.provider).toBe("google");
+    expect(args.model).toBe("gemini-voice");
   });
 });

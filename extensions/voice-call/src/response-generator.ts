@@ -50,6 +50,42 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function resolveModelPrimary(raw: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const primary = (raw as { primary?: unknown }).primary;
+  if (typeof primary !== "string") {
+    return undefined;
+  }
+  const trimmed = primary.trim();
+  return trimmed || undefined;
+}
+
+function resolveVoiceAgentPrimaryModel(
+  coreConfig: CoreConfig,
+  agentId: string,
+): string | undefined {
+  const agents =
+    (coreConfig?.agents as { defaults?: { model?: unknown }; list?: unknown } | undefined) ??
+    undefined;
+  const entries = Array.isArray(agents?.list) ? agents.list : [];
+  const normalizedAgentId = agentId.trim().toLowerCase();
+  const selectedAgent = entries.find((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const id = (entry as { id?: unknown }).id;
+    return typeof id === "string" && id.trim().toLowerCase() === normalizedAgentId;
+  }) as { model?: unknown } | undefined;
+
+  return resolveModelPrimary(selectedAgent?.model) ?? resolveModelPrimary(agents?.defaults?.model);
+}
+
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -216,19 +252,12 @@ export async function generateVoiceResponse(
     agentId,
   });
 
-  // Resolve model from config
-  // Prefer explicit voice responseModel, then the agent primary model, then runtime defaults.
-  const agents = coreConfig?.agents as Record<string, unknown> | undefined;
-  const agentDefaults = (agents?.defaults ?? {}) as Record<string, unknown>;
-  const agentModelRaw = agentDefaults?.model;
-  // agents.defaults.model can be a string ("provider/model") or an object ({ primary: "..." })
-  const agentPrimary =
-    typeof agentModelRaw === "string"
-      ? agentModelRaw
-      : ((agentModelRaw as Record<string, unknown> | undefined)?.primary as string | undefined);
+  // Resolve model from config.
+  // Prefer explicit voice responseModel, then the selected response agent's model,
+  // then the global agent default, then runtime defaults.
   const modelRef =
     voiceConfig.responseModel ||
-    agentPrimary ||
+    resolveVoiceAgentPrimaryModel(coreConfig, agentId) ||
     `${agentRuntime.defaults.provider}/${agentRuntime.defaults.model}`;
   const slashIndex = modelRef.indexOf("/");
   const provider =

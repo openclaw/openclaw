@@ -685,7 +685,6 @@ export class TwilioProvider implements VoiceCallProvider {
       if (ttsProvider.streamForTelephony) {
         console.log(`[voice-call] Using streaming TTS for stream ${streamSid}`);
         let remainder: Buffer = Buffer.alloc(0);
-        let audioSent = false;
         let abortListenerAttached = false;
         let streamTimedOut = false;
         const streamAbort = new AbortController();
@@ -742,7 +741,6 @@ export class TwilioProvider implements VoiceCallProvider {
                 chunkAttempts += 1;
                 if (chunkResult.sent) {
                   chunkDelivered += 1;
-                  audioSent = true;
                 }
                 totalBytesSent += CHUNK_SIZE;
                 remainder = remainder.subarray(CHUNK_SIZE);
@@ -755,11 +753,11 @@ export class TwilioProvider implements VoiceCallProvider {
             }
           }
         } catch (err) {
-          if (audioSent) {
-            // Partial audio already sent — do not fall back to <Say> which would
-            // replay the entire text, causing a jarring double-response.
+          if (chunkDelivered > 0) {
+            // Audio already reached the stream — do not fall back to buffered playback,
+            // which would replay the full text and create a jarring double-response.
             console.warn(
-              `[voice-call] Streaming TTS failed after partial audio sent; suppressing fallback:`,
+              `[voice-call] Streaming TTS failed after audio delivery; suppressing fallback:`,
               err instanceof Error ? err.message : err,
             );
             console.log(
