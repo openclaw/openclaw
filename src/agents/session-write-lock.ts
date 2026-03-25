@@ -171,6 +171,28 @@ async function releaseHeldLock(
   }
 }
 
+type FileHandleInternal = Record<symbol, unknown> & {
+  fd: number;
+};
+
+function getFileHandleSymbols(handle: fs.FileHandle): {
+  kHandle?: { releaseFD: () => void };
+  kFd?: number;
+} {
+  const internal = handle as unknown as FileHandleInternal;
+  const result: { kHandle?: { releaseFD: () => void }; kFd?: number } = {};
+  for (const sym of Object.getOwnPropertySymbols(handle)) {
+    const str = sym.toString();
+    if (str.includes("kHandle")) {
+      result.kHandle = internal[sym] as { releaseFD: () => void };
+    }
+    if (str.includes("kFd")) {
+      result.kFd = internal[sym] as number;
+    }
+  }
+  return result;
+}
+
 /**
  * Synchronously release all held locks.
  * Used during process exit when async operations aren't reliable.
@@ -179,7 +201,18 @@ function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
     const fd = held.handle.fd;
     try {
+      const symbols = getFileHandleSymbols(held.handle);
+      if (symbols.kHandle?.releaseFD) {
+        symbols.kHandle.releaseFD();
+      }
       fsSync.closeSync(fd);
+      const fdSym = Object.getOwnPropertySymbols(held.handle).find((s) =>
+        s.toString().includes("kFd"),
+      );
+      if (fdSym) {
+        const internal = held.handle as unknown as FileHandleInternal;
+        internal[fdSym] = -1;
+      }
     } catch {
       // Ignore errors during cleanup - best effort
     }
