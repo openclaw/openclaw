@@ -1266,6 +1266,12 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
+      const latest = getLatestSubagentRunByChildSessionKey(key);
+      if (latest) {
+        const latestControllerSessionKey =
+          latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+        return latestControllerSessionKey === spawnedBy;
+      }
       return entry?.spawnedBy === spawnedBy;
     })
     .filter(([, entry]) => {
