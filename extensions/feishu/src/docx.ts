@@ -1,6 +1,6 @@
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
@@ -536,11 +536,13 @@ async function resolveUploadInput(
     const absolutePath = isAbsolute(imageInput);
 
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
-      const buffer = await fs.readFile(candidate);
-      if (buffer.length > maxBytes) {
-        throw new Error(`Local file exceeds limit: ${buffer.length} bytes > ${maxBytes} bytes`);
-      }
-      return { buffer, fileName: explicitFileName ?? basename(candidate) };
+      // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
+      const resolvedPath = resolve(candidate);
+      const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
+        maxBytes,
+        optimizeImages: false,
+      });
+      return { buffer: loaded.buffer, fileName: explicitFileName ?? basename(candidate) };
     }
 
     if (absolutePath && !existsSync(candidate)) {
@@ -594,12 +596,14 @@ async function resolveUploadInput(
     };
   }
 
-  const buffer = await fs.readFile(filePath!);
-  if (buffer.length > maxBytes) {
-    throw new Error(`Local file exceeds limit: ${buffer.length} bytes > ${maxBytes} bytes`);
-  }
+  // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
+  const resolvedFilePath = resolve(filePath!);
+  const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
+    maxBytes,
+    optimizeImages: false,
+  });
   return {
-    buffer,
+    buffer: loaded.buffer,
     fileName: explicitFileName || basename(filePath!),
   };
 }
