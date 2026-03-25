@@ -27,6 +27,7 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
@@ -561,11 +562,15 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+  const hasAnyMedia = collectPayloadMediaSources(payloads).length > 0;
+  const computedMediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
     cfg,
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
   });
+  const mediaLocalRoots = hasAnyMedia
+    ? Array.from(new Set([...computedMediaLocalRoots, resolvePreferredOpenClawTmpDir()]))
+    : computedMediaLocalRoots;
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,

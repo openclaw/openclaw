@@ -105,8 +105,8 @@ async function withTelegramGatewayWritebackFixture(
             label: "Telegram",
             outbound: {
               deliveryMode: "direct",
-              sendText: async ({ cfg, to, text, accountId, gatewayClientScopes }) =>
-                ({
+              sendText: async ({ cfg, to, text, accountId, gatewayClientScopes }) => {
+                return {
                   channel: "telegram",
                   ...(await sendMessageTelegram(to, text, {
                     cfg,
@@ -118,9 +118,10 @@ async function withTelegramGatewayWritebackFixture(
                       sendMessage,
                     },
                   })),
-                }),
-              sendPoll: async ({ cfg, to, poll, accountId, gatewayClientScopes, threadId }) =>
-                ({
+                };
+              },
+              sendPoll: async ({ cfg, to, poll, accountId, gatewayClientScopes, threadId }) => {
+                return {
                   channel: "telegram",
                   ...(await sendPollTelegram(to, poll, {
                     cfg,
@@ -136,7 +137,8 @@ async function withTelegramGatewayWritebackFixture(
                       sendPoll,
                     },
                   })),
-                }),
+                };
+              },
             },
           }),
         },
