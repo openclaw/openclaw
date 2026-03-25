@@ -8,7 +8,7 @@ import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 type ConversationStoreData = {
   version: 1;
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
+  conversations: Record<string, StoredConversationReference>;
 };
 
 const STORE_FILENAME = "msteams-conversations.json";
@@ -26,9 +26,7 @@ function parseTimestamp(value: string | undefined): number | null {
   return parsed;
 }
 
-function pruneToLimit(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
-) {
+function pruneToLimit(conversations: Record<string, StoredConversationReference>) {
   const entries = Object.entries(conversations);
   if (entries.length <= MAX_CONVERSATIONS) {
     return conversations;
@@ -45,7 +43,7 @@ function pruneToLimit(
 }
 
 function pruneExpired(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
+  conversations: Record<string, StoredConversationReference>,
   nowMs: number,
   ttlMs: number,
 ) {
