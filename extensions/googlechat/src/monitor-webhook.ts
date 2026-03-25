@@ -96,6 +96,23 @@ export function createGoogleChatWebhookRequestHandler(params: {
   webhookInFlightLimiter: WebhookInFlightLimiter;
   processEvent: (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  const logAuthFailure = (opts: {
+    targets: WebhookTarget[];
+    source: "header" | "addon";
+    reasons: string[];
+    reqUrl: string;
+  }) => {
+    const { targets, source, reasons, reqUrl } = opts;
+    const reasonText = reasons.length > 0 ? reasons.join("; ") : "no match";
+    const message = `[googlechat] webhook auth rejected (${source}) path=${reqUrl} reasons=${reasonText}`;
+    const logger = targets[0]?.runtime.error ?? targets[0]?.runtime.log;
+    if (logger) {
+      logger(message);
+      return;
+    }
+    console.error(message);
+  };
+
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
       req,
@@ -133,6 +150,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
         };
 
         if (headerBearer) {
+          const authFailures: string[] = [];
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
@@ -143,10 +161,21 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 audience: target.audience,
                 expectedAddOnPrincipal: target.account.config.appPrincipal,
               });
+              if (!verification.ok) {
+                authFailures.push(
+                  `account=${target.account.accountId} reason=${verification.reason ?? "unauthorized"}`,
+                );
+              }
               return verification.ok;
             },
           });
           if (!selectedTarget) {
+            logAuthFailure({
+              targets,
+              source: "header",
+              reasons: authFailures,
+              reqUrl: String(req.url ?? "/"),
+            });
             return true;
           }
 
@@ -168,6 +197,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
             return true;
           }
 
+          const authFailures: string[] = [];
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
@@ -178,10 +208,21 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 audience: target.audience,
                 expectedAddOnPrincipal: target.account.config.appPrincipal,
               });
+              if (!verification.ok) {
+                authFailures.push(
+                  `account=${target.account.accountId} reason=${verification.reason ?? "unauthorized"}`,
+                );
+              }
               return verification.ok;
             },
           });
           if (!selectedTarget) {
+            logAuthFailure({
+              targets,
+              source: "addon",
+              reasons: authFailures,
+              reqUrl: String(req.url ?? "/"),
+            });
             return true;
           }
         }
