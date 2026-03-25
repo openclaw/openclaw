@@ -145,7 +145,11 @@ function resolveLoaderPluginSdkPackageRoot(
           cwd,
           moduleUrl: params.moduleUrl,
         })
-      : null);
+      : null) ??
+    // sdk-alias.ts is always compiled into the openclaw package, so import.meta.url
+    // provides a reliable fallback for locating the openclaw root when the plugin
+    // lives outside the installation directory (e.g. ~/.openclaw/extensions/).
+    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   return (
     fromCwd ??
     fromExplicitHints ??
