@@ -8,6 +8,7 @@ import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import type { DiscordGatewayEvent, DiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type ExecApprovalsHandler = {
@@ -56,8 +57,7 @@ export async function runDiscordGatewayLifecycle(params: {
   voiceManagerRef: { current: DiscordVoiceManager | null };
   execApprovalsHandler: ExecApprovalsHandler | null;
   threadBindings: { stop: () => void };
-  pendingGatewayErrors?: unknown[];
-  releaseEarlyGatewayErrorGuard?: () => void;
+  gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
 }) {
   const HELLO_TIMEOUT_MS = 30000;
@@ -68,7 +68,7 @@ export async function runDiscordGatewayLifecycle(params: {
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
-  const gatewayEmitter = getDiscordGatewayEmitter(gateway);
+  const gatewayEmitter = params.gatewaySupervisor.emitter ?? getDiscordGatewayEmitter(gateway);
   const stopGatewayLogging = attachDiscordGatewayLogging({
     emitter: gatewayEmitter,
     runtime: params.runtime,
@@ -128,7 +128,6 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
-    gatewayEmitter?.once("error", () => {});
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
@@ -274,45 +273,30 @@ export async function runDiscordGatewayLifecycle(params: {
   gatewayEmitter?.on("debug", onGatewayDebug);
 
   let sawDisallowedIntents = false;
-  const logGatewayError = (err: unknown) => {
-    if (params.isDisallowedIntentsError(err)) {
+  const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
+    if (event.type === "disallowed-intents") {
       sawDisallowedIntents = true;
       params.runtime.error?.(
         danger(
           "discord: gateway closed with code 4014 (missing privileged gateway intents). Enable the required intents in the Discord Developer Portal or disable them in config.",
         ),
       );
-      return;
+      return "stop";
     }
-    params.runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+    params.runtime.error?.(danger(`discord gateway error: ${event.message}`));
+    return event.shouldStopLifecycle ? "stop" : "continue";
   };
-  const shouldStopOnGatewayError = (err: unknown) => {
-    const message = String(err);
-    return (
-      message.includes("Max reconnect attempts") ||
-      message.includes("Fatal Gateway error") ||
-      params.isDisallowedIntentsError(err)
-    );
-  };
-  const drainPendingGatewayErrors = (): "continue" | "stop" => {
-    const pendingGatewayErrors = params.pendingGatewayErrors ?? [];
-    if (pendingGatewayErrors.length === 0) {
-      return "continue";
-    }
-    const queuedErrors = [...pendingGatewayErrors];
-    pendingGatewayErrors.length = 0;
-    for (const err of queuedErrors) {
-      logGatewayError(err);
-      if (!shouldStopOnGatewayError(err)) {
-        continue;
+  const drainPendingGatewayErrors = (): "continue" | "stop" =>
+    params.gatewaySupervisor.drainPending((event) => {
+      const decision = handleGatewayEvent(event);
+      if (decision !== "stop") {
+        return "continue";
       }
-      if (params.isDisallowedIntentsError(err)) {
+      if (event.type === "disallowed-intents") {
         return "stop";
       }
-      throw err;
-    }
-    return "continue";
-  };
+      throw event.err;
+    });
   try {
     if (params.execApprovalsHandler) {
       await params.execApprovalsHandler.start();
@@ -395,16 +379,19 @@ export async function runDiscordGatewayLifecycle(params: {
       });
     }
 
+    if (drainPendingGatewayErrors() === "stop") {
+      return;
+    }
+
     await waitForDiscordGatewayStop({
       gateway: gateway
         ? {
-            emitter: gatewayEmitter,
             disconnect: () => gateway.disconnect(),
           }
         : undefined,
       abortSignal: params.abortSignal,
-      onGatewayError: logGatewayError,
-      shouldStopOnError: shouldStopOnGatewayError,
+      gatewaySupervisor: params.gatewaySupervisor,
+      onGatewayEvent: handleGatewayEvent,
       registerForceStop: (forceStop) => {
         forceStopHandler = forceStop;
         if (queuedForceStopError !== undefined) {
@@ -420,14 +407,7 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
-    // attach a safety listener before releasing other listeners so that late
-    // "error" events emitted by Carbon during teardown do not become uncaught
-    // exceptions and crash the entire gateway process.
-    const suppressLateError = (err: unknown) => {
-      params.runtime.error?.(danger(`discord: suppressed late gateway error: ${String(err)}`));
-    };
-    gatewayEmitter?.on("error", suppressLateError);
-    params.releaseEarlyGatewayErrorGuard?.();
+    params.gatewaySupervisor.detachLifecycle();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
     reconnectStallWatchdog.stop();
@@ -442,6 +422,5 @@ export async function runDiscordGatewayLifecycle(params: {
       await params.execApprovalsHandler.stop();
     }
     params.threadBindings.stop();
-    gatewayEmitter?.removeListener("error", suppressLateError);
   }
 }
