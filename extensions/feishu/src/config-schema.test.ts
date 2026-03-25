@@ -19,7 +19,10 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.webhookPath).toBe("/feishu/events");
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
-    expect(result.requireMention).toBe(true);
+    // requireMention has no schema-level default now — it is resolved at runtime
+    // by resolveFeishuReplyPolicy(), which defaults to false for groupPolicy=open
+    // and true otherwise.
+    expect(result.requireMention).toBeUndefined();
   });
 
   it("does not force top-level policy defaults into account config", () => {
