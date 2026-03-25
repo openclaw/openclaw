@@ -37,6 +37,24 @@ function createTelegramPollExtraToolSchemas() {
   };
 }
 
+function createCardSchemaPlugin(params: {
+  id: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+}) {
+  return createChannelPlugin({
+    ...params,
+    actions: ["send"],
+    capabilities: ["cards"],
+    toolSchema: () => ({
+      properties: {
+        card: createMessageToolCardSchema(),
+      },
+    }),
+  });
+}
+
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
   loadConfig: vi.fn(() => ({})),
@@ -421,37 +439,45 @@ describe("message tool schema scoping", () => {
     expect(actionEnum).toContain("poll");
   });
 
-  it("keeps provider card schema optional after merging into the message tool schema", () => {
-    const feishuPlugin = createChannelPlugin({
-      id: "feishu",
-      label: "Feishu",
-      docsPath: "/channels/feishu",
-      blurb: "Feishu test plugin.",
-      actions: ["send"],
-      capabilities: ["cards"],
-      toolSchema: () => ({
-        properties: {
-          card: createMessageToolCardSchema(),
-        },
+  it.each([
+    {
+      provider: "feishu",
+      plugin: createCardSchemaPlugin({
+        id: "feishu",
+        label: "Feishu",
+        docsPath: "/channels/feishu",
+        blurb: "Feishu test plugin.",
       }),
-    });
+    },
+    {
+      provider: "msteams",
+      plugin: createCardSchemaPlugin({
+        id: "msteams",
+        label: "MSTeams",
+        docsPath: "/channels/msteams",
+        blurb: "MSTeams test plugin.",
+      }),
+    },
+  ])(
+    "keeps $provider card schema optional after merging into the message tool schema",
+    ({ plugin }) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
+      );
 
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
-    );
+      const tool = createMessageTool({
+        config: {} as never,
+        currentChannelProvider: plugin.id,
+      });
+      const schema = tool.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
 
-    const tool = createMessageTool({
-      config: {} as never,
-      currentChannelProvider: "feishu",
-    });
-    const schema = tool.parameters as {
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
-
-    expect(schema.properties?.card).toBeDefined();
-    expect(schema.required ?? []).not.toContain("card");
-  });
+      expect(schema.properties?.card).toBeDefined();
+      expect(schema.required ?? []).not.toContain("card");
+    },
+  );
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
