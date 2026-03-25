@@ -1,12 +1,34 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { CACHED_MEDIA_MARKER_PREFIX } from "../../../media/media-cache.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 export const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
+
+/**
+ * Extract text blocks containing `[media cached: ...]` markers from a tool result
+ * so they can be preserved through hard-clear operations.
+ */
+function extractCachedMediaMarkers(msg: AgentMessage): TextContent[] {
+  if (msg.role !== "toolResult") {
+    return [];
+  }
+  const markers: TextContent[] = [];
+  for (const block of (msg as unknown as ToolResultMessage).content) {
+    if (
+      "text" in block &&
+      typeof block.text === "string" &&
+      block.text.includes(CACHED_MEDIA_MARKER_PREFIX)
+    ) {
+      markers.push(block);
+    }
+  }
+  return markers;
+}
 
 /**
  * Metadata for a media block that was pruned from the context.
@@ -359,9 +381,14 @@ export function pruneContextMessages(params: {
     }
 
     const beforeChars = estimateMessageChars(msg);
+    const cachedMarkers = extractCachedMediaMarkers(msg);
+    const clearedContent: TextContent[] = [asText(settings.hardClear.placeholder)];
+    if (cachedMarkers.length > 0) {
+      clearedContent.push(...cachedMarkers);
+    }
     const cleared: ToolResultMessage = {
       ...msg,
-      content: [asText(settings.hardClear.placeholder)],
+      content: clearedContent,
     };
     if (!next) {
       next = messages.slice();
@@ -510,9 +537,14 @@ export function pruneContextMessagesWithMediaCollection(params: {
     }
 
     const beforeChars = estimateMessageChars(msg);
+    const cachedMarkers = extractCachedMediaMarkers(msg);
+    const clearedContent: TextContent[] = [asText(settings.hardClear.placeholder)];
+    if (cachedMarkers.length > 0) {
+      clearedContent.push(...cachedMarkers);
+    }
     const cleared: ToolResultMessage = {
       ...msg,
-      content: [asText(settings.hardClear.placeholder)],
+      content: clearedContent,
     };
     if (!next) {
       next = messages.slice();
