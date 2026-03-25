@@ -20,7 +20,13 @@ function createHarness(params?: {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
-  const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
+  const setSession =
+    params?.setSession ??
+    (vi.fn(async (key: string) => {
+      // Simulate production behavior: setSession resolves and scopes the key
+      // under the current agent (e.g. "tui-<uuid>" → "agent:main:tui-<uuid>").
+      state.currentSessionKey = `agent:main:${key}`;
+    }) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
@@ -162,23 +168,30 @@ describe("tui command handlers", () => {
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
-    const { handleCommand, resetSession } = createHarness({
+    const { handleCommand, resetSession, setSession } = createHarness({
       loadHistory,
-      setSession: setSessionMock,
     });
 
     await handleCommand("/new");
     await handleCommand("/reset");
 
     // /new creates a unique session key (isolates TUI client) (#39217)
-    expect(setSessionMock).toHaveBeenCalledTimes(1);
-    expect(setSessionMock).toHaveBeenCalledWith(
+    expect(setSession).toHaveBeenCalledTimes(1);
+    expect(setSession).toHaveBeenCalledWith(
       expect.stringMatching(/^tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
     );
-    // /reset still resets the shared session
-    expect(resetSession).toHaveBeenCalledTimes(1);
-    expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
+    // /new also calls resetSession to fire hooks (command:new, session-memory, etc.)
+    // Uses the resolved agent-scoped key (state.currentSessionKey) set by setSession.
+    // /reset resets the shared session (also using state.currentSessionKey).
+    expect(resetSession).toHaveBeenCalledTimes(2);
+    expect(resetSession).toHaveBeenCalledWith(
+      expect.stringMatching(/^agent:main:tui-[a-f0-9-]+$/),
+      "new",
+    );
+    expect(resetSession).toHaveBeenCalledWith(
+      expect.stringMatching(/^agent:main:tui-[a-f0-9-]+$/),
+      "reset",
+    );
     expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
   });
 
