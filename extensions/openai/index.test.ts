@@ -163,12 +163,6 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
       model: "gpt-4o-mini-tts",
       voice: "alloy",
     },
-    minimax: {
-      baseUrl: "https://api.minimax.io",
-      model: "speech-2.8-turbo",
-      voice: "English_radiant_girl",
-      speed: 1,
-    },
     edge: {
       enabled: false,
       voice: "en-US-AriaNeural",
