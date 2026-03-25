@@ -415,6 +415,24 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order?.["qwen-portal"]).toEqual(["qwen-portal:default", "qwen:legacy"]);
   });
+
+  it("stores display metadata without overloading email", () => {
+    const next = applyAuthProfileConfig(
+      {},
+      {
+        profileId: "openai-codex:id-abc",
+        provider: "openai-codex",
+        mode: "oauth",
+        displayName: "Work account",
+      },
+    );
+
+    expect(next.auth?.profiles?.["openai-codex:id-abc"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+      displayName: "Work account",
+    });
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {
