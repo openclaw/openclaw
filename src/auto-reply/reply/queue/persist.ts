@@ -147,14 +147,19 @@ export async function consumePersistedFollowups(
 
   await fs.unlink(filePath).catch(() => {});
 
-  const totalItems = parsed.queues.reduce((sum, q) => sum + q.items.length, 0);
+  // Validate each queue entry has an items array
+  const validQueues = parsed.queues.filter(
+    (q) => q && typeof q.queueKey === "string" && Array.isArray(q.items),
+  );
+
+  const totalItems = validQueues.reduce((sum, q) => sum + q.items.length, 0);
   if (totalItems > 0) {
     defaultRuntime.info?.(
       `Consumed ${totalItems} persisted followup item(s) from ${parsed.queues.length} queue(s)`,
     );
   }
 
-  return parsed.queues;
+  return validQueues;
 }
 
 function resolveDrainRejectedPath(env: NodeJS.ProcessEnv = process.env): string {

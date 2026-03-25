@@ -166,6 +166,9 @@ describe("consumePersistedFollowups", () => {
 
     const result = await consumePersistedFollowups(env);
     expect(result).toEqual([]);
+
+    // File should be deleted after consumption
+    await expect(fs.access(filePath)).rejects.toThrow();
   });
 });
 
