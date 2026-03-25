@@ -147,23 +147,24 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
     const approveOriginal = devicePairingModule.approveDevicePairing;
     let simulatedRace = false;
+    const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
+      if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
+        return await approveOriginal(
+          requestId,
+          optionsOrBaseDir as { callerScopes?: readonly string[] },
+        );
+      }
+      return await approveOriginal(requestId);
+    };
     const approveSpy = vi
       .spyOn(devicePairingModule, "approveDevicePairing")
       .mockImplementation(
         async (requestId: string, optionsOrBaseDir?: unknown, maybeBaseDir?: unknown) => {
           if (simulatedRace) {
-            return await approveOriginal(
-              requestId,
-              optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
-              maybeBaseDir as string | undefined,
-            );
+            return await forwardApprove(requestId, optionsOrBaseDir);
           }
           simulatedRace = true;
-          await approveOriginal(
-            requestId,
-            optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
-            maybeBaseDir as string | undefined,
-          );
+          await forwardApprove(requestId, optionsOrBaseDir);
           return null;
         },
       );
