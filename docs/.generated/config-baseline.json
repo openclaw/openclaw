@@ -7531,6 +7531,16 @@
       "hasChildren": true
     },
     {
+      "path": "auth.profiles.*.displayName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "auth.profiles.*.email",
       "kind": "core",
       "type": "string",
