@@ -1,3 +1,4 @@
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
@@ -67,7 +68,7 @@ function resolveWhatsAppRetryConfig(
   const root = cfg.channels?.whatsapp;
   const effectiveAccountId = accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
   if (effectiveAccountId) {
-    const accountCfg = root?.accounts?.[effectiveAccountId];
+    const accountCfg = resolveAccountEntry(root?.accounts, effectiveAccountId);
     if (accountCfg?.retry !== undefined) return accountCfg.retry;
   }
   return root?.retry;
