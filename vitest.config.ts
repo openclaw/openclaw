@@ -13,7 +13,43 @@ import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const parsePositiveInt = (value: string | undefined): number | undefined => {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+export function resolveLocalVitestMaxWorkers(
+  env: Record<string, string | undefined> = process.env,
+  options: {
+    cpuCount?: number;
+    totalMemoryBytes?: number;
+    platform?: NodeJS.Platform;
+  } = {},
+): number {
+  const explicit = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  const cpuCount =
+    parsePositiveInt(env.OPENCLAW_TEST_HOST_CPU_COUNT) ?? options.cpuCount ?? os.cpus().length;
+  const totalMemoryBytes = options.totalMemoryBytes ?? os.totalmem();
+  const hostMemoryGiB =
+    parsePositiveInt(env.OPENCLAW_TEST_HOST_MEMORY_GIB) ?? Math.floor(totalMemoryBytes / 1024 ** 3);
+  const platform = options.platform ?? process.platform;
+  const isMacOS = platform === "darwin" || env.RUNNER_OS === "macOS";
+  const boundedCpuCount = Math.max(1, cpuCount);
+
+  if (isMacOS && boundedCpuCount <= 12 && hostMemoryGiB <= 64) {
+    return Math.min(3, boundedCpuCount);
+  }
+  if (hostMemoryGiB <= 64) {
+    return Math.min(4, boundedCpuCount);
+  }
+  return Math.max(4, Math.min(16, boundedCpuCount));
+}
+
+const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
 export default defineConfig({
   resolve: {

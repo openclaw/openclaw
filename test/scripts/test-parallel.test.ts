@@ -164,4 +164,23 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("base-pinned-followup-runner");
     expect(output).not.toContain("base-followup-runner");
   });
+
+  it("auto-applies the macmini profile on mid-memory local macOS hosts", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CI: "",
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      },
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("unit-fast filters=all maxWorkers=3");
+    expect(output).toContain("extensions filters=all maxWorkers=1");
+  });
 });

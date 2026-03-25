@@ -1,0 +1,34 @@
+import { describe, expect, it } from "vitest";
+import { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
+
+describe("resolveLocalVitestMaxWorkers", () => {
+  it("auto-caps local macOS mid-memory hosts to the macmini budget", () => {
+    expect(
+      resolveLocalVitestMaxWorkers(
+        {
+          RUNNER_OS: "macOS",
+        },
+        {
+          cpuCount: 10,
+          totalMemoryBytes: 64 * 1024 ** 3,
+          platform: "darwin",
+        },
+      ),
+    ).toBe(3);
+  });
+
+  it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
+    expect(
+      resolveLocalVitestMaxWorkers(
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "2",
+        },
+        {
+          cpuCount: 10,
+          totalMemoryBytes: 128 * 1024 ** 3,
+          platform: "darwin",
+        },
+      ),
+    ).toBe(2);
+  });
+});

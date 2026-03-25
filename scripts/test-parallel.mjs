@@ -76,13 +76,21 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
-const hostCpuCount = os.cpus().length;
-const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
+const parsePositiveInt = (value) => {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+const hostCpuCount = parsePositiveInt(process.env.OPENCLAW_TEST_HOST_CPU_COUNT) ?? os.cpus().length;
+const hostMemoryGiB =
+  parsePositiveInt(process.env.OPENCLAW_TEST_HOST_MEMORY_GIB) ??
+  Math.floor(os.totalmem() / 1024 ** 3);
 // Keep aggressive local defaults for high-memory workstations (Mac Studio class).
 const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
-const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
+const lowMemLocalHost = !isCI && hostMemoryGiB <= 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
 const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
+const autoMacMiniProfile =
+  !isCI && !rawTestProfile && isMacOS && hostCpuCount <= 12 && hostMemoryGiB <= 64;
 const testProfile =
   rawTestProfile === "low" ||
   rawTestProfile === "macmini" ||
@@ -90,7 +98,9 @@ const testProfile =
   rawTestProfile === "normal" ||
   rawTestProfile === "serial"
     ? rawTestProfile
-    : "normal";
+    : autoMacMiniProfile
+      ? "macmini"
+      : "normal";
 const isMacMiniProfile = testProfile === "macmini";
 // Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
 // shared unit lane still retains transformed ESM/module state even when the
@@ -1082,14 +1092,14 @@ const defaultWorkerBudget =
                   // Sub-64 GiB local hosts are prone to OOM with large vmFork runs.
                   unit: 2,
                   unitIsolated: 1,
-                  extensions: 4,
+                  extensions: 1,
                   gateway: 1,
                 }
               : {
                   // 64-95 GiB local hosts: conservative split with some parallel headroom.
                   unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
                   unitIsolated: 1,
-                  extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+                  extensions: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
                   gateway: 1,
                 };
 
@@ -1652,7 +1662,13 @@ if (serialPrefixRuns.length > 0) {
   // Low-profile runs favor stability over overlap once we leave the shared
   // unit-fast batches; the isolated memory-heavy lanes can still trip over
   // each other when two singleton Vitest processes overlap.
-  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 1 : undefined;
+  const deferredRunConcurrency = isMacMiniProfile
+    ? 3
+    : testProfile === "low"
+      ? 1
+      : !isCI && !highMemLocalHost
+        ? 2
+        : undefined;
   const failedDeferredParallel = isMacMiniProfile
     ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
     : deferredRunConcurrency
