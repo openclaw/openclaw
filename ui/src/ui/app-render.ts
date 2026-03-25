@@ -95,7 +95,7 @@ import {
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
+  resolveModelConfigForFallbackEdit,
   sortLocaleStrings,
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
@@ -1264,58 +1264,27 @@ export function renderApp(state: AppViewState) {
                     const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
                     const currentConfig = getCurrentConfigValue();
                     const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
-                    const effectivePrimary =
-                      resolveModelPrimary(resolvedConfig.entry?.model) ??
-                      resolveModelPrimary(resolvedConfig.defaults?.model);
                     const effectiveFallbacks = resolveEffectiveModelFallbacks(
                       resolvedConfig.entry?.model,
                       resolvedConfig.defaults?.model,
                     );
+                    const existingModel = resolvedConfig.entry?.model;
+                    const nextModel = resolveModelConfigForFallbackEdit({
+                      existingModel,
+                      nextFallbacks: normalized,
+                      hadEffectiveFallbacks: (effectiveFallbacks?.length ?? 0) > 0,
+                    });
                     const index =
-                      normalized.length > 0
-                        ? effectivePrimary
-                          ? ensureAgentIndex(agentId)
-                          : -1
-                        : (effectiveFallbacks?.length ?? 0) > 0 || findAgentIndex(agentId) >= 0
-                          ? ensureAgentIndex(agentId)
-                          : -1;
+                      nextModel === null ? findAgentIndex(agentId) : ensureAgentIndex(agentId);
                     if (index < 0) {
                       return;
                     }
-                    const list = (
-                      getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null
-                    )?.agents?.list;
                     const basePath = ["agents", "list", index, "model"];
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
-                    const resolvePrimary = () => {
-                      if (typeof existing === "string") {
-                        return existing.trim() || null;
-                      }
-                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                        const primary = (existing as { primary?: unknown }).primary;
-                        if (typeof primary === "string") {
-                          const trimmed = primary.trim();
-                          return trimmed || null;
-                        }
-                      }
-                      return null;
-                    };
-                    const primary = resolvePrimary() ?? effectivePrimary;
-                    if (normalized.length === 0) {
-                      if (primary) {
-                        updateConfigFormValue(state, basePath, primary);
-                      } else {
-                        removeConfigFormValue(state, basePath);
-                      }
-                      return;
+                    if (nextModel === null) {
+                      removeConfigFormValue(state, basePath);
+                    } else {
+                      updateConfigFormValue(state, basePath, nextModel);
                     }
-                    if (!primary) {
-                      return;
-                    }
-                    updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                   },
                   onSetDefault: (agentId) => {
                     if (!configValue) {

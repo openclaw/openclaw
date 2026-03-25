@@ -4,6 +4,7 @@ import {
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
   resolveEffectiveModelFallbacks,
+  resolveModelConfigForFallbackEdit,
   sortLocaleStrings,
 } from "./agents-utils.ts";
 
@@ -88,6 +89,85 @@ describe("resolveConfiguredCronModelSuggestions", () => {
     expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
       [],
     );
+  });
+});
+
+describe("resolveModelConfigForFallbackEdit", () => {
+  it("keeps an explicit string primary when adding fallback overrides", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: "openai/gpt-5.4",
+        nextFallbacks: ["google/gemini-2.5-flash"],
+        hadEffectiveFallbacks: false,
+      }),
+    ).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["google/gemini-2.5-flash"],
+    });
+  });
+
+  it("supports fallback-only overrides when no explicit primary exists", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: undefined,
+        nextFallbacks: ["google/gemini-2.5-flash"],
+        hadEffectiveFallbacks: false,
+      }),
+    ).toEqual({
+      fallbacks: ["google/gemini-2.5-flash"],
+    });
+  });
+
+  it("keeps an explicit empty override when clearing inherited fallbacks", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: undefined,
+        nextFallbacks: [],
+        hadEffectiveFallbacks: true,
+      }),
+    ).toEqual({
+      fallbacks: [],
+    });
+  });
+
+  it("keeps the explicit primary when clearing fallback overrides", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: {
+          primary: "openai/gpt-5.4",
+          fallbacks: ["google/gemini-2.5-flash"],
+        },
+        nextFallbacks: [],
+        hadEffectiveFallbacks: true,
+      }),
+    ).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: [],
+    });
+  });
+
+  it("preserves explicit empty fallback arrays even without inherited fallbacks", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: {
+          fallbacks: [],
+        },
+        nextFallbacks: [],
+        hadEffectiveFallbacks: false,
+      }),
+    ).toEqual({
+      fallbacks: [],
+    });
+  });
+
+  it("removes the model config when nothing explicit remains", () => {
+    expect(
+      resolveModelConfigForFallbackEdit({
+        existingModel: undefined,
+        nextFallbacks: [],
+        hadEffectiveFallbacks: false,
+      }),
+    ).toBeNull();
   });
 });
 
