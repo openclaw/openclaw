@@ -203,6 +203,72 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
+  describe("allowOutboundTo list", () => {
+    it("allows message when target is in allowOutboundTo but not in allowFrom", () => {
+      // normalizeWhatsAppTarget calls: 1. allowFrom entry (SECONDARY), 2. allowOutboundTo entry (PRIMARY), 3. to (PRIMARY)
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(SECONDARY_TARGET) // allowFrom[0]
+        .mockReturnValueOnce(PRIMARY_TARGET) // allowOutboundTo[0]
+        .mockReturnValueOnce(PRIMARY_TARGET); // to
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      expectResolutionOk(
+        {
+          to: PRIMARY_TARGET,
+          allowFrom: [SECONDARY_TARGET],
+          allowOutboundTo: [PRIMARY_TARGET],
+          mode: "explicit",
+        },
+        PRIMARY_TARGET,
+      );
+    });
+
+    it("allows message when allowOutboundTo has wildcard", () => {
+      // normalizeWhatsAppTarget calls: 1. allowFrom entry (SECONDARY), 2. to (PRIMARY)
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(SECONDARY_TARGET) // allowFrom[0]
+        .mockReturnValueOnce(PRIMARY_TARGET); // to
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      expectResolutionOk(
+        {
+          to: PRIMARY_TARGET,
+          allowFrom: [SECONDARY_TARGET],
+          allowOutboundTo: ["*"],
+          mode: "explicit",
+        },
+        PRIMARY_TARGET,
+      );
+    });
+
+    it("still denies when target is in neither allowFrom nor allowOutboundTo", () => {
+      const THIRD_TARGET = "+15550001111";
+      // normalizeWhatsAppTarget calls: 1. allowFrom entry (SECONDARY), 2. allowOutboundTo entry (THIRD), 3. to (PRIMARY)
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(SECONDARY_TARGET) // allowFrom[0]
+        .mockReturnValueOnce(THIRD_TARGET) // allowOutboundTo[0]
+        .mockReturnValueOnce(PRIMARY_TARGET); // to
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      expectResolutionError({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        allowOutboundTo: [THIRD_TARGET],
+        mode: "explicit",
+      });
+    });
+
+    it("allowOutboundTo is optional and defaults to empty", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+
+      expectResolutionError({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "explicit",
+      });
+    });
+  });
+
   describe("whitespace handling", () => {
     it("trims whitespace from to parameter", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET);

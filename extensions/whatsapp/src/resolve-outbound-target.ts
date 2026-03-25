@@ -8,6 +8,7 @@ export type WhatsAppOutboundTargetResolution =
 export function resolveWhatsAppOutboundTarget(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
+  allowOutboundTo?: Array<string | number> | null | undefined;
   mode: string | null | undefined;
 }): WhatsAppOutboundTargetResolution {
   const trimmed = params.to?.trim() ?? "";
@@ -16,6 +17,17 @@ export function resolveWhatsAppOutboundTarget(params: {
     .filter(Boolean);
   const hasWildcard = allowListRaw.includes("*");
   const allowList = allowListRaw
+    .filter((entry) => entry !== "*")
+    .map((entry) => normalizeWhatsAppTarget(entry))
+    .filter((entry): entry is string => Boolean(entry));
+
+  // Separate outbound allowlist: when configured, permits sending to targets
+  // that are not in allowFrom (e.g. proactive messages to third parties).
+  const outboundListRaw = (params.allowOutboundTo ?? [])
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
+  const hasOutboundWildcard = outboundListRaw.includes("*");
+  const outboundList = outboundListRaw
     .filter((entry) => entry !== "*")
     .map((entry) => normalizeWhatsAppTarget(entry))
     .filter((entry): entry is string => Boolean(entry));
@@ -31,10 +43,10 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
-    if (hasWildcard || allowList.length === 0) {
+    if (hasWildcard || hasOutboundWildcard || allowList.length === 0) {
       return { ok: true, to: normalizedTo };
     }
-    if (allowList.includes(normalizedTo)) {
+    if (allowList.includes(normalizedTo) || outboundList.includes(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
     return {

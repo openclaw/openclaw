@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveAllowOutboundTo } from "./resolve-allow-outbound.js";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
@@ -23,8 +24,13 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunkerMode: "text",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget: ({ to, allowFrom, cfg, accountId, mode }) =>
+    resolveWhatsAppOutboundTarget({
+      to,
+      allowFrom,
+      allowOutboundTo: resolveAllowOutboundTo(cfg, accountId),
+      mode,
+    }),
   sendPayload: async (ctx) => {
     const text = trimLeadingWhitespace(ctx.payload.text);
     const hasMedia = resolveSendableOutboundReplyParts(ctx.payload).hasMedia;
