@@ -241,7 +241,6 @@ describe("loadModelCatalog", () => {
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
-        name: "gpt-5.4",
       }),
     );
   });

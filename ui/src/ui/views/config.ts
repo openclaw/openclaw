@@ -7,6 +7,7 @@ import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
   humanize,
+  isSensitiveConfigPath,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
@@ -421,7 +422,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
     id: "appearance",
     label: "Appearance",
     sections: [
-      { key: "__appearance__", label: "Appearance" },
+      { key: "__appearance__", label: "Theme" },
       { key: "ui", label: "UI" },
       { key: "wizard", label: "Setup Wizard" },
     ],
@@ -554,6 +555,9 @@ function truncateValue(value: unknown, maxLen = 40): string {
 }
 
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
+  if (isSensitiveConfigPath(path) && value != null && truncateValue(value).trim() !== "") {
+    return REDACTED_PLACEHOLDER;
+  }
   return truncateValue(value);
 }
 
@@ -883,6 +887,7 @@ export function renderConfig(props: ConfigProps) {
                         type="text"
                         class="config-search__input"
                         placeholder="Search settings..."
+                        aria-label="Search settings"
                         .value=${props.searchQuery}
                         @input=${(e: Event) =>
                           props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -892,6 +897,7 @@ export function renderConfig(props: ConfigProps) {
                           ? html`
                               <button
                                 class="config-search__clear"
+                                aria-label="Clear search"
                                 @click=${() => props.onSearchChange("")}
                               >
                                 ×
