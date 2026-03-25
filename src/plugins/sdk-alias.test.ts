@@ -498,6 +498,46 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
+  it("resolves plugin-sdk aliases for user-installed plugins via moduleUrl hint", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
+    const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
+    mkdirSafe(externalPluginRoot);
+    fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    // Simulate loader.ts passing its own import.meta.url as the moduleUrl hint.
+    // This covers installations where argv1 does not resolve to the openclaw root
+    // (e.g. single-binary distributions or custom process launchers).
+    const loaderModuleUrl = pathToFileURL(
+      path.join(fixture.root, "dist", "plugins", "loader.js"),
+    ).href;
+
+    const aliases = withCwd(externalPluginRoot, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          externalPluginEntry,
+          undefined, // no argv1
+          loaderModuleUrl,
+        ),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
+    );
+  });
+
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",
