@@ -609,9 +609,11 @@ export function createAgentEventHandler({
     }
 
     const now = Date.now();
-    // Apply segment offset so the flushed payload only contains post-tool text.
+    // Instead of text (trimmed), derive displayText directly from the raw buffer
+    // so the offset arithmetic stays consistent with how segmentOffset was recorded.
+    const rawBuffer = chatRunState.buffers.get(clientRunId) ?? "";
     const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
-    const displayText = segmentOffset > 0 ? text.slice(segmentOffset) : text;
+    const displayText = segmentOffset > 0 ? rawBuffer.slice(segmentOffset) : rawBuffer;
     const flushPayload = {
       runId: clientRunId,
       sessionKey,
