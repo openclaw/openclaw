@@ -157,6 +157,45 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const replyToChannel = resolveOriginMessageProvider({
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+      }) as OriginatingChannelType | undefined;
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+        queued.originatingChatType,
+      );
+      const currentMessageId = queued.messageId?.trim() || undefined;
+      const applyFollowupReplyThreading = (payloads: ReplyPayload[]) =>
+        applyReplyThreading({
+          payloads,
+          replyToMode,
+          replyToChannel,
+          currentMessageId,
+        });
+
+      const sendCompactionNotice = async (text: string) => {
+        const noticePayloads = applyFollowupReplyThreading([
+          {
+            text,
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          },
+        ]);
+        if (noticePayloads.length === 0) {
+          return;
+        }
+        try {
+          await sendFollowupPayloads(noticePayloads, queued);
+        } catch (err) {
+          logVerbose(
+            `followup queue: compaction notice delivery failed (non-fatal): ${String(err)}`,
+          );
+        }
+      };
+
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -299,22 +338,7 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
-
-      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode,
-        replyToChannel,
-      });
+      const replyTaggedPayloads = applyFollowupReplyThreading(sanitizedPayloads);
 
       const dedupedPayloads = filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
@@ -371,9 +395,7 @@ export function createFollowupRunner(params: {
         }
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
+          await sendCompactionNotice(`🧹 Auto-compaction complete${suffix}.`);
         }
       }
 

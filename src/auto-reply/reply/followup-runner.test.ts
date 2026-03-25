@@ -529,6 +529,81 @@ describe("createFollowupRunner compaction", () => {
   });
 });
 
+describe("createFollowupRunner reply threading", () => {
+  it("threads followup replies when replyToMode=all and current message is available", async () => {
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const queued = createQueuedRun({
+      messageId: "msg-42",
+      originatingChannel: "telegram",
+      run: {
+        config: {
+          channels: {
+            whatsapp: {
+              replyToMode: "all",
+            },
+          },
+        },
+      },
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    const payload = routeReplyMock.mock.calls.at(-1)?.[0]?.payload;
+    expect(payload).toMatchObject({
+      text: "final",
+      replyToId: "msg-42",
+    });
+  });
+});
+
+describe("createFollowupRunner reply threading", () => {
+  it("threads followup replies when replyToMode=all and current message is available", async () => {
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final reply" }],
+      meta: {},
+    });
+
+    const queued = createQueuedRun({
+      messageId: "msg-42",
+      originatingChannel: "telegram",
+      run: {
+        config: {
+          channels: {
+            telegram: {
+              replyToMode: "all",
+            },
+          },
+        },
+        originatingAccountId: "primary",
+      },
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    const payload = routeReplyMock.mock.calls.at(-1)?.[0]?.payload;
+    expect(payload).toMatchObject({
+      text: "final reply",
+      replyToId: "msg-42",
+    });
+  });
+});
+
 describe("createFollowupRunner bootstrap warning dedupe", () => {
   it("passes stored warning signature history to embedded followup runs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
