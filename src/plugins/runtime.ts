@@ -3,14 +3,18 @@ import type { PluginRegistry } from "./registry.js";
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
-type RegistryState = {
+type RegistrySurfaceState = {
   registry: PluginRegistry | null;
-  httpRouteRegistry: PluginRegistry | null;
-  httpRouteRegistryPinned: boolean;
-  channelRegistry: PluginRegistry | null;
-  channelRegistryPinned: boolean;
-  key: string | null;
+  pinned: boolean;
   version: number;
+};
+
+type RegistryState = {
+  activeRegistry: PluginRegistry | null;
+  activeVersion: number;
+  httpRoute: RegistrySurfaceState;
+  channel: RegistrySurfaceState;
+  key: string | null;
 };
 
 const state: RegistryState = (() => {
@@ -19,63 +23,93 @@ const state: RegistryState = (() => {
   };
   if (!globalState[REGISTRY_STATE]) {
     globalState[REGISTRY_STATE] = {
-      registry: null,
-      httpRouteRegistry: null,
-      httpRouteRegistryPinned: false,
-      channelRegistry: null,
-      channelRegistryPinned: false,
+      activeRegistry: null,
+      activeVersion: 0,
+      httpRoute: {
+        registry: null,
+        pinned: false,
+        version: 0,
+      },
+      channel: {
+        registry: null,
+        pinned: false,
+        version: 0,
+      },
       key: null,
-      version: 0,
     };
   }
   return globalState[REGISTRY_STATE];
 })();
 
+function installSurfaceRegistry(
+  surface: RegistrySurfaceState,
+  registry: PluginRegistry | null,
+  pinned: boolean,
+) {
+  if (surface.registry === registry && surface.pinned === pinned) {
+    return;
+  }
+  surface.registry = registry;
+  surface.pinned = pinned;
+  surface.version += 1;
+}
+
+function syncTrackedSurface(
+  surface: RegistrySurfaceState,
+  registry: PluginRegistry | null,
+  refreshVersion = false,
+) {
+  if (surface.pinned) {
+    return;
+  }
+  if (surface.registry === registry && !surface.pinned) {
+    if (refreshVersion) {
+      surface.version += 1;
+    }
+    return;
+  }
+  installSurfaceRegistry(surface, registry, false);
+}
+
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
-  state.registry = registry;
-  if (!state.httpRouteRegistryPinned) {
-    state.httpRouteRegistry = registry;
-  }
-  if (!state.channelRegistryPinned) {
-    state.channelRegistry = registry;
-  }
+  state.activeRegistry = registry;
+  state.activeVersion += 1;
+  syncTrackedSurface(state.httpRoute, registry, true);
+  syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
-  state.version += 1;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
-  return state.registry;
+  return state.activeRegistry;
 }
 
 export function requireActivePluginRegistry(): PluginRegistry {
-  if (!state.registry) {
-    state.registry = createEmptyPluginRegistry();
-    if (!state.httpRouteRegistryPinned) {
-      state.httpRouteRegistry = state.registry;
-    }
-    if (!state.channelRegistryPinned) {
-      state.channelRegistry = state.registry;
-    }
-    state.version += 1;
+  if (!state.activeRegistry) {
+    state.activeRegistry = createEmptyPluginRegistry();
+    state.activeVersion += 1;
+    syncTrackedSurface(state.httpRoute, state.activeRegistry);
+    syncTrackedSurface(state.channel, state.activeRegistry);
   }
-  return state.registry;
+  return state.activeRegistry;
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
-  state.httpRouteRegistry = registry;
-  state.httpRouteRegistryPinned = true;
+  installSurfaceRegistry(state.httpRoute, registry, true);
 }
 
 export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) {
-  if (registry && state.httpRouteRegistry !== registry) {
+  if (registry && state.httpRoute.registry !== registry) {
     return;
   }
-  state.httpRouteRegistryPinned = false;
-  state.httpRouteRegistry = state.registry;
+  installSurfaceRegistry(state.httpRoute, state.activeRegistry, false);
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
-  return state.httpRouteRegistry ?? state.registry;
+  return state.httpRoute.registry ?? state.activeRegistry;
+}
+
+export function getActivePluginHttpRouteRegistryVersion(): number {
+  return state.httpRoute.registry ? state.httpRoute.version : state.activeVersion;
 }
 
 export function requireActivePluginHttpRouteRegistry(): PluginRegistry {
@@ -84,7 +118,7 @@ export function requireActivePluginHttpRouteRegistry(): PluginRegistry {
     return existing;
   }
   const created = requireActivePluginRegistry();
-  state.httpRouteRegistry = created;
+  installSurfaceRegistry(state.httpRoute, created, false);
   return created;
 }
 
@@ -106,32 +140,25 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
  *  gateway startup after the initial plugin load so that config-schema reads
  *  and other non-primary registry loads cannot evict channel plugins. */
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
-  if (state.channelRegistry === registry && state.channelRegistryPinned) {
-    return;
-  }
-  state.channelRegistry = registry;
-  state.channelRegistryPinned = true;
-  state.version += 1;
+  installSurfaceRegistry(state.channel, registry, true);
 }
 
 export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
-  if (registry && state.channelRegistry !== registry) {
+  if (registry && state.channel.registry !== registry) {
     return;
   }
-  const nextChannelRegistry = state.registry;
-  if (state.channelRegistry === nextChannelRegistry && !state.channelRegistryPinned) {
-    return;
-  }
-  state.channelRegistryPinned = false;
-  state.channelRegistry = nextChannelRegistry;
-  state.version += 1;
+  installSurfaceRegistry(state.channel, state.activeRegistry, false);
 }
 
 /** Return the registry that should be used for channel plugin resolution.
  *  When pinned, this returns the startup registry regardless of subsequent
  *  `setActivePluginRegistry` calls. */
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return state.channelRegistry ?? state.registry;
+  return state.channel.registry ?? state.activeRegistry;
+}
+
+export function getActivePluginChannelRegistryVersion(): number {
+  return state.channel.registry ? state.channel.version : state.activeVersion;
 }
 
 export function requireActivePluginChannelRegistry(): PluginRegistry {
@@ -140,7 +167,7 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
     return existing;
   }
   const created = requireActivePluginRegistry();
-  state.channelRegistry = created;
+  installSurfaceRegistry(state.channel, created, false);
   return created;
 }
 
@@ -149,15 +176,13 @@ export function getActivePluginRegistryKey(): string | null {
 }
 
 export function getActivePluginRegistryVersion(): number {
-  return state.version;
+  return state.activeVersion;
 }
 
 export function resetPluginRuntimeStateForTest(): void {
-  state.registry = null;
-  state.httpRouteRegistry = null;
-  state.httpRouteRegistryPinned = false;
-  state.channelRegistry = null;
-  state.channelRegistryPinned = false;
+  state.activeRegistry = null;
+  state.activeVersion += 1;
+  installSurfaceRegistry(state.httpRoute, null, false);
+  installSurfaceRegistry(state.channel, null, false);
   state.key = null;
-  state.version += 1;
 }
