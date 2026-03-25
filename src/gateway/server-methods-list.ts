@@ -301,6 +301,12 @@ const BASE_METHODS = [
   "wakeup.complete",
   // Dashboard aggregation
   "dashboard.summary",
+  // Plugin management
+  "plugins.list",
+  "plugins.info",
+  "plugins.enable",
+  "plugins.disable",
+  "plugins.configure",
 ];
 
 export function listGatewayMethods(): string[] {

@@ -36,6 +36,7 @@ import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { onboardingHandlers } from "./server-methods/onboarding.js";
 import { personasHandlers } from "./server-methods/personas.js";
+import { pluginsHandlers } from "./server-methods/plugins.js";
 import { projectsHandlers } from "./server-methods/projects.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
@@ -138,6 +139,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...commandsHandlers,
   ...stateHandlers,
   ...personasHandlers,
+  ...pluginsHandlers,
   ...onboardingHandlers,
   ...metricsHandlers,
   ...executionWorkspacesHandlers,

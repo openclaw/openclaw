@@ -220,6 +220,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "plugins.list",
+    "plugins.info",
+    "plugins.enable",
+    "plugins.disable",
+    "plugins.configure",
     "agents.apiKeys.create",
     "agents.apiKeys.list",
     "agents.apiKeys.revoke",
