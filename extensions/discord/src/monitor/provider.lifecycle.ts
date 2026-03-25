@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
+import { prepareDiscordGatewayForShutdown } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import type { DiscordGatewayEvent, DiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -128,7 +129,11 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
-    gateway.options.reconnect = { maxAttempts: 0 };
+    prepareDiscordGatewayForShutdown(gateway);
+    gateway.options.reconnect = {
+      ...(gateway.options.reconnect ?? {}),
+      maxAttempts: 0,
+    };
     gateway.disconnect();
   };
 

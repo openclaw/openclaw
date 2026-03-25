@@ -62,6 +62,7 @@ describe("runDiscordGatewayLifecycle", () => {
       options?: Record<string, unknown>;
       disconnect?: () => void;
       connect?: (resume?: boolean) => void;
+      prepareForShutdown?: () => void;
       state?: {
         sessionId?: string | null;
         resumeGatewayUrl?: string | null;
@@ -159,6 +160,7 @@ describe("runDiscordGatewayLifecycle", () => {
       options: {},
       disconnect: vi.fn(),
       connect: vi.fn(),
+      prepareForShutdown: vi.fn(),
       ...(params?.state ? { state: params.state } : {}),
       ...(params?.sequence !== undefined ? { sequence: params.sequence } : {}),
       emitter,
@@ -579,6 +581,7 @@ describe("runDiscordGatewayLifecycle", () => {
       options: { reconnect: { maxAttempts: 3 } },
       disconnect: vi.fn(),
       connect: vi.fn(),
+      prepareForShutdown: vi.fn(),
       emitter,
     };
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -605,5 +608,6 @@ describe("runDiscordGatewayLifecycle", () => {
     // guarded by !lifecycleStopping to avoid contradicting the abort.
     const connectedTrue = statusUpdates.find((s) => s.connected === true);
     expect(connectedTrue).toBeUndefined();
+    expect(gateway.prepareForShutdown).toHaveBeenCalledTimes(1);
   });
 });

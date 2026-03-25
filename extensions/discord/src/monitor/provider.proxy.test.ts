@@ -1,12 +1,17 @@
+import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   GatewayIntents,
   baseRegisterClientSpy,
+  baseHandleReconnectionAttemptSpy,
+  connectSpy,
+  disconnectSpy,
   GatewayPlugin,
   globalFetchMock,
   HttpsProxyAgent,
   getLastAgent,
+  monitorDestroySpy,
   restProxyAgentSpy,
   undiciFetchMock,
   undiciProxyAgentSpy,
@@ -20,6 +25,10 @@ const {
   const undiciFetchMock = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
+  const baseHandleReconnectionAttemptSpy = vi.fn();
+  const connectSpy = vi.fn();
+  const disconnectSpy = vi.fn();
+  const monitorDestroySpy = vi.fn();
   const webSocketSpy = vi.fn();
 
   const GatewayIntents = {
@@ -36,12 +45,36 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    emitter = new EventEmitter();
+    monitor = { destroy: monitorDestroySpy };
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
+    }
+    connect(resume = false) {
+      connectSpy(resume);
+    }
+    disconnect() {
+      disconnectSpy();
+    }
+    handleReconnectionAttempt(options: unknown) {
+      baseHandleReconnectionAttemptSpy(options);
+      const reconnect = (this.options as { reconnect?: { maxAttempts?: number } } | undefined)
+        ?.reconnect;
+      const maxAttempts = reconnect?.maxAttempts ?? 5;
+      const code = (options as { code?: number } | undefined)?.code;
+      this.emitter.emit(
+        "error",
+        new Error(
+          `Max reconnect attempts (${maxAttempts}) reached${code ? ` after code ${code}` : ""}`,
+        ),
+      );
+    }
+    handleClose(code: number) {
+      this.handleReconnectionAttempt({ code });
     }
   }
 
@@ -60,11 +93,15 @@ const {
 
   return {
     baseRegisterClientSpy,
+    baseHandleReconnectionAttemptSpy,
+    connectSpy,
+    disconnectSpy,
     GatewayIntents,
     GatewayPlugin,
     globalFetchMock,
     HttpsProxyAgent,
     getLastAgent: () => HttpsProxyAgent.lastCreated,
+    monitorDestroySpy,
     restProxyAgentSpy,
     undiciFetchMock,
     undiciProxyAgentSpy,
@@ -182,7 +219,11 @@ describe("createDiscordGatewayPlugin", () => {
     vi.stubGlobal("fetch", globalFetchMock);
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
+    baseHandleReconnectionAttemptSpy.mockClear();
+    connectSpy.mockClear();
+    disconnectSpy.mockClear();
     globalFetchMock.mockClear();
+    monitorDestroySpy.mockClear();
     restProxyAgentSpy.mockClear();
     undiciFetchMock.mockClear();
     undiciProxyAgentSpy.mockClear();
@@ -354,5 +395,53 @@ describe("createDiscordGatewayPlugin", () => {
       url: "wss://gateway.discord.gg/?v=10",
       shards: 8,
     });
+  });
+
+  it("suppresses reconnect-exhausted errors during intentional shutdown", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      emitter: EventEmitter;
+      handleClose: (code: number) => void;
+      prepareForShutdown?: () => void;
+    };
+    const errors: unknown[] = [];
+    plugin.emitter.on("error", (error) => {
+      errors.push(error);
+    });
+
+    plugin.prepareForShutdown?.();
+    plugin.handleClose(1005);
+
+    expect(baseHandleReconnectionAttemptSpy).not.toHaveBeenCalled();
+    expect(monitorDestroySpy).toHaveBeenCalledTimes(1);
+    expect(errors).toEqual([]);
+  });
+
+  it("resumes normal reconnect handling after a new connect", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      emitter: EventEmitter;
+      connect: (resume?: boolean) => void;
+      handleClose: (code: number) => void;
+      prepareForShutdown?: () => void;
+    };
+    const errors: string[] = [];
+    plugin.emitter.on("error", (error) => {
+      errors.push(String(error));
+    });
+
+    plugin.prepareForShutdown?.();
+    plugin.connect(true);
+    plugin.handleClose(1006);
+
+    expect(connectSpy).toHaveBeenCalledWith(true);
+    expect(baseHandleReconnectionAttemptSpy).toHaveBeenCalledWith({ code: 1006 });
+    expect(errors).toEqual(["Error: Max reconnect attempts (50) reached after code 1006"]);
   });
 });

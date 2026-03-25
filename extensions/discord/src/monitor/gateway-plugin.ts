@@ -22,6 +22,10 @@ type DiscordGatewayFetch = (
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
+type ShutdownAwareGatewayPlugin = GatewayPlugin & {
+  prepareForShutdown?: () => void;
+};
+
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
 ): number {
@@ -231,9 +235,14 @@ function createGatewayPlugin(params: {
 }): GatewayPlugin {
   class SafeGatewayPlugin extends GatewayPlugin {
     private gatewayInfoUsedFallback = false;
+    private shuttingDown = false;
 
     constructor() {
       super(params.options);
+    }
+
+    prepareForShutdown() {
+      this.shuttingDown = true;
     }
 
     override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
@@ -254,6 +263,25 @@ function createGatewayPlugin(params: {
       return super.registerClient(client);
     }
 
+    override connect(resume = false) {
+      this.shuttingDown = false;
+      super.connect(resume);
+    }
+
+    override handleReconnectionAttempt(
+      options: Parameters<GatewayPlugin["handleReconnectionAttempt"]>[0],
+    ) {
+      if (this.shuttingDown) {
+        this.emitter.emit(
+          "debug",
+          `Suppressing reconnect during intentional shutdown${options.code ? ` after code ${options.code}` : ""}`,
+        );
+        this.monitor.destroy();
+        return;
+      }
+      super.handleReconnectionAttempt(options);
+    }
+
     override createWebSocket(url: string) {
       if (!params.wsAgent) {
         return super.createWebSocket(url);
@@ -263,6 +291,10 @@ function createGatewayPlugin(params: {
   }
 
   return new SafeGatewayPlugin();
+}
+
+export function prepareDiscordGatewayForShutdown(gateway?: GatewayPlugin): void {
+  (gateway as ShutdownAwareGatewayPlugin | undefined)?.prepareForShutdown?.();
 }
 
 export function createDiscordGatewayPlugin(params: {
