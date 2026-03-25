@@ -10,12 +10,14 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import {
+  getSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry.js";
+import { getFileStatSnapshot } from "../config/cache-utils.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -77,6 +79,7 @@ export type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   SessionsListResult,
+  SessionsListRpcResult,
   SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
@@ -881,6 +884,31 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+/**
+ * Cheap identity for combined session stores: sorted `path:mtime:size` markers.
+ * Used to skip `sessions.list` recomputation when backing files are unchanged.
+ */
+export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig): string {
+  const storeConfig = cfg.session?.store;
+  const storePaths: string[] =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? [resolveStorePath(storeConfig)]
+      : resolveAllAgentSessionStoreTargetsSync(cfg).map((t) => t.storePath);
+
+  const markers: string[] = [];
+  const seen = new Set<string>();
+  for (const storePath of storePaths) {
+    if (seen.has(storePath)) {
+      continue;
+    }
+    seen.add(storePath);
+    const snap = getFileStatSnapshot(storePath);
+    markers.push(snap ? `${storePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `${storePath}:missing`);
+  }
+  markers.sort();
+  return markers.join("\n");
+}
+
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -1089,7 +1117,7 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentRun = getSubagentRunByChildSessionKey(key);
   const subagentOwner =
     subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;

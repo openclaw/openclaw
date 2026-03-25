@@ -65,6 +65,8 @@ export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
+/** Monotonic counter bumped on every registry mutation; used to invalidate caches that depend on subagent state. */
+let subagentRegistryGeneration = 0;
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -293,6 +295,7 @@ function reconcileOrphanedRun(params: {
     void safeRemoveAttachmentsDir(params.entry);
   }
   const removed = subagentRuns.delete(params.runId);
+  subagentRegistryGeneration += 1;
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
     return false;
@@ -869,6 +872,7 @@ async function sweepSubagentRuns() {
       workspaceDir: entry.workspaceDir,
     });
     subagentRuns.delete(runId);
+    subagentRegistryGeneration += 1;
     mutated = true;
     // Archive/purge is terminal for the run record; remove any retained attachments too.
     await safeRemoveAttachmentsDir(entry);
@@ -1146,6 +1150,7 @@ function completeCleanupBookkeeping(params: {
       workspaceDir: params.entry.workspaceDir,
     });
     subagentRuns.delete(params.runId);
+    subagentRegistryGeneration += 1;
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(params.runId);
     return;
@@ -1331,6 +1336,7 @@ export function replaceSubagentRunAfterSteer(params: {
       void safeRemoveAttachmentsDir(source);
     }
     subagentRuns.delete(previousRunId);
+    subagentRegistryGeneration += 1;
     resumedRuns.delete(previousRunId);
   }
 
@@ -1383,6 +1389,7 @@ export function replaceSubagentRunAfterSteer(params: {
   };
 
   subagentRuns.set(nextRunId, next);
+  subagentRegistryGeneration += 1;
   ensureListener();
   persistSubagentRuns();
   if (archiveAtMs) {
@@ -1450,6 +1457,7 @@ export function registerSubagentRun(params: {
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
   });
+  subagentRegistryGeneration += 1;
   ensureListener();
   persistSubagentRuns();
   if (archiveAtMs) {
@@ -1566,6 +1574,7 @@ export function releaseSubagentRun(runId: string) {
   }
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
+    subagentRegistryGeneration += 1;
     persistSubagentRuns();
   }
   if (subagentRuns.size === 0) {
@@ -1799,6 +1808,11 @@ export function getLatestSubagentRunByChildSessionKey(
   }
 
   return latest;
+}
+
+/** Monotonic generation counter; bumped on every registry mutation (set/delete/clear). */
+export function getSubagentRegistryGeneration(): number {
+  return subagentRegistryGeneration;
 }
 
 export function initSubagentRegistry() {

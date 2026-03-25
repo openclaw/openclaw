@@ -181,6 +181,8 @@ export function connectGateway(host: GatewayHost) {
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
+  (host as unknown as OpenClawApp).sessionsListLastHash = null;
+  (host as unknown as OpenClawApp).sessionsListLastHashParamsKey = null;
   host.execApprovalQueue = [];
   host.execApprovalError = null;
 

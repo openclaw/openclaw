@@ -1,16 +1,48 @@
+import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { SessionsListResult, SessionsListRpcResult } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
+
+/**
+ * Canonical fingerprint for `sessions.list` params when deciding whether `lastHash` is reusable.
+ * Must stay aligned with `buildSessionsListParamsKey` in `src/gateway/sessions-list-result-cache.ts`
+ * for filter fields (`label`, `spawnedBy`, `agentId`, `search`, `limit`); `activeMinutes` is included
+ * here because it affects listing even when the gateway list-result cache is bypassed.
+ */
+export function buildSessionsListLastHashParamsKey(body: Record<string, unknown>): string {
+  const activeMinutes =
+    typeof body.activeMinutes === "number" && Number.isFinite(body.activeMinutes)
+      ? Math.max(0, Math.floor(body.activeMinutes))
+      : 0;
+  const limit =
+    typeof body.limit === "number" && Number.isFinite(body.limit)
+      ? Math.max(1, Math.floor(body.limit))
+      : 0;
+  return JSON.stringify({
+    includeGlobal: body.includeGlobal === true,
+    includeUnknown: body.includeUnknown === true,
+    activeMinutes,
+    limit,
+    label: typeof body.label === "string" ? body.label.trim() : "",
+    spawnedBy: typeof body.spawnedBy === "string" ? body.spawnedBy : "",
+    agentId: typeof body.agentId === "string" ? normalizeAgentId(body.agentId) : "",
+    search: typeof body.search === "string" ? body.search.trim().toLowerCase() : "",
+  });
+}
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  /** Hash from last full `sessions.list` response; sent as `lastHash` for incremental refresh. */
+  sessionsListLastHash: string | null;
+  /** Serialized params key that produced `sessionsListLastHash`; hash is only sent when params match. */
+  sessionsListLastHashParamsKey: string | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -61,11 +93,27 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    const paramsKey = buildSessionsListLastHashParamsKey(params);
+    if (state.sessionsListLastHash && state.sessionsListLastHashParamsKey === paramsKey) {
+      params.lastHash = state.sessionsListLastHash;
+    }
+    const res = await state.client.request<SessionsListRpcResult | undefined>(
+      "sessions.list",
+      params,
+    );
     if (res) {
-      state.sessionsResult = res;
+      if ("unchanged" in res && res.unchanged) {
+        state.sessionsListLastHash = res.hash;
+        state.sessionsListLastHashParamsKey = paramsKey;
+      } else {
+        state.sessionsResult = res as SessionsListResult;
+        state.sessionsListLastHash = typeof res.hash === "string" ? res.hash : null;
+        state.sessionsListLastHashParamsKey = state.sessionsListLastHash ? paramsKey : null;
+      }
     }
   } catch (err) {
+    state.sessionsListLastHash = null;
+    state.sessionsListLastHashParamsKey = null;
     if (isMissingOperatorReadScopeError(err)) {
       state.sessionsResult = null;
       state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
@@ -109,6 +157,9 @@ export async function patchSession(
   }
   try {
     await state.client.request("sessions.patch", params);
+    // Store was mutated — clear stale hash so the refresh doesn't send a lastHash that can't match.
+    state.sessionsListLastHash = null;
+    state.sessionsListLastHashParamsKey = null;
     await loadSessions(state);
   } catch (err) {
     state.sessionsError = String(err);
@@ -139,7 +190,10 @@ export async function deleteSessionsAndRefresh(
   try {
     for (const key of keys) {
       try {
-        await state.client.request("sessions.delete", { key, deleteTranscript: true });
+        await state.client.request("sessions.delete", {
+          key,
+          deleteTranscript: true,
+        });
         deleted.push(key);
       } catch (err) {
         deleteErrors.push(String(err));
@@ -149,6 +203,9 @@ export async function deleteSessionsAndRefresh(
     state.sessionsLoading = false;
   }
   if (deleted.length > 0) {
+    // Store was mutated — clear stale hash so the refresh doesn't send a lastHash that can't match.
+    state.sessionsListLastHash = null;
+    state.sessionsListLastHashParamsKey = null;
     await loadSessions(state);
   }
   if (deleteErrors.length > 0) {
