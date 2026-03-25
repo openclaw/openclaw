@@ -19,7 +19,8 @@ export const WHATSAPP_SEND_RETRY_DEFAULTS = {
 } satisfies Required<RetryConfig>;
 
 // Only retry clearly transient network errors to avoid duplicate message delivery.
-const WHATSAPP_SEND_RETRY_RE = /timeout|connect|reset|closed|unavailable|temporarily/i;
+// Matches both "timeout" and "timed out" (spaced form used by some network libs).
+const WHATSAPP_SEND_RETRY_RE = /timed?\s*out|connect|reset|closed|unavailable|temporarily/i;
 
 function shouldRetryWhatsAppSend(err: unknown): boolean {
   return WHATSAPP_SEND_RETRY_RE.test(formatErrorMessage(err));

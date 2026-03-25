@@ -2,22 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { whatsappOutbound } from "./outbound-adapter.js";
 
 describe("whatsappOutbound send retry", () => {
-  it("retries sendText on transient network errors and succeeds on second attempt", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("connection reset"))
-      .mockResolvedValue({ messageId: "wa-1", toJid: "jid" });
+  it.each(["connection reset", "operation timed out"])(
+    "retries sendText on transient network error '%s' and succeeds on second attempt",
+    async (errorMsg) => {
+      const sendWhatsApp = vi
+        .fn()
+        .mockRejectedValueOnce(new Error(errorMsg))
+        .mockResolvedValue({ messageId: "wa-1", toJid: "jid" });
 
-    const result = await whatsappOutbound.sendText!({
-      cfg: { channels: { whatsapp: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } } } },
-      to: "5511999999999@c.us",
-      text: "hello",
-      deps: { sendWhatsApp },
-    });
+      const result = await whatsappOutbound.sendText!({
+        cfg: { channels: { whatsapp: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } } } },
+        to: "5511999999999@c.us",
+        text: "hello",
+        deps: { sendWhatsApp },
+      });
 
-    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ messageId: "wa-1" });
-  });
+      expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ messageId: "wa-1" });
+    },
+  );
 
   it("does not retry sendText on non-transient errors", async () => {
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("forbidden: not allowed"));
