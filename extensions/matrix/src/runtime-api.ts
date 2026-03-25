@@ -1,6 +1,7 @@
-export * from "../../../src/plugin-sdk/matrix.js";
+export * from "openclaw/plugin-sdk/matrix";
 export {
   assertHttpUrlTargetsPrivateNetwork,
+  buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -14,6 +15,5 @@ export {
   maybeCreateMatrixMigrationSnapshot,
   resolveConfiguredAcpBindingRecord,
 } from "openclaw/plugin-sdk/matrix-runtime-heavy";
-// Keep auth-precedence available internally without re-exporting helper-api
-// twice through both plugin-sdk/matrix and ../runtime-api.js.
-export * from "./auth-precedence.js";
+// resolveMatrixAccountStringValues already comes from plugin-sdk/matrix.
+// Re-exporting auth-precedence here makes Jiti try to define the same export twice.

@@ -99,6 +99,18 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
+const AutoTopicLabelSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        prompt: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
@@ -110,6 +122,7 @@ export const TelegramDirectSchema = z
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     requireTopic: z.boolean().optional(),
+    autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
 
@@ -280,6 +293,8 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    apiRoot: z.string().url().optional(),
+    autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
 
@@ -400,6 +415,8 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    /** Naming strategy for auto-created threads. "message" uses message text; "generated" creates an LLM title after thread creation. */
+    autoThreadName: z.enum(["message", "generated"]).optional(),
     /** Archive duration for auto-created threads in minutes. Discord supports 60, 1440 (1 day), 4320 (3 days), 10080 (1 week). Default: 60. */
     autoArchiveDuration: z
       .union([

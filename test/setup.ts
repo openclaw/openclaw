@@ -10,6 +10,27 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
+vi.mock("@mariozechner/clipboard", () => ({
+  availableFormats: () => [],
+  getText: async () => "",
+  setText: async () => {},
+  hasText: () => false,
+  getImageBinary: async () => [],
+  getImageBase64: async () => "",
+  setImageBinary: async () => {},
+  setImageBase64: async () => {},
+  hasImage: () => false,
+  getHtml: async () => "",
+  setHtml: async () => {},
+  hasHtml: () => false,
+  getRtf: async () => "",
+  setRtf: async () => {},
+  hasRtf: () => false,
+  clear: async () => {},
+  watch: () => {},
+  callThreadsafeFunction: () => {},
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
@@ -22,6 +43,13 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
+import { resetContextWindowCacheForTest } from "../src/agents/context.js";
+import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config.js";
+import {
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+} from "../src/agents/session-write-lock.js";
+import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -31,11 +59,12 @@ import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
 const testEnv = withIsolatedTestHome();
-afterAll(() => testEnv.cleanup());
 
 installProcessWarningFilter();
 
@@ -47,12 +76,6 @@ type RegistryState = {
   httpRouteRegistryPinned: boolean;
   key: string | null;
   version: number;
-};
-
-type TestChannelRegistration = {
-  pluginId: string;
-  plugin: unknown;
-  source: string;
 };
 
 const globalRegistryState = (() => {
@@ -74,6 +97,41 @@ const globalRegistryState = (() => {
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
+
+function resolveSlackStubReplyToMode(params: {
+  cfg: OpenClawConfig;
+  chatType?: string | null;
+}): "off" | "first" | "all" {
+  const entry = (
+    params.cfg.channels as
+      | Record<
+          string,
+          {
+            replyToMode?: "off" | "first" | "all";
+            replyToModeByChatType?: Partial<
+              Record<"direct" | "group" | "channel", "off" | "first" | "all">
+            >;
+            dm?: { replyToMode?: "off" | "first" | "all" };
+          }
+        >
+      | undefined
+  )?.slack;
+  const normalizedChatType = params.chatType?.trim().toLowerCase();
+  if (
+    normalizedChatType === "direct" ||
+    normalizedChatType === "group" ||
+    normalizedChatType === "channel"
+  ) {
+    const byChatType = entry?.replyToModeByChatType?.[normalizedChatType];
+    if (byChatType) {
+      return byChatType;
+    }
+    if (normalizedChatType === "direct" && entry?.dm?.replyToMode) {
+      return entry.dm.replyToMode;
+    }
+  }
+  return entry?.replyToMode ?? "off";
+}
 
 const createStubOutbound = (
   id: ChannelId,
@@ -110,6 +168,11 @@ const createStubPlugin = (params: {
   aliases?: string[];
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
   preferSessionLookupForAnnounceTarget?: boolean;
+  resolveReplyToMode?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    chatType?: string | null;
+  }) => "off" | "first" | "all";
 }): ChannelPlugin => ({
   id: params.id,
   meta: {
@@ -122,6 +185,11 @@ const createStubPlugin = (params: {
     preferSessionLookupForAnnounceTarget: params.preferSessionLookupForAnnounceTarget,
   },
   capabilities: { chatTypes: ["direct", "group"] },
+  threading: params.resolveReplyToMode
+    ? {
+        resolveReplyToMode: params.resolveReplyToMode,
+      }
+    : undefined,
   config: {
     listAccountIds: (cfg: OpenClawConfig) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -151,48 +219,34 @@ const createStubPlugin = (params: {
   outbound: createStubOutbound(params.id, params.deliveryMode),
 });
 
-const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: channels as unknown as PluginRegistry["channels"],
-  channelSetups: channels.map((entry) => ({
-    pluginId: entry.pluginId,
-    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
-    source: entry.source,
-    enabled: true,
-  })),
-  providers: [],
-  speechProviders: [],
-  mediaUnderstandingProviders: [],
-  imageGenerationProviders: [],
-  webSearchProviders: [],
-  gatewayHandlers: {},
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
-});
-
 const createDefaultRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createStubPlugin({ id: "discord", label: "Discord" }),
+      plugin: createStubPlugin({
+        id: "discord",
+        label: "Discord",
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+      }),
       source: "test",
     },
     {
       pluginId: "slack",
-      plugin: createStubPlugin({ id: "slack", label: "Slack" }),
+      plugin: createStubPlugin({
+        id: "slack",
+        label: "Slack",
+        resolveReplyToMode: ({ cfg, chatType }) => resolveSlackStubReplyToMode({ cfg, chatType }),
+      }),
       source: "test",
     },
     {
       pluginId: "telegram",
       plugin: {
-        ...createStubPlugin({ id: "telegram", label: "Telegram" }),
+        ...createStubPlugin({
+          id: "telegram",
+          label: "Telegram",
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+        }),
         status: {
           buildChannelSummary: async () => ({
             configured: false,
@@ -268,14 +322,20 @@ beforeAll(() => {
   installDefaultPluginRegistry();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanupSessionStateForTest();
+  resetContextWindowCacheForTest();
+  resetModelsJsonReadyCacheForTest();
+  resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
     installDefaultPluginRegistry();
     globalRegistryState.key = null;
     globalRegistryState.version += 1;
   }
-  // Guard against leaked fake timers across test files/workers.
-  if (vi.isFakeTimers()) {
-    vi.useRealTimers();
-  }
+});
+
+afterAll(async () => {
+  await cleanupSessionStateForTest();
+  await drainSessionWriteLockStateForTest();
+  testEnv.cleanup();
 });

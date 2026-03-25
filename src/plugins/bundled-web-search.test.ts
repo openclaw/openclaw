@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
+import { resolveBundledWebSearchPluginId } from "./bundled-web-search-provider-ids.js";
 import {
   listBundledWebSearchProviders,
   resolveBundledWebSearchPluginIds,
@@ -18,6 +21,7 @@ describe("bundled web search metadata", () => {
       signupUrl: string;
       docsUrl?: string;
       autoDetectOrder?: number;
+      requiresCredential?: boolean;
       credentialPath: string;
       inactiveSecretPaths?: string[];
       getConfiguredCredentialValue?: unknown;
@@ -36,6 +40,7 @@ describe("bundled web search metadata", () => {
       signupUrl: params.provider.signupUrl,
       docsUrl: params.provider.docsUrl,
       autoDetectOrder: params.provider.autoDetectOrder,
+      requiresCredential: params.provider.requiresCredential,
       credentialPath: params.provider.credentialPath,
       inactiveSecretPaths: params.provider.inactiveSecretPaths,
       hasConfiguredCredentialAccessors:
@@ -67,6 +72,8 @@ describe("bundled web search metadata", () => {
   it("keeps bundled web search compat ids aligned with bundled manifests", () => {
     expect(resolveBundledWebSearchPluginIds({})).toEqual([
       "brave",
+      "duckduckgo",
+      "exa",
       "firecrawl",
       "google",
       "moonshot",
@@ -74,6 +81,25 @@ describe("bundled web search metadata", () => {
       "tavily",
       "xai",
     ]);
+  });
+
+  it("keeps bundled web search fast-path ids aligned with the registry", () => {
+    expect([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]).toEqual(
+      bundledWebSearchPluginRegistrations
+        .map(({ plugin }) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right)),
+    );
+  });
+
+  it("keeps bundled web search provider-to-plugin ids aligned with bundled contracts", () => {
+    expect(resolveBundledWebSearchPluginId("brave")).toBe("brave");
+    expect(resolveBundledWebSearchPluginId("exa")).toBe("exa");
+    expect(resolveBundledWebSearchPluginId("firecrawl")).toBe("firecrawl");
+    expect(resolveBundledWebSearchPluginId("gemini")).toBe("google");
+    expect(resolveBundledWebSearchPluginId("kimi")).toBe("moonshot");
+    expect(resolveBundledWebSearchPluginId("perplexity")).toBe("perplexity");
+    expect(resolveBundledWebSearchPluginId("tavily")).toBe("tavily");
+    expect(resolveBundledWebSearchPluginId("grok")).toBe("xai");
   });
 
   it("keeps fast-path bundled provider metadata aligned with bundled plugin contracts", async () => {

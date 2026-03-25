@@ -1,6 +1,6 @@
 ---
 title: "Plugin SDK Migration"
-sidebarTitle: "SDK Migration"
+sidebarTitle: "Migrate to SDK"
 summary: "Migrate from the legacy backwards-compatibility layer to the modern plugin SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
@@ -115,7 +115,8 @@ is a small, self-contained module with a clear purpose and documented contract.
 <Accordion title="Full import path table">
   | Import path | Purpose | Key exports |
   | --- | --- | --- |
-  | `plugin-sdk/core` | Plugin entry definitions, base types | `defineChannelPluginEntry`, `definePluginEntry` |
+  | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
+  | `plugin-sdk/core` | Channel entry definitions, channel builders, base types | `defineChannelPluginEntry`, `createChatChannelPlugin` |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
@@ -163,6 +164,9 @@ This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins)
-- [Plugin Internals](/plugins/architecture)
-- [Plugin Manifest](/plugins/manifest)
+- [Getting Started](/plugins/building-plugins) — build your first plugin
+- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
+- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
+- [Plugin Internals](/plugins/architecture) — architecture deep dive
+- [Plugin Manifest](/plugins/manifest) — manifest schema reference

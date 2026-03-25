@@ -1,6 +1,16 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDirectoryCli } from "./directory-cli.js";
+import type { CliRuntimeCapture } from "./test-runtime-capture.js";
+
+const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
+
+function getRuntimeCapture(): CliRuntimeCapture {
+  if (!runtimeState.capture) {
+    throw new Error("runtime capture not initialized");
+  }
+  return runtimeState.capture;
+}
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -9,9 +19,6 @@ const mocks = vi.hoisted(() => ({
   resolveMessageChannelSelection: vi.fn(),
   getChannelPlugin: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -35,17 +42,16 @@ vi.mock("../channels/plugins/helpers.js", () => ({
   resolveChannelDefaultAccountId: mocks.resolveChannelDefaultAccountId,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: (...args: unknown[]) => mocks.log(...args),
-    error: (...args: unknown[]) => mocks.error(...args),
-    exit: (...args: unknown[]) => mocks.exit(...args),
-  },
-}));
+vi.mock("../runtime.js", async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  runtimeState.capture ??= createCliRuntimeCapture();
+  return { defaultRuntime: runtimeState.capture.defaultRuntime };
+});
 
 describe("registerDirectoryCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getRuntimeCapture().resetRuntimeCapture();
     mocks.loadConfig.mockReturnValue({ channels: {} });
     mocks.writeConfigFile.mockResolvedValue(undefined);
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
@@ -54,8 +60,8 @@ describe("registerDirectoryCli", () => {
       configured: ["slack"],
       source: "explicit",
     });
-    mocks.exit.mockImplementation((code?: number) => {
-      throw new Error(`exit:${code ?? 0}`);
+    getRuntimeCapture().defaultRuntime.exit.mockImplementation((code: number) => {
+      throw new Error(`exit:${code}`);
     });
   });
 
@@ -97,9 +103,9 @@ describe("registerDirectoryCli", () => {
         accountId: "default",
       }),
     );
-    expect(mocks.log).toHaveBeenCalledWith(
+    expect(getRuntimeCapture().defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
-    expect(mocks.error).not.toHaveBeenCalled();
+    expect(getRuntimeCapture().defaultRuntime.error).not.toHaveBeenCalled();
   });
 });
