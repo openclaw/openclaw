@@ -236,7 +236,11 @@ describe("discord tool result dispatch", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    const pairingReply = String(sendMock.mock.calls[0]?.[1] ?? "");
+    expect(pairingReply).toContain("OpenClaw: access not configured.");
+    expect(pairingReply).toContain("Your Discord user id: u2");
+    expect(pairingReply).toContain("Pairing code:");
+    expect(pairingReply).toContain("```\nPAIRCODE\n```");
+    expect(pairingReply).toContain("pairing approve discord PAIRCODE");
   }, 10000);
 });
