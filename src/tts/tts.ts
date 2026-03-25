@@ -12,7 +12,6 @@ import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
@@ -28,7 +27,8 @@ import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
 } from "../plugins/provider-model-defaults.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId, normalizeOptionalAccountId } from "../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
@@ -70,6 +70,8 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   useSpeakerBoost: true,
   speed: 1.0,
 };
+
+const ACCOUNT_TTS_CHANNELS = new Set<string>(["feishu"]);
 
 const OPUS_OUTPUT = {
   openai: "opus" as const,
@@ -350,6 +352,15 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
     return base;
   }
+  const mergedMicrosoftAlias =
+    base.microsoft || base.edge || override.microsoft || override.edge
+      ? {
+          ...base.edge,
+          ...base.microsoft,
+          ...override.edge,
+          ...override.microsoft,
+        }
+      : undefined;
   return {
     ...base,
     ...override,
@@ -370,25 +381,40 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
         }
       : {}),
     ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
-    ...(base.edge || override.edge ? { edge: { ...base.edge, ...override.edge } } : {}),
+    ...(mergedMicrosoftAlias
+      ? {
+          microsoft: mergedMicrosoftAlias,
+          edge: mergedMicrosoftAlias,
+        }
+      : {}),
   };
 }
 
 function resolveAccountTtsOverride(
   cfg: OpenClawConfig,
   channel: string,
-  accountId: string,
+  accountId?: string,
 ): TtsConfig | undefined {
+  const channelId = normalizeChannelId(channel) ?? String(channel).trim().toLowerCase();
+  if (!channelId || !ACCOUNT_TTS_CHANNELS.has(channelId)) {
+    return undefined;
+  }
   const channelConfig = cfg.channels?.[channel] as
-    | { accounts?: Record<string, { tts?: TtsConfig }> }
+    | { defaultAccount?: string; accounts?: Record<string, { tts?: TtsConfig }> }
     | undefined;
-  return resolveAccountEntry(channelConfig?.accounts, accountId)?.tts;
+  const defaultAccountId =
+    accountId == null ? normalizeOptionalAccountId(channelConfig?.defaultAccount) : undefined;
+  return resolveNormalizedAccountEntry(
+    channelConfig?.accounts,
+    defaultAccountId ?? normalizeAccountId(accountId),
+    normalizeAccountId,
+  )?.tts;
 }
 
 export function resolveTtsConfigForAccount(
   cfg: OpenClawConfig,
   channel: string,
-  accountId: string,
+  accountId?: string,
 ): ResolvedTtsConfig {
   const base = cfg.messages?.tts ?? {};
   const accountTts = resolveAccountTtsOverride(cfg, channel, accountId);
@@ -585,7 +611,7 @@ function resolveOutputFormat(channelId?: string | null) {
   return DEFAULT_OUTPUT;
 }
 
-function resolveChannelId(channel: string | undefined): ChannelId | null {
+function resolveChannelId(channel: string | undefined): string | null {
   return channel ? normalizeChannelId(channel) : null;
 }
 
@@ -890,10 +916,9 @@ export async function maybeApplyTtsToPayload(params: {
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
-  const config =
-    params.channel && params.accountId
-      ? resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId)
-      : resolveTtsConfig(params.cfg);
+  const config = params.channel
+    ? resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId)
+    : resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -990,13 +1015,12 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const ttsStart = Date.now();
-  const mergedTtsConfig =
-    params.channel && params.accountId
-      ? mergeTtsConfig(
-          params.cfg.messages?.tts ?? {},
-          resolveAccountTtsOverride(params.cfg, params.channel, params.accountId),
-        )
-      : params.cfg.messages?.tts;
+  const mergedTtsConfig = params.channel
+    ? mergeTtsConfig(
+        params.cfg.messages?.tts ?? {},
+        resolveAccountTtsOverride(params.cfg, params.channel, params.accountId),
+      )
+    : params.cfg.messages?.tts;
   const cfgWithAccountTts = {
     ...params.cfg,
     messages: {

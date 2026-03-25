@@ -869,6 +869,92 @@ describe("tts", () => {
         });
       }
     });
+
+    it("uses normalized account ids when synthesizing account-level TTS overrides", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            auto: "always",
+            provider: "openai",
+            openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          },
+        },
+        channels: {
+          feishu: {
+            accounts: {
+              "Ops Team": {
+                tts: {
+                  openai: {
+                    voice: "ash",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "This should use the account-specific voice." },
+          cfg,
+          channel: "feishu",
+          accountId: "ops-team",
+          kind: "final",
+        });
+
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+          voice?: string;
+        };
+        expect(body.voice).toBe("ash");
+      });
+    });
+
+    it("uses the configured default account when synthesizing without an account id", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            auto: "always",
+            provider: "openai",
+            openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          },
+        },
+        channels: {
+          feishu: {
+            defaultAccount: "Ops Team",
+            accounts: {
+              "Ops Team": {
+                tts: {
+                  openai: {
+                    voice: "ash",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "This should use the default-account voice." },
+          cfg,
+          channel: "feishu",
+          kind: "final",
+        });
+
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+          voice?: string;
+        };
+        expect(body.voice).toBe("ash");
+      });
+    });
   });
 
   describe("resolveTtsConfigForAccount", () => {
@@ -885,61 +971,7 @@ describe("tts", () => {
       },
     };
 
-    it("falls back to global config when no account TTS is configured", () => {
-      const config = tts.resolveTtsConfigForAccount(baseCfg, "telegram", "my-bot");
-      expect(config.edge.voice).toBe("zh-CN-XiaoyiNeural");
-      expect(config.edge.lang).toBe("zh-CN");
-    });
-
-    it("uses account TTS override when configured", () => {
-      const cfg: OpenClawConfig = {
-        ...baseCfg,
-        channels: {
-          telegram: {
-            accounts: {
-              "english-bot": {
-                tts: {
-                  provider: "edge",
-                  edge: {
-                    voice: "en-US-JennyNeural",
-                    lang: "en-US",
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "english-bot");
-      expect(config.edge.voice).toBe("en-US-JennyNeural");
-      expect(config.edge.lang).toBe("en-US");
-    });
-
-    it("matches account TTS overrides case-insensitively", () => {
-      const cfg: OpenClawConfig = {
-        ...baseCfg,
-        channels: {
-          telegram: {
-            accounts: {
-              "English-Bot": {
-                tts: {
-                  provider: "edge",
-                  edge: {
-                    voice: "en-US-JennyNeural",
-                    lang: "en-US",
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "english-bot");
-      expect(config.edge.voice).toBe("en-US-JennyNeural");
-      expect(config.edge.lang).toBe("en-US");
-    });
-
-    it("merges partial account TTS with global config", () => {
+    it("falls back to global config when the channel does not support account TTS", () => {
       const cfg: OpenClawConfig = {
         ...baseCfg,
         channels: {
@@ -957,9 +989,171 @@ describe("tts", () => {
         },
       } as OpenClawConfig;
       const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "my-bot");
+      expect(config.edge.voice).toBe("zh-CN-XiaoyiNeural");
+      expect(config.edge.lang).toBe("zh-CN");
+    });
+
+    it("treats a missing account id as the default account", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          feishu: {
+            accounts: {
+              default: {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
+    it("uses the channel defaultAccount when account id is missing", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          feishu: {
+            defaultAccount: "Ops Team",
+            accounts: {
+              "Ops Team": {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+              default: {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "fr-FR-DeniseNeural",
+                    lang: "fr-FR",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
+    it("uses account TTS override when configured", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          feishu: {
+            accounts: {
+              "english-bot": {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu", "english-bot");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
+    it("matches account TTS overrides with normalized account ids", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          feishu: {
+            accounts: {
+              "Ops Team": {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu", "ops-team");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
+    it("merges partial account TTS with global config", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          feishu: {
+            accounts: {
+              "my-bot": {
+                tts: {
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu", "my-bot");
       expect(config.edge.voice).toBe("en-US-JennyNeural");
       expect(config.edge.lang).toBe("zh-CN");
       expect(config.provider).toBe("microsoft");
+    });
+
+    it("preserves inherited microsoft alias fields for partial account overrides", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "microsoft",
+            microsoft: {
+              voice: "zh-CN-XiaoyiNeural",
+              lang: "zh-CN",
+              outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+            },
+          },
+        },
+        channels: {
+          feishu: {
+            accounts: {
+              "ops-team": {
+                tts: {
+                  microsoft: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "feishu", "ops-team");
+      expect(config.provider).toBe("microsoft");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("zh-CN");
+      expect(config.edge.outputFormat).toBe("audio-24khz-48kbitrate-mono-mp3");
     });
 
     it("returns global config for non-existent channel/account", () => {

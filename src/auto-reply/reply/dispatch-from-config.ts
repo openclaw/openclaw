@@ -769,7 +769,7 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const ttsMode =
-      (ttsChannel && ctx.AccountId
+      (ttsChannel
         ? resolveTtsConfigForAccount(cfg, ttsChannel, ctx.AccountId)
         : resolveTtsConfig(cfg)
       ).mode ?? "final";
