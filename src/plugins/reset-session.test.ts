@@ -247,6 +247,10 @@ async function createApiHarness(options?: RegistryImportOptions) {
           throw options.sessionResetImportError;
         };
 
+  vi.doMock("../gateway/session-utils.js", () => ({
+    resolveGatewaySessionStoreTarget: deps.resolveGatewaySessionStoreTarget,
+  }));
+
   const { createPluginRegistry } = await import("./registry.js");
   const { createApi } = createPluginRegistry({
     logger: {
@@ -321,6 +325,7 @@ async function createApiWithDefaultMocks(options?: RegistryImportOptions) {
 
 afterEach(() => {
   vi.doUnmock("../gateway/session-reset-service.js");
+  vi.doUnmock("../gateway/session-utils.js");
   vi.clearAllMocks();
   vi.resetModules();
 });

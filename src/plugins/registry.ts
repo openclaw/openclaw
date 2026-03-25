@@ -8,6 +8,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
+import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -72,7 +73,6 @@ import type {
 
 type GatewaySessionResetModule = {
   performGatewaySessionReset: typeof import("../gateway/session-reset-service.js").performGatewaySessionReset;
-  resolveGatewaySessionStoreTarget: typeof import("../gateway/session-utils.js").resolveGatewaySessionStoreTarget;
 };
 
 export type PluginToolRegistration = {
@@ -301,14 +301,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return registryParams.loadSessionResetModule;
     }
     return async () => {
-      const [{ performGatewaySessionReset }, { resolveGatewaySessionStoreTarget }] =
-        await Promise.all([
-          import("../gateway/session-reset-service.js"),
-          import("../gateway/session-utils.js"),
-        ]);
+      const { performGatewaySessionReset } = await import("../gateway/session-reset-service.js");
       return {
         performGatewaySessionReset,
-        resolveGatewaySessionStoreTarget,
       };
     };
   })();
@@ -376,8 +371,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
         const normalizedReason = reason === "reset" ? "reset" : "new";
         const liveConfig = params.loadConfig();
-        const { resolveGatewaySessionStoreTarget, performGatewaySessionReset } =
-          await params.loadSessionResetModule();
+        const { performGatewaySessionReset } = await params.loadSessionResetModule();
         const target = resolveGatewaySessionStoreTarget({
           cfg: liveConfig,
           key: trimmedKey,
