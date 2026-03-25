@@ -1370,6 +1370,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                         },
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -1391,6 +1396,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         items: {
                           type: "string",
                         },
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -1414,6 +1424,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                         },
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -1435,6 +1450,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         items: {
                           type: "string",
                         },
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -2818,6 +2838,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               type: "string",
                             },
                           },
+                          timeoutMs: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -3403,6 +3428,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           items: {
                             type: "string",
                           },
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
                         },
                       },
                       additionalProperties: false,
@@ -13970,6 +14000,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Image Generation Model Fallbacks",
       help: "Ordered fallback image-generation models (provider/model).",
       tags: ["reliability", "media"],
+    },
+    "agents.defaults.imageGenerationModel.timeoutMs": {
+      label: "Image Generation Timeout (ms)",
+      help: "Request timeout in milliseconds for image generation. Passed to providers to limit how long a single generation request may take. Default: provider-specific (typically 60 000 ms).",
+      tags: ["performance", "media"],
     },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",

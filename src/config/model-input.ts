@@ -24,6 +24,13 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
+export function resolveAgentModelTimeoutMs(model?: AgentModelConfig): number | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return model.timeoutMs;
+}
+
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
   if (typeof model === "string") {
     const primary = model.trim();

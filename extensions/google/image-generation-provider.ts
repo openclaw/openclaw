@@ -168,7 +168,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
               : {}),
           },
         },
-        timeoutMs: 60_000,
+        timeoutMs: req.timeoutMs ?? 60_000,
         fetchFn: fetch,
         allowPrivateNetwork: allowPrivate,
       });

@@ -12,6 +12,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Request timeout in milliseconds. Providers use this to limit how long a single generation request may take. */
+      timeoutMs?: number;
     };
 
 export type AgentSandboxConfig = {

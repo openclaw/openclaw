@@ -1016,6 +1016,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
   "agents.defaults.imageGenerationModel.fallbacks":
     "Ordered fallback image-generation models (provider/model).",
+  "agents.defaults.imageGenerationModel.timeoutMs":
+    "Request timeout in milliseconds for image generation. Passed to providers to limit how long a single generation request may take. Default: provider-specific (typically 60 000 ms).",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",

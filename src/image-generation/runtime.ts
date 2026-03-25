@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  resolveAgentModelTimeoutMs,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
@@ -127,6 +128,10 @@ export async function generateImage(
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  const configTimeoutMs = resolveAgentModelTimeoutMs(
+    params.cfg.agents?.defaults?.imageGenerationModel,
+  );
+
   for (const candidate of candidates) {
     const provider = getImageGenerationProvider(candidate.provider, params.cfg);
     if (!provider) {
@@ -148,6 +153,7 @@ export async function generateImage(
         cfg: params.cfg,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        timeoutMs: configTimeoutMs,
         count: params.count,
         size: params.size,
         aspectRatio: params.aspectRatio,
