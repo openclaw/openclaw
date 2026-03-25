@@ -25,6 +25,15 @@ internal sealed class DpapiKeypairStorageAdapter : IKeypairStorage
         _storagePath = Path.Combine(dir, "keypair.dpapi");
     }
 
+    // Test-only constructor: isolates DPAPI storage to a temp directory so tests
+    // never touch the developer's real %APPDATA%\OpenClaw\keypair.dpapi.
+    internal DpapiKeypairStorageAdapter(string storagePath, ILogger<DpapiKeypairStorageAdapter> logger)
+    {
+        _logger      = logger;
+        _storagePath = storagePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(storagePath)!);
+    }
+
     public Task<bool> ExistsAsync(CancellationToken ct)
         => Task.FromResult(File.Exists(_storagePath));
 

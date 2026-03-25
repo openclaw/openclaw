@@ -213,8 +213,9 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
         var id = Guid.NewGuid().ToString();
         _connectRequestId = id;  // set before sending so the res handler can match it
 
-        // Resolve auth from endpoint store — handles env-var overrides, local/remote
-        // precedence, and auth.mode selection (token suppressed when mode=password).
+        // Refresh before reading so a token/password rotation or auth.mode change
+        // that happened since the last connect attempt is picked up immediately.
+        await _endpointStore.RefreshAsync(ct).ConfigureAwait(false);
         string? token = null;
         string? password = null;
         if (_endpointStore.CurrentState is GatewayEndpointState.Ready endpointReady)

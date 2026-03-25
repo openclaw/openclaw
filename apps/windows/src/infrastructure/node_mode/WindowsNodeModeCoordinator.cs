@@ -388,8 +388,9 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         Dictionary<string, bool> permissions,
         CancellationToken        ct)
     {
-        // Resolve auth from endpoint store — same source as the control channel.
-        // Handles env-var overrides, local/remote precedence, and auth.mode selection.
+        // Refresh before reading so a token/password rotation or auth.mode change
+        // is picked up on the next reconnect attempt without requiring a restart.
+        await _endpointStore.RefreshAsync(ct).ConfigureAwait(false);
         string? token = null;
         string? password = null;
         if (_endpointStore.CurrentState is GatewayEndpointState.Ready endpointReady)

@@ -6,36 +6,26 @@ namespace OpenClawWindows.Tests.Unit.Infrastructure.Security;
 
 // Integration tests for DpapiKeypairStorageAdapter.
 // These tests exercise the real DPAPI stack and the filesystem.
-// Any pre-existing keypair.dpapi is preserved: backed-up before each test,
-// restored in the finally block so the user's pairing state is never lost.
+// An isolated temp directory is used so the developer's real keypair.dpapi
+// in %APPDATA%\OpenClaw is never touched, even on crash or aborted run.
 public sealed class DpapiKeypairStorageAdapterTests : IDisposable
 {
     private readonly DpapiKeypairStorageAdapter _sut;
     private readonly string                     _storagePath;
-    private readonly byte[]?                    _originalBytes;
+    private readonly string                     _tempDir;
 
     public DpapiKeypairStorageAdapterTests()
     {
-        _sut = new DpapiKeypairStorageAdapter(NullLogger<DpapiKeypairStorageAdapter>.Instance);
-
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _storagePath = Path.Combine(appData, "OpenClaw", "keypair.dpapi");
-
-        // Back up any existing keypair so we can restore it after the tests.
-        _originalBytes = File.Exists(_storagePath) ? File.ReadAllBytes(_storagePath) : null;
-
-        // Start from a clean slate.
-        if (File.Exists(_storagePath))
-            File.Delete(_storagePath);
+        _tempDir     = Path.Combine(Path.GetTempPath(), $"openclaw-dpapi-tests-{Guid.NewGuid():N}");
+        _storagePath = Path.Combine(_tempDir, "keypair.dpapi");
+        _sut         = new DpapiKeypairStorageAdapter(_storagePath,
+                            NullLogger<DpapiKeypairStorageAdapter>.Instance);
     }
 
     public void Dispose()
     {
-        // Restore the original keypair regardless of test outcome.
-        if (_originalBytes is not null)
-            File.WriteAllBytes(_storagePath, _originalBytes);
-        else if (File.Exists(_storagePath))
-            File.Delete(_storagePath);
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     // ── Exists ────────────────────────────────────────────────────────────────
