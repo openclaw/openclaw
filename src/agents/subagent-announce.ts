@@ -549,6 +549,64 @@ function buildChildCompletionFindings(
   return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
+function dedupeLatestChildCompletionRows(
+  children: Array<{
+    childSessionKey: string;
+    task: string;
+    label?: string;
+    createdAt: number;
+    endedAt?: number;
+    frozenResultText?: string | null;
+    outcome?: SubagentRunOutcome;
+  }>,
+) {
+  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  for (const child of children) {
+    const existing = latestByChildSessionKey.get(child.childSessionKey);
+    if (!existing || child.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(child.childSessionKey, child);
+    }
+  }
+  return [...latestByChildSessionKey.values()];
+}
+
+function filterCurrentDirectChildCompletionRows(
+  children: Array<{
+    runId: string;
+    childSessionKey: string;
+    requesterSessionKey: string;
+    task: string;
+    label?: string;
+    createdAt: number;
+    endedAt?: number;
+    frozenResultText?: string | null;
+    outcome?: SubagentRunOutcome;
+  }>,
+  params: {
+    requesterSessionKey: string;
+    getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
+      | {
+          runId: string;
+          requesterSessionKey: string;
+        }
+      | null
+      | undefined;
+  },
+) {
+  if (typeof params.getLatestSubagentRunByChildSessionKey !== "function") {
+    return children;
+  }
+  return children.filter((child) => {
+    const latest = params.getLatestSubagentRunByChildSessionKey?.(child.childSessionKey);
+    if (!latest) {
+      return true;
+    }
+    return (
+      latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
+    );
+  });
+}
+
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -830,7 +888,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
   signal?: AbortSignal;
-}): Promise<"steered" | "queued" | "none"> {
+}): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
     return "none";
   }
@@ -863,7 +921,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    enqueueAnnounce({
+    const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
@@ -880,7 +938,7 @@ async function maybeQueueSubagentAnnounce(params: {
       settings: queueSettings,
       send: sendAnnounce,
     });
-    return "queued";
+    return didQueue ? "queued" : "dropped";
   }
 
   return "none";
@@ -1396,7 +1454,15 @@ export async function runSubagentAnnounceFlow(params: {
           },
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
-          childCompletionFindings = buildChildCompletionFindings(directChildren);
+          childCompletionFindings = buildChildCompletionFindings(
+            dedupeLatestChildCompletionRows(
+              filterCurrentDirectChildCompletionRows(directChildren, {
+                requesterSessionKey: params.childSessionKey,
+                getLatestSubagentRunByChildSessionKey:
+                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+              }),
+            ),
+          );
         }
       }
     } catch {
@@ -1630,7 +1696,7 @@ export async function runSubagentAnnounceFlow(params: {
           params: {
             key: params.childSessionKey,
             deleteTranscript: true,
-            emitLifecycleHooks: false,
+            emitLifecycleHooks: params.spawnMode === "session",
           },
           timeoutMs: 10_000,
         });

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
 import { MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE } from "./matrix-plugin-helper.js";
+
+vi.unmock("../version.js");
 
 function writeFile(filePath: string, value: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -39,9 +41,16 @@ function writeMatrixPluginFixture(rootDir: string): void {
 
 const matrixHelperEnv = {
   OPENCLAW_BUNDLED_PLUGINS_DIR: (home: string) => path.join(home, "bundled"),
+  OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+  OPENCLAW_VERSION: undefined,
+  VITEST: "true",
 };
 
 describe("matrix legacy encrypted-state migration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("extracts a saved backup key into the new recovery-key path", async () => {
     await withTempHome(
       async (home) => {

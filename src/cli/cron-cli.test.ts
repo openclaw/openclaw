@@ -614,6 +614,23 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --tz with --every on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid",
+      "--every",
+      "10m",
+      "--tz",
+      "UTC",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
+  });
+
   it("applies --tz to --at for offset-less datetimes on cron add", async () => {
     await runCronCommand([
       "cron",
@@ -677,6 +694,23 @@ describe("cron cli", () => {
     const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
     expect(params.schedule.kind).toBe("at");
     expect(params.schedule.at).toBe("2026-03-29T00:30:00.000Z");
+  });
+
+  it("rejects nonexistent DST gap wall-clock times on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-gap-test",
+      "--at",
+      "2026-03-29T02:30:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
   });
 
   it("sets explicit stagger for cron edit", async () => {

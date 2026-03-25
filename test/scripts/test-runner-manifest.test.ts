@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   dedupeFilesPreserveOrder,
   packFilesByDuration,
+  packFilesByDurationWithBaseLoads,
   selectMemoryHeavyFiles,
   selectTimedHeavyFiles,
   selectUnitHeavyFileGroups,
@@ -132,5 +133,22 @@ describe("packFilesByDuration", () => {
       ["src/a.test.ts", "src/d.test.ts"],
       ["src/b.test.ts", "src/c.test.ts"],
     ]);
+  });
+
+  it("accounts for existing shard load when packing new work", () => {
+    const durationByFile = {
+      "src/a.test.ts": 100,
+      "src/b.test.ts": 90,
+      "src/c.test.ts": 20,
+    } satisfies Record<string, number>;
+
+    expect(
+      packFilesByDurationWithBaseLoads(
+        Object.keys(durationByFile),
+        3,
+        (file) => durationByFile[file] ?? 0,
+        [0, 200, 10],
+      ),
+    ).toEqual([["src/a.test.ts", "src/c.test.ts"], [], ["src/b.test.ts"]]);
   });
 });
