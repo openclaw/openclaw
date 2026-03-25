@@ -201,9 +201,9 @@ jobs:
       - name: Audit production dependencies
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
-  # Fanout: downstream lanes branch from preflight outputs instead of waiting
-  # on unrelated Linux checks.
   # Build dist once for Node-relevant changes and share it with downstream jobs.
+  # Keep this overlapping with the fast correctness lanes so green PRs get heavy
+  # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
     needs: [scope]
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
@@ -280,7 +280,7 @@ jobs:
 
   checks-fast:
     needs: [scope]
-    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -820,13 +820,9 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
-  # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
-  # running 4 separate jobs per PR (as before) starved the queue. One job
-  # per PR allows 5 PRs to run macOS checks simultaneously.
-  macos:
-    needs: [scope]
-    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true'
+  macos-node-1:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -841,16 +837,157 @@ jobs:
         with:
           install-bun: "false"
 
-      - name: Build dist (macOS)
-        run: pnpm build
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
 
-      # --- Run all checks sequentially (fast gates first) ---
-      - name: TS tests (macOS)
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 1/4)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=1" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 1/4)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm test
 
-      # --- Xcode/Swift setup ---
+  macos-node-2:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 2/4)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=2" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 2/4)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-3:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 3/4)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=3" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 3/4)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-4:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 4/4)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=4" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 4/4)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-swift:
+    needs: [scope]
+    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
