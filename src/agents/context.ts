@@ -7,8 +7,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
 type ModelRegistryLike = {
@@ -79,11 +79,16 @@ export function applyConfiguredContextWindows(params: {
   }
 }
 
-const MODEL_CACHE = new Map<string, number>();
 let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
+let modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
+
+function loadModelsConfigRuntime() {
+  modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
+  return modelsConfigRuntimePromise;
+}
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
   const entryBasename = path
@@ -164,7 +169,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   try {
     const cfg = loadConfig();
     applyConfiguredContextWindows({
-      cache: MODEL_CACHE,
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
     configuredConfig = cfg;
@@ -192,7 +197,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   loadPromise = (async () => {
     try {
-      await ensureOpenClawModelsJson(cfg);
+      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
     } catch {
       // Continue with best-effort discovery/overrides.
     }
@@ -208,7 +213,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
           ? modelRegistry.getAvailable()
           : modelRegistry.getAll();
       applyDiscoveredContextWindows({
-        cache: MODEL_CACHE,
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
         models,
       });
     } catch {
@@ -216,13 +221,22 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     applyConfiguredContextWindows({
-      cache: MODEL_CACHE,
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
   })().catch(() => {
     // Keep lookup best-effort.
   });
   return loadPromise;
+}
+
+export function resetContextWindowCacheForTest(): void {
+  loadPromise = null;
+  configuredConfig = undefined;
+  configLoadFailures = 0;
+  nextConfigLoadAttemptAtMs = 0;
+  modelsConfigRuntimePromise = undefined;
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
 }
 
 export function lookupContextTokens(
@@ -232,11 +246,15 @@ export function lookupContextTokens(
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading on demand, but don't block lookups.
-  if (options?.allowAsyncLoad !== false) {
+  if (options?.allowAsyncLoad === false) {
+    // Read-only callers still need synchronous config-backed overrides, but they
+    // should not start background model discovery or models.json writes.
+    primeConfiguredContextWindows();
+  } else {
+    // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-  return MODEL_CACHE.get(modelId);
+  return lookupCachedContextTokens(modelId);
 }
 
 if (shouldEagerWarmContextWindowCache()) {

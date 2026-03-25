@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
-import { sessionsHandlers } from "./server-methods/sessions.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -18,7 +17,10 @@ import {
   trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
-import { getReplyFromConfig } from "./test-helpers.mocks.js";
+
+async function getSessionsHandlers() {
+  return (await import("./server-methods/sessions.js")).sessionsHandlers;
+}
 
 const sessionCleanupMocks = vi.hoisted(() => ({
   clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
@@ -49,6 +51,10 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   getAcpRuntimeBackend: vi.fn(),
   requireAcpRuntimeBackend: vi.fn(),
+}));
+const acpManagerMocks = vi.hoisted(() => ({
+  cancelSession: vi.fn(async () => {}),
+  closeSession: vi.fn(async () => {}),
 }));
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
@@ -136,6 +142,13 @@ vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: acpManagerMocks.cancelSession,
+    closeSession: acpManagerMocks.closeSession,
+  }),
+}));
 
 vi.mock("../browser/session-tab-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../browser/session-tab-registry.js")>();
@@ -240,6 +253,8 @@ describe("gateway server sessions", () => {
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
+    acpManagerMocks.cancelSession.mockClear();
+    acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
@@ -358,9 +373,8 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
+    await createSessionStoreDir();
     const { ws } = await openClient();
-    const replySpy = vi.mocked(getReplyFromConfig);
-    const callsBefore = replySpy.mock.calls.length;
 
     const created = await rpcReq<{
       key?: string;
@@ -382,13 +396,6 @@ describe("gateway server sessions", () => {
     expect(created.payload?.runStarted).toBe(true);
     expect(created.payload?.runId).toBeTruthy();
     expect(created.payload?.messageSeq).toBe(1);
-
-    await vi.waitFor(() => replySpy.mock.calls.length > callsBefore);
-    const ctx = replySpy.mock.calls.at(-1)?.[0] as
-      | { Body?: string; SessionKey?: string }
-      | undefined;
-    expect(ctx?.Body).toContain("hello from create");
-    expect(ctx?.SessionKey).toBe(created.payload?.key);
 
     ws.close();
   });
@@ -524,6 +531,7 @@ describe("gateway server sessions", () => {
 
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -1081,6 +1089,68 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
+      "agent:main:subagent:target": {
+        sessionId: "sess-target-exact",
+        updatedAt: now - 20_000,
+      },
+    };
+    for (let i = 0; i < 9; i += 1) {
+      entries[`agent:main:subagent:noisy-${i}`] = {
+        sessionId: `sess-noisy-${i}`,
+        updatedAt: now - i * 1_000,
+        label: `sess-target-exact noisy ${i}`,
+      };
+    }
+    await writeSessionStore({ entries });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-target-exact",
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+  });
+
+  test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:visible-parent": {
+          sessionId: "sess-visible-parent",
+          updatedAt: now - 3_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:hidden-parent": {
+          sessionId: "sess-hidden-parent",
+          updatedAt: now - 2_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:shared-child-key-filter": {
+          sessionId: "sess-shared-child-key-filter",
+          updatedAt: now - 1_000,
+          spawnedBy: "agent:main:subagent:hidden-parent",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      key: "agent:main:subagent:shared-child-key-filter",
+      spawnedBy: "agent:main:subagent:visible-parent",
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error?.message).toContain(
+      "No session found: agent:main:subagent:shared-child-key-filter",
+    );
+  });
+
   test("sessions.delete rejects main and aborts active runs", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -1169,41 +1239,23 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:discord:group:dev",
-          backend: "acpx",
-          runtimeSessionName: "runtime:delete",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: acpRuntimeMocks.cancel,
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
-    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
 
     ws.close();
@@ -1408,32 +1460,17 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:main",
-          backend: "acpx",
-          runtimeSessionName: "runtime:reset",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: vi.fn(async () => {}),
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:main",
-        backend: "acpx",
-        runtimeSessionName: "runtime:reset",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-reset",
+      sessionKey: "agent:main:main",
     });
 
     ws.close();

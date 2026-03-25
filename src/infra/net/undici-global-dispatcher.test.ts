@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   Agent,
@@ -45,6 +45,8 @@ const {
     getDefaultAutoSelectFamily,
   };
 });
+
+const mockedModuleIds = ["node:net", "undici", "./proxy-env.js"] as const;
 
 vi.mock("undici", () => ({
   Agent,
@@ -210,4 +212,11 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateConfigObjectWithPlugins } from "./config.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
@@ -121,8 +120,16 @@ vi.mock("../plugins/web-search-providers.js", () => {
   };
 });
 
-const { __testing } = await import("../agents/tools/web-search.js");
-const { resolveSearchProvider } = __testing;
+let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
+let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
+  ({
+    __testing: { resolveSearchProvider },
+  } = await import("../agents/tools/web-search.js"));
+});
 
 function pluginWebSearchApiKey(
   config: Record<string, unknown> | undefined,
@@ -136,6 +143,35 @@ function pluginWebSearchApiKey(
 }
 
 describe("web search provider config", () => {
+  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+    const res = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["bluebubbles", "memory-core"],
+      },
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            apiKey: "test-brave-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).not.toContainEqual(
+      expect.objectContaining({
+        path: "plugins.entries.brave",
+        message: expect.stringContaining(
+          "plugin disabled (not in allowlist) but config is present",
+        ),
+      }),
+    );
+  });
+
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({

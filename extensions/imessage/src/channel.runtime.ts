@@ -1,4 +1,4 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "../runtime-api.js";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { monitorIMessageProvider } from "./monitor.js";

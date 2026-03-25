@@ -1,5 +1,5 @@
 import { logVerbose } from "../../globals.js";
-import { listSpeechProviders, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
+import { getSpeechProvider, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -178,8 +178,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const requested = args.trim().toLowerCase();
-    const knownProviders = new Set(listSpeechProviders(params.cfg).map((provider) => provider.id));
-    if (requested !== "edge" && !knownProviders.has(requested)) {
+    if (requested !== "edge" && !getSpeechProvider(requested, params.cfg)) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

@@ -130,7 +130,7 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
     label: "Microsoft Teams",
     selectionLabel: "Microsoft Teams (Bot Framework)",
     docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
+    blurb: "Teams SDK; enterprise support.",
   },
   capabilities: { chatTypes: ["direct"] },
   config: {
@@ -410,6 +410,31 @@ describe("routeReply", () => {
         channel: "telegram",
         to: "telegram:123",
         replyToId: "123",
+      }),
+    );
+  });
+
+  it("preserves audioAsVoice on routed outbound payloads", async () => {
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        payloads: [
+          expect.objectContaining({
+            text: "voice caption",
+            mediaUrl: "file:///tmp/clip.mp3",
+            audioAsVoice: true,
+          }),
+        ],
       }),
     );
   });

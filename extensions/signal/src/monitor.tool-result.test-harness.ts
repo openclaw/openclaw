@@ -4,6 +4,7 @@ import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;
+  enqueueSystemEventMock: MockFn;
   sendMock: MockFn;
   replyMock: MockFn;
   updateLastRouteMock: MockFn;
@@ -16,6 +17,7 @@ type SignalToolResultTestMocks = {
 };
 
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const sendMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const replyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const updateLastRouteMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
@@ -29,6 +31,7 @@ const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
     waitForTransportReadyMock,
+    enqueueSystemEventMock,
     sendMock,
     replyMock,
     updateLastRouteMock,
@@ -45,6 +48,27 @@ export let config: Record<string, unknown> = {};
 
 export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
+}
+
+export function createSignalToolResultConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const base = config as { channels?: Record<string, unknown> };
+  const channels = base.channels ?? {};
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
 }
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -162,6 +186,10 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   return {
     ...actual,
     waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
+      enqueueSystemEventMock(...args);
+      return actual.enqueueSystemEvent(...args);
+    },
   };
 });
 
@@ -189,6 +217,7 @@ export function installSignalToolResultTestHooks() {
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
     upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
+    enqueueSystemEventMock.mockReset();
 
     resetSystemEventsForTest();
   });
