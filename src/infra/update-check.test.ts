@@ -7,6 +7,7 @@ import {
   checkUpdateStatus,
   compareSemverStrings,
   fetchNpmLatestVersion,
+  fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -47,7 +48,10 @@ describe("resolveNpmChannelTag", () => {
         return {
           ok: version != null,
           status: version != null ? 200 : 404,
-          json: async () => ({ version }),
+          json: async () => ({
+            version,
+            engines: version != null ? { node: ">=22.14.0" } : undefined,
+          }),
         } as Response;
       }),
     );
@@ -96,6 +100,13 @@ describe("resolveNpmChannelTag", () => {
   it("exposes tag fetch helpers for success and http failures", async () => {
     versionByTag.latest = "1.0.4";
 
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "1.0.4",
+      nodeEngine: ">=22.14.0",
+    });
     await expect(fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000 })).resolves.toEqual({
       tag: "latest",
       version: "1.0.4",

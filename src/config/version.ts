@@ -104,6 +104,18 @@ export function shouldWarnOnTouchedVersion(
   current: string | null | undefined,
   touched: string | null | undefined,
 ): boolean {
+  const parsedCurrent = parseOpenClawVersion(current);
+  const parsedTouched = parseOpenClawVersion(touched);
+  if (
+    parsedCurrent &&
+    parsedTouched &&
+    parsedCurrent.major === parsedTouched.major &&
+    parsedCurrent.minor === parsedTouched.minor &&
+    parsedCurrent.patch === parsedTouched.patch &&
+    parsedTouched.revision != null
+  ) {
+    return false;
+  }
   if (isSameOpenClawStableFamily(current, touched)) {
     return false;
   }

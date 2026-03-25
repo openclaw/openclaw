@@ -6,7 +6,9 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { readWebSelfIdentity } from "../auth-store.js";
+import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -75,14 +77,21 @@ export async function monitorWebInbox(options: {
     logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
   }
 
-  const selfJid = sock.user?.id;
-  const selfE164 = selfJid ? jidToE164(selfJid) : null;
+  const self = await readWebSelfIdentity(
+    options.authDir,
+    sock.user as { id?: string | null; lid?: string | null } | undefined,
+  );
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
+      const sender = msg.sender;
       const senderKey =
         msg.chatType === "group"
-          ? (msg.senderJid ?? msg.senderE164 ?? msg.senderName ?? msg.from)
+          ? (getPrimaryIdentityId(sender ?? null) ??
+            msg.senderJid ??
+            msg.senderE164 ??
+            msg.senderName ??
+            msg.from)
           : msg.from;
       if (!senderKey) {
         return null;
@@ -102,7 +111,7 @@ export async function monitorWebInbox(options: {
       }
       const mentioned = new Set<string>();
       for (const entry of entries) {
-        for (const jid of entry.mentionedJids ?? []) {
+        for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
           mentioned.add(jid);
         }
       }
@@ -113,6 +122,7 @@ export async function monitorWebInbox(options: {
       const combinedMessage: WebInboundMessage = {
         ...last,
         body: combinedBody,
+        mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
         mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
       };
       await options.onMessage(combinedMessage);
@@ -252,7 +262,7 @@ export async function monitorWebInbox(options: {
     const access = await checkInboundAccessControl({
       accountId: options.accountId,
       from,
-      selfE164,
+      selfE164: self.e164 ?? null,
       senderE164,
       group,
       pushName: msg.pushName ?? undefined,
@@ -384,7 +394,7 @@ export async function monitorWebInbox(options: {
     inboundLogger.info(
       {
         from: inbound.from,
-        to: selfE164 ?? "me",
+        to: self.e164 ?? "me",
         body: enriched.body,
         mediaPath: enriched.mediaPath,
         mediaType: enriched.mediaType,
@@ -397,26 +407,35 @@ export async function monitorWebInbox(options: {
       id: inbound.id,
       from: inbound.from,
       conversationId: inbound.from,
-      to: selfE164 ?? "me",
+      to: self.e164 ?? "me",
       accountId: inbound.access.resolvedAccountId,
       body: enriched.body,
       pushName: senderName,
       timestamp,
       chatType: inbound.group ? "group" : "direct",
       chatId: inbound.remoteJid,
+      sender: resolveComparableIdentity({
+        jid: inbound.participantJid,
+        e164: inbound.senderE164 ?? undefined,
+        name: senderName,
+      }),
       senderJid: inbound.participantJid,
       senderE164: inbound.senderE164 ?? undefined,
       senderName,
+      replyTo: enriched.replyContext ?? undefined,
       replyToId: enriched.replyContext?.id,
       replyToBody: enriched.replyContext?.body,
-      replyToSender: enriched.replyContext?.sender,
-      replyToSenderJid: enriched.replyContext?.senderJid,
-      replyToSenderE164: enriched.replyContext?.senderE164,
+      replyToSender: enriched.replyContext?.sender?.label ?? undefined,
+      replyToSenderJid: enriched.replyContext?.sender?.jid ?? undefined,
+      replyToSenderE164: enriched.replyContext?.sender?.e164 ?? undefined,
       groupSubject: inbound.groupSubject,
       groupParticipants: inbound.groupParticipants,
+      mentions: mentionedJids ?? undefined,
       mentionedJids: mentionedJids ?? undefined,
-      selfJid,
-      selfE164,
+      self,
+      selfJid: self.jid ?? undefined,
+      selfLid: self.lid ?? undefined,
+      selfE164: self.e164 ?? undefined,
       fromMe: Boolean(msg.key?.fromMe),
       location: enriched.location ?? undefined,
       sendComposing,

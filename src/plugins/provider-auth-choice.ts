@@ -143,6 +143,9 @@ export async function runProviderPluginAuthMethod(params: {
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
+      ...("displayName" in profile.credential && profile.credential.displayName
+        ? { displayName: profile.credential.displayName }
+        : {}),
     });
   }
 

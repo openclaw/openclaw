@@ -33,6 +33,12 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  getSenderIdentity,
+} from "../../identity.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -62,8 +68,10 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const isGroup = params.msg.chatType === "group";
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
   const senderE164 = normalizeE164(
-    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
+    isGroup ? (sender.e164 ?? "") : (sender.e164 ?? params.msg.from ?? ""),
   );
   if (!senderE164) {
     return false;
@@ -84,11 +92,7 @@ async function resolveWhatsAppCommandAuthorized(params: {
         dmPolicy,
       });
   const dmAllowFrom =
-    configuredAllowFrom.length > 0
-      ? configuredAllowFrom
-      : params.msg.selfE164
-        ? [params.msg.selfE164]
-        : [];
+    configuredAllowFrom.length > 0 ? configuredAllowFrom : self.e164 ? [self.e164] : [];
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy,
@@ -244,11 +248,14 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
+  const replyTo = getReplyContext(params.msg);
   const dmRouteTarget =
     params.msg.chatType !== "group"
       ? (() => {
-          if (params.msg.senderE164) {
-            return normalizeE164(params.msg.senderE164);
+          if (sender.e164) {
+            return normalizeE164(sender.e164);
           }
           // In direct chats, `msg.from` is already the canonical conversation id.
           if (params.msg.from.includes("@")) {
@@ -280,8 +287,8 @@ export async function processMessage(params: {
   });
   const isSelfChat =
     params.msg.chatType !== "group" &&
-    Boolean(params.msg.selfE164) &&
-    normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
+    Boolean(self.e164) &&
+    normalizeE164(params.msg.from) === normalizeE164(self.e164 ?? "");
   const responsePrefix =
     replyPipeline.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
@@ -310,9 +317,9 @@ export async function processMessage(params: {
     SessionKey: params.route.sessionKey,
     AccountId: params.route.accountId,
     MessageSid: params.msg.id,
-    ReplyToId: params.msg.replyToId,
-    ReplyToBody: params.msg.replyToBody,
-    ReplyToSender: params.msg.replyToSender,
+    ReplyToId: replyTo?.id,
+    ReplyToBody: replyTo?.body,
+    ReplyToSender: replyTo?.sender?.label,
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
@@ -322,11 +329,11 @@ export async function processMessage(params: {
     GroupMembers: formatGroupMembers({
       participants: params.msg.groupParticipants,
       roster: params.groupMemberNames.get(params.groupHistoryKey),
-      fallbackE164: params.msg.senderE164,
+      fallbackE164: sender.e164 ?? undefined,
     }),
-    SenderName: params.msg.senderName,
-    SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
-    SenderE164: params.msg.senderE164,
+    SenderName: sender.name ?? undefined,
+    SenderId: getPrimaryIdentityId(sender) ?? undefined,
+    SenderE164: sender.e164 ?? undefined,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),

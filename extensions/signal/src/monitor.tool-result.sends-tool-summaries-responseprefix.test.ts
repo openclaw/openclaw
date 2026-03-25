@@ -2,6 +2,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   createSignalToolResultConfig,
   config,
@@ -166,8 +167,11 @@ describe("monitorSignalProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Signal number: +15550001111");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "signal",
+      idLine: "Your Signal number: +15550001111",
+      code: "PAIRCODE",
+    });
   });
 
   it("ignores reaction-only messages", async () => {

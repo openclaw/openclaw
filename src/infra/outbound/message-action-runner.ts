@@ -15,7 +15,10 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  getAgentScopedMediaLocalRootsForSources,
+} from "../../media/local-roots.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -136,6 +139,17 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
+}
+
+function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
+  const sources: string[] = [];
+  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
+    const value = params[key];
+    if (typeof value === "string" && value.trim()) {
+      sources.push(value);
+    }
+  }
+  return sources;
 }
 
 function applyCrossContextMessageDecoration({
@@ -720,15 +734,24 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, resolvedAgentId);
-  const mediaPolicy = resolveAttachmentMediaPolicy({
+  const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
-    mediaLocalRoots,
+    mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
 
   await normalizeSandboxMediaParams({
     args: params,
-    mediaPolicy,
+    mediaPolicy: normalizationPolicy,
+  });
+
+  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+    cfg,
+    agentId: resolvedAgentId,
+    mediaSources: collectActionMediaSourceHints(params),
+  });
+  const mediaPolicy = resolveAttachmentMediaPolicy({
+    sandboxRoot: input.sandboxRoot,
+    mediaLocalRoots,
   });
 
   await hydrateAttachmentParamsForAction({

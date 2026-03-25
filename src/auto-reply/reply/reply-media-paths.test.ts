@@ -54,4 +54,43 @@ describe("createReplyMediaPathNormalizer", () => {
       ],
     });
   });
+
+  it("keeps host-local media paths flexible when sandbox exists and workspaceOnly is off", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/inbound/photo.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+    });
+  });
+
+  it("keeps sandbox media strict when workspaceOnly is enabled", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    await expect(
+      normalize({
+        mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+      }),
+    ).rejects.toThrow(/sandbox root|outside|escapes/i);
+  });
 });

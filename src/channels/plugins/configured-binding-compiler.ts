@@ -1,6 +1,6 @@
 import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
@@ -13,8 +13,6 @@ import type {
 
 // Configured bindings are channel-owned rules compiled from config, separate
 // from runtime plugin-owned conversation bindings.
-
-type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
 
 export type CompiledConfiguredBindingRegistry = {
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;
@@ -30,36 +28,12 @@ const compiledRegistryCache = new WeakMap<
   CachedCompiledConfiguredBindingRegistry
 >();
 
-function findChannelPlugin(params: {
-  registry:
-    | {
-        channels?: Array<{ plugin?: ChannelPluginLike | null } | null> | null;
-      }
-    | null
-    | undefined;
-  channel: string;
-}): ChannelPluginLike | undefined {
-  return (
-    params.registry?.channels?.find((entry) => entry?.plugin?.id === params.channel)?.plugin ??
-    undefined
-  );
-}
-
 function resolveLoadedChannelPlugin(channel: string) {
   const normalized = channel.trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }
-
-  const current = getChannelPlugin(normalized as ConfiguredBindingChannel);
-  if (current) {
-    return current;
-  }
-
-  return findChannelPlugin({
-    registry: getActivePluginRegistry(),
-    channel: normalized,
-  });
+  return getChannelPlugin(normalized as ConfiguredBindingChannel);
 }
 
 function resolveConfiguredBindingAdapter(channel: string): {
@@ -199,7 +173,7 @@ function compileConfiguredBindingRegistry(params: {
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
-  const registryVersion = getActivePluginRegistryVersion();
+  const registryVersion = getActivePluginChannelRegistryVersion();
   const cached = compiledRegistryCache.get(cfg);
   if (cached?.registryVersion === registryVersion) {
     return cached.registry;
@@ -220,7 +194,7 @@ export function primeCompiledBindingRegistry(
 ): CompiledConfiguredBindingRegistry {
   const registry = compileConfiguredBindingRegistry({ cfg });
   compiledRegistryCache.set(cfg, {
-    registryVersion: getActivePluginRegistryVersion(),
+    registryVersion: getActivePluginChannelRegistryVersion(),
     registry,
   });
   return registry;

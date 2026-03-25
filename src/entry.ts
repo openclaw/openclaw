@@ -139,18 +139,8 @@ if (
     }
 
     const containerTargetName = resolveCliContainerTarget(process.argv);
-    if (
-      containerTargetName &&
-      (parsed.profile ||
-        process.env.OPENCLAW_PROFILE?.trim() ||
-        process.env.OPENCLAW_GATEWAY_PORT?.trim() ||
-        process.env.OPENCLAW_GATEWAY_URL?.trim() ||
-        process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-        process.env.OPENCLAW_GATEWAY_PASSWORD?.trim())
-    ) {
-      console.error(
-        "[openclaw] --container cannot be combined with --profile/--dev or gateway override env vars",
-      );
+    if (containerTargetName && parsed.profile) {
+      console.error("[openclaw] --container cannot be combined with --profile/--dev");
       process.exit(2);
     }
 
