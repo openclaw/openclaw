@@ -9,6 +9,7 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import type { RouterConfig } from "../config/types.agent-defaults.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -114,6 +115,15 @@ export async function resolveOpenAiCompatModelOverride(params: {
   }
 
   return { modelOverride: raw };
+}
+
+/**
+ * Returns the router config for an agent if configured.
+ */
+export function getRouterConfigForAgent(_agentId: string): RouterConfig | undefined {
+  const cfg = loadConfig();
+  const agentDefaults = cfg.agents?.defaults;
+  return agentDefaults?.router;
 }
 
 export function resolveAgentIdForRequest(params: {
