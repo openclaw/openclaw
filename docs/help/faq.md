@@ -580,6 +580,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+### Anthropic 429 errors
+
   <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
     That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
     use a **Claude subscription** (setup-token), wait for the window to
