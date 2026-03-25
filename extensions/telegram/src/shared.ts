@@ -97,13 +97,20 @@ export function createTelegramPluginBase(params: {
     config: {
       ...telegramConfigAdapter,
       isConfigured: (account, cfg) => {
-        if (!account.token?.trim()) {
+        // Use inspectTelegramAccount for a complete token resolution that includes
+        // channel-level fallback paths not available in resolveTelegramAccount.
+        // This ensures binding-created accountIds that inherit the channel-level
+        // token are correctly detected as configured.
+        // See: https://github.com/openclaw/openclaw/issues/53876
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        if (!inspected.configured) {
           return false;
         }
         return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
       },
       unconfiguredReason: (account, cfg) => {
-        if (!account.token?.trim()) {
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        if (!inspected.configured) {
           return "not configured";
         }
         const ownerAccountId = findTelegramTokenOwnerAccountId({
@@ -118,15 +125,18 @@ export function createTelegramPluginBase(params: {
           ownerAccountId,
         });
       },
-      describeAccount: (account, cfg) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured:
-          Boolean(account.token?.trim()) &&
-          !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
-        tokenSource: account.tokenSource,
-      }),
+      describeAccount: (account, cfg) => {
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured:
+            inspected.configured &&
+            !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
+          tokenSource: inspected.tokenSource,
+        };
+      },
     },
     setup: params.setup,
   }) as Pick<

@@ -476,6 +476,39 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
   });
 
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Single-bot setup with channel-level token should report configured.
+  it("reports configured for single-bot setup with channel-level token", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created non-default accountId in single-bot setup should report configured.
+  it("reports configured for binding-created accountId in single-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "bot-main");
+    expect(account.token).toBe("single-bot-token");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
   it("does not crash startup when a resolved account token is undefined", async () => {
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: false,
