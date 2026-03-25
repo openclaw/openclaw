@@ -204,6 +204,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => ({ limit }));
@@ -220,6 +221,9 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/infra-runtime", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
         embeddings = { create: embeddingsCreate };
@@ -277,6 +281,10 @@ describe("memory plugin e2e", () => {
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
+        embeddingsCreate.mock.invocationCallOrder[0],
+      );
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
