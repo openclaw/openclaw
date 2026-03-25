@@ -24,6 +24,7 @@ export function resolveDefaultAgentWorkspaceDir(
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
+export const DEFAULT_HARD_EXECUTION_RULES_FILENAME = "HARD_EXECUTION_RULES.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
@@ -132,6 +133,7 @@ async function loadTemplate(name: string): Promise<string> {
 export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
+  | typeof DEFAULT_HARD_EXECUTION_RULES_FILENAME
   | typeof DEFAULT_TOOLS_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
@@ -169,6 +171,7 @@ type WorkspaceSetupState = {
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_HARD_EXECUTION_RULES_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -484,6 +487,19 @@ async function resolveMemoryBootstrapEntry(
   return null;
 }
 
+async function resolveOptionalBootstrapEntry(
+  resolvedDir: string,
+  name: WorkspaceBootstrapFileName,
+): Promise<{ name: WorkspaceBootstrapFileName; filePath: string } | null> {
+  const filePath = path.join(resolvedDir, name);
+  try {
+    await fs.access(filePath);
+    return { name, filePath };
+  } catch {
+    return null;
+  }
+}
+
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
@@ -521,6 +537,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
+  const hardRulesEntry = await resolveOptionalBootstrapEntry(
+    resolvedDir,
+    DEFAULT_HARD_EXECUTION_RULES_FILENAME,
+  );
+  if (hardRulesEntry) {
+    entries.push(hardRulesEntry);
+  }
+
   const memoryEntry = await resolveMemoryBootstrapEntry(resolvedDir);
   if (memoryEntry) {
     entries.push(memoryEntry);
@@ -550,6 +574,7 @@ const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_HARD_EXECUTION_RULES_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
 ]);

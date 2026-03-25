@@ -89,6 +89,12 @@ const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
 const BOOTSTRAP_TAIL_RATIO = 0.2;
 
+const BOOTSTRAP_PRIORITY_BY_FILENAME: Readonly<Record<string, number>> = {
+  "SOUL.md": 0,
+  "HARD_EXECUTION_RULES.md": 1,
+  "AGENTS.md": 2,
+};
+
 type TrimBootstrapResult = {
   content: string;
   truncated: boolean;
@@ -171,6 +177,35 @@ function clampToBudget(content: string, budget: number): string {
   return `${truncateUtf16Safe(content, safe)}…`;
 }
 
+function resolveBootstrapPriority(file: WorkspaceBootstrapFile): number {
+  const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+  const baseName = pathValue ? path.basename(pathValue) : file.name;
+  return BOOTSTRAP_PRIORITY_BY_FILENAME[baseName] ?? 100;
+}
+
+function orderBootstrapFiles(files: WorkspaceBootstrapFile[]): WorkspaceBootstrapFile[] {
+  return [...files]
+    .map((file, index) => ({ file, index }))
+    .toSorted((left, right) => {
+      const priorityDelta =
+        resolveBootstrapPriority(left.file) - resolveBootstrapPriority(right.file);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.file);
+}
+
+function summarizeSkippedBootstrapFiles(files: WorkspaceBootstrapFile[]): string {
+  const names = files
+    .map((file) => file.name)
+    .filter((name, index, arr) => arr.indexOf(name) === index)
+    .slice(0, 4);
+  const suffix = files.length > names.length ? ` (+${files.length - names.length} more)` : "";
+  return `${names.join(", ")}${suffix}`;
+}
+
 export async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -206,8 +241,16 @@ export function buildBootstrapContextFiles(
   );
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
-  for (const file of files) {
+  const orderedFiles = orderBootstrapFiles(files);
+  for (let index = 0; index < orderedFiles.length; index += 1) {
+    const file = orderedFiles[index];
     if (remainingTotalChars <= 0) {
+      const skipped = orderedFiles.slice(index);
+      if (skipped.length > 0) {
+        opts?.warn?.(
+          `bootstrap total budget exhausted (${totalMaxChars}); dropped: ${summarizeSkippedBootstrapFiles(skipped)}`,
+        );
+      }
       break;
     }
     const pathValue = typeof file.path === "string" ? file.path.trim() : "";
@@ -231,8 +274,9 @@ export function buildBootstrapContextFiles(
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      const skipped = orderedFiles.slice(index);
       opts?.warn?.(
-        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
+        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping: ${summarizeSkippedBootstrapFiles(skipped)}`,
       );
       break;
     }
