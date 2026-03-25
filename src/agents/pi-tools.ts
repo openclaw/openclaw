@@ -57,6 +57,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { createPythonOrchestratorTool } from "./tools/python-orchestrator.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -466,7 +467,7 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
-  const tools: AnyAgentTool[] = [
+  let tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
       ? allowWorkspaceWrites
@@ -545,6 +546,14 @@ export function createOpenClawCodingTools(options?: {
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
   ];
+  // Add Python Orchestrator after all other tools are built
+  // It needs access to the full filtered tool list for the bridge server
+  tools.push(
+    createPythonOrchestratorTool({
+      availableTools: tools,
+      maxToolCalls: options?.config?.tools?.pythonOrchestrator?.maxToolCalls ?? 100,
+    }) as unknown as AnyAgentTool,
+  );
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {
