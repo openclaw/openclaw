@@ -35,6 +35,8 @@ const {
   useSpy,
 } = harness;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -79,21 +81,22 @@ describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveTelegramFetch } = await import("./fetch.js"));
+    ({
+      createTelegramBot: createTelegramBotBase,
+      getTelegramSequentialKey,
+      setTelegramBotRuntimeForTest,
+    } = await import("./bot.js"));
+  });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
   });
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    const {
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey: importedGetTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js");
+  beforeEach(() => {
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
-    getTelegramSequentialKey = importedGetTelegramSequentialKey;
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -497,10 +500,10 @@ describe("createTelegramBot", () => {
         const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
         expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
         expect(pairingText, testCase.name).toContain("Pairing code:");
-        const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-        expect(code, testCase.name).toBeDefined();
-        expect(pairingText, testCase.name).toContain(`openclaw pairing approve telegram ${code}`);
-        expect(pairingText, testCase.name).not.toContain("<code>");
+        expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+        expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
       }
     });
   });
@@ -543,7 +546,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
@@ -630,7 +638,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();

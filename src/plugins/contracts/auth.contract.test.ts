@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
   WizardProgress,
   WizardSelectParams,
 } from "../../wizard/prompts.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
@@ -56,22 +55,6 @@ import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
 import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
-
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
     update() {},
@@ -106,6 +89,12 @@ function buildAuthContext() {
       createVpsAwareHandlers: vi.fn<CreateVpsAwareHandlers>(),
     },
   };
+}
+
+function createJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
 }
 
 describe("provider auth contract", () => {
@@ -154,6 +143,214 @@ describe("provider auth contract", () => {
             refresh: "refresh-token",
             expires: 1_700_000_000_000,
             email: "user@example.com",
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.4",
+      notes: undefined,
+    });
+  });
+
+  it("backfills OpenAI Codex OAuth email from the JWT profile claim", async () => {
+    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const access = createJwt({
+      "https://api.openai.com/profile": {
+        email: "jwt-user@example.com",
+      },
+    });
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access,
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: "openai-codex:jwt-user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access,
+            refresh: "refresh-token",
+            expires: 1_700_000_000_000,
+            email: "jwt-user@example.com",
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.4",
+      notes: undefined,
+    });
+  });
+
+  it("uses a stable fallback id when OpenAI Codex JWT email is missing", async () => {
+    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const access = createJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_user_id: "user-123__acct-456",
+      },
+    });
+    const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access,
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: `openai-codex:id-${expectedStableId}`,
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access,
+            refresh: "refresh-token",
+            expires: 1_700_000_000_000,
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.4",
+      notes: undefined,
+    });
+  });
+
+  it("uses iss and sub to build a stable fallback id when auth claims are missing", async () => {
+    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const access = createJwt({
+      iss: "https://accounts.openai.com",
+      sub: "user-abc",
+    });
+    const expectedStableId = Buffer.from("https://accounts.openai.com|user-abc").toString(
+      "base64url",
+    );
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access,
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: `openai-codex:id-${expectedStableId}`,
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access,
+            refresh: "refresh-token",
+            expires: 1_700_000_000_000,
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.4",
+      notes: undefined,
+    });
+  });
+
+  it("uses sub alone to build a stable fallback id when iss is missing", async () => {
+    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const access = createJwt({
+      sub: "user-abc",
+    });
+    const expectedStableId = Buffer.from("user-abc").toString("base64url");
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access,
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: `openai-codex:id-${expectedStableId}`,
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access,
+            refresh: "refresh-token",
+            expires: 1_700_000_000_000,
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.4",
+      notes: undefined,
+    });
+  });
+
+  it("falls back to the default OpenAI Codex profile when JWT parsing yields no identity", async () => {
+    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access: "not-a-jwt-token",
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: "openai-codex:default",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "not-a-jwt-token",
+            refresh: "refresh-token",
+            expires: 1_700_000_000_000,
           },
         },
       ],

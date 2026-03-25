@@ -28,6 +28,11 @@ import {
   type SystemdUserLingerStatus,
 } from "./systemd-linger.js";
 import {
+  classifySystemdUnavailableDetail,
+  isSystemctlMissingDetail,
+  isSystemdUserBusUnavailableDetail,
+} from "./systemd-unavailable.js";
+import {
   buildSystemdUnit,
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
@@ -265,18 +270,7 @@ function readSystemctlDetail(result: { stdout: string; stderr: string }): string
   return `${result.stderr} ${result.stdout}`.trim();
 }
 
-function isSystemctlMissing(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("not found") ||
-    normalized.includes("no such file or directory") ||
-    normalized.includes("spawn systemctl enoent") ||
-    normalized.includes("spawn systemctl eacces")
-  );
-}
+const isSystemctlMissing = isSystemctlMissingDetail;
 
 function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
@@ -294,31 +288,10 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
-function isSystemctlBusUnavailable(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("failed to connect to bus") ||
-    normalized.includes("failed to connect to user scope bus") ||
-    normalized.includes("dbus_session_bus_address") ||
-    normalized.includes("xdg_runtime_dir") ||
-    normalized.includes("no medium found")
-  );
-}
+const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    isSystemctlMissing(normalized) ||
-    isSystemctlBusUnavailable(normalized) ||
-    normalized.includes("not been booted") ||
-    normalized.includes("not supported")
-  );
+  return classifySystemdUnavailableDetail(detail) !== null;
 }
 
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
@@ -376,13 +349,7 @@ function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
 }
 
 function shouldFallbackToMachineUserScope(detail: string): boolean {
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("failed to connect to bus") ||
-    normalized.includes("failed to connect to user scope bus") ||
-    normalized.includes("dbus_session_bus_address") ||
-    normalized.includes("xdg_runtime_dir")
-  );
+  return isSystemdUserBusUnavailableDetail(detail);
 }
 
 async function execSystemctlUser(

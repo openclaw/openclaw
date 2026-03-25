@@ -7531,6 +7531,16 @@
       "hasChildren": true
     },
     {
+      "path": "auth.profiles.*.displayName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "auth.profiles.*.email",
       "kind": "core",
       "type": "string",
@@ -10377,6 +10387,20 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -13309,6 +13333,20 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -17079,8 +17117,7 @@
       "path": "channels.feishu.requireMention",
       "kind": "channel",
       "type": "boolean",
-      "required": true,
-      "defaultValue": true,
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
