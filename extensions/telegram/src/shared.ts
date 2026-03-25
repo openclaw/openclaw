@@ -4,6 +4,7 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -17,6 +18,7 @@ import {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
+  resolveTelegramAccountConfig,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 
@@ -54,6 +56,36 @@ export function formatDuplicateTelegramTokenReason(params: {
     `Duplicate Telegram bot token: account "${params.accountId}" shares a token with ` +
     `account "${params.ownerAccountId}". Keep one owner account per bot token.`
   );
+}
+
+/**
+ * Returns true when the runtime token resolver (`resolveTelegramToken`) would
+ * block channel-level fallthrough for the given accountId.  This mirrors the
+ * guard in `token.ts` so that status-check functions (`isConfigured`,
+ * `unconfiguredReason`, `describeAccount`) stay consistent with the gateway
+ * runtime behaviour.
+ *
+ * The guard fires when:
+ *   1. The accountId is not the default account, AND
+ *   2. The config has an explicit `accounts` section with entries, AND
+ *   3. The accountId is not found in that `accounts` section.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/53876
+ */
+function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boolean {
+  if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
+    return false;
+  }
+  const accounts = cfg.channels?.telegram?.accounts;
+  const hasConfiguredAccounts =
+    !!accounts &&
+    typeof accounts === "object" &&
+    !Array.isArray(accounts) &&
+    Object.keys(accounts).length > 0;
+  if (!hasConfiguredAccounts) {
+    return false;
+  }
+  return !resolveTelegramAccountConfig(cfg, accountId);
 }
 
 export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
@@ -102,6 +134,9 @@ export function createTelegramPluginBase(params: {
         // This ensures binding-created accountIds that inherit the channel-level
         // token are correctly detected as configured.
         // See: https://github.com/openclaw/openclaw/issues/53876
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return false;
+        }
         const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
         if (!inspected.configured) {
           return false;
@@ -109,6 +144,9 @@ export function createTelegramPluginBase(params: {
         return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
       },
       unconfiguredReason: (account, cfg) => {
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return `not configured: unknown accountId "${account.accountId}" in multi-bot setup`;
+        }
         const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
         if (!inspected.configured) {
           return "not configured";
@@ -126,6 +164,15 @@ export function createTelegramPluginBase(params: {
         });
       },
       describeAccount: (account, cfg) => {
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: false,
+            tokenSource: "none" as const,
+          };
+        }
         const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
         return {
           accountId: account.accountId,

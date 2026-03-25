@@ -509,6 +509,26 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
   });
 
+  // Regression: multi-bot guard — unknown binding-created accountId in multi-bot
+  // setup must NOT be reported as configured, matching resolveTelegramToken behaviour.
+  it("reports not configured for unknown binding-created accountId in multi-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "unknownBot");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unknown accountId");
+  });
+
   it("does not crash startup when a resolved account token is undefined", async () => {
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: false,
