@@ -508,8 +508,34 @@ export async function handleOpenAiHttpRequest(
   });
 
   if (!stream) {
+    // Subscribe to events for signal recording (router escalation)
+    const unsubscribe = router
+      ? onAgentEvent((evt) => {
+          if (evt.runId !== runId) {
+            return;
+          }
+          if (evt.stream === "tool") {
+            router.recordToolCall();
+          }
+          if (evt.stream === "lifecycle" && evt.data?.phase === "error") {
+            const rawError = evt.data?.error;
+            const errorMsg = typeof rawError === "string" ? rawError : "unknown";
+            router.recordError(errorMsg);
+          }
+        })
+      : () => {};
+
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      let result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+
+      // Escalation loop: retry with higher tier if signals warrant it
+      if (router && router.shouldEscalate()) {
+        unsubscribe();
+        router.escalate();
+        const escalatedModel = router.getCurrentModel();
+        const escalatedInput = { ...commandInput, modelOverride: escalatedModel };
+        result = await agentCommandFromIngress(escalatedInput, defaultRuntime, deps);
+      }
 
       const content = resolveAgentResponseText(result);
 
@@ -532,6 +558,8 @@ export async function handleOpenAiHttpRequest(
       sendJson(res, 500, {
         error: { message: "internal error", type: "api_error" },
       });
+    } finally {
+      unsubscribe();
     }
     return true;
   }
