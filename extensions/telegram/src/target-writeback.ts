@@ -165,7 +165,6 @@ export async function maybePersistResolvedTelegramTarget(params: {
     );
     return;
   }
-  }
 
   try {
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
