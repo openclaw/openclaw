@@ -27,6 +27,7 @@ import {
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
+import { restartLaunchAgent } from "../../daemon/launchd.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
@@ -94,6 +95,30 @@ async function stopGatewayWithoutServiceManager(port: number) {
 
 async function restartGatewayWithoutServiceManager(port: number) {
   await assertUnmanagedGatewayRestartEnabled(port);
+
+  // On macOS, prefer launchctl restart over SIGUSR1 to handle cases where
+  // the LaunchAgent exists but isn't loaded (e.g., after system reboot or update).
+  if (process.platform === "darwin") {
+    try {
+      // restartLaunchAgent handles both loaded and not-loaded cases internally
+      const result = await restartLaunchAgent({
+        stdout: defaultRuntime,
+        env: process.env,
+      });
+      if (result.outcome === "scheduled" || result.outcome === "completed") {
+        return {
+          result: "restarted" as const,
+          message: `Gateway service restarted via launchctl on port ${port}.`,
+        };
+      }
+    } catch (err) {
+      // Fall back to SIGUSR1 if launchctl fails
+      defaultRuntime.log(
+        `LaunchAgent restart failed: ${err instanceof Error ? err.message : String(err)}, falling back to SIGUSR1`,
+      );
+    }
+  }
+
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
