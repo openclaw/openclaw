@@ -1463,14 +1463,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           const imageModelKeys = new Set<string>();
 
           // Helper to resolve and add model key
+          // Use imageFallbackAliasIndex and imageModelProvider for correct provider context
+          // when resolving image fallbacks (handles cross-provider configs correctly).
           const addResolvedModelKey = (rawModel: string) => {
             const resolved = resolveModelRefFromString({
               raw: rawModel.trim(),
-              defaultProvider,
-              aliasIndex,
+              defaultProvider: imageModelProvider ?? defaultProvider,
+              aliasIndex: imageFallbackAliasIndex,
             });
             if (resolved) {
-              const key = `${resolved.ref.provider}/${resolved.ref.model}`;
+              const key = modelKey(resolved.ref.provider, resolved.ref.model);
               imageModelKeys.add(key);
             }
             // Also add the raw string for backward compatibility
