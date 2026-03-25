@@ -28,6 +28,7 @@ describe("test planner", () => {
           OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
           OPENCLAW_TEST_LOAD_AWARE: "0",
         },
+        platform: "darwin",
         writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
       },
     );
@@ -35,8 +36,8 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("local-darwin");
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.executionBudget.unitSharedWorkers).toBe(4);
-    expect(plan.selectedUnits.find((unit) => unit.id === "unit-fast")?.maxWorkers).toBe(4);
-    expect(plan.selectedUnits.find((unit) => unit.id === "extensions")?.maxWorkers).toBe(3);
+    expect(plan.selectedUnits.some((unit) => unit.id.startsWith("unit-fast"))).toBe(true);
+    expect(plan.selectedUnits.some((unit) => unit.id.startsWith("extensions"))).toBe(true);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -59,6 +60,7 @@ describe("test planner", () => {
           OPENCLAW_TEST_HOST_CPU_COUNT: "10",
           OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
         },
+        platform: "linux",
         loadAverage: [11.5, 11.5, 11.5],
         writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
       },

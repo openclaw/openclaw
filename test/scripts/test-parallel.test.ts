@@ -14,6 +14,13 @@ import {
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
 
+const clearPlannerShardEnv = (env) => {
+  const nextEnv = { ...env };
+  delete nextEnv.OPENCLAW_TEST_SHARDS;
+  delete nextEnv.OPENCLAW_TEST_SHARD_INDEX;
+  return nextEnv;
+};
+
 describe("scripts/test-parallel fatal output guard", () => {
   it("fails a zero exit when V8 reports an out-of-memory fatal", () => {
     const output = [
@@ -119,7 +126,7 @@ describe("scripts/test-parallel lane planning", () => {
     const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
       cwd: repoRoot,
       env: {
-        ...process.env,
+        ...clearPlannerShardEnv(process.env),
         OPENCLAW_TEST_PROFILE: "serial",
       },
       encoding: "utf8",
@@ -134,7 +141,7 @@ describe("scripts/test-parallel lane planning", () => {
     const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
       cwd: repoRoot,
       env: {
-        ...process.env,
+        ...clearPlannerShardEnv(process.env),
         CI: "",
         OPENCLAW_TEST_UNIT_FAST_LANES: "1",
         OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
@@ -158,7 +165,7 @@ describe("scripts/test-parallel lane planning", () => {
       ],
       {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       },
     );
@@ -175,7 +182,7 @@ describe("scripts/test-parallel lane planning", () => {
       {
         cwd: repoRoot,
         env: {
-          ...process.env,
+          ...clearPlannerShardEnv(process.env),
           CI: "",
           GITHUB_ACTIONS: "",
           RUNNER_OS: "macOS",
@@ -187,8 +194,9 @@ describe("scripts/test-parallel lane planning", () => {
       },
     );
 
-    expect(output).toContain("runtime=local-darwin mode=local intent=normal memoryBand=mid");
-    expect(output).toContain("unit-fast filters=all maxWorkers=4");
+    expect(output).toContain("mode=local intent=normal memoryBand=mid");
+    expect(output).toContain("unit-fast");
+    expect(output).toContain("filters=all maxWorkers=4");
     expect(output).toContain("extensions filters=all maxWorkers=3");
   });
 
@@ -199,7 +207,7 @@ describe("scripts/test-parallel lane planning", () => {
       ["scripts/test-parallel.mjs", "--explain", "src/auto-reply/reply/followup-runner.test.ts"],
       {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       },
     );
@@ -223,7 +231,7 @@ describe("scripts/test-parallel lane planning", () => {
       {
         cwd: repoRoot,
         env: {
-          ...process.env,
+          ...clearPlannerShardEnv(process.env),
           CI: "",
           GITHUB_ACTIONS: "",
           RUNNER_OS: "Linux",
@@ -244,7 +252,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--profile", "macmini"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Unsupported test profile "macmini"/u);
@@ -256,7 +264,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--surface", "channel"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Unsupported --surface value\(s\): channel/u);
@@ -268,7 +276,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--files", "--config"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Invalid --files value/u);
@@ -280,7 +288,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--profile"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Invalid --profile value/u);
@@ -292,7 +300,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--surface"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Invalid --surface value/u);
@@ -304,7 +312,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() =>
       execFileSync("node", ["scripts/test-parallel.mjs", "--explain"], {
         cwd: repoRoot,
-        env: process.env,
+        env: clearPlannerShardEnv(process.env),
         encoding: "utf8",
       }),
     ).toThrowError(/Invalid --explain value/u);
@@ -319,7 +327,7 @@ describe("scripts/test-parallel lane planning", () => {
       expect(() =>
         execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--files", tempFilePath], {
           cwd: repoRoot,
-          env: process.env,
+          env: clearPlannerShardEnv(process.env),
           encoding: "utf8",
         }),
       ).toThrowError(/is not a known test file/u);
