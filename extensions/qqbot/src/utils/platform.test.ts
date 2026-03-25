@@ -15,7 +15,9 @@ describe("qqbot local media path remapping", () => {
 
   it("remaps missing workspace media paths to the real media directory", () => {
     const actualHome = getHomeDir();
-    const testRoot = fs.mkdtempSync(path.join(actualHome, ".openclaw", "qqbot-platform-test-"));
+    const openclawDir = path.join(actualHome, ".openclaw");
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
@@ -45,7 +47,9 @@ describe("qqbot local media path remapping", () => {
 
   it("leaves existing media paths unchanged", () => {
     const actualHome = getHomeDir();
-    const testRoot = fs.mkdtempSync(path.join(actualHome, ".openclaw", "qqbot-platform-test-"));
+    const openclawDir = path.join(actualHome, ".openclaw");
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
