@@ -107,7 +107,23 @@ export async function buildReplyPayloads(params: {
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
+    ? params.payloads.map((payload) => {
+        const text = payload.text || "";
+        if (!text) {
+          return payload;
+        }
+        // Strip [TOOL_CALL] and [TOOL_RESULT] bracket-format blocks that the
+        // embedded agent may emit as plain text. Without this, these blocks
+        // leak into user-facing channel messages (issue #54138).
+        let cleaned = text
+          .replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, "")
+          .replace(/\[TOOL_RESULT\][\s\S]*?\[\/TOOL_RESULT\]/gi, "");
+        if (cleaned !== text) {
+          logVerbose("Stripped [TOOL_CALL]/[TOOL_RESULT] block from heartbeat reply");
+          return { ...payload, text: cleaned || "" };
+        }
+        return payload;
+      })
     : params.payloads.flatMap((payload) => {
         let text = payload.text;
 
