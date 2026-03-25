@@ -7,7 +7,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { buildConfigSchema } from "../config/schema.js";
+import { loadRuntimeConfigSchema } from "../config/runtime-schema.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -1197,7 +1197,7 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 }
 
 function buildCliConfigSchema(): Record<string, unknown> {
-  const schema = structuredClone(buildConfigSchema().schema) as {
+  const schema = structuredClone(loadRuntimeConfigSchema().schema) as {
     properties?: Record<string, unknown>;
     required?: string[];
   };

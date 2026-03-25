@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildConfigSchema } from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -18,6 +17,7 @@ const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockLoadRuntimeConfigSchema = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
@@ -27,6 +27,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
+}));
+
+vi.mock("../config/runtime-schema.js", () => ({
+  loadRuntimeConfigSchema: () => mockLoadRuntimeConfigSchema(),
 }));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -128,6 +132,36 @@ describe("config cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    mockLoadRuntimeConfigSchema.mockReturnValue({
+      schema: {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+          plugins: {
+            type: "object",
+            properties: {
+              entries: {
+                type: "object",
+              },
+            },
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "2026-03-25T00:00:00.000Z",
+    });
     mockExit.mockImplementation((code: number) => {
       const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
       throw new Error(`__exit__:${code} - ${errorMessages}`);
@@ -425,10 +459,25 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.gateway).toEqual(
-        (buildConfigSchema().schema as { properties?: Record<string, unknown> }).properties
-          ?.gateway,
-      );
+      expect(payload.properties?.channels).toEqual({
+        type: "object",
+        properties: {
+          telegram: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      });
+      expect(payload.properties?.plugins).toEqual({
+        type: "object",
+        properties: {
+          entries: {
+            type: "object",
+          },
+        },
+      });
     });
   });
 
