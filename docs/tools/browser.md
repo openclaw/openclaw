@@ -298,8 +298,9 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 Defaults:
 
 - The `openclaw` profile is auto-created if missing.
-- The `user` profile is built-in for Chrome MCP existing-session attach.
-- Existing-session profiles are opt-in beyond `user`; create them with `--driver existing-session`.
+- The `user` profile is built-in for the safe cloned browser lane.
+- The `user-live` profile is built-in for the user's actual live Chrome session.
+- Existing-session profiles are opt-in beyond `user-live`; create them with `--driver existing-session`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -318,15 +319,18 @@ Official background and setup references:
 
 Built-in profile:
 
-- `user`
+- `user-live`
 
 Optional: create your own custom existing-session profile if you want a
 different name, color, or browser data directory.
 
 Default behavior:
 
-- The built-in `user` profile uses Chrome MCP auto-connect, which targets the
-  default local Google Chrome profile.
+- The built-in `user` profile uses the cloned signed-in lane, which seeds a
+  separate managed browser from the user's Chrome state.
+- The built-in `user-live` profile uses Chrome MCP auto-connect as the explicit
+  live browser lane. Use this when the user means the real open Chrome window
+  or tabs rather than the safe cloned browser.
 
 Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
 

@@ -14,6 +14,7 @@ import {
   appendCdpPath,
   fetchJson,
   getHeadersWithAuth,
+  isLoopbackHost,
   normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -329,6 +330,15 @@ function observeBrowser(browser: Browser) {
   }
 }
 
+function usesLoopbackCdpEndpoint(cdpUrl: string): boolean {
+  try {
+    const normalizedBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+    return isLoopbackHost(new URL(normalizedBase).hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
@@ -342,9 +352,16 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const loopbackAttach = usesLoopbackCdpEndpoint(normalized);
+    const maxAttempts = loopbackAttach ? 2 : 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        const timeout = 5000 + attempt * 2000;
+        // Local managed profiles, especially the signed-in cloned `user` lane,
+        // can spend several seconds replaying extension/background targets after
+        // the CDP socket is already open. A couple of longer uninterrupted
+        // attach attempts are more reliable than repeatedly resetting progress
+        // with the old 5s/7s/9s budget.
+        const timeout = loopbackAttach ? 12000 + attempt * 3000 : 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);

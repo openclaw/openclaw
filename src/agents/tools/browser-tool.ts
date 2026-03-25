@@ -65,7 +65,9 @@ function resolveEffectiveBrowserProfile(params: {
   explicitProfile?: string;
   agentSessionKey?: string;
 }): string | undefined {
-  const explicitProfile = normalizeRememberedProfile(params.explicitProfile);
+  const explicitProfile = resolveBrowserProfileAlias(
+    normalizeRememberedProfile(params.explicitProfile),
+  );
   if (!shouldUseRememberedProfile(params.action)) {
     return explicitProfile;
   }
@@ -79,11 +81,39 @@ function resolveEffectiveBrowserProfile(params: {
   if (!sessionKey) {
     return undefined;
   }
-  return rememberedBrowserProfilesBySession.get(sessionKey);
+  return resolveBrowserProfileAlias(rememberedBrowserProfilesBySession.get(sessionKey));
 }
 
 export function __resetRememberedBrowserProfilesForTests(): void {
   rememberedBrowserProfilesBySession.clear();
+}
+
+function resolveBrowserProfileAlias(profileName?: string): string | undefined {
+  const normalized = normalizeRememberedProfile(profileName);
+  if (!normalized) {
+    return normalized;
+  }
+
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  if (resolveProfile(resolved, normalized)) {
+    return normalized;
+  }
+
+  const lower = normalized.toLowerCase();
+  // Models still sometimes ask for `profile="chrome"` when they mean the
+  // user's live Chrome session. Prefer the explicit live lane, but keep a
+  // custom profile named `chrome` working if the user configured one.
+  if (lower === "chrome" || lower === "chrome-live") {
+    if (resolveProfile(resolved, "user-live")) {
+      return "user-live";
+    }
+    if (resolveProfile(resolved, "user")) {
+      return "user";
+    }
+  }
+
+  return normalized;
 }
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -353,9 +383,11 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Browser choice: prefer profile="user" for signed-in sites, hostile sites, or any flow where existing cookies/logins matter.',
+      'Use profile="user-live" when the user explicitly means their actual live Chrome session, already-open tabs, or the browser they are actively using right now.',
       'Use profile="openclaw" for public browsing, clean isolated runs, or as an explicit fallback when session reuse is not required.',
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
       "profile=\"user\" launches a separate host-local Chromium window seeded from the user's signed-in browser state; it should not take over the user's current live tabs by default.",
+      'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and should be used only when the user explicitly wants the live browser.',
       'Do not mention the removed Browser Relay extension path. If profile="user" fails, describe the actual blocker (for example clone setup, Chrome availability, or signed-in state) instead of suggesting relay fixes.',
       "Custom existing-session profiles can target Brave, Edge, Chromium, or non-default Chrome profiles via userDataDir when auto-connect would attach to the wrong browser state.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',

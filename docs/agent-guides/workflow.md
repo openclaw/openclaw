@@ -10,6 +10,7 @@
 - Do not recreate `consumer` for new work. The active product branch is `codex/consumer-openclaw-project`.
 - If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they want the legacy `consumer` branch.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
+- Validate new bot behavior in a feature worktree first when possible, ideally with a tester bot or other isolated runtime. Do not repoint the long-lived main bot or LaunchAgent at a feature worktree. For the production bot, merge to `main` first, then restart and exercise the gateway from the `main` checkout. See `docs/debug/worktree-branch-survival.md` for the runtime truth model.
 
 ## GitHub footguns
 

@@ -184,26 +184,33 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "user" profile exists for the signed-in cloned Chrome lane.
+ * Ensure the built-in signed-in browser lanes exist.
  *
- * This is intentionally different from the explicit existing-session / live-attach
- * flow. The default consumer-safe behavior is a separate managed browser window
- * seeded from the user's Chrome state rather than taking over the live browser.
+ * `user` is the safe cloned window seeded from the user's Chrome state.
+ * `user-live` is the explicit live-attach lane for the user's existing Chrome session.
+ * Keeping both avoids forcing one semantic onto the other.
  */
-function ensureDefaultUserBrowserProfile(
+function ensureDefaultSignedInBrowserProfiles(
   profiles: Record<string, BrowserProfileConfig>,
   range?: { start: number; end: number },
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (result.user) {
-    return result;
+  if (!result.user) {
+    const cdpPort = allocateCdpPort(getUsedPorts(result), range) ?? CDP_PORT_RANGE_START + 1;
+    result.user = {
+      cdpPort,
+      cloneFromUserProfile: true,
+      color: "#00AA00",
+    };
   }
-  const cdpPort = allocateCdpPort(getUsedPorts(result), range) ?? CDP_PORT_RANGE_START + 1;
-  result.user = {
-    cdpPort,
-    cloneFromUserProfile: true,
-    color: "#00AA00",
-  };
+  if (!result["user-live"]) {
+    // Keep the live lane visually distinct so operators can tell the cloned
+    // browser and the user's actual browser apart at a glance.
+    result["user-live"] = {
+      driver: "existing-session",
+      color: "#2D7FF9",
+    };
+  }
   return result;
 }
 
@@ -266,7 +273,7 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
+  const profiles = ensureDefaultSignedInBrowserProfiles(
     ensureDefaultProfile(
       cfg?.profiles,
       defaultColor,

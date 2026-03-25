@@ -28,6 +28,12 @@ describe("browser config", () => {
     expect(user?.cdpPort).toBe(18801);
     expect(user?.cdpUrl).toBe("http://127.0.0.1:18801");
     expect(user?.cloneFromUserProfile).toBe(true);
+    const userLive = resolveProfile(resolved, "user-live");
+    expect(userLive?.driver).toBe("existing-session");
+    expect(userLive?.cdpPort).toBe(0);
+    expect(userLive?.cdpUrl).toBe("");
+    expect(userLive?.attachOnly).toBe(true);
+    expect(userLive?.color).toBe("#2D7FF9");
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);

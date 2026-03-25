@@ -53,6 +53,11 @@ Use a specific profile:
 openclaw browser --browser-profile work tabs
 ```
 
+Built-in signed-in lanes:
+
+- `user`: cloned browser seeded from the user's Chrome state
+- `user-live`: the user's actual live Chrome session
+
 ## Tabs
 
 ```bash
