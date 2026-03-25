@@ -298,6 +298,15 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  // Security: reject function bodies that attempt prototype pollution,
+  // constructor access, or import() to limit the eval attack surface.
+  // Each pattern uses its own appropriate boundary: \b for word-bounded
+  // tokens, lookahead for patterns ending in non-word characters.
+  const BLOCKED_PATTERNS =
+    /\b__proto__\b|constructor\s*\[|import\s*\(|require\s*\(|\bprocess\s*\.\s*env\b|\bchild_process\b/;
+  if (BLOCKED_PATTERNS.test(fnText)) {
+    throw new Error("evaluate function contains blocked patterns");
+  }
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations

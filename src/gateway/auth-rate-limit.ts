@@ -128,8 +128,21 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     return { key: `${scope}:${ip}`, ip };
   }
 
-  function isExempt(ip: string): boolean {
-    return exemptLoopback && isLoopbackAddress(ip);
+  function isExempt(ip: string, rawScope?: string): boolean {
+    if (!exemptLoopback || !isLoopbackAddress(ip)) return false;
+    // Loopback gets a relaxed but finite threshold (10x normal) to
+    // mitigate local privilege escalation via auth brute-force.
+    // Use the caller's scope so all auth flows are tracked correctly.
+    const { key } = resolveKey(ip, rawScope);
+    const entry = entries.get(key);
+    if (!entry) {
+      // No entry yet — allow this request but ensure recordFailure
+      // will create an entry (it skips fully-exempt IPs, so we only
+      // return true here; tracking is handled below).
+      return true;
+    }
+    slideWindow(entry, Date.now());
+    return entry.attempts.length < maxAttempts * 10;
   }
 
   function slideWindow(entry: RateLimitEntry, now: number): void {
@@ -140,7 +153,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   function check(rawIp: string | undefined, rawScope?: string): RateLimitCheckResult {
     const { key, ip } = resolveKey(rawIp, rawScope);
-    if (isExempt(ip)) {
+    if (isExempt(ip, rawScope)) {
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
     }
 
@@ -173,7 +186,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   function recordFailure(rawIp: string | undefined, rawScope?: string): void {
     const { key, ip } = resolveKey(rawIp, rawScope);
-    if (isExempt(ip)) {
+    const loopback = exemptLoopback && isLoopbackAddress(ip);
+
+    // For loopback IPs: always track failures so the 10x threshold
+    // in isExempt can enforce a ceiling. Skip only for truly non-loopback
+    // exempt cases (which currently don't exist).
+    if (!loopback && isExempt(ip, rawScope)) {
       return;
     }
 
