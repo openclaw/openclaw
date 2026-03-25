@@ -19,7 +19,8 @@ export type SentMessageCache = {
 
 // Keep the text fallback short so repeated user replies like "ok" are not
 // suppressed for long; delayed reflections should match the stronger message-id key.
-const SENT_MESSAGE_TEXT_TTL_MS = 3_000;
+// 4s gives ~2s margin above the observed 2.2s echo arrival time under normal load.
+const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {

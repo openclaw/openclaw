@@ -194,7 +194,7 @@ describe("self-chat dedupe — #47830", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("drops echo after text TTL reduction (within 3s, not 5s)", () => {
+  it("drops echo after text TTL expiry (4s TTL: expired at 5s)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -204,14 +204,14 @@ describe("self-chat dedupe — #47830", () => {
     // Agent sends text (no message id available)
     echoCache.remember(scope, { text: "Hello there" });
 
-    // After 4 seconds — should NOT match if TTL reduced to 3s
-    vi.advanceTimersByTime(4000);
+    // After 5 seconds — beyond the 4s TTL, should NOT match
+    vi.advanceTimersByTime(5000);
 
     const result = echoCache.has(scope, { text: "Hello there" });
     expect(result).toBe(false);
   });
 
-  it("still drops text echo within reduced 3s TTL window", () => {
+  it("still drops text echo within 4s TTL window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -220,8 +220,8 @@ describe("self-chat dedupe — #47830", () => {
 
     echoCache.remember(scope, { text: "Hello there" });
 
-    // After 2 seconds — should still match
-    vi.advanceTimersByTime(2000);
+    // After 3 seconds — within the 4s TTL, should still match
+    vi.advanceTimersByTime(3000);
 
     const result = echoCache.has(scope, { text: "Hello there" });
     expect(result).toBe(true);
