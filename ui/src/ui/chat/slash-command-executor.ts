@@ -25,6 +25,7 @@ import type {
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
+import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -715,7 +716,7 @@ async function executeSteer(
       sessionKey: resolved.key,
       message: resolved.message,
       deliver: false,
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey: generateUUID(),
     });
     return { content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered." };
   } catch (err) {
