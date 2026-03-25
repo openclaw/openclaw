@@ -236,8 +236,6 @@ async function createApiHarness(options?: RegistryImportOptions) {
     emitSessionUnboundLifecycleEvent: vi.fn(async () => {}),
     performGatewaySessionReset:
       deps.performGatewaySessionReset as SessionResetModule["performGatewaySessionReset"],
-    resolveGatewaySessionStoreTarget:
-      deps.resolveGatewaySessionStoreTarget as SessionResetModule["resolveGatewaySessionStoreTarget"],
   });
 
   const loadSessionResetModule: () => Promise<SessionResetModule> =
@@ -299,7 +297,7 @@ function createTestRuntime(params: {
       getSession: vi.fn(),
       deleteSession,
     },
-  } as PluginRuntime;
+  } as unknown as PluginRuntime;
 }
 
 function deferred<T>() {
@@ -319,7 +317,7 @@ async function createApiWithDefaultMocks(options?: RegistryImportOptions) {
   harness.deps.loadConfig.mockReturnValue({
     agents: { list: [{ id: "main", default: true }] },
     session: { mainKey: "main", scope: "agent" },
-  } as OpenClawConfig);
+  } as unknown as OpenClawConfig);
   return harness;
 }
 
