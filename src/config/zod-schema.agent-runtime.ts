@@ -135,6 +135,7 @@ export const SandboxDockerSchema = z
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
+    dangerouslyAllowHostNetwork: z.boolean().optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -165,13 +166,15 @@ export const SandboxDockerSchema = z
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
+      allowHostNetwork: data.dangerouslyAllowHostNetwork === true,
     });
     if (blockedNetworkReason === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["network"],
         message:
-          'Sandbox security: network mode "host" is blocked. Use "bridge" or "none" instead.',
+          'Sandbox security: network mode "host" is blocked. ' +
+          'Use "bridge" or "none" instead, or set dangerouslyAllowHostNetwork=true only when you fully trust this runtime.',
       });
     }
     if (blockedNetworkReason === "container_namespace_join") {

@@ -313,6 +313,20 @@ describe("buildSandboxCreateArgs", () => {
     expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
   });
 
+  it("allows host network with explicit dangerous override", () => {
+    const cfg = createSandboxConfig({
+      network: "host",
+      dangerouslyAllowHostNetwork: true,
+    });
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-host-network-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args).toEqual(expect.arrayContaining(["--network", "host"]));
+  });
+
   it("allows container namespace join with explicit dangerous override", () => {
     const cfg = createSandboxConfig({
       network: "container:peer",

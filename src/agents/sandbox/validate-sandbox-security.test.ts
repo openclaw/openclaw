@@ -228,6 +228,14 @@ describe("validateNetworkMode", () => {
     }
   });
 
+  it("allows host mode with explicit dangerous override", () => {
+    expect(() =>
+      validateNetworkMode("host", {
+        allowHostNetwork: true,
+      }),
+    ).not.toThrow();
+  });
+
   it("blocks container namespace joins by default", () => {
     const cases = [
       {

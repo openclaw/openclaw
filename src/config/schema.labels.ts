@@ -489,6 +489,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
+  "agents.defaults.sandbox.docker.dangerouslyAllowHostNetwork":
+    "Sandbox Docker Allow Host Network",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
@@ -845,6 +847,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
+  "agents.list[].sandbox.docker.dangerouslyAllowHostNetwork":
+    "Agent Sandbox Docker Allow Host Network",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

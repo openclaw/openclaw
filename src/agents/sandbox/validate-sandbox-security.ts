@@ -44,6 +44,7 @@ export type ValidateBindMountsOptions = {
 
 export type ValidateNetworkModeOptions = {
   allowContainerNamespaceJoin?: boolean;
+  allowHostNetwork?: boolean;
 };
 
 export type BlockedBindReason =
@@ -287,12 +288,13 @@ export function validateNetworkMode(
   const blockedReason = getBlockedNetworkModeReason({
     network,
     allowContainerNamespaceJoin: options?.allowContainerNamespaceJoin,
+    allowHostNetwork: options?.allowHostNetwork,
   });
   if (blockedReason === "host") {
     throw new Error(
       `Sandbox security: network mode "${network}" is blocked. ` +
         'Network "host" mode bypasses container network isolation. ' +
-        'Use "bridge" or "none" instead.',
+        'Use "bridge" or "none" instead, or set dangerouslyAllowHostNetwork=true only when you fully trust this runtime.',
     );
   }
 
@@ -332,11 +334,13 @@ export function validateSandboxSecurity(
     seccompProfile?: string;
     apparmorProfile?: string;
     dangerouslyAllowContainerNamespaceJoin?: boolean;
+    dangerouslyAllowHostNetwork?: boolean;
   } & ValidateBindMountsOptions,
 ): void {
   validateBindMounts(cfg.binds, cfg);
   validateNetworkMode(cfg.network, {
     allowContainerNamespaceJoin: cfg.dangerouslyAllowContainerNamespaceJoin === true,
+    allowHostNetwork: cfg.dangerouslyAllowHostNetwork === true,
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);

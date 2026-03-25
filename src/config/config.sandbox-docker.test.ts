@@ -77,6 +77,22 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("allows network host mode with explicit dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "host",
+              dangerouslyAllowHostNetwork: true,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects container namespace join by default", () => {
     const res = validateConfigObject({
       agents: {

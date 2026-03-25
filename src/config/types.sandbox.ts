@@ -59,6 +59,12 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /**
+   * Dangerous override: allow Docker `network: "host"` mode.
+   * Default behavior blocks host network mode to preserve sandbox network isolation.
+   * Enable only for trusted agents that need host-level network access (e.g. OAuth callback flows).
+   */
+  dangerouslyAllowHostNetwork?: boolean;
 };
 
 export type SandboxBrowserSettings = {

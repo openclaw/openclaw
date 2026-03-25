@@ -910,8 +910,11 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
         title: "Dangerous network mode in sandbox config",
         detail,
         remediation:
-          `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
-          ` Use ${source}.dangerouslyAllowContainerNamespaceJoin=true only as a break-glass override when you fully trust this runtime.`,
+          normalizedNetwork === "host"
+            ? `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
+              ` Use ${source}.dangerouslyAllowHostNetwork=true only as a break-glass override when you fully trust this runtime.`
+            : `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
+              ` Use ${source}.dangerouslyAllowContainerNamespaceJoin=true only as a break-glass override when you fully trust this runtime.`,
       });
     }
 
