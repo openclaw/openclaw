@@ -426,7 +426,7 @@ describe("monitorSlackProvider tool results", () => {
     await expectMentionPatternMessageAccepted("openclaw: hello <@U2>");
   });
 
-  it("treats replies to bot threads as implicit mentions", async () => {
+  it("treats replies to bot threads as implicit mentions by default", async () => {
     setRequireMentionChannelConfig();
     replyMock.mockResolvedValue({ text: "hi" });
 
@@ -442,6 +442,31 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(firstReplyCtx().WasMentioned).toBe(true);
+  });
+
+  it("does not treat replies to bot threads as implicit mentions when autoReplyOnParticipation is false", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+          thread: { autoReplyOnParticipation: false },
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        text: "following up",
+        ts: "124",
+        thread_ts: "123",
+        parent_user_id: "bot-user",
+        channel_type: "channel",
+      }),
+    });
+
+    expect(replyMock).not.toHaveBeenCalled();
   });
 
   it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
