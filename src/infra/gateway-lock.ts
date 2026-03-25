@@ -25,6 +25,17 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
+export type GatewayLockInspection = {
+  lockPath: string;
+  configPath: string;
+  pid: number | null;
+  pidAlive: boolean | null;
+  ageMs: number | null;
+  stale: boolean;
+  staleReasons: string[];
+  removed: boolean;
+};
+
 export type GatewayLockOptions = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -170,6 +181,69 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGateway
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
+}
+
+export async function inspectGatewayLock(
+  params: {
+    env?: NodeJS.ProcessEnv;
+    staleMs?: number;
+    removeStale?: boolean;
+  } = {},
+): Promise<GatewayLockInspection | null> {
+  const env = params.env ?? process.env;
+  const staleMs = params.staleMs ?? DEFAULT_STALE_MS;
+  const removeStale = params.removeStale === true;
+  const { lockPath, configPath } = resolveGatewayLockPath(env);
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(lockPath);
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+
+  const payload = await readLockPayload(lockPath);
+  const pid = payload?.pid ?? null;
+  const pidAlive = pid === null ? null : isPidAlive(pid);
+  let ageMs: number | null = null;
+
+  if (payload?.createdAt) {
+    const createdAt = Date.parse(payload.createdAt);
+    if (Number.isFinite(createdAt)) {
+      ageMs = Math.max(0, Date.now() - createdAt);
+    }
+  }
+  if (ageMs === null && Number.isFinite(stat.mtimeMs)) {
+    ageMs = Math.max(0, Date.now() - stat.mtimeMs);
+  }
+
+  const staleReasons: string[] = [];
+  if (pid !== null && pidAlive === false) {
+    staleReasons.push("owner-dead");
+  }
+  if (ageMs !== null && ageMs > staleMs) {
+    staleReasons.push("age");
+  }
+  const stale = staleReasons.length > 0;
+  let removed = false;
+  if (stale && removeStale) {
+    await fs.rm(lockPath, { force: true });
+    removed = true;
+  }
+
+  return {
+    lockPath,
+    configPath: payload?.configPath ?? configPath,
+    pid,
+    pidAlive,
+    ageMs,
+    stale,
+    staleReasons,
+    removed,
+  };
 }
 
 export async function acquireGatewayLock(

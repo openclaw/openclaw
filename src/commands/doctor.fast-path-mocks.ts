@@ -44,6 +44,10 @@ vi.mock("./doctor-session-locks.js", () => ({
   noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-gateway-locks.js", () => ({
+  noteGatewayLockHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor-state-integrity.js", () => ({
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
   noteWorkspaceBackupTip: vi.fn(),
