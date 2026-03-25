@@ -1,5 +1,6 @@
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 
 export type WebListenerCloseReason = {
   status?: number;
@@ -18,9 +19,11 @@ export type WebInboundMessage = {
   timestamp?: number;
   chatType: "direct" | "group";
   chatId: string;
+  sender?: WhatsAppIdentity;
   senderJid?: string;
   senderE164?: string;
   senderName?: string;
+  replyTo?: WhatsAppReplyContext;
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
@@ -28,7 +31,9 @@ export type WebInboundMessage = {
   replyToSenderE164?: string;
   groupSubject?: string;
   groupParticipants?: string[];
+  mentions?: string[];
   mentionedJids?: string[];
+  self?: WhatsAppSelfIdentity;
   selfJid?: string | null;
   selfLid?: string | null;
   selfE164?: string | null;

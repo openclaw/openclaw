@@ -7,6 +7,7 @@ import {
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { jidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { parseVcard } from "../vcard.js";
 
 const MESSAGE_WRAPPER_KEYS = [
@@ -107,46 +108,43 @@ function extractMessage(message: proto.IMessage | undefined): proto.IMessage | u
   return candidate && typeof candidate === "object" ? (candidate as proto.IMessage) : normalized;
 }
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  let normalized = normalizeMessage(message);
-  if (!normalized) {
-    return undefined;
-  }
-  // Generic FutureProofMessage unwrap for wrappers that Baileys'
-  // normalizeMessageContent doesn't handle yet (e.g. botInvokeMessage,
-  // groupMentionedMessage). These wrappers have shape { message: IMessage }.
-  // Iterate up to 3 times to handle nested wrappers.
-  for (let i = 0; i < 3; i++) {
-    const contentType = getMessageContentType(normalized);
-    if (!contentType) {
-      break;
-    }
-    const value = (normalized as Record<string, unknown>)[contentType];
-    if (
-      value &&
-      typeof value === "object" &&
-      "message" in value &&
-      (value as { message?: unknown }).message &&
-      typeof (value as { message: unknown }).message === "object"
-    ) {
-      const inner = normalizeMessage((value as { message: proto.IMessage }).message);
-      if (inner) {
-        const innerType = getMessageContentType(inner);
-        if (innerType && innerType !== contentType) {
-          normalized = inner;
-          continue;
-        }
+function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | undefined {
+  const contentType = getMessageContentType(message);
+  const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
+  if (
+    candidate &&
+    typeof candidate === "object" &&
+    "message" in candidate &&
+    (candidate as { message?: unknown }).message &&
+    typeof (candidate as { message: unknown }).message === "object"
+  ) {
+    const inner = normalizeMessage((candidate as { message: proto.IMessage }).message);
+    if (inner) {
+      const innerType = getMessageContentType(inner);
+      if (innerType && innerType !== contentType) {
+        return inner;
       }
     }
-    break;
   }
-  return normalized;
+  return undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
-  if (!message) {
-    return undefined;
+function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[] {
+  const chain: proto.IMessage[] = [];
+  let current = normalizeMessage(message);
+  while (current && chain.length < 4) {
+    chain.push(current);
+    current = getFutureProofInnerMessage(current);
   }
+  return chain;
+}
+
+function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  const chain = buildMessageChain(message);
+  return chain.at(-1);
+}
+
+function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextInfo | undefined {
   const contentType = getMessageContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   const contextInfo =
@@ -191,6 +189,16 @@ function extractContextInfo(message: proto.IMessage | undefined): proto.IContext
           return innerCtx;
         }
       }
+    }
+  }
+  return undefined;
+}
+
+function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+  for (const candidate of buildMessageChain(message)) {
+    const contextInfo = extractContextInfoFromMessage(candidate);
+    if (contextInfo) {
+      return contextInfo;
     }
   }
   return undefined;
@@ -426,13 +434,9 @@ export function extractLocationData(
   return null;
 }
 
-export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
-  id?: string;
-  body: string;
-  sender: string;
-  senderJid?: string;
-  senderE164?: string;
-} | null {
+export function describeReplyContext(
+  rawMessage: proto.IMessage | undefined,
+): WhatsAppReplyContext | null {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return null;
@@ -457,13 +461,13 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
-  const senderE164 = senderJid ? (jidToE164(senderJid) ?? senderJid) : undefined;
-  const sender = senderE164 ?? "unknown sender";
+  const sender = resolveComparableIdentity({
+    jid: senderJid,
+    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
+  });
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
     body,
     sender,
-    senderJid,
-    senderE164,
   };
 }
