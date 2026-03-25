@@ -4,6 +4,7 @@ import {
   ensureConfiguredAcpBindingReady,
   formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
+  getSessionBindingService,
   logInboundDrop,
   logTypingFailure,
   resolveControlCommandGate,
@@ -529,7 +530,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const _messageId = event.event_id ?? "";
       const _threadRootId = resolveMatrixThreadRootId({ event, content });
-      const { route: _route, configuredBinding: _configuredBinding } = resolveMatrixInboundRoute({
+      const {
+        route: _route,
+        configuredBinding: _configuredBinding,
+        runtimeBindingId: _runtimeBindingId,
+      } = resolveMatrixInboundRoute({
         cfg,
         accountId,
         roomId,
@@ -713,6 +718,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
           return;
         }
+      }
+      if (_runtimeBindingId) {
+        getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
       }
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = `${bodyText}\n[matrix event id: ${_messageId} room: ${roomId}]`;

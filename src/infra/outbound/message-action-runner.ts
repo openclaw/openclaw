@@ -258,6 +258,7 @@ type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
+  mediaLocalRoots: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -382,8 +383,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   // Support media, path, and filePath parameters for attachments
   const mediaHint =
     readStringParam(params, "media", { trim: false }) ??
+    readStringParam(params, "mediaUrl", { trim: false }) ??
     readStringParam(params, "path", { trim: false }) ??
-    readStringParam(params, "filePath", { trim: false });
+    readStringParam(params, "filePath", { trim: false }) ??
+    readStringParam(params, "fileUrl", { trim: false });
   const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
@@ -472,7 +475,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
-  const forceDocument = readBooleanParam(params, "forceDocument") ?? false;
+  const forceDocument =
+    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
@@ -619,7 +623,18 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal, agentId } = ctx;
+  const {
+    cfg,
+    params,
+    channel,
+    mediaLocalRoots,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+    abortSignal,
+    agentId,
+  } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
@@ -643,6 +658,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     action,
     cfg,
     params,
+    mediaLocalRoots,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     sessionKey: input.sessionKey,
@@ -752,6 +768,7 @@ export async function runMessageAction(
       cfg,
       params,
       channel,
+      mediaLocalRoots,
       accountId,
       dryRun,
       gateway,
@@ -767,6 +784,7 @@ export async function runMessageAction(
       cfg,
       params,
       channel,
+      mediaLocalRoots,
       accountId,
       dryRun,
       gateway,
@@ -779,6 +797,7 @@ export async function runMessageAction(
     cfg,
     params,
     channel,
+    mediaLocalRoots,
     accountId,
     dryRun,
     gateway,

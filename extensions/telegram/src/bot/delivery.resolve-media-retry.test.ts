@@ -1,6 +1,5 @@
 import type { Message } from "@grammyjs/types";
-import { GrammyError } from "grammy";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -34,7 +33,7 @@ vi.mock("../sticker-cache.js", () => ({
   describeStickerImage: async () => null,
 }));
 
-import { resolveMedia } from "./delivery.js";
+let resolveMedia: typeof import("./delivery.js").resolveMedia;
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -169,6 +168,11 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveMedia } = await import("./delivery.js"));
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
@@ -224,11 +228,8 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
-    const fileTooBigError = new GrammyError(
-      "Call to 'getFile' failed!",
-      { ok: false, error_code: 400, description: "Bad Request: file is too big" },
-      "getFile",
-      {},
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 

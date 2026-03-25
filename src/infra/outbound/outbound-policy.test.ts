@@ -2,12 +2,11 @@ import { Container, Separator, TextDisplay } from "@buape/carbon";
 import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-  shouldApplyCrossContextMarker,
-} from "./outbound-policy.js";
+
+let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
+let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
+let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
+let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
 
 class TestDiscordUiContainer extends Container {}
 
@@ -53,19 +52,6 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./channel-adapters.js", () => ({
-  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
-}));
-
-vi.mock("./target-normalization.js", () => ({
-  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
-}));
-
-vi.mock("./target-resolver.js", () => ({
-  formatTargetDisplay: mocks.formatTargetDisplay,
-  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
-}));
-
 const slackConfig = {
   channels: {
     slack: {
@@ -82,8 +68,25 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy helpers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    vi.doMock("./channel-adapters.js", () => ({
+      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+    }));
+    vi.doMock("./target-normalization.js", () => ({
+      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+    }));
+    vi.doMock("./target-resolver.js", () => ({
+      formatTargetDisplay: mocks.formatTargetDisplay,
+      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+    }));
+    ({
+      applyCrossContextDecoration,
+      buildCrossContextDecoration,
+      enforceCrossContextPolicy,
+      shouldApplyCrossContextMarker,
+    } = await import("./outbound-policy.js"));
   });
 
   it("allows cross-provider sends when enabled", () => {

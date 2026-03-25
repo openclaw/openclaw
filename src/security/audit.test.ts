@@ -28,7 +28,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram" | "zalouser";
+  id: "discord" | "slack" | "synology-chat" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -149,6 +149,30 @@ const zalouserPlugin = stubChannelPlugin({
     const base = (channel ?? {}) as Record<string, unknown>;
     const account = channel?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
+  },
+});
+
+const synologyChatPlugin = stubChannelPlugin({
+  id: "synology-chat",
+  label: "Synology Chat",
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.["synology-chat"]?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  inspectAccount: () => null,
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.["synology-chat"] ?? {};
+    const account = cfg.channels?.["synology-chat"]?.accounts?.[resolvedAccountId] ?? {};
+    const dangerouslyAllowNameMatching =
+      typeof account.dangerouslyAllowNameMatching === "boolean"
+        ? account.dangerouslyAllowNameMatching
+        : base.dangerouslyAllowNameMatching === true;
+    return {
+      accountId: resolvedAccountId,
+      enabled: true,
+      dangerouslyAllowNameMatching,
+    };
   },
 });
 
@@ -2615,6 +2639,60 @@ description: test skill
           expect.arrayContaining([expect.objectContaining(testCase.expectFindingMatch)]),
         );
       }
+    });
+  });
+
+  it.each([
+    {
+      name: "audits Synology Chat base dangerous name matching",
+      cfg: {
+        channels: {
+          "synology-chat": {
+            token: "t",
+            incomingUrl: "https://nas.example.com/incoming",
+            dangerouslyAllowNameMatching: true,
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedMatch: {
+        checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+        severity: "info",
+        title: "Synology Chat dangerous name matching is enabled",
+      },
+    },
+    {
+      name: "audits non-default Synology Chat accounts for dangerous name matching",
+      cfg: {
+        channels: {
+          "synology-chat": {
+            token: "t",
+            incomingUrl: "https://nas.example.com/incoming",
+            accounts: {
+              alpha: {
+                token: "a",
+                incomingUrl: "https://nas.example.com/incoming-alpha",
+              },
+              beta: {
+                token: "b",
+                incomingUrl: "https://nas.example.com/incoming-beta",
+                dangerouslyAllowNameMatching: true,
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedMatch: {
+        checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+        severity: "info",
+        title: expect.stringContaining("(account: beta)"),
+      },
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, [synologyChatPlugin]);
+      expect(res.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining(testCase.expectedMatch)]),
+      );
     });
   });
 

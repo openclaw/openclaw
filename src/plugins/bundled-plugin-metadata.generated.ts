@@ -88,7 +88,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         expectedVersion: {
           label: "Expected acpx Version",
-          help: 'Exact version to enforce (for example 0.1.16) or "any" to skip strict version matching.',
+          help: 'Exact version to enforce or "any" to skip strict version matching.',
         },
         cwd: {
           label: "Default Working Directory",
@@ -491,6 +491,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "deepseek",
+    idHint: "deepseek",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/deepseek-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw DeepSeek provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "deepseek",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["deepseek"],
+      providerAuthEnvVars: {
+        deepseek: ["DEEPSEEK_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "deepseek",
+          method: "api-key",
+          choiceId: "deepseek-api-key",
+          choiceLabel: "DeepSeek API key",
+          groupId: "deepseek",
+          groupLabel: "DeepSeek",
+          groupHint: "API key",
+          optionKey: "deepseekApiKey",
+          cliFlag: "--deepseek-api-key",
+          cliOption: "--deepseek-api-key <key>",
+          cliDescription: "DeepSeek API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "diagnostics-otel",
     idHint: "diagnostics-otel",
     source: {
@@ -753,6 +794,52 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "duckduckgo",
+    idHint: "duckduckgo-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/duckduckgo-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw DuckDuckGo plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "duckduckgo",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              region: {
+                type: "string",
+              },
+              safeSearch: {
+                type: "string",
+                enum: ["strict", "moderate", "off"],
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "webSearch.region": {
+          label: "DuckDuckGo Region",
+          help: "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+        },
+        "webSearch.safeSearch": {
+          label: "DuckDuckGo SafeSearch",
+          help: "SafeSearch level for DuckDuckGo results.",
+        },
+      },
+    },
+  },
+  {
     dirName: "elevenlabs",
     idHint: "elevenlabs",
     source: {
@@ -771,6 +858,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         type: "object",
         additionalProperties: false,
         properties: {},
+      },
+    },
+  },
+  {
+    dirName: "exa",
+    idHint: "exa-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/exa-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Exa plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "exa",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        exa: ["EXA_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Exa API Key",
+          help: "Exa Search API key (fallback: EXA_API_KEY env var).",
+          sensitive: true,
+          placeholder: "exa-...",
+        },
       },
     },
   },
@@ -1799,13 +1929,41 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       providerAuthChoices: [
         {
           provider: "modelstudio",
+          method: "standard-api-key-cn",
+          choiceId: "modelstudio-standard-api-key-cn",
+          choiceLabel: "Standard API Key for China (pay-as-you-go)",
+          choiceHint: "Endpoint: dashscope.aliyuncs.com",
+          groupId: "modelstudio",
+          groupLabel: "Qwen (Alibaba Cloud Model Studio)",
+          groupHint: "Standard / Coding Plan (CN / Global)",
+          optionKey: "modelstudioStandardApiKeyCn",
+          cliFlag: "--modelstudio-standard-api-key-cn",
+          cliOption: "--modelstudio-standard-api-key-cn <key>",
+          cliDescription: "Alibaba Cloud Model Studio Standard API key (China)",
+        },
+        {
+          provider: "modelstudio",
+          method: "standard-api-key",
+          choiceId: "modelstudio-standard-api-key",
+          choiceLabel: "Standard API Key for Global/Intl (pay-as-you-go)",
+          choiceHint: "Endpoint: dashscope-intl.aliyuncs.com",
+          groupId: "modelstudio",
+          groupLabel: "Qwen (Alibaba Cloud Model Studio)",
+          groupHint: "Standard / Coding Plan (CN / Global)",
+          optionKey: "modelstudioStandardApiKey",
+          cliFlag: "--modelstudio-standard-api-key",
+          cliOption: "--modelstudio-standard-api-key <key>",
+          cliDescription: "Alibaba Cloud Model Studio Standard API key (Global/Intl)",
+        },
+        {
+          provider: "modelstudio",
           method: "api-key-cn",
           choiceId: "modelstudio-api-key-cn",
           choiceLabel: "Coding Plan API Key for China (subscription)",
           choiceHint: "Endpoint: coding.dashscope.aliyuncs.com",
           groupId: "modelstudio",
-          groupLabel: "Alibaba Cloud Model Studio",
-          groupHint: "Coding Plan API key (CN / Global)",
+          groupLabel: "Qwen (Alibaba Cloud Model Studio)",
+          groupHint: "Standard / Coding Plan (CN / Global)",
           optionKey: "modelstudioApiKeyCn",
           cliFlag: "--modelstudio-api-key-cn",
           cliOption: "--modelstudio-api-key-cn <key>",
@@ -1818,8 +1976,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           choiceLabel: "Coding Plan API Key for Global/Intl (subscription)",
           choiceHint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
           groupId: "modelstudio",
-          groupLabel: "Alibaba Cloud Model Studio",
-          groupHint: "Coding Plan API key (CN / Global)",
+          groupLabel: "Qwen (Alibaba Cloud Model Studio)",
+          groupHint: "Standard / Coding Plan (CN / Global)",
           optionKey: "modelstudioApiKey",
           cliFlag: "--modelstudio-api-key",
           cliOption: "--modelstudio-api-key <key>",
@@ -1933,10 +2091,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       channel: {
         id: "msteams",
         label: "Microsoft Teams",
-        selectionLabel: "Microsoft Teams (Bot Framework)",
+        selectionLabel: "Microsoft Teams (Teams SDK)",
         docsPath: "/channels/msteams",
         docsLabel: "msteams",
-        blurb: "Bot Framework; enterprise support.",
+        blurb: "Teams SDK; enterprise support.",
         aliases: ["teams"],
         order: 60,
       },

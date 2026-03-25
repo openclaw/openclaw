@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../../logging/state.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
 const setVerboseMock = vi.fn();
@@ -56,8 +57,11 @@ const mockedModuleIds = [
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
+let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
+let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
+let originalForceStderr: boolean;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
@@ -74,15 +78,37 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
+  originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
+  observedProcessTitle = originalProcessTitle;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalForceStderr = loggingState.forceConsoleToStderr;
+  Object.defineProperty(process, "title", {
+    configurable: true,
+    enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
+    get: () => observedProcessTitle,
+    set: (value: string) => {
+      observedProcessTitle = value;
+    },
+  });
+  loggingState.forceConsoleToStderr = false;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
 });
 
 afterEach(() => {
   process.argv = originalProcessArgv;
-  process.title = originalProcessTitle;
+  if (originalProcessTitleDescriptor && "value" in originalProcessTitleDescriptor) {
+    Object.defineProperty(process, "title", {
+      ...originalProcessTitleDescriptor,
+      value: originalProcessTitle,
+    });
+  } else if (originalProcessTitleDescriptor) {
+    Object.defineProperty(process, "title", originalProcessTitleDescriptor);
+  } else {
+    process.title = originalProcessTitle;
+  }
+  loggingState.forceConsoleToStderr = originalForceStderr;
   if (originalNodeNoWarnings === undefined) {
     delete process.env.NODE_NO_WARNINGS;
   } else {
@@ -124,6 +150,12 @@ describe("registerPreActionHooks", () => {
     program.command("onboard").action(() => {});
     const channels = program.command("channels");
     channels.command("add").action(() => {});
+    program
+      .command("plugins")
+      .command("install")
+      .argument("<spec>")
+      .option("--marketplace <marketplace>")
+      .action(() => {});
     program
       .command("update")
       .command("status")
@@ -222,6 +254,61 @@ describe("registerPreActionHooks", () => {
       commandPath: ["channels", "add"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows invalid config for explicit Matrix reinstall requests", async () => {
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "alpha"],
+      processArgv: ["node", "openclaw", "plugins", "install", "alpha"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "./extensions/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "./extensions/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix", "--marketplace", "local/repo"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "plugins",
+        "install",
+        "@openclaw/matrix",
+        "--marketplace",
+        "local/repo",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
@@ -338,6 +425,39 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
+    let stderrDuringPluginLoad = false;
+    ensurePluginRegistryLoadedMock.mockImplementation(() => {
+      stderrDuringPluginLoad = loggingState.forceConsoleToStderr;
+    });
+
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(stderrDuringPluginLoad).toBe(true);
+    // Flag must be restored after plugin loading completes
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("does not route logs to stderr during plugin loading without --json", async () => {
+    let stderrDuringPluginLoad = false;
+    ensurePluginRegistryLoadedMock.mockImplementation(() => {
+      stderrDuringPluginLoad = loggingState.forceConsoleToStderr;
+    });
+
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(stderrDuringPluginLoad).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   beforeAll(() => {

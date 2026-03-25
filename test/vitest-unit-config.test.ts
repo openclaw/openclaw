@@ -1,29 +1,16 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import unitConfig from "../vitest.unit.config.ts";
 import {
+  createUnitVitestConfig,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
 } from "../vitest.unit.config.ts";
+import { createPatternFileHelper } from "./helpers/pattern-file.js";
 
-const tempDirs = new Set<string>();
+const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 
 afterEach(() => {
-  for (const dir of tempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  patternFiles.cleanup();
 });
-
-const writePatternFile = (basename: string, value: unknown) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-unit-config-"));
-  tempDirs.add(dir);
-  const filePath = path.join(dir, basename);
-  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
-  return filePath;
-};
 
 describe("loadIncludePatternsFromEnv", () => {
   it("returns null when no include file is configured", () => {
@@ -31,7 +18,7 @@ describe("loadIncludePatternsFromEnv", () => {
   });
 
   it("loads include patterns from a JSON file", () => {
-    const filePath = writePatternFile("include.json", [
+    const filePath = patternFiles.writePatternFile("include.json", [
       "src/infra/update-runner.test.ts",
       42,
       "",
@@ -52,7 +39,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
   });
 
   it("loads extra exclude patterns from a JSON file", () => {
-    const filePath = writePatternFile("extra-exclude.json", [
+    const filePath = patternFiles.writePatternFile("extra-exclude.json", [
       "src/infra/update-runner.test.ts",
       42,
       "",
@@ -67,7 +54,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
   });
 
   it("throws when the configured file is not a JSON array", () => {
-    const filePath = writePatternFile("extra-exclude.json", {
+    const filePath = patternFiles.writePatternFile("extra-exclude.json", {
       exclude: ["src/infra/update-runner.test.ts"],
     });
 
@@ -81,6 +68,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 
 describe("unit vitest config", () => {
   it("defaults unit tests to non-isolated mode", () => {
+    const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
   });
 });

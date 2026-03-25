@@ -51,6 +51,13 @@ type LoadedMarketplace = {
   cleanup?: () => Promise<void>;
 };
 
+type MarketplaceManifestOrigin = "local" | "remote";
+
+type ResolvedLocalMarketplaceSource = {
+  manifestPath: string;
+  rootDir: string;
+};
+
 type KnownMarketplaceRecord = {
   installLocation?: string;
   source?: unknown;
@@ -462,25 +469,41 @@ async function loadMarketplace(params: {
   logger?: MarketplaceLogger;
   timeoutMs?: number;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
+  const loadResolvedLocalMarketplace = async (
+    local: ResolvedLocalMarketplaceSource,
+    sourceLabel: string,
+  ): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
+    const raw = await fs.readFile(local.manifestPath, "utf-8");
+    const parsed = parseMarketplaceManifest(raw, local.manifestPath);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    const validated = validateMarketplaceManifest({
+      manifest: parsed.manifest,
+      sourceLabel: local.manifestPath,
+      rootDir: local.rootDir,
+      origin: "local",
+    });
+    if (!validated.ok) {
+      return validated;
+    }
+    return {
+      ok: true,
+      marketplace: {
+        manifest: validated.manifest,
+        rootDir: local.rootDir,
+        sourceLabel,
+      },
+    };
+  };
+
   const knownMarketplaces = await readClaudeKnownMarketplaces();
   const known = knownMarketplaces[params.source];
   if (known) {
     if (known.installLocation) {
       const local = await resolveLocalMarketplaceSource(known.installLocation);
       if (local?.ok) {
-        const raw = await fs.readFile(local.manifestPath, "utf-8");
-        const parsed = parseMarketplaceManifest(raw, local.manifestPath);
-        if (!parsed.ok) {
-          return parsed;
-        }
-        return {
-          ok: true,
-          marketplace: {
-            manifest: parsed.manifest,
-            rootDir: local.rootDir,
-            sourceLabel: params.source,
-          },
-        };
+        return await loadResolvedLocalMarketplace(local, params.source);
       }
     }
 
@@ -500,19 +523,7 @@ async function loadMarketplace(params: {
   }
 
   if (local?.ok) {
-    const raw = await fs.readFile(local.manifestPath, "utf-8");
-    const parsed = parseMarketplaceManifest(raw, local.manifestPath);
-    if (!parsed.ok) {
-      return parsed;
-    }
-    return {
-      ok: true,
-      marketplace: {
-        manifest: parsed.manifest,
-        rootDir: local.rootDir,
-        sourceLabel: local.manifestPath,
-      },
-    };
+    return await loadResolvedLocalMarketplace(local, local.manifestPath);
   }
 
   const cloned = await cloneMarketplaceRepo({
@@ -543,11 +554,21 @@ async function loadMarketplace(params: {
     await cloned.cleanup();
     return parsed;
   }
+  const validated = validateMarketplaceManifest({
+    manifest: parsed.manifest,
+    sourceLabel: cloned.label,
+    rootDir: cloned.rootDir,
+    origin: "remote",
+  });
+  if (!validated.ok) {
+    await cloned.cleanup();
+    return validated;
+  }
 
   return {
     ok: true,
     marketplace: {
-      manifest: parsed.manifest,
+      manifest: validated.manifest,
       rootDir: cloned.rootDir,
       sourceLabel: cloned.label,
       cleanup: cloned.cleanup,
@@ -598,6 +619,56 @@ function ensureInsideMarketplaceRoot(
     };
   }
   return { ok: true, path: resolved };
+}
+
+function validateMarketplaceManifest(params: {
+  manifest: MarketplaceManifest;
+  sourceLabel: string;
+  rootDir: string;
+  origin: MarketplaceManifestOrigin;
+}): { ok: true; manifest: MarketplaceManifest } | { ok: false; error: string } {
+  if (params.origin === "local") {
+    return { ok: true, manifest: params.manifest };
+  }
+
+  for (const plugin of params.manifest.plugins) {
+    const source = plugin.source;
+    if (source.kind === "path") {
+      if (isHttpUrl(source.path)) {
+        return {
+          ok: false,
+          error:
+            `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
+            "remote marketplaces may not use HTTP(S) plugin paths",
+        };
+      }
+      if (path.isAbsolute(source.path)) {
+        return {
+          ok: false,
+          error:
+            `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
+            "remote marketplaces may only use relative plugin paths",
+        };
+      }
+      const resolved = ensureInsideMarketplaceRoot(params.rootDir, source.path);
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          error: `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ${resolved.error}`,
+        };
+      }
+      continue;
+    }
+
+    return {
+      ok: false,
+      error:
+        `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
+        `remote marketplaces may not use ${source.kind} plugin sources`,
+    };
+  }
+
+  return { ok: true, manifest: params.manifest };
 }
 
 async function resolveMarketplaceEntryInstallPath(params: {
