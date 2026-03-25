@@ -39,15 +39,26 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
-  let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
-    const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
-  }
+  const sessionDeliveryContext = deliveryContextFromSession(entry);
+  // If the current session entry only captured a partial route, consult the base
+  // session for missing fields. When there is no distinct base session to inspect
+  // (baseSessionKey is null or points back to the same session), we intentionally
+  // keep the partial context and fall back to system-event wakeups if routing still
+  // cannot be resolved.
+  const shouldConsultBaseSession =
+    (!sessionDeliveryContext || !sessionDeliveryContext.channel || !sessionDeliveryContext.to) &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey;
+  const baseDeliveryContext = shouldConsultBaseSession
+    ? deliveryContextFromSession(loadSessionEntry(baseSessionKey).entry)
+    : undefined;
 
+  // Keep explicit restart/session hints ahead of fallback routing derived from a
+  // parent/base session. The base session should only fill fields that are still
+  // missing after consulting the current session key/parsed target.
   const origin = mergeDeliveryContext(
-    sentinelContext,
-    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
+    mergeDeliveryContext(sentinelContext, sessionDeliveryContext),
+    mergeDeliveryContext(parsedTarget ?? undefined, baseDeliveryContext),
   );
 
   const channelRaw = origin?.channel;
