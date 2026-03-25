@@ -1,4 +1,4 @@
----
+<img width="1201" height="961" alt="image" src="https://github.com/user-attachments/assets/34eaf367-9605-40fe-9d50-3094fec148a9" />---
 summary: "Community-maintained OpenClaw plugins: browse, install, and submit your own"
 read_when:
   - You want to find third-party OpenClaw plugins
@@ -20,6 +20,17 @@ openclaw plugins install <package-name>
 OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
+
+### AIFBA Amazon Listing Analyzer for OpenClaw
+
+Cloud-powered Amazon listing analyzer for OpenClaw. Built for Amazon sellers who want one-click listing analysis, competitor-backed optimization, and a structured AIFBA web report.
+
+- **npm:** `aifba-amazon-listing-analyzer-openclaw`
+- **repo:** [github.com/corli-AIFBA/aifba-amazon-listing-analyzer-openclaw](https://github.com/corli-AIFBA/aifba-amazon-listing-analyzer-openclaw)
+
+```bash
+openclaw plugins install aifba-amazon-listing-analyzer-openclaw
+```
 
 ### Codex App Server Bridge
 
@@ -127,15 +138,6 @@ We welcome community plugins that are useful, documented, and safe to operate.
   </Step>
 </Steps>
 
-### AIFBA Amazon Listing Analyzer for OpenClaw
-
-Cloud-powered Amazon listing analyzer for OpenClaw. Built for Amazon sellers who want one-click listing analysis, competitor-backed optimization, and an AIFBA web report.
-
-- npm: `aifba-amazon-listing-analyzer-openclaw`
-- repo: `https://github.com/corli-AIFBA/aifba-amazon-listing-analyzer-openclaw`
-
-```bash
-openclaw plugins install aifba-amazon-listing-analyzer-openclaw
 
 
 ## Quality bar
