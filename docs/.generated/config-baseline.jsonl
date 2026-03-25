@@ -1518,7 +1518,7 @@
 {"recordType":"path","path":"channels.feishu.reactionNotifications","kind":"channel","type":"string","required":true,"enumValues":["off","own","all"],"defaultValue":"own","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.renderMode","kind":"channel","type":"string","required":false,"enumValues":["auto","raw","card"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.replyInThread","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.requireMention","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.resolveSenderNames","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.streaming","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
