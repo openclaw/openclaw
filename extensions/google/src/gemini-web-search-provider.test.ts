@@ -25,8 +25,11 @@ describe("gemini web search provider", () => {
     );
   });
 
-  it("prefers configured base URL over default", () => {
+  it("prefers configured base URL over default and normalizes it", () => {
     expect(__testing.resolveGeminiBaseUrl({ baseUrl: "https://custom.api.com" })).toBe(
+      "https://custom.api.com",
+    );
+    expect(__testing.resolveGeminiBaseUrl({ baseUrl: "https://custom.api.com/" })).toBe(
       "https://custom.api.com",
     );
   });

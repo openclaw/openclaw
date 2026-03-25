@@ -1,5 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import { DEFAULT_GOOGLE_API_BASE_URL } from "openclaw/plugin-sdk/provider-google";
+import {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  normalizeGoogleApiBaseUrl,
+} from "openclaw/plugin-sdk/provider-google";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -78,8 +81,7 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
 }
 
 function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
-  const baseUrl = typeof gemini?.baseUrl === "string" ? gemini.baseUrl.trim() : "";
-  return baseUrl || DEFAULT_GOOGLE_API_BASE_URL;
+  return normalizeGoogleApiBaseUrl(gemini?.baseUrl);
 }
 
 async function runGeminiSearch(params: {
