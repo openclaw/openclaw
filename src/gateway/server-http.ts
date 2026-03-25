@@ -12,7 +12,6 @@ import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
@@ -784,10 +783,6 @@ export function createGatewayHttpServer(opts: {
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     syncPluginRegistry();
-    console.log(
-      "PLUGINS:",
-      listChannelPlugins().map((p) => p.id),
-    );
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
@@ -909,6 +904,12 @@ export function createGatewayHttpServer(opts: {
           run: () => canvasHost.handleHttpRequest(req, res),
         });
       }
+      requestStages.push({
+        name: "hooks",
+        run: () => {
+          return handleHooksRequest(req, res);
+        },
+      });
       // Plugin routes run before the Control UI SPA catch-all so explicitly
       // registered plugin endpoints stay reachable. Core built-in gateway
       // routes above still keep precedence on overlapping paths.
@@ -927,12 +928,6 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
-      requestStages.push({
-        name: "hooks",
-        run: () => {
-          return handleHooksRequest(req, res);
-        },
-      });
 
       if (controlUiEnabled) {
         requestStages.push({
