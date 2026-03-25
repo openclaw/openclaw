@@ -112,7 +112,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
@@ -176,7 +176,41 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const message = typeof params.message === "string" ? params.message : "";
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
-    const replyToId = readMattermostReplyToId(params);
+    // When no explicit reply target is set, inherit the thread context from
+    // the active session — but only when:
+    //   1. The send target is the same channel as the active session (same channelId),
+    //      to avoid injecting a foreign root_id into a different Mattermost channel.
+    //   2. replyToMode is "all", or "first" and the first reply has not yet been sent.
+    const sessionThreadTs = toolContext?.currentThreadTs?.trim() || undefined;
+    const normalizedTo = normalizeMattermostMessagingTarget(to) ?? to;
+    const normalizedCurrentChannelId = toolContext?.currentChannelId
+      ? (normalizeMattermostMessagingTarget(toolContext.currentChannelId) ??
+        toolContext.currentChannelId)
+      : undefined;
+    const isSameChannel =
+      sessionThreadTs !== undefined &&
+      normalizedCurrentChannelId !== undefined &&
+      normalizedTo === normalizedCurrentChannelId;
+    // For replyToMode=first, only inherit if a hasRepliedRef exists AND it hasn't fired yet.
+    // Fail-closed: absent ref → don't inherit (avoids every send threading like replyToMode=all).
+    const replyToModeAllowsThread =
+      toolContext?.replyToMode === "all" ||
+      (toolContext?.replyToMode === "first" &&
+        toolContext.hasRepliedRef !== undefined &&
+        toolContext.hasRepliedRef.value !== true);
+    const implicitReplyToId =
+      isSameChannel && replyToModeAllowsThread ? sessionThreadTs : undefined;
+    const replyToId = readMattermostReplyToId(params) ?? implicitReplyToId;
+    // For replyToMode=first: flip hasRepliedRef after any threaded send (implicit or
+    // explicit) so subsequent tool sends in the same turn go to the channel root.
+    // This covers both implicit fallback and explicit replyTo/replyToId params.
+    if (
+      replyToId !== undefined &&
+      toolContext?.replyToMode === "first" &&
+      toolContext.hasRepliedRef !== undefined
+    ) {
+      toolContext.hasRepliedRef.value = true;
+    }
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
@@ -434,6 +468,43 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             ? chatType
             : "channel",
         ),
+    },
+    buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
+      // Resolve replyToMode from account config so the message tool can respect it.
+      const account = resolveMattermostAccount({ cfg, accountId: accountId ?? "default" });
+      const chatType =
+        context.ChatType === "direct" ||
+        context.ChatType === "group" ||
+        context.ChatType === "channel"
+          ? context.ChatType
+          : "channel";
+      const configuredReplyToMode = resolveMattermostReplyToMode(account, chatType);
+      // currentThreadTs is the Mattermost root post ID of the active thread.
+      // MessageThreadId is set when the inbound message is already part of a thread.
+      const threadTs =
+        typeof context.MessageThreadId === "string" && context.MessageThreadId.trim()
+          ? context.MessageThreadId.trim()
+          : typeof context.ReplyToId === "string" && context.ReplyToId.trim()
+            ? context.ReplyToId.trim()
+            : undefined;
+      // When the session is already inside a thread and the configured mode is
+      // "off", promote to "all" so that tool sends stay in the thread (mirrors
+      // Slack's threading-tool-context.ts effective-mode promotion).
+      // For "first", preserve it so hasRepliedRef can gate subsequent sends.
+      // For "all", it stays "all" naturally.
+      const effectiveReplyToMode =
+        configuredReplyToMode === "off" && threadTs != null ? "all" : configuredReplyToMode;
+      return {
+        // context.To is "channel:<id>" or "user:<id>" (no mattermost: prefix).
+        // Strip any platform prefix defensively to ensure it matches the
+        // tool's `to` param format used in normalizeMattermostMessagingTarget.
+        currentChannelId: context.To?.trim().replace(/^mattermost:/i, "") || undefined,
+        currentChannelProvider: "mattermost",
+        currentThreadTs: threadTs,
+        currentMessageId: context.CurrentMessageId,
+        replyToMode: effectiveReplyToMode,
+        hasRepliedRef,
+      };
     },
   },
   security: mattermostSecurityAdapter,
