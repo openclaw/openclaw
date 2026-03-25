@@ -349,4 +349,72 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
   });
+
+  it("retries setMyCommands after a 429 rate-limit using the retry_after delay", async () => {
+    vi.useFakeTimers();
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const rateLimitError = Object.assign(new Error("429: Too Many Requests: retry after 5"), {
+      error_code: 429,
+      description: "Too Many Requests: retry after 5",
+    });
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      runtimeError,
+      commandsToRegister: [{ command: "help", description: "Help" }],
+      accountId: `test-ratelimit-${Date.now()}`,
+      botIdentity: "bot-ratelimit",
+    });
+
+    // Advance past the 5-second retry_after delay.
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("rate-limited (retry after 5s)"),
+    );
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+
+  it("gives up setMyCommands after exhausting 429 rate-limit retries", async () => {
+    vi.useFakeTimers();
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const rateLimitError = Object.assign(new Error("429: Too Many Requests: retry after 2"), {
+      error_code: 429,
+      description: "Too Many Requests: retry after 2",
+    });
+    const setMyCommands = vi.fn().mockRejectedValue(rateLimitError);
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      runtimeError,
+      commandsToRegister: [{ command: "help", description: "Help" }],
+      accountId: `test-ratelimit-exhaust-${Date.now()}`,
+      botIdentity: "bot-exhaust",
+    });
+
+    // Each retry schedules a new timer; drain multiple rounds to exhaust all retries.
+    for (let i = 0; i < 4; i++) {
+      await vi.runAllTimersAsync();
+    }
+    vi.useRealTimers();
+
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("rate-limited after 3 retries"),
+    );
+  });
 });
