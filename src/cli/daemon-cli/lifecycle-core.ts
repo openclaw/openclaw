@@ -19,6 +19,7 @@ import {
   type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
+import { filterContainerGenericHints } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
@@ -51,7 +52,10 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (systemdAvailable) {
     return hints;
   }
-  return [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
+  return [
+    ...hints,
+    ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
+  ];
 }
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
@@ -81,7 +85,9 @@ async function handleServiceNotLoaded(params: {
   json: boolean;
   emit: ReturnType<typeof createActionIO>["emit"];
 }) {
-  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  const hints = filterContainerGenericHints(
+    await maybeAugmentSystemdHints(params.renderStartHints()),
+  );
   params.emit({
     ok: true,
     result: "not-loaded",
@@ -202,24 +208,46 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
-  if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
-  }
-  // Pre-flight config validation (#35862)
+  // Pre-flight config validation (#35862) — run for both loaded and not-loaded
+  // to prevent launching from invalid config in any start path.
   {
     const configError = await getConfigValidationError();
     if (configError) {
       fail(
         `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
       );
+      return;
+    }
+  }
+  if (!loaded) {
+    // Service was stopped (e.g. `gateway stop` booted out the LaunchAgent).
+    // Attempt a restart, which handles re-bootstrapping the service. Without
+    // this, `start` after `stop` just prints hints and does nothing (#53878).
+    try {
+      const restartResult = await params.service.restart({ env: process.env, stdout });
+      const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+      const postLoaded = await params.service.isLoaded({ env: process.env }).catch(() => true);
+      emit({
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, postLoaded),
+      });
+      if (!json) {
+        defaultRuntime.log(restartStatus.message);
+      }
+      return;
+    } catch {
+      // Bootstrap failed (e.g. plist was deleted, not just booted out).
+      // Fall through to the not-loaded hints.
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
       return;
     }
   }

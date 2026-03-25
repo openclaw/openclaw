@@ -181,6 +181,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/github-copilot-token": {
+      "types": "./dist/plugin-sdk/github-copilot-token.d.ts",
+      "default": "./dist/plugin-sdk/github-copilot-token.js"
+    },
     "./plugin-sdk/cli-runtime": {
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
@@ -821,7 +825,7 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.16.2"
+    "node-llama-cpp": "3.18.1"
   },
   "peerDependenciesMeta": {
     "node-llama-cpp": {
@@ -834,7 +838,7 @@
   "engines": {
     "node": ">=22.16.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {

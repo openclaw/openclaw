@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -28,14 +29,6 @@ const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
-const REQUIRED_BUNDLED_RUNTIME_SIDECARS = [
-  "dist/extensions/whatsapp/light-runtime-api.js",
-  "dist/extensions/whatsapp/runtime-api.js",
-  "dist/extensions/matrix/helper-api.js",
-  "dist/extensions/matrix/runtime-api.js",
-  "dist/extensions/matrix/thread-bindings-runtime.js",
-  "dist/extensions/msteams/runtime-api.js",
-] as const;
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -445,10 +438,11 @@ describe("update-cli", () => {
         name: "json output",
         options: { json: true },
         assert: () => {
-          const last = vi.mocked(defaultRuntime.log).mock.calls.at(-1)?.[0];
-          expect(typeof last).toBe("string");
-          const parsed = JSON.parse(String(last));
-          expect(parsed.channel.value).toBe("stable");
+          const last = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
+          expect(last).toBeDefined();
+          const parsed = last as Record<string, unknown>;
+          const channel = parsed.channel as { value?: unknown };
+          expect(channel.value).toBe("stable");
         },
       },
     ] as const;
@@ -634,14 +628,14 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
       "utf-8",
     );
-    for (const relativePath of REQUIRED_BUNDLED_RUNTIME_SIDECARS) {
+    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(pkgRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
     readPackageVersion.mockResolvedValue("2026.3.23");
     pathExists.mockImplementation(async (candidate: string) =>
-      REQUIRED_BUNDLED_RUNTIME_SIDECARS.some(
+      BUNDLED_RUNTIME_SIDECAR_PATHS.some(
         (relativePath) => candidate === path.join(pkgRoot, relativePath),
       ),
     );
@@ -734,19 +728,11 @@ describe("update-cli", () => {
         name: "outputs JSON when --json is set",
         run: async () => {
           vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-          vi.mocked(defaultRuntime.log).mockClear();
+          vi.mocked(defaultRuntime.writeJson).mockClear();
           await updateCommand({ json: true });
         },
         assert: () => {
-          const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
-          const jsonOutput = logCalls.find((call) => {
-            try {
-              JSON.parse(call[0] as string);
-              return true;
-            } catch {
-              return false;
-            }
-          });
+          const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
           expect(jsonOutput).toBeDefined();
         },
       },

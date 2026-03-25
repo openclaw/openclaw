@@ -72,4 +72,54 @@ describe("msteams conversation store (fs)", () => {
       "19:new@thread.tacv2",
     ]);
   });
+
+  it("stores and retrieves timezone from conversation reference", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    const ref: StoredConversationReference = {
+      conversation: { id: "19:tz-test@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1", aadObjectId: "aad1" },
+      timezone: "America/Los_Angeles",
+    };
+
+    await store.upsert("19:tz-test@thread.tacv2", ref);
+
+    const retrieved = await store.get("19:tz-test@thread.tacv2");
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.timezone).toBe("America/Los_Angeles");
+  });
+
+  it("preserves existing timezone when upsert omits timezone", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    await store.upsert("19:tz-keep@thread.tacv2", {
+      conversation: { id: "19:tz-keep@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      timezone: "Europe/London",
+    });
+
+    // Second upsert without timezone field
+    await store.upsert("19:tz-keep@thread.tacv2", {
+      conversation: { id: "19:tz-keep@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    const retrieved = await store.get("19:tz-keep@thread.tacv2");
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.timezone).toBe("Europe/London");
+  });
 });

@@ -5,6 +5,7 @@ const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
   readRuntime: vi.fn(),
   restart: vi.fn(),
+  stage: vi.fn(),
   install: vi.fn(),
   readCommand: vi.fn(),
 }));
@@ -143,15 +144,36 @@ describe("maybeRepairGatewayDaemon", () => {
   function createPrompter(confirmImpl: (message: string) => boolean) {
     return {
       confirm: vi.fn(),
-      confirmRepair: vi.fn(),
-      confirmAggressive: vi.fn(),
-      confirmSkipInNonInteractive: vi.fn(async ({ message }: { message: string }) =>
-        confirmImpl(message),
-      ),
+      confirmAutoFix: vi.fn(),
+      confirmAggressiveAutoFix: vi.fn(),
+      confirmRuntimeRepair: vi.fn(async ({ message }: { message: string }) => confirmImpl(message)),
       select: vi.fn(),
       shouldRepair: false,
       shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
     };
+  }
+
+  async function runNonInteractiveUpdateRepair() {
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter: createDoctorPrompter({
+        runtime,
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
   }
 
   it("skips restart verification when a running service restart is only scheduled", async () => {
@@ -201,20 +223,9 @@ describe("maybeRepairGatewayDaemon", () => {
 
   it("skips gateway install during non-interactive update repairs", async () => {
     setPlatform("linux");
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     service.isLoaded.mockResolvedValue(false);
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter: createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { repair: true, nonInteractive: true },
-      }),
-      options: { deep: false, repair: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
-    });
+    await runNonInteractiveUpdateRepair();
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
@@ -222,19 +233,8 @@ describe("maybeRepairGatewayDaemon", () => {
 
   it("skips gateway restart during non-interactive update repairs", async () => {
     setPlatform("linux");
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter: createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { repair: true, nonInteractive: true },
-      }),
-      options: { deep: false, repair: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
-    });
+    await runNonInteractiveUpdateRepair();
 
     expect(service.restart).not.toHaveBeenCalled();
   });

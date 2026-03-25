@@ -1,17 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../test/helpers/extensions/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      ensureConfiguredBindingRouteReadyMock(...args),
-    resolveConfiguredBindingRoute: (...args: unknown[]) =>
-      resolveConfiguredBindingRouteMock(...args),
-  };
+  return await createConfiguredBindingConversationRuntimeModuleMock(
+    {
+      ensureConfiguredBindingRouteReadyMock,
+      resolveConfiguredBindingRouteMock,
+    },
+    importOriginal,
+  );
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
@@ -128,14 +128,17 @@ function createConfiguredTelegramRoute() {
 }
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
+  beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
   });
 
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {

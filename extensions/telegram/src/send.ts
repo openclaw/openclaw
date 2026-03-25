@@ -67,9 +67,9 @@ type TelegramSendOpts = {
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
   plainText?: string;
-  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
-  /** Send video as video note (voice bubble) instead of regular video. Defaults to false. */
+  /** Send video as video note instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
@@ -506,7 +506,21 @@ function createTelegramRequestWithDiag(params: {
 }
 
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
-  if (!CHAT_NOT_FOUND_RE.test(formatErrorMessage(err))) {
+  const errorMsg = formatErrorMessage(err);
+
+  // Check for 403 "bot is not a member" or "bot was blocked" errors
+  if (/403.*(bot.*not.*member|bot.*blocked|bot.*kicked)/i.test(errorMsg)) {
+    return new Error(
+      [
+        `Telegram send failed: bot is not a member of the chat, was blocked, or was kicked (chat_id=${params.chatId}).`,
+        `Telegram API said: ${errorMsg}.`,
+        "Fix: Add the bot to the channel/group, or ensure it has not been removed/blocked/kicked by the user.",
+        `Input was: ${JSON.stringify(params.input)}.`,
+      ].join(" "),
+    );
+  }
+
+  if (!CHAT_NOT_FOUND_RE.test(errorMsg)) {
     return err;
   }
   return new Error(
