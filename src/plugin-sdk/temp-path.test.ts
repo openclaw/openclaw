@@ -19,7 +19,7 @@ describe("buildRandomTempFilePath", () => {
   it("sanitizes prefix and extension to avoid path traversal segments", () => {
     const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     const result = buildRandomTempFilePath({
-      prefix: "../../line/../media",
+      prefix: "../../channels/../media",
       extension: "/../.jpg",
       now: 123,
       uuid: "abc",
@@ -27,7 +27,7 @@ describe("buildRandomTempFilePath", () => {
     const resolved = path.resolve(result);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
-    expect(path.basename(result)).toBe("line-media-123-abc.jpg");
+    expect(path.basename(result)).toBe("channels-media-123-abc.jpg");
     expect(result).not.toContain("..");
   });
 });
@@ -54,7 +54,7 @@ describe("withTempDownloadPath", () => {
     let capturedPath = "";
     await withTempDownloadPath(
       {
-        prefix: "../../line/../media",
+        prefix: "../../channels/../media",
         fileName: "../../evil.bin",
       },
       async (tmpPath) => {

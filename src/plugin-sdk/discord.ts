@@ -9,6 +9,7 @@ export type { DiscordConfig, DiscordPluralKitConfig } from "../config/types.disc
 export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
+export type { DiscordComponentMessageSpec } from "../../extensions/discord/api.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -64,8 +65,10 @@ export {
 } from "./status-helpers.js";
 
 export {
+  buildDiscordComponentMessage,
   createDiscordActionGate,
   listDiscordAccountIds,
+  resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
 } from "../../extensions/discord/api.js";
 export { inspectDiscordAccount } from "../../extensions/discord/api.js";
@@ -79,7 +82,7 @@ export { collectDiscordStatusIssues } from "../../extensions/discord/api.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/runtime-api.js";
+} from "../../extensions/discord/timeouts.js";
 export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/session-key-api.js";
 export {
   autoBindSpawnedDiscordSubagent,
@@ -105,6 +108,8 @@ export {
   createScheduledEventDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
   deleteMessageDiscord,
   editChannelDiscord,
   editMessageDiscord,

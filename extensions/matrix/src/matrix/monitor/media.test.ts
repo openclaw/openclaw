@@ -1,7 +1,35 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import { downloadMatrixMedia } from "./media.js";
+
+function createEncryptedClient() {
+  const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
+
+  return {
+    client: {
+      crypto: { decryptMedia },
+      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
+    } as unknown as import("../sdk.js").MatrixClient,
+    decryptMedia,
+  };
+}
+
+function createEncryptedFile() {
+  return {
+    url: "mxc://example/file",
+    key: {
+      kty: "oct",
+      key_ops: ["encrypt", "decrypt"],
+      alg: "A256CTR",
+      k: "secret",
+      ext: true,
+    },
+    iv: "iv",
+    hashes: { sha256: "hash" },
+    v: "v2",
+  };
+}
 
 describe("downloadMatrixMedia", () => {
   const saveMediaBuffer = vi.fn().mockResolvedValue({
@@ -23,26 +51,8 @@ describe("downloadMatrixMedia", () => {
   });
 
   it("decrypts encrypted media when file payloads are present", async () => {
-    const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-
-    const client = {
-      crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("../sdk.js").MatrixClient;
-
-    const file = {
-      url: "mxc://example/file",
-      key: {
-        kty: "oct",
-        key_ops: ["encrypt", "decrypt"],
-        alg: "A256CTR",
-        k: "secret",
-        ext: true,
-      },
-      iv: "iv",
-      hashes: { sha256: "hash" },
-      v: "v2",
-    };
+    const { client, decryptMedia } = createEncryptedClient();
+    const file = createEncryptedFile();
 
     const result = await downloadMatrixMedia({
       client,
@@ -66,26 +76,8 @@ describe("downloadMatrixMedia", () => {
   });
 
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
-    const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-
-    const client = {
-      crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("../sdk.js").MatrixClient;
-
-    const file = {
-      url: "mxc://example/file",
-      key: {
-        kty: "oct",
-        key_ops: ["encrypt", "decrypt"],
-        alg: "A256CTR",
-        k: "secret",
-        ext: true,
-      },
-      iv: "iv",
-      hashes: { sha256: "hash" },
-      v: "v2",
-    };
+    const { client, decryptMedia } = createEncryptedClient();
+    const file = createEncryptedFile();
 
     await expect(
       downloadMatrixMedia({

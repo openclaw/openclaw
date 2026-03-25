@@ -10,6 +10,14 @@ const SLACK_PLAIN_TEXT_MAX = 75;
 
 export type SlackBlock = Block | KnownBlock;
 
+function buildSlackReplyButtonActionId(buttonIndex: number, choiceIndex: number): string {
+  return `${SLACK_REPLY_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
+}
+
+function buildSlackReplySelectActionId(selectIndex: number): string {
+  return `${SLACK_REPLY_SELECT_ACTION_ID}:${String(selectIndex)}`;
+}
+
 export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
   const initialState = {
     blocks: [] as SlackBlock[],
@@ -40,7 +48,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
         block_id: `openclaw_reply_buttons_${++state.buttonIndex}`,
         elements: block.buttons.map((button, choiceIndex) => ({
           type: "button",
-          action_id: SLACK_REPLY_BUTTON_ACTION_ID,
+          action_id: buildSlackReplyButtonActionId(state.buttonIndex, choiceIndex),
           text: {
             type: "plain_text",
             text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
@@ -60,7 +68,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       elements: [
         {
           type: "static_select",
-          action_id: SLACK_REPLY_SELECT_ACTION_ID,
+          action_id: buildSlackReplySelectActionId(state.selectIndex),
           placeholder: {
             type: "plain_text",
             text: truncateSlackText(

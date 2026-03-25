@@ -1,6 +1,7 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-runtime";
+import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSenderIdentity } from "../../identity.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
@@ -55,10 +56,11 @@ export function maybeSendAckReaction(params: {
     { chatId: params.msg.chatId, messageId: params.msg.id, emoji },
     "sending ack reaction",
   );
+  const sender = getSenderIdentity(params.msg);
   sendReactionWhatsApp(params.msg.chatId, params.msg.id, emoji, {
     verbose: params.verbose,
     fromMe: false,
-    participant: params.msg.senderJid,
+    participant: sender.jid ?? undefined,
     accountId: params.accountId,
   }).catch((err) => {
     params.warn(

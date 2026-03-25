@@ -130,6 +130,7 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  audioAsVoice?: boolean;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
@@ -140,6 +141,7 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

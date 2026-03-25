@@ -22,6 +22,20 @@ export function hasFatalTestRunOutput(output) {
   return fatalOutputPatterns.some((pattern) => pattern.test(output));
 }
 
+export function formatCapturedOutputTail(output, maxLines = 60, maxChars = 6000) {
+  const trimmed = output.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lines = trimmed.split(/\r?\n/u);
+  const tailLines = lines.slice(-maxLines);
+  const tail = tailLines.join("\n");
+  if (tail.length <= maxChars) {
+    return tail;
+  }
+  return tail.slice(-maxChars);
+}
+
 export function resolveTestRunExitCode({ code, signal, output, fatalSeen = false, childError }) {
   if (typeof code === "number" && code !== 0) {
     return code;
