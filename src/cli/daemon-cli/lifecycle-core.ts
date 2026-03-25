@@ -208,6 +208,17 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
+  // Pre-flight config validation (#35862) — run for both loaded and not-loaded
+  // to prevent launching from invalid config in any start path.
+  {
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return;
+    }
+  }
   if (!loaded) {
     // Service was stopped (e.g. `gateway stop` booted out the LaunchAgent).
     // Attempt a restart, which handles re-bootstrapping the service. Without
@@ -215,11 +226,12 @@ export async function runServiceStart(params: {
     try {
       const restartResult = await params.service.restart({ env: process.env, stdout });
       const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+      const postLoaded = await params.service.isLoaded({ env: process.env }).catch(() => true);
       emit({
         ok: true,
         result: restartStatus.daemonActionResult,
         message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, true),
+        service: buildDaemonServiceSnapshot(params.service, postLoaded),
       });
       if (!json) {
         defaultRuntime.log(restartStatus.message);
@@ -236,16 +248,6 @@ export async function runServiceStart(params: {
         json,
         emit,
       });
-      return;
-    }
-  }
-  // Pre-flight config validation (#35862)
-  {
-    const configError = await getConfigValidationError();
-    if (configError) {
-      fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
-      );
       return;
     }
   }
