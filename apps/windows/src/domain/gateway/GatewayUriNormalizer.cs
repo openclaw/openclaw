@@ -29,8 +29,11 @@ internal static class GatewayUriNormalizer
             // ws:// is only valid for loopback
             if (!IsLoopbackHost(host)) return null;
 
-            // Inject port 18789 when omitted
-            if (!uri.IsDefaultPort && uri.Port != -1) return uri.ToString();
+            // Inject port 18789 when omitted.
+            // Use UriComponents.Port (empty when absent) instead of IsDefaultPort because
+            // IsDefaultPort is true for both "no port" and explicit ":80" in .NET.
+            var portStr = uri.GetComponents(UriComponents.Port, UriFormat.Unescaped);
+            if (!string.IsNullOrEmpty(portStr)) return uri.ToString();
             return new UriBuilder(uri) { Port = DefaultWsPort }.Uri.ToString();
         }
 
