@@ -386,4 +386,78 @@ describe("session.message websocket events", () => {
       await harness.close();
     }
   });
+
+  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
+    await writeSessionStore({
+      entries: {
+        older: {
+          sessionId: "sess-old",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+        newer: {
+          sessionId: "sess-new",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now() + 10,
+        },
+      },
+      storePath,
+    });
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
+        JSON.stringify({
+          id: "msg-shared",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "shared transcript update" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const ws = await harness.openWs();
+      try {
+        await connectOk(ws, { scopes: ["operator.read"] });
+        await rpcReq(ws, "sessions.subscribe");
+
+        const messageEventPromise = onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:newer",
+        );
+
+        emitSessionTranscriptUpdate({
+          sessionFile: transcriptPath,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "shared transcript update" }],
+            timestamp: Date.now(),
+          },
+          messageId: "msg-shared",
+        });
+
+        const messageEvent = await messageEventPromise;
+        expect(messageEvent.payload).toMatchObject({
+          sessionKey: "agent:main:newer",
+          messageId: "msg-shared",
+          messageSeq: 1,
+        });
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await harness.close();
+    }
+  });
 });
