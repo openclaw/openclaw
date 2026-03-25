@@ -6,7 +6,7 @@ import { CommandLane } from "../process/lanes.js";
 export function applyGatewayLaneConcurrency(cfg: ReturnType<typeof loadConfig>) {
   const cronConcurrency = cfg.cron?.maxConcurrentRuns ?? 1;
   setCommandLaneConcurrency(CommandLane.Cron, cronConcurrency);
-  setCommandLaneConcurrency(CommandLane.Nested, cronConcurrency);
+  setCommandLaneConcurrency(CommandLane.CronNested, cronConcurrency);
   setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(cfg));
   setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(cfg));
 }

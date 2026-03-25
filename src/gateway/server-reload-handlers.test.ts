@@ -3,6 +3,11 @@ import { CommandLane } from "../process/lanes.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 
 const hoisted = vi.hoisted(() => ({
+  buildGatewayCronService: vi.fn(() => ({
+    cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+    storePath: "/tmp/cron.json",
+    cronEnabled: true,
+  })),
   getActiveEmbeddedRunCount: vi.fn(() => 0),
   getTotalPendingReplies: vi.fn(() => 0),
   getTotalQueueSize: vi.fn(() => 0),
@@ -46,6 +51,10 @@ vi.mock("./server/hooks.js", () => ({
   resolveHookClientIpConfig: hoisted.resolveHookClientIpConfig,
 }));
 
+vi.mock("./server-cron.js", () => ({
+  buildGatewayCronService: hoisted.buildGatewayCronService,
+}));
+
 const { createGatewayReloadHandlers } = await import("./server-reload-handlers.js");
 
 function createPlan(): GatewayReloadPlan {
@@ -57,7 +66,7 @@ function createPlan(): GatewayReloadPlan {
     reloadHooks: false,
     restartGmailWatcher: false,
     restartBrowserControl: false,
-    restartCron: false,
+    restartCron: true,
     restartHeartbeat: false,
     restartHealthMonitor: false,
     restartChannels: new Set(),
@@ -70,7 +79,7 @@ describe("createGatewayReloadHandlers", () => {
     vi.clearAllMocks();
   });
 
-  it("applies cron concurrency to the nested lane during hot reload", async () => {
+  it("applies cron concurrency to the cron-nested lane during hot reload", async () => {
     const state = {
       hooksConfig: {},
       hookClientIpConfig: {},
@@ -104,10 +113,11 @@ describe("createGatewayReloadHandlers", () => {
     });
     expect(hoisted.setCommandLaneConcurrency.mock.calls).toEqual([
       [CommandLane.Cron, 4],
-      [CommandLane.Nested, 4],
+      [CommandLane.CronNested, 4],
       [CommandLane.Main, 5],
       [CommandLane.Subagent, 9],
     ]);
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledOnce();
     expect(setState).toHaveBeenCalledOnce();
   });
 });

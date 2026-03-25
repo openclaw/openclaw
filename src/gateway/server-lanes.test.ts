@@ -23,14 +23,14 @@ describe("applyGatewayLaneConcurrency", () => {
     vi.clearAllMocks();
   });
 
-  it("applies cron concurrency to the nested lane too", () => {
+  it("applies cron concurrency to the cron-nested lane too", () => {
     applyGatewayLaneConcurrency({
       cron: { maxConcurrentRuns: 3 },
     } as never);
 
     expect(hoisted.setCommandLaneConcurrency.mock.calls).toEqual([
       [CommandLane.Cron, 3],
-      [CommandLane.Nested, 3],
+      [CommandLane.CronNested, 3],
       [CommandLane.Main, 7],
       [CommandLane.Subagent, 11],
     ]);

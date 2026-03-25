@@ -7,9 +7,10 @@ export function resolveSessionLane(key: string) {
 
 export function resolveGlobalLane(lane?: string) {
   const cleaned = lane?.trim();
-  // Cron jobs hold the cron lane slot; inner operations must use nested to avoid deadlock.
+  // Cron jobs hold the cron lane slot; inner operations must use a dedicated
+  // cron-nested lane to avoid deadlock without widening the shared nested lane.
   if (cleaned === CommandLane.Cron) {
-    return CommandLane.Nested;
+    return CommandLane.CronNested;
   }
   return cleaned ? cleaned : CommandLane.Main;
 }
