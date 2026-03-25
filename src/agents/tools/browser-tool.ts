@@ -325,7 +325,7 @@ function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
-}): string | undefined {
+}): string {
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
@@ -348,7 +348,7 @@ function resolveBrowserBaseUrl(params: {
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
   }
-  return undefined;
+  return `http://127.0.0.1:${resolved.controlPort}`;
 }
 
 function shouldPreferHostForProfile(profileName: string | undefined) {

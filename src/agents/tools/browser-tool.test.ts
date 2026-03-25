@@ -136,6 +136,9 @@ import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
 import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
 
+// Host browser URL returned by resolveBrowserBaseUrl when target="host"
+const HOST_BROWSER_URL = "http://127.0.0.1:18791";
+
 function mockSingleBrowserProxyNode() {
   nodesUtilsMocks.listNodes.mockResolvedValue([
     {
@@ -229,7 +232,7 @@ describe("browser tool snapshot maxChars", () => {
     await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         format: "ai",
         maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -248,7 +251,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         maxChars: override,
       }),
@@ -275,7 +278,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "profiles" });
 
-    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(HOST_BROWSER_URL);
   });
 
   it("passes refs mode through to browser snapshot", async () => {
@@ -288,7 +291,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         format: "ai",
         refs: "aria",
@@ -303,7 +306,7 @@ describe("browser tool snapshot maxChars", () => {
     await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         mode: "efficient",
       }),
@@ -341,7 +344,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         profile: "user",
       }),
@@ -361,7 +364,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         profile: "chrome-live",
       }),
@@ -389,7 +392,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "snapshot", target: "host", profile: "user" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         profile: "user",
       }),
@@ -467,7 +470,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", profile: "user" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({ profile: "user" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
@@ -482,7 +485,7 @@ describe("browser tool url alias support", () => {
     await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
 
     expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       "https://example.com",
       expect.objectContaining({ profile: undefined }),
     );
@@ -500,7 +503,7 @@ describe("browser tool url alias support", () => {
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       targetId: "tab-123",
-      baseUrl: undefined,
+      baseUrl: HOST_BROWSER_URL,
       profile: undefined,
     });
   });
@@ -514,7 +517,7 @@ describe("browser tool url alias support", () => {
     });
 
     expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         url: "https://example.com",
         targetId: "tab-1",
@@ -539,14 +542,14 @@ describe("browser tool url alias support", () => {
     });
 
     expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       "tab-xyz",
       expect.objectContaining({ profile: undefined }),
     );
     expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       targetId: "tab-xyz",
-      baseUrl: undefined,
+      baseUrl: HOST_BROWSER_URL,
       profile: undefined,
     });
   });
@@ -567,7 +570,7 @@ describe("browser tool act compatibility", () => {
     });
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({
         kind: "type",
         ref: "f1e3",
@@ -593,7 +596,7 @@ describe("browser tool act compatibility", () => {
     });
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
-      undefined,
+      HOST_BROWSER_URL,
       {
         kind: "press",
         key: "Enter",
@@ -781,13 +784,13 @@ describe("browser tool act stale target recovery", () => {
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
       1,
-      undefined,
+      HOST_BROWSER_URL,
       expect.objectContaining({ targetId: "stale-tab", kind: "hover", ref: "btn-1" }),
       expect.objectContaining({ profile: "user" }),
     );
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
       2,
-      undefined,
+      HOST_BROWSER_URL,
       expect.not.objectContaining({ targetId: expect.anything() }),
       expect.objectContaining({ profile: "user" }),
     );
