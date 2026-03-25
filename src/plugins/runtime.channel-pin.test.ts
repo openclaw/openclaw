@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
+  getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginChannelRegistry,
   pinActivePluginChannelRegistry,
@@ -52,10 +53,12 @@ describe("channel registry pinning", () => {
 
     expect(getChannelPlugin("slack")).toBe(setupPlugin);
 
-    const versionBeforeRepin = getActivePluginRegistryVersion();
+    const activeVersionBeforeRepin = getActivePluginRegistryVersion();
+    const channelVersionBeforeRepin = getActivePluginChannelRegistryVersion();
     pinActivePluginChannelRegistry(full);
 
-    expect(getActivePluginRegistryVersion()).toBe(versionBeforeRepin + 1);
+    expect(getActivePluginRegistryVersion()).toBe(activeVersionBeforeRepin);
+    expect(getActivePluginChannelRegistryVersion()).toBe(channelVersionBeforeRepin + 1);
     expect(getChannelPlugin("slack")).toBe(fullPlugin);
   });
 
