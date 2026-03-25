@@ -124,8 +124,7 @@ describe("directive behavior", () => {
                 workspace: path.join(home, "openclaw"),
                 models: {
                   "minimax/MiniMax-M2.7": {},
-                  "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-highspeed": {},
+                  "minimax/MiniMax-M2.7-highspeed": {},
                   "lmstudio/minimax-m2.5-gs32": {},
                 },
               },
@@ -139,7 +138,7 @@ describe("directive behavior", () => {
                   api: "anthropic-messages",
                   models: [
                     makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
-                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
+                    makeModelDefinition("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed"),
                   ],
                 },
                 lmstudio: {
@@ -153,11 +152,11 @@ describe("directive behavior", () => {
           },
         },
         {
-          body: "/model minimax/m2.5",
+          body: "/model minimax/highspeed",
           storePath: path.join(home, "sessions-provider-fuzzy.json"),
           expectedSelection: {
             provider: "minimax",
-            model: "MiniMax-M2.5",
+            model: "MiniMax-M2.7-highspeed",
           },
           config: {
             agents: {
@@ -166,8 +165,7 @@ describe("directive behavior", () => {
                 workspace: path.join(home, "openclaw"),
                 models: {
                   "minimax/MiniMax-M2.7": {},
-                  "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-highspeed": {},
+                  "minimax/MiniMax-M2.7-highspeed": {},
                 },
               },
             },
@@ -180,8 +178,7 @@ describe("directive behavior", () => {
                   api: "anthropic-messages",
                   models: [
                     makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
-                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
-                    makeModelDefinition("MiniMax-M2.5-highspeed", "MiniMax M2.5 Highspeed"),
+                    makeModelDefinition("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed"),
                   ],
                 },
               },

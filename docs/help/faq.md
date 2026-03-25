@@ -2153,9 +2153,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,
-       `minimax/MiniMax-M2.7-highspeed`, `minimax/MiniMax-M2.5`, or
-       `minimax/MiniMax-M2.5-highspeed`.
+    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
+       `minimax/MiniMax-M2.7-highspeed`.
     4. Run:
 
        ```bash
