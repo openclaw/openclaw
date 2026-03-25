@@ -34,6 +34,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
+  hasInternalHookListeners: vi.fn(() => true),
   triggerInternalHook: vi.fn(async (_event: unknown) => {}),
 }));
 
@@ -96,6 +97,7 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   );
   return {
     ...actual,
+    hasInternalHookListeners: sessionHookMocks.hasInternalHookListeners,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
   };
 });
@@ -260,6 +262,8 @@ describe("gateway server sessions", () => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
@@ -1935,6 +1939,30 @@ describe("gateway server sessions", () => {
       }),
     );
 
+    ws.close();
+  });
+
+  test("session:patch skips clone and dispatch when no hooks listen", async () => {
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(false);
+
+    const { ws } = await openClient();
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "no-hook-listener",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(structuredCloneSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        patch: expect.any(Object),
+        sessionEntry: expect.any(Object),
+      }),
+    );
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    structuredCloneSpy.mockRestore();
     ws.close();
   });
 
