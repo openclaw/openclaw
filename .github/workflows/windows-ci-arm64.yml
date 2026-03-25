@@ -1,0 +1,54 @@
+name: Windows ARM64
+
+# Build and package viability for ARM64.
+# No tests — GitHub Actions has no native ARM64 Windows runner,
+# and cross-arch test execution is unreliable.
+
+on:
+  push:
+    branches: [main]
+    paths: [apps/windows/**]
+  pull_request:
+    branches: [main]
+    paths: [apps/windows/**]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-package:
+    name: Build & Package ARM64
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore OpenClawWindows.csproj -r win-arm64 -p:Platform=ARM64
+
+      - name: Build & Package MSIX ARM64
+        working-directory: apps/windows
+        run: |
+          dotnet build OpenClawWindows.csproj `
+            -c Release `
+            -r win-arm64 `
+            -p:Platform=ARM64 `
+            -p:PackageMsix=true `
+            --no-restore
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClawWindows-arm64
+          path: apps/windows/AppPackages/*ARM64*/*.msix
+          retention-days: 30

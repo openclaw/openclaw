@@ -1,0 +1,48 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Onboarding.WelcomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:onboarding="using:OpenClawWindows.Presentation.Onboarding">
+
+    <StackPanel Spacing="22" Padding="0,20,0,16">
+
+        <onboarding:GlowingOpenClawIcon
+            Size="130"
+            GlowIntensity="0.28"
+            HorizontalAlignment="Center" />
+
+        <StackPanel Spacing="10" HorizontalAlignment="Center">
+            <TextBlock
+                Text="Welcome to OpenClaw"
+                Style="{StaticResource TitleTextBlockStyle}"
+                HorizontalAlignment="Center" />
+            <TextBlock
+                Text="OpenClaw connects you to AI agents via a WebSocket gateway. It runs quietly in the system tray."
+                TextWrapping="Wrap"
+                HorizontalAlignment="Center"
+                TextAlignment="Center"
+                Opacity="0.65"
+                MaxWidth="420" />
+        </StackPanel>
+
+        <!-- Security notice card -->
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            Padding="16">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Top">
+                <FontIcon Glyph="&#xE814;" FontSize="18" VerticalAlignment="Top" Margin="0,2,0,0" />
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Security notice" FontWeight="SemiBold" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        Opacity="0.65"
+                        Text="The connected AI agent (e.g. Claude) can trigger powerful actions, including running commands, reading/writing files, and capturing screenshots — depending on the permissions you grant.&#x0a;&#x0a;Only enable OpenClaw if you understand the risks and trust the prompts and integrations you use." />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+    </StackPanel>
+</Page>

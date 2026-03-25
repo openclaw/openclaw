@@ -1,0 +1,139 @@
+name: Release — Windows MSIX
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release-x64:
+    name: Release x64
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore
+
+      - name: Build
+        working-directory: apps/windows
+        run: dotnet build -c Release -p:Platform=x64 --no-restore
+
+      - name: Test
+        working-directory: apps/windows
+        run: |
+          dotnet test tests/OpenClawWindows.Tests.csproj `
+            -c Release `
+            -p:Platform=x64 `
+            --no-build `
+            --logger "trx;LogFileName=test-results-x64.trx" `
+            --results-directory TestResults `
+            -v normal
+        env:
+          FSCHECK_PROFILE: ci
+
+      - name: Package MSIX x64
+        working-directory: apps/windows
+        run: |
+          dotnet build OpenClawWindows.csproj `
+            -c Release `
+            -r win-x64 `
+            -p:Platform=x64 `
+            -p:PackageMsix=true
+
+      - name: Sign MSIX x64
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Sign MSIX x64 package
+        uses: azure/trusted-signing-action@v1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+          files-folder: apps/windows/AppPackages
+          files-folder-filter: msix
+          files-folder-depth: 3
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results-x64
+          path: apps/windows/TestResults/**/*.trx
+
+      - name: Upload x64 MSIX to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/windows/AppPackages/*x64*/*.msix
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+
+  release-arm64:
+    name: Release ARM64
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore
+
+      - name: Package MSIX ARM64
+        working-directory: apps/windows
+        run: |
+          dotnet build OpenClawWindows.csproj `
+            -c Release `
+            -r win-arm64 `
+            -p:Platform=ARM64 `
+            -p:PackageMsix=true
+
+      - name: Sign MSIX ARM64
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Sign MSIX ARM64 package
+        uses: azure/trusted-signing-action@v1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+          files-folder: apps/windows/AppPackages
+          files-folder-filter: msix
+          files-folder-depth: 3
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Upload ARM64 MSIX to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/windows/AppPackages/*ARM64*/*.msix
+          tag_name: ${{ github.ref_name }}

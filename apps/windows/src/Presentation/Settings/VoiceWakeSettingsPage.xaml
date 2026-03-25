@@ -1,0 +1,202 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.VoiceWakeSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:settings="using:OpenClawWindows.Presentation.Settings"
+    mc:Ignorable="d">
+
+    <!-- Mirrors VoiceWakeSettings.swift: enable toggle, mic/locale pickers,
+         sensitivity slider, chime selectors, trigger word table. -->
+    <ScrollViewer Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="14" MaxWidth="560">
+
+            <!-- ── Error banner ───────────────────────────────────────────── -->
+            <Border Padding="10" CornerRadius="6"
+                    Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                    Visibility="{Binding ErrorVisibility}">
+                <TextBlock Text="{Binding LastError}"
+                           TextWrapping="Wrap"
+                           Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+            </Border>
+
+            <!-- ── Enable / push-to-talk ──────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="12">
+
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Enable Voice Wake" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="Listen for a wake phrase before running voice commands. Recognition runs fully on-device."
+                                TextWrapping="Wrap"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1"
+                                      IsOn="{Binding VoiceWakeEnabled, Mode=TwoWay}"
+                                      VerticalAlignment="Center"
+                                      OnContent="" OffContent="" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Hold Right Option to talk" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="Push-to-talk mode: starts listening while key is held and shows the preview overlay."
+                                TextWrapping="Wrap"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1"
+                                      IsOn="{Binding VoicePushToTalkEnabled, Mode=TwoWay}"
+                                      VerticalAlignment="Center"
+                                      OnContent="" OffContent="" />
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+
+            <!-- ── Sensitivity ────────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Wake sensitivity" FontWeight="SemiBold" />
+                    <TextBlock
+                        Text="Lower values reduce false wakes; higher values improve recall."
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap" />
+                    <Slider Minimum="0" Maximum="1" StepFrequency="0.01"
+                            Value="{Binding Sensitivity, Mode=TwoWay}" />
+                </StackPanel>
+            </Border>
+
+            <!-- ── Microphone picker ──────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Microphone" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding AvailableMics}"
+                              SelectedIndex="{Binding SelectedMicIndex, Mode=TwoWay}"
+                              DisplayMemberPath="Name"
+                              HorizontalAlignment="Stretch" />
+                </StackPanel>
+            </Border>
+
+            <!-- ── Locale picker ──────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Recognition language" FontWeight="SemiBold" />
+                    <TextBlock
+                        Text="Language used by on-device speech recognition."
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ComboBox ItemsSource="{Binding AvailableLocales}"
+                              SelectedIndex="{Binding SelectedLocaleIndex, Mode=TwoWay}"
+                              DisplayMemberPath="DisplayName"
+                              HorizontalAlignment="Stretch" />
+                </StackPanel>
+            </Border>
+
+            <!-- ── Chimes ─────────────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Chimes" FontWeight="SemiBold" />
+
+                    <Grid ColumnDefinitions="140,*">
+                        <TextBlock Grid.Column="0" Text="Wake trigger chime"
+                                   VerticalAlignment="Center" FontSize="13" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding AvailableChimes}"
+                                  SelectedIndex="{Binding SelectedTriggerChimeIndex, Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="140,*">
+                        <TextBlock Grid.Column="0" Text="Send chime"
+                                   VerticalAlignment="Center" FontSize="13" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding AvailableChimes}"
+                                  SelectedIndex="{Binding SelectedSendChimeIndex, Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ── Test card — Mirrors VoiceWakeTestCard.swift ───────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <settings:VoiceWakeTestCard
+                    x:Name="TestCard"
+                    TestState="{Binding TestState}"
+                    IsTesting="{Binding IsTesting}" />
+            </Border>
+
+            <!-- ── Trigger words ──────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Wake phrases" FontWeight="SemiBold" />
+                    <TextBlock
+                        Text="Words or phrases that trigger voice wake. Leave empty to use the default."
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap" />
+
+                    <!-- Add row -->
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0"
+                                 PlaceholderText="Add phrase…"
+                                 Text="{Binding NewTriggerWord, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Grid.Column="1"
+                                Content="Add"
+                                Command="{Binding AddTriggerWordCommand}" />
+                    </Grid>
+
+                    <!-- Word list -->
+                    <ItemsControl ItemsSource="{Binding TriggerWords}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding}"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="Remove"
+                                            Tag="{Binding}"
+                                            Click="OnRemoveTriggerWordClicked" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- ── Save ───────────────────────────────────────────────────── -->
+            <Button Content="Save"
+                    Command="{Binding SaveCommand}"
+                    Style="{StaticResource AccentButtonStyle}"
+                    HorizontalAlignment="Right" />
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

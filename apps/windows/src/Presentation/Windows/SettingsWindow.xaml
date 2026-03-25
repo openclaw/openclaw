@@ -1,0 +1,57 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Mirrors SettingsRootView.swift: sidebar NavigationView with settings pages -->
+    <NavigationView
+        x:Name="NavView"
+        IsBackButtonVisible="Collapsed"
+        IsSettingsVisible="False"
+        PaneDisplayMode="Left"
+        OpenPaneLength="180"
+        SelectionChanged="NavView_SelectionChanged">
+
+        <NavigationView.MenuItems>
+            <NavigationViewItem Tag="General"     Content="General">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Channels"    Content="Channels">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE71B;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Sessions"    Content="Sessions">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE823;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Permissions" Content="Permissions">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D7;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="VoiceWake"   Content="Voice Wake">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Config"      Content="Config">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE912;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="SystemRun"   Content="Security">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Skills"      Content="Skills">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE7C1;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Instances"   Content="Instances">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE774;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Cron"        Content="Cron">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE787;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="Debug"       Content="Debug"
+                                Visibility="{Binding DebugPaneEnabled, Converter={StaticResource BoolToVisibilityConverter}}">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE90F;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Tag="About"       Content="About">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE897;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+
+        <Frame x:Name="ContentFrame" />
+    </NavigationView>
+</Window>

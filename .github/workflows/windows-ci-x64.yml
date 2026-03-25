@@ -1,0 +1,80 @@
+name: Windows x64
+
+on:
+  push:
+    branches: [main]
+    paths: [apps/windows/**]
+  pull_request:
+    branches: [main]
+    paths: [apps/windows/**]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-package:
+    name: Build, Test & Package
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: |
+          dotnet restore OpenClawWindows.csproj -r win-x64 -p:Platform=x64
+          dotnet restore tests/OpenClawWindows.Tests.csproj -r win-x64 -p:Platform=x64
+
+      - name: Build
+        working-directory: apps/windows
+        run: dotnet build OpenClawWindows.csproj -c Release -r win-x64 -p:Platform=x64
+
+      - name: Build Tests
+        working-directory: apps/windows
+        run: dotnet build tests/OpenClawWindows.Tests.csproj -c Release -r win-x64 -p:Platform=x64
+
+      - name: Test
+        working-directory: apps/windows
+        run: |
+          dotnet test tests/OpenClawWindows.Tests.csproj `
+            -c Release `
+            -r win-x64 `
+            -p:Platform=x64 `
+            --no-build `
+            --logger "trx;LogFileName=test-results-x64.trx" `
+            --results-directory TestResults `
+            -v normal
+        env:
+          FSCHECK_PROFILE: ci
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-x64
+          path: apps/windows/TestResults/**/*.trx
+
+      - name: Package MSIX x64
+        working-directory: apps/windows
+        run: |
+          dotnet build OpenClawWindows.csproj `
+            -c Release `
+            -r win-x64 `
+            -p:Platform=x64 `
+            -p:PackageMsix=true
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClawWindows-x64
+          path: apps/windows/AppPackages/**/*.msix
+          retention-days: 30

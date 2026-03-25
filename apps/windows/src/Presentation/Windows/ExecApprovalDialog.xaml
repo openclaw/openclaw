@@ -1,0 +1,66 @@
+<ContentDialog
+    x:Class="OpenClawWindows.Presentation.Windows.ExecApprovalDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Allow Command?"
+    PrimaryButtonText="Allow Once"
+    SecondaryButtonText="Allow Always"
+    CloseButtonText="Deny">
+
+    <!-- Mirrors ExecApprovalsGatewayPrompter.swift prompt sheet:
+         three-button response (allow-once / allow-always / deny) + security context. -->
+    <StackPanel MinWidth="360" MaxWidth="560" Spacing="12">
+
+        <TextBlock
+            Text="The following command is requesting permission to run:"
+            TextWrapping="Wrap"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+        <!-- Command display — monospaced, selectable, scrollable -->
+        <!-- TextBlock has no Background in WinUI 3; use Border to provide the fill. -->
+        <ScrollViewer MaxHeight="180" HorizontalScrollBarVisibility="Auto">
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4">
+                <TextBlock
+                    Text="{Binding CommandText}"
+                    FontFamily="Cascadia Mono, Consolas, Courier New"
+                    FontSize="12"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"
+                    Padding="8" />
+            </Border>
+        </ScrollViewer>
+
+        <!-- Security context — agent and session, when available -->
+        <StackPanel Spacing="4">
+
+            <StackPanel
+                Spacing="4"
+                Visibility="{Binding HasAgentLabel, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock
+                    Text="Agent:"
+                    FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock
+                    Text="{Binding AgentLabel}"
+                    FontSize="11" />
+            </StackPanel>
+
+            <StackPanel
+                Spacing="4"
+                Visibility="{Binding HasSessionLabel, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock
+                    Text="Session:"
+                    FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock
+                    Text="{Binding SessionLabel}"
+                    FontSize="11" />
+            </StackPanel>
+
+        </StackPanel>
+
+    </StackPanel>
+</ContentDialog>

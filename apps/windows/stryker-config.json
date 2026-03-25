@@ -1,0 +1,22 @@
+{
+  "stryker-config": {
+    "project": "OpenClawWindows.csproj",
+    "test-projects": ["tests/OpenClawWindows.Tests.csproj"],
+    "solution": "OpenClawWindows.sln",
+    "target-framework": "net9.0-windows10.0.19041.0",
+    "reporters": ["json", "html"],
+    "thresholds": {
+      "high": 80,
+      "low": 70,
+      "break": 60
+    },
+    "mutate": [
+      "src/domain/**/*.cs",
+      "src/application/**/*.cs",
+      "!src/domain/shared_kernel/Entity.cs",
+      "!**/*DomainEvent*.cs",
+      "!**/*Events/*.cs"
+    ],
+    "coverage-analysis": "perTest"
+  }
+}

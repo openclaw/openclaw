@@ -1,0 +1,66 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Onboarding.GlowingOpenClawIcon"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors GlowingOpenClawIcon.swift: app icon with pulsing glow and breathing animation. -->
+    <Grid x:Name="Container">
+        <Grid.Resources>
+            <!-- Breathing storyboard: easeInOut(duration:3.6).repeatForever(autoreverses:true) -->
+            <Storyboard x:Name="BreatheStoryboard" RepeatBehavior="Forever" AutoReverse="True">
+                <!-- Glow scale: breathe-off (0.96) → breathe-on (1.08) -->
+                <DoubleAnimation Storyboard.TargetName="GlowTransform" Storyboard.TargetProperty="ScaleX"
+                                 From="0.96" To="1.08" Duration="0:0:3.6">
+                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <DoubleAnimation Storyboard.TargetName="GlowTransform" Storyboard.TargetProperty="ScaleY"
+                                 From="0.96" To="1.08" Duration="0:0:3.6">
+                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <!-- Icon scale: breathe-off (1.00) → breathe-on (1.02) -->
+                <DoubleAnimation Storyboard.TargetName="IconTransform" Storyboard.TargetProperty="ScaleX"
+                                 From="1.0" To="1.02" Duration="0:0:3.6">
+                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <DoubleAnimation Storyboard.TargetName="IconTransform" Storyboard.TargetProperty="ScaleY"
+                                 From="1.0" To="1.02" Duration="0:0:3.6">
+                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+            </Storyboard>
+        </Grid.Resources>
+
+        <!-- Glow layer: gradient circle at 0.84 opacity with breathing scale. -->
+        <!-- Adapts Swift .blur(radius:18): approximated via gradient soft edges; WinUI3 element-level
+             blur requires Composition/Win2D which is out of scope for a pure-XAML onboarding widget. -->
+        <Ellipse x:Name="GlowEllipse" Opacity="0.84"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 RenderTransformOrigin="0.5,0.5">
+            <Ellipse.Fill>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop x:Name="GlowStartStop" Offset="0"/>
+                    <GradientStop x:Name="GlowEndStop"   Offset="1"/>
+                </LinearGradientBrush>
+            </Ellipse.Fill>
+            <Ellipse.RenderTransform>
+                <CompositeTransform x:Name="GlowTransform" ScaleX="0.96" ScaleY="0.96"/>
+            </Ellipse.RenderTransform>
+        </Ellipse>
+
+        <!-- App icon: rounded-corner clipping via Border; shadow omitted (see above comment). -->
+        <Border x:Name="IconBorder"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="Transparent"
+                RenderTransformOrigin="0.5,0.5">
+            <Border.RenderTransform>
+                <CompositeTransform x:Name="IconTransform" ScaleX="1.0" ScaleY="1.0"/>
+            </Border.RenderTransform>
+            <Image x:Name="IconImage"
+                   Source="ms-appx:///Assets/Icons/AppIcon.png"
+                   Stretch="UniformToFill"/>
+        </Border>
+    </Grid>
+
+</UserControl>

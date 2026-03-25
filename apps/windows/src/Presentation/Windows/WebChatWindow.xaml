@@ -1,0 +1,517 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.WebChatWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ctk="using:CommunityToolkit.WinUI.UI.Controls"
+    mc:Ignorable="d">
+
+    <!-- Mirrors ChatView (macOS): bubble chat + compose area.
+         Size: 500x840 logical (window) / 480x640 (panel) — set in code-behind. -->
+    <Grid x:Name="LayoutRoot"
+          RowDefinitions="Auto,*,Auto"
+          Background="{ThemeResource LayerFillColorDefaultBrush}"
+          AllowDrop="True"
+          DragOver="Grid_DragOver"
+          Drop="Grid_Drop">
+
+        <!-- Session header — subtle divider below -->
+        <Border Grid.Row="0" BorderThickness="0,0,0,1"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Padding="16,10,16,8">
+            <TextBlock
+                Text="{Binding SessionLabel}"
+                FontSize="14" FontWeight="SemiBold" />
+        </Border>
+
+        <!-- Message list + streaming bubble -->
+        <Grid Grid.Row="1">
+            <ScrollViewer
+                VerticalScrollBarVisibility="Auto"
+                Padding="0"
+                x:Name="MessageScroll"
+                ViewChanged="MessageScroll_ViewChanged">
+                <Grid x:Name="MessageContainer"
+                      RowDefinitions="Auto,Auto,Auto,Auto"
+                      Padding="12,16,12,20"
+                      SizeChanged="MessageContainer_SizeChanged">
+                    <ItemsControl Grid.Row="0" ItemsSource="{Binding Messages}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="4" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <!-- ── User bubble: right-aligned, seam/accent background ── -->
+                                    <!-- Background: seam color from settings, falls back to AccentFillColorDefaultBrush -->
+                                    <Border
+                                        Visibility="{Binding IsUser, Converter={StaticResource BoolToVisibilityConverter}}"
+                                        HorizontalAlignment="Right"
+                                        MaxWidth="{Binding DataContext.BubbleMaxWidth, ElementName=LayoutRoot}"
+                                        x:Name="UserBubbleBorder"
+                                        Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                        CornerRadius="16,16,4,16"
+                                        Padding="14,10">
+                                        <StackPanel Spacing="0">
+                                            <ctk:MarkdownTextBlock
+                                                Text="{Binding Text, Converter={StaticResource MarkdownPreprocessConverter}}"
+                                                TextWrapping="Wrap"
+                                                IsTextSelectionEnabled="True"
+                                                Foreground="White"
+                                                Background="Transparent"
+                                                LinkClicked="MarkdownTextBlock_LinkClicked" />
+                                            <!-- Inline images — mirrors InlineImageList (macOS ChatMarkdownRenderer.swift:69) -->
+                                            <ItemsRepeater
+                                                ItemsSource="{Binding InlineImages}"
+                                                Visibility="{Binding HasInlineImages, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                <ItemsRepeater.Layout>
+                                                    <StackLayout Spacing="6" />
+                                                </ItemsRepeater.Layout>
+                                                <ItemsRepeater.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border CornerRadius="12" Margin="0,6,0,0">
+                                                            <Image
+                                                                Source="{Binding Bytes, Converter={StaticResource BytesToBitmapConverter}}"
+                                                                MaxHeight="260"
+                                                                HorizontalAlignment="Left"
+                                                                Stretch="Uniform" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsRepeater.ItemTemplate>
+                                            </ItemsRepeater>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- ── Assistant bubble: left-aligned, card background ── -->
+                                    <Border
+                                        Visibility="{Binding IsAssistant, Converter={StaticResource BoolToVisibilityConverter}}"
+                                        HorizontalAlignment="Left"
+                                        MaxWidth="{Binding DataContext.BubbleMaxWidth, ElementName=LayoutRoot}"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="16,16,16,4"
+                                        Padding="14,10">
+                                        <StackPanel Spacing="0">
+                                            <ctk:MarkdownTextBlock
+                                                Text="{Binding Text, Converter={StaticResource MarkdownPreprocessConverter}}"
+                                                TextWrapping="Wrap"
+                                                IsTextSelectionEnabled="True"
+                                                Background="Transparent"
+                                                LinkClicked="MarkdownTextBlock_LinkClicked" />
+                                            <!-- Inline images — mirrors InlineImageList (macOS ChatMarkdownRenderer.swift:69) -->
+                                            <ItemsRepeater
+                                                ItemsSource="{Binding InlineImages}"
+                                                Visibility="{Binding HasInlineImages, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                <ItemsRepeater.Layout>
+                                                    <StackLayout Spacing="6" />
+                                                </ItemsRepeater.Layout>
+                                                <ItemsRepeater.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border CornerRadius="12" Margin="0,6,0,0">
+                                                            <Image
+                                                                Source="{Binding Bytes, Converter={StaticResource BytesToBitmapConverter}}"
+                                                                MaxHeight="260"
+                                                                HorizontalAlignment="Left"
+                                                                Stretch="Uniform" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsRepeater.ItemTemplate>
+                                            </ItemsRepeater>
+                                        </StackPanel>
+                                    </Border>
+
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Streaming assistant bubble — same style as assistant messages -->
+                    <Border Grid.Row="1"
+                        HorizontalAlignment="Left"
+                        MaxWidth="{Binding BubbleMaxWidth}"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16,16,16,4"
+                        Padding="14,10"
+                        Visibility="{Binding StreamingVisibleText, Converter={StaticResource StringToVisibilityConverter}}">
+                        <RichTextBlock
+                            x:Name="StreamingRtb"
+                            TextWrapping="Wrap"
+                            IsTextSelectionEnabled="True" />
+                    </Border>
+
+                    <!-- Typing indicator — mirrors ChatTypingIndicatorBubble (macOS ChatMessageViews.swift:474) -->
+                    <!-- Three dots fade 0.30→0.95 staggered 0/0.16/0.32s; animation driven from code-behind -->
+                    <Border Grid.Row="2"
+                        HorizontalAlignment="Left"
+                        MaxWidth="{Binding BubbleMaxWidth}"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16,16,16,4"
+                        Padding="14,10"
+                        Visibility="{Binding IsTyping, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <Ellipse x:Name="TypingDot0" Width="7" Height="7" Opacity="0.30"
+                                     Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Ellipse x:Name="TypingDot1" Width="7" Height="7" Opacity="0.30"
+                                     Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Ellipse x:Name="TypingDot2" Width="7" Height="7" Opacity="0.30"
+                                     Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Pending tool calls bubble — mirrors ChatPendingToolsBubble (macOS ChatMessageViews.swift:534) -->
+                    <Border Grid.Row="3"
+                        HorizontalAlignment="Left"
+                        MaxWidth="{Binding BubbleMaxWidth}"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16,16,16,4"
+                        Padding="14,10"
+                        Visibility="{Binding HasPendingToolCalls, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <StackPanel Spacing="6">
+                            <!-- Header: "Running tools…" — mirrors Label("Running tools…") in macOS -->
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE90F;" FontSize="11"
+                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="Running tools…" FontSize="11"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+
+                            <!-- One row per tool call -->
+                            <ItemsRepeater ItemsSource="{Binding PendingToolCalls}">
+                                <ItemsRepeater.Layout>
+                                    <StackLayout Spacing="4" />
+                                </ItemsRepeater.Layout>
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{ThemeResource LayerFillColorAltBrush}"
+                                                CornerRadius="8" Padding="8,6">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock
+                                                    Grid.Column="0"
+                                                    Text="{Binding Name}"
+                                                    FontFamily="Cascadia Mono, Consolas"
+                                                    FontSize="11"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    VerticalAlignment="Center" />
+                                                <ProgressRing
+                                                    Grid.Column="1"
+                                                    IsActive="True"
+                                                    Width="14" Height="14"
+                                                    Margin="6,0,0,0" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Scroll-to-bottom pill — visible when user scrolls away from bottom -->
+            <Button x:Name="ScrollToBottomBtn"
+                Click="ScrollToBottomBtn_Click"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,8"
+                Padding="8,4"
+                MinWidth="0" MinHeight="0"
+                CornerRadius="12"
+                Visibility="Collapsed"
+                ToolTipService.ToolTip="Scroll to bottom">
+                <FontIcon Glyph="&#xE74B;" FontSize="12" />
+            </Button>
+
+            <!-- Loading indicator — mirrors ProgressView().controlSize(.large) in ChatView.swift:125 -->
+            <ProgressRing
+                IsActive="{Binding IsLoading}"
+                Width="48" Height="48"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- Error banner — mirrors ChatNoticeBanner (macOS ChatView.swift:248); shown when error + has messages -->
+            <Border VerticalAlignment="Top"
+                    Margin="10,8,10,0"
+                    Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                    BorderBrush="{ThemeResource SystemFillColorCriticalBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="12,8"
+                    Visibility="{Binding ErrorBannerVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                <Grid ColumnDefinitions="*,Auto,Auto">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding LastError}"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               FontSize="12" />
+                    <Button Grid.Column="1"
+                            Command="{Binding RefreshCommand}"
+                            Content="Retry"
+                            Margin="8,0,0,0"
+                            Padding="8,4" MinWidth="0"
+                            FontSize="11" />
+                    <Button Grid.Column="2"
+                            Command="{Binding DismissErrorCommand}"
+                            Margin="4,0,0,0"
+                            Padding="4" MinWidth="0"
+                            Background="Transparent" BorderThickness="0">
+                        <FontIcon Glyph="&#xE711;" FontSize="10" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Error card — mirrors ChatNoticeCard (macOS ChatView.swift:261); shown when error + no messages -->
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="8"
+                        Padding="24,0"
+                        Visibility="{Binding ErrorCardVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                <FontIcon Glyph="&#xE783;" FontSize="36"
+                          Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                          HorizontalAlignment="Center" />
+                <TextBlock Text="Something went wrong"
+                           FontSize="16" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding LastError}"
+                           FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" MaxWidth="300" />
+                <Button Command="{Binding RefreshCommand}"
+                        Content="Refresh"
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Margin="0,4,0,0" />
+            </StackPanel>
+
+            <!-- Empty state — mirrors ChatNoticeCard (macOS ChatView.swift:271-282) -->
+            <!-- Shown when: no messages, no streaming, no pending runs/tools -->
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="8"
+                Padding="24,0"
+                Visibility="{Binding IsEmptyState, Converter={StaticResource BoolToVisibilityConverter}}">
+                <FontIcon Glyph="&#xE8BD;" FontSize="36"
+                          Foreground="{ThemeResource AccentFillColorDefaultBrush}"
+                          HorizontalAlignment="Center" />
+                <TextBlock Text="Web Chat"
+                           FontSize="16" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="Type a message below to start."
+                           FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="Return sends  •  Shift+Return adds a line break."
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+        </Grid>
+
+        <!-- Compose area — mirrors composerBackground+border+shadow in ChatComposer.swift:44-83 (L-08) -->
+        <Border Grid.Row="2"
+              Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+              BorderThickness="0,1,0,0"
+              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+              CornerRadius="12,12,0,0"
+              Padding="10,6,10,10">
+            <StackPanel Spacing="4">
+                <!-- Attachments strip -->
+                <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                              HorizontalScrollMode="Enabled"
+                              VerticalScrollMode="Disabled"
+                              Visibility="{Binding HasAttachments, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ItemsRepeater ItemsSource="{Binding Attachments}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Orientation="Horizontal" Spacing="4" />
+                    </ItemsRepeater.Layout>
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    CornerRadius="4" Padding="6,2" Margin="0,2">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <!-- Image thumbnail 22×22 — mirrors att.preview in ChatComposer.swift:150-155 -->
+                                    <Border CornerRadius="6"
+                                            Width="22" Height="22"
+                                            Visibility="{Binding IsImage, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <Image Source="{Binding Data, Converter={StaticResource BytesToBitmapConverter}}"
+                                               Stretch="UniformToFill" />
+                                    </Border>
+                                    <!-- Paperclip fallback — mirrors Image(systemName:"photo") in ChatComposer.swift:156-158 -->
+                                    <FontIcon Glyph="&#xE7C3;" FontSize="12"
+                                              Visibility="{Binding IsImage, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                                    <TextBlock Text="{Binding FileName}" FontSize="11"
+                                        MaxWidth="120" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                    <Button Command="{Binding DataContext.RemoveAttachmentCommand, ElementName=ComposeBox}"
+                                            CommandParameter="{Binding Id}"
+                                            Padding="2" MinWidth="0" MinHeight="0"
+                                            Background="Transparent" BorderThickness="0">
+                                        <FontIcon Glyph="&#xE711;" FontSize="10" />
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
+                </ScrollViewer>
+
+                <!-- Connection pill + thinking picker + model picker + session picker row -->
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="4">
+                    <!-- Connection pill — mirrors connectionPill in ChatComposer.swift:209-224 -->
+                    <!-- Dot green when HealthOK, orange when Connecting; session label + status text -->
+                    <Border Grid.Column="0"
+                            Background="{ThemeResource LayerFillColorAltBrush}"
+                            CornerRadius="10"
+                            Padding="8,4"
+                            VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <!-- Green dot: visible when connected -->
+                            <Ellipse Width="7" Height="7" Fill="#22C55E" VerticalAlignment="Center"
+                                     Visibility="{Binding HealthOK, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <!-- Orange dot: visible when connecting -->
+                            <Ellipse Width="7" Height="7" Fill="#F97316" VerticalAlignment="Center"
+                                     Visibility="{Binding HealthOK, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                            <TextBlock Text="{Binding SessionLabel}"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ConnectionStatusText}"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Thinking level picker — mirrors thinkingPicker in ChatComposer.swift:85-96. -->
+                    <ComboBox Grid.Column="2"
+                              SelectedValue="{Binding ThinkingLevel, Mode=TwoWay}"
+                              SelectedValuePath="Tag"
+                              FontSize="11"
+                              MaxWidth="100"
+                              Padding="8,4"
+                              MinHeight="0"
+                              VerticalAlignment="Center"
+                              ToolTipService.ToolTip="Thinking">
+                        <ComboBoxItem Tag="off"    Content="Off"    />
+                        <ComboBoxItem Tag="low"    Content="Low"    />
+                        <ComboBoxItem Tag="medium" Content="Medium" />
+                        <ComboBoxItem Tag="high"   Content="High"   />
+                    </ComboBox>
+
+                    <!-- Model picker — mirrors MacGatewayChatTransport.listModels() / setSessionModel().
+                         Hidden when gateway returns fewer than 2 models (error or single-model config). -->
+                    <ComboBox Grid.Column="3"
+                              x:Name="ModelPicker"
+                              ItemsSource="{Binding AvailableModels}"
+                              SelectedItem="{Binding SelectedModel, Mode=TwoWay}"
+                              FontSize="11"
+                              MaxWidth="140"
+                              Padding="8,4"
+                              MinHeight="0"
+                              VerticalAlignment="Center"
+                              ToolTipService.ToolTip="Model"
+                              Visibility="{Binding HasModelPicker, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" FontSize="11" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <!-- Session picker — mirrors sessionPicker in ChatComposer.swift:98-116. -->
+                    <ComboBox Grid.Column="4"
+                              x:Name="SessionPicker"
+                              ItemsSource="{Binding SessionChoices}"
+                              Visibility="{Binding HasMultipleSessions, Converter={StaticResource BoolToVisibilityConverter}}"
+                              SelectedValuePath="Key"
+                              FontSize="11"
+                              MaxWidth="160"
+                              Padding="8,4"
+                              MinHeight="0"
+                              VerticalAlignment="Center"
+                              ToolTipService.ToolTip="Session"
+                              SelectionChanged="SessionPicker_SelectionChanged">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <!-- Mirrors session.displayName ?? session.key in ChatComposer.swift:106 -->
+                                <TextBlock FontFamily="Cascadia Mono"
+                                           Text="{Binding DisplayLabel}"
+                                           FontSize="11" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+                    <!-- File + Refresh buttons — mirrors ChatComposer.swift:307-316 (L-06) -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <Button Command="{Binding PickFilesCommand}"
+                                ToolTipService.ToolTip="Add files"
+                                Padding="6" MinWidth="0">
+                            <FontIcon Glyph="&#xE723;" FontSize="14" />
+                        </Button>
+                        <Button Command="{Binding RefreshCommand}"
+                                ToolTipService.ToolTip="Refresh"
+                                Padding="6" MinWidth="0">
+                            <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                        </Button>
+                    </StackPanel>
+
+                    <TextBox
+                        Grid.Column="1"
+                        PlaceholderText="Message OpenClaw…"
+                        Text="{Binding ComposeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        AcceptsReturn="True"
+                        MinHeight="32"
+                        CornerRadius="16"
+                        x:Name="ComposeBox"
+                        PreviewKeyDown="ComposeBox_KeyDown" />
+
+                    <!-- Stop button: shows spinner while aborting (L-04) -->
+                    <Button
+                        Grid.Column="2"
+                        Command="{Binding AbortCommand}"
+                        Visibility="{Binding IsSending, Converter={StaticResource BoolToVisibilityConverter}}"
+                        x:Name="AbortButton">
+                        <Grid Width="40" Height="20">
+                            <TextBlock Text="Stop"
+                                       Visibility="{Binding IsAborting, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <ProgressRing IsActive="{Binding IsAborting}" Width="16" Height="16"
+                                          Visibility="{Binding IsAborting, Converter={StaticResource BoolToVisibilityConverter}}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                    </Button>
+
+                    <!-- Send button: shows spinner while sending (L-03) -->
+                    <Button
+                        Grid.Column="3"
+                        Command="{Binding SendMessageCommand}"
+                        IsEnabled="{Binding IsSendEnabled}"
+                        Style="{StaticResource AccentButtonStyle}"
+                        CornerRadius="16"
+                        Padding="10,6"
+                        MinWidth="0">
+                        <Grid Width="20" Height="20">
+                            <FontIcon Glyph="&#xE724;" FontSize="16"
+                                      Visibility="{Binding IsSending, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                            <ProgressRing IsActive="{Binding IsSending}" Width="16" Height="16"
+                                          Visibility="{Binding IsSending, Converter={StaticResource BoolToVisibilityConverter}}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                    </Button>
+                </Grid>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,161 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Onboarding.ConnectionPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="18" Padding="0,24,0,16">
+
+        <TextBlock
+            Text="Choose your Gateway"
+            Style="{StaticResource TitleTextBlockStyle}"
+            HorizontalAlignment="Center" />
+
+        <TextBlock
+            Text="OpenClaw uses a single Gateway that stays running. Pick This PC, connect to a discovered gateway, or configure later."
+            TextWrapping="Wrap"
+            HorizontalAlignment="Center"
+            TextAlignment="Center"
+            Opacity="0.7"
+            MaxWidth="480" />
+
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            Padding="14">
+            <StackPanel Spacing="8">
+
+                <!-- This PC (local) -->
+                <Button
+                    x:Name="LocalChoiceButton"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Click="LocalChoiceButton_Click">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="This PC 🟢" FontWeight="SemiBold" />
+                            <TextBlock Text="Gateway is running locally on this machine." FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                        <TextBlock
+                            Grid.Column="1"
+                            Text="✓" VerticalAlignment="Center" Margin="8,0,0,0"
+                            Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </Grid>
+                </Button>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,2" />
+
+                <!-- mDNS discovered gateways -->
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="📡" FontSize="11" VerticalAlignment="Center" />
+                        <TextBlock
+                            Text="Searching for nearby gateways…"
+                            FontSize="11" Opacity="0.6" VerticalAlignment="Center"
+                            Visibility="{Binding IsDiscovering, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        <TextBlock
+                            Text="Nearby gateways"
+                            FontSize="11" Opacity="0.6" VerticalAlignment="Center"
+                            Visibility="{Binding IsDiscovering, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                        <ProgressRing
+                            IsActive="True" Width="12" Height="12"
+                            Visibility="{Binding IsDiscovering, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{Binding DiscoveredGateways}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    Margin="0,2"
+                                    Tag="{Binding}"
+                                    Click="GatewayChoiceButton_Click">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Uri}" FontSize="11" Opacity="0.6" />
+                                        </StackPanel>
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            Text="✓" VerticalAlignment="Center" Margin="8,0,0,0"
+                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,2" />
+
+                <!-- Configure later -->
+                <Button
+                    x:Name="UnconfiguredChoiceButton"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Click="UnconfiguredChoiceButton_Click">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Configure later" FontWeight="SemiBold" />
+                            <TextBlock Text="Set up the gateway connection in Settings." FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                        <TextBlock
+                            Grid.Column="1"
+                            Text="✓" VerticalAlignment="Center" Margin="8,0,0,0"
+                            Visibility="{Binding IsUnconfiguredSelected, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </Grid>
+                </Button>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,2" />
+
+                <!-- Advanced section -->
+                <HyperlinkButton
+                    Content="{Binding AdvancedToggleLabel}"
+                    Command="{Binding ToggleAdvancedCommand}"
+                    Padding="0" />
+
+                <StackPanel
+                    Spacing="10"
+                    Visibility="{Binding ShowAdvanced, Converter={StaticResource BoolToVisibilityConverter}}">
+
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Gateway URL" FontWeight="SemiBold" FontSize="13" />
+                        <TextBox
+                            PlaceholderText="ws://192.168.1.100:3000  or  wss://gateway.example.com"
+                            Text="{Binding ManualUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            FontFamily="Consolas" />
+                        <TextBlock
+                            Text="Use ws:// for local network, wss:// for remote hosts."
+                            FontSize="11" Opacity="0.6" />
+                    </StackPanel>
+
+                    <Button
+                        Content="Check connection"
+                        Command="{Binding CheckConnectionCommand}"
+                        Style="{StaticResource AccentButtonStyle}" />
+
+                    <!-- Probe result -->
+                    <StackPanel
+                        Spacing="2"
+                        Visibility="{Binding ProbeMessage, Converter={StaticResource StringToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock
+                                Text="✓" Foreground="Green"
+                                Visibility="{Binding IsProbeReady, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <TextBlock
+                                Text="✗" Foreground="Red"
+                                Visibility="{Binding IsProbeFailed, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <TextBlock
+                                Text="{Binding ProbeMessage}"
+                                TextWrapping="Wrap" FontSize="12" />
+                        </StackPanel>
+                    </StackPanel>
+
+                </StackPanel>
+
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</Page>

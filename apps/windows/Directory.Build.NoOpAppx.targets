@@ -1,0 +1,34 @@
+<Project>
+  <!--
+    No-op overrides for APPX packaging SDK targets that require the VS
+    "Windows application development" workload (Microsoft.Build.AppxPackage.dll,
+    Microsoft.Build.Packaging.Pri.Tasks.dll).
+    Only imported when _AppxNoOp == true (CI / dotnet build without VS packaging DLLs).
+
+    WinAppSDK 1.7 MrtCore.PriGen.targets registers GetMrtPackagingOutputs (calls
+    ExpandPayloadDirectories) and AddPriPayloadFilesToCopyToOutputDirectoryItems (calls
+    ExpandPriContent) — both require VS-only DLLs even with AppxGeneratePriEnabled=false.
+  -->
+
+  <Target Name="GetPackagingOutputs" Returns="@(PackagingOutputs)">
+    <!-- no-op: VS packaging DLLs absent, MSIX disabled -->
+  </Target>
+
+  <!-- GetMrtPackagingOutputs and AddPriPayloadFilesToCopyToOutputDirectoryItems
+       were no-oped here but that prevented Microsoft.UI.pri and
+       Microsoft.UI.Xaml.Controls.pri from being merged into the app PRI.
+       With EnableMsixTooling=true + SDK 1.8, the NuGet-shipped tasks handle these. -->
+
+  <Target Name="_GetDefaultResourceLanguage">
+    <!-- Stub: GetDefaultResourceLanguage requires Microsoft.Build.AppxPackage.dll.
+         Provide a sensible default so PRI gen can proceed without VS toolchain. -->
+    <PropertyGroup>
+      <DefaultResourceLanguage Condition="'$(DefaultResourceLanguage)' == ''">en-US</DefaultResourceLanguage>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="CopyLocalFilesOutputGroup" Returns="@(CopyLocalFilesOutputGroupOutput)">
+    <!-- no-op: VS packaging DLLs absent, MSIX disabled -->
+  </Target>
+
+</Project>

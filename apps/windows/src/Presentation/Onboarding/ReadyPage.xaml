@@ -1,0 +1,68 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Onboarding.ReadyPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="18" Padding="0,24,0,16">
+
+        <TextBlock
+            Text="All set"
+            Style="{StaticResource TitleTextBlockStyle}"
+            HorizontalAlignment="Center" />
+
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            Padding="16">
+            <StackPanel Spacing="14">
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <FontIcon Glyph="&#xE8BD;" FontSize="18" Width="22"
+                              VerticalAlignment="Top" Margin="0,2,0,0" />
+                    <StackPanel>
+                        <TextBlock Text="Open the tray panel" FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="Click the OpenClaw tray icon for quick chat and status."
+                            TextWrapping="Wrap" Opacity="0.65" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <FontIcon Glyph="&#xE71B;" FontSize="18" Width="22"
+                              VerticalAlignment="Top" Margin="0,2,0,0" />
+                    <StackPanel>
+                        <TextBlock Text="Connect WhatsApp or Telegram" FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="Open Settings → Channels to link channels and monitor status."
+                            TextWrapping="Wrap" Opacity="0.65" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <FontIcon Glyph="&#xE737;" FontSize="18" Width="22"
+                              VerticalAlignment="Top" Margin="0,2,0,0" />
+                    <StackPanel>
+                        <TextBlock Text="Use the panel + Canvas" FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="Open the tray panel for quick chat; the agent can show previews and richer visuals in Canvas."
+                            TextWrapping="Wrap" Opacity="0.65" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                <ToggleSwitch
+                    Header="Launch at login"
+                    IsOn="{Binding AutoStart, Mode=TwoWay}"
+                    OnContent="On" OffContent="Off" />
+
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</Page>

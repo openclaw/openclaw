@@ -1,0 +1,76 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.CronSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors CronSettings.swift: job list with Add / Edit / Delete / Enable-Disable / Run actions. -->
+    <Grid Padding="20,16,20,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: Refresh + Add -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,0,0,12">
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+            <Button Content="Add Job" Click="OnAddJobClicked" Style="{StaticResource AccentButtonStyle}" />
+        </StackPanel>
+
+        <ListView
+            Grid.Row="1"
+            ItemsSource="{Binding CronJobs}"
+            SelectionMode="None">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <Grid Padding="0,8,0,8" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Job name + schedule + last-run -->
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="{Binding Schedule}"
+                                FontFamily="Cascadia Mono, Consolas, Courier New"
+                                FontSize="11"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock
+                                Text="{Binding LastRunLabel}"
+                                FontSize="11"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+
+                        <!-- Row action buttons — mirrors jobContextMenu in CronSettings+Rows.swift -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <Button
+                                Content="{Binding EnableDisableLabel}"
+                                Tag="{Binding}"
+                                Click="OnToggleJobEnabled"
+                                FontSize="11" />
+                            <Button
+                                Content="Edit"
+                                Tag="{Binding Id}"
+                                Click="OnEditJobClicked"
+                                FontSize="11" />
+                            <Button
+                                Content="Run"
+                                Tag="{Binding Id}"
+                                Click="OnRunJobClicked"
+                                FontSize="11" />
+                            <Button
+                                Content="Delete"
+                                Tag="{Binding Id}"
+                                Click="OnDeleteJobClicked"
+                                FontSize="11" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</Page>

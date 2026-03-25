@@ -1,0 +1,196 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.PermissionsSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors PermissionsSettings.swift: per-capability status cards with open-settings links. -->
+    <ScrollViewer Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12">
+
+            <Grid>
+                <TextBlock Text="Privacy Permissions" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <Button Content="Refresh"
+                        Command="{Binding RefreshCommand}"
+                        HorizontalAlignment="Right" />
+            </Grid>
+
+            <TextBlock
+                Text="OpenClaw needs these permissions to function correctly. Click 'Open Settings' to grant any that are missing."
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                FontSize="12" />
+
+            <!-- ── Camera ──────────────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Camera" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding CameraGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding CameraWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="Camera"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Microphone ─────────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Microphone" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding MicrophoneGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding MicrophoneWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="Microphone"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Speech Recognition ─────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Speech Recognition" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding SpeechRecognitionGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding SpeechRecognitionWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="SpeechRecognition"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Screen Recording ───────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Screen Recording" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding ScreenRecordingGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding ScreenRecordingWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="ScreenRecording"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Location ───────────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Location" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding LocationGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding LocationWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="Location"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Notifications ──────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Notifications" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding NotificationsGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding NotificationsWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="Notifications"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- ── Accessibility ──────────────────────────────────────────── -->
+            <Border Padding="12" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Accessibility" FontWeight="SemiBold" />
+                        <TextBlock Text="● Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding AccessibilityGrantedVisibility}" />
+                        <TextBlock Text="● Not Granted"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{Binding AccessibilityWarningVisibility}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}"
+                            CommandParameter="Accessibility"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

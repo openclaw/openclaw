@@ -1,0 +1,17 @@
+<winex:WindowEx
+    x:Class="OpenClawWindows.Presentation.Windows.TrayContextMenuWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:winex="using:WinUIEx"
+    xmlns:tray="using:OpenClawWindows.Presentation.Tray">
+
+    <!-- Borderless popup window that hosts TrayContextMenu.
+         Equivalent to the NSMenu shown by MenuBarExtra in macOS.
+         Acrylic backdrop set in code-behind. Auto-hides on deactivation. -->
+    <ScrollViewer
+        VerticalScrollBarVisibility="Auto"
+        HorizontalScrollBarVisibility="Disabled"
+        MaxHeight="640">
+        <tray:TrayContextMenu x:Name="MenuContent" />
+    </ScrollViewer>
+</winex:WindowEx>

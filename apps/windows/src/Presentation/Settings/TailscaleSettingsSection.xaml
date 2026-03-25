@@ -1,0 +1,160 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Settings.TailscaleSettingsSection"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Mirrors TailscaleIntegrationSection.swift:
+         status dot, mode picker (off/serve/funnel), access URL, auth fields. -->
+    <Border
+        Padding="12"
+        CornerRadius="8"
+        Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+
+        <StackPanel Spacing="8">
+
+            <!-- Title -->
+            <TextBlock
+                Text="Tailscale (dashboard access)"
+                Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <!-- Status row — dot + text + Refresh -->
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Ellipse
+                    Grid.Column="0"
+                    Width="10" Height="10"
+                    VerticalAlignment="Center">
+                    <Ellipse.Fill>
+                        <SolidColorBrush Color="{Binding StatusIndicatorColor}" />
+                    </Ellipse.Fill>
+                </Ellipse>
+
+                <TextBlock
+                    Grid.Column="1"
+                    Text="{Binding StatusText}"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource BodyTextBlockStyle}" />
+
+                <Button
+                    Grid.Column="2"
+                    Content="Refresh"
+                    Command="{Binding CheckStatusCommand}" />
+            </Grid>
+
+            <!-- Install buttons — visible when Tailscale is not installed -->
+            <StackPanel
+                Visibility="{Binding InstallButtonsVisibility}"
+                Orientation="Horizontal"
+                Spacing="12">
+                <HyperlinkButton
+                    Content="Direct Download"
+                    Command="{Binding OpenDownloadPageCommand}" />
+                <HyperlinkButton
+                    Content="Setup Guide"
+                    Command="{Binding OpenSetupGuideCommand}" />
+            </StackPanel>
+
+            <!-- Mode picker — visible when Tailscale is installed -->
+            <StackPanel Visibility="{Binding ModePickerVisibility}" Spacing="4">
+                <TextBlock
+                    Text="Exposure mode"
+                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ComboBox
+                    SelectedIndex="{Binding TailscaleModeIndex, Mode=TwoWay}"
+                    HorizontalAlignment="Stretch">
+                    <ComboBoxItem Content="Off" />
+                    <ComboBoxItem Content="Tailnet (Serve)" />
+                    <ComboBoxItem Content="Public (Funnel)" />
+                </ComboBox>
+            </StackPanel>
+
+            <!-- Start Tailscale button — installed but not running, mode active -->
+            <Button
+                Content="Start Tailscale"
+                Visibility="{Binding StartAppButtonVisibility}"
+                Command="{Binding OpenTailscaleAppCommand}" />
+
+            <!-- Access URL — shown when mode is active and hostname is known -->
+            <StackPanel
+                Visibility="{Binding AccessUrlVisibility}"
+                Orientation="Horizontal"
+                Spacing="8">
+                <TextBlock
+                    Text="Dashboard:"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <HyperlinkButton
+                    Content="{Binding AccessUrl}"
+                    NavigateUri="{Binding AccessUrl}"
+                    FontFamily="Consolas"
+                    FontSize="11" />
+            </StackPanel>
+
+            <!-- "Start Tailscale to get your tailnet hostname." — mirrors macOS accessURLRow hint -->
+            <TextBlock
+                Text="Start Tailscale to get your tailnet hostname."
+                Visibility="{Binding TailscaleHintVisibility}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <!-- Serve auth — require credentials toggle -->
+            <ToggleSwitch
+                Header="Require credentials"
+                IsOn="{Binding RequireCredentialsForServe, Mode=TwoWay}"
+                Visibility="{Binding ServeAuthVisibility}" />
+
+            <!-- "Serve uses Tailscale identity headers; no password required." — mirrors macOS serveAuthSection hint -->
+            <TextBlock
+                Text="Serve uses Tailscale identity headers; no password required."
+                Visibility="{Binding ServeNoCredHintVisibility}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <!-- "Funnel requires authentication." — mirrors macOS funnelAuthSection description -->
+            <TextBlock
+                Text="Funnel requires authentication."
+                Visibility="{Binding FunnelDescriptionVisibility}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <!-- Password field — funnel always / serve when credentials required -->
+            <StackPanel
+                Visibility="{Binding PasswordFieldVisibility}"
+                Spacing="6">
+                <PasswordBox
+                    Header="Password"
+                    MaxWidth="280"
+                    HorizontalAlignment="Left"
+                    Password="{Binding Password, Mode=TwoWay}" />
+                <TextBlock
+                    Text="Stored in settings.json. Prefer environment variable for production."
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Button
+                    Content="Apply"
+                    Command="{Binding ApplySettingsCommand}" />
+            </StackPanel>
+
+            <!-- Validation message -->
+            <TextBlock
+                Text="{Binding ValidationMessage}"
+                Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Visibility="{Binding ValidationMessage, Converter={StaticResource StringToVisibilityConverter}}" />
+
+            <!-- Status message -->
+            <TextBlock
+                Text="{Binding StatusMessage}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Visibility="{Binding StatusMessage, Converter={StaticResource StringToVisibilityConverter}}" />
+
+        </StackPanel>
+    </Border>
+</UserControl>

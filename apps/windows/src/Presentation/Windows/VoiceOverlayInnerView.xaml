@@ -1,0 +1,94 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Windows.VoiceOverlayInnerView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:voice="using:OpenClawWindows.Presentation.Voice"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors VoiceWakeOverlayView.swift inner content:
+         read-only label ↔ editable field, send button with VAD fill bar, close button.
+         Uses N4-02 (VoiceOverlayReadOnlyLabel) and N4-01 (VoiceOverlayEditableTextView). -->
+    <Grid>
+
+        <Grid ColumnDefinitions="*,Auto">
+
+            <!-- Transcript area: N4-02 label when !IsEditing, N4-01 editable when IsEditing -->
+            <Grid Grid.Column="0" MinHeight="32">
+
+                <!-- N4-02: Read-only formatted label — mirrors VibrantLabelView -->
+                <voice:VoiceOverlayReadOnlyLabel
+                    x:Name="ReadOnlyLabel"
+                    CommittedText="{Binding CommittedText}"
+                    VolatileText="{Binding VolatileText}"
+                    IsFinal="{Binding IsFinal}"
+                    VerticalAlignment="Stretch"
+                    Visibility="{Binding IsReadOnly, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <!-- N4-01: Editable rich-text field — mirrors TranscriptTextView -->
+                <voice:VoiceOverlayEditableTextView
+                    x:Name="EditableText"
+                    CommittedText="{Binding CommittedText}"
+                    VolatileText="{Binding VolatileText}"
+                    EditedText="{Binding TranscriptText, Mode=TwoWay}"
+                    IsFinal="{Binding IsFinal}"
+                    VerticalAlignment="Stretch"
+                    Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            </Grid>
+
+            <!-- Send button: VAD level fill + paper-plane/checkmark icon swap.
+                 Mirrors Button with GeometryReader fill bar (width * level) in Swift. -->
+            <Grid Grid.Column="1" Width="32" Height="28" Margin="8,0,0,0" CornerRadius="8">
+
+                <!-- VAD level fill background — 0.12 opacity base + 0.25 level fill -->
+                <Border CornerRadius="8" Background="{ThemeResource AccentFillColorDefaultBrush}" Opacity="0.12" />
+                <Rectangle
+                    Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                    Opacity="0.25"
+                    HorizontalAlignment="Left"
+                    Width="{Binding MicLevelBarWidth}"
+                    VerticalAlignment="Stretch" />
+
+                <!-- Send button (paper-plane icon, idle state) -->
+                <Button
+                    Command="{Binding SendCommand}"
+                    Width="32" Height="28" Padding="0"
+                    Background="Transparent"
+                    BorderThickness="0">
+                    <FontIcon Glyph="&#xE724;" FontSize="12" Visibility="{Binding IdleVisibility}" />
+                </Button>
+
+                <!-- Checkmark overlay (sending state) -->
+                <FontIcon
+                    Glyph="&#xE10B;"
+                    FontSize="12"
+                    Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    IsHitTestVisible="False"
+                    Visibility="{Binding SendingVisibility}" />
+
+            </Grid>
+        </Grid>
+
+        <!-- Close button — mirrors CloseButtonOverlay.swift: circle xmark, top-left offset(-9,-9).
+             Visible when hovering OR editing. -->
+        <Button
+            x:Name="CloseButton"
+            Visibility="{Binding CloseButtonVisibility}"
+            Command="{Binding DismissCommand}"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Margin="-9,-9,0,0"
+            Width="22" Height="22"
+            Padding="0"
+            CornerRadius="11"
+            Background="{ThemeResource SystemFillColorCriticalBrush}">
+            <FontIcon Glyph="&#xE711;" FontSize="10" Foreground="White" />
+        </Button>
+
+    </Grid>
+
+</UserControl>

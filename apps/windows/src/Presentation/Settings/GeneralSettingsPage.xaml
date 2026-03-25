@@ -1,0 +1,221 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.GeneralSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:settings="using:OpenClawWindows.Presentation.Settings"
+    mc:Ignorable="d">
+
+    <!-- Mirrors GeneralSettings.swift: active toggle, connection mode, voice wake, feature toggles, UI prefs. -->
+    <ScrollViewer Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="16">
+
+            <!-- Active toggle -->
+            <ToggleSwitch
+                Header="OpenClaw Active"
+                IsOn="{Binding IsActive, Mode=TwoWay}"
+                OnContent="Active"
+                OffContent="Paused" />
+
+            <TextBlock
+                Text="Pause to stop the gateway; no messages will be processed."
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Connection mode -->
+            <TextBlock Text="OpenClaw runs" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <ComboBox
+                Header="Mode"
+                SelectedIndex="{Binding ConnectionModeIndex, Mode=TwoWay}"
+                MinWidth="260">
+                <ComboBoxItem Content="Not configured" />
+                <ComboBoxItem Content="Local (this computer)" />
+                <ComboBoxItem Content="Remote (another host)" />
+            </ComboBox>
+
+            <!-- Remote section — visible only when ConnectionMode == Remote -->
+            <StackPanel
+                Spacing="12"
+                Visibility="{Binding RemoteSectionVisibility}">
+
+                <ComboBox
+                    Header="Transport"
+                    SelectedIndex="{Binding RemoteTransportIndex, Mode=TwoWay}"
+                    MinWidth="200">
+                    <ComboBoxItem Content="SSH tunnel" />
+                    <ComboBoxItem Content="Direct (ws/wss)" />
+                </ComboBox>
+
+                <!-- SSH fields -->
+                <StackPanel Spacing="8" Visibility="{Binding SshAdvancedVisibility}">
+                    <TextBox
+                        Header="SSH target"
+                        Text="{Binding RemoteTarget, Mode=TwoWay}"
+                        PlaceholderText="user@host[:22]" />
+
+                    <TextBlock
+                        Text="Advanced SSH options"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                    <TextBox
+                        Header="Identity file"
+                        Text="{Binding RemoteIdentity, Mode=TwoWay}"
+                        PlaceholderText="/home/you/.ssh/id_ed25519" />
+
+                    <TextBox
+                        Header="Project root"
+                        Text="{Binding RemoteProjectRoot, Mode=TwoWay}"
+                        PlaceholderText="/home/you/Projects/openclaw" />
+
+                    <TextBox
+                        Header="CLI path"
+                        Text="{Binding RemoteCliPath, Mode=TwoWay}"
+                        PlaceholderText="/Applications/OpenClaw/.../openclaw" />
+
+                    <TextBlock
+                        Text="Tip: enable Tailscale for stable remote access."
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <!-- Direct URL field -->
+                <StackPanel Spacing="8" Visibility="{Binding DirectUrlVisibility}">
+                    <TextBox
+                        Header="Gateway URL"
+                        Text="{Binding RemoteUrl, Mode=TwoWay}"
+                        PlaceholderText="wss://gateway.example.ts.net" />
+
+                    <TextBlock
+                        Text="Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1."
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+            </StackPanel>
+
+            <NavigationViewItemSeparator />
+
+            <!-- Voice Wake -->
+            <ToggleSwitch
+                Header="Voice Wake"
+                IsOn="{Binding VoiceWakeEnabled, Mode=TwoWay}" />
+
+            <Slider
+                Header="Voice Wake Sensitivity"
+                Minimum="0"
+                Maximum="1"
+                StepFrequency="0.01"
+                Value="{Binding VoiceWakeSensitivity, Mode=TwoWay}"
+                IsEnabled="{Binding VoiceWakeEnabled}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- System toggles — mirrors GeneralSettings.swift body toggles -->
+            <ToggleSwitch
+                Header="Launch at Login"
+                IsOn="{Binding LaunchAtLogin, Mode=TwoWay}" />
+
+            <ToggleSwitch
+                Header="Show Taskbar Icon"
+                IsOn="{Binding ShowDockIcon, Mode=TwoWay}" />
+
+            <TextBlock
+                Text="Keep OpenClaw visible in the taskbar instead of system-tray-only mode."
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <ToggleSwitch
+                Header="Play Tray Icon Animations"
+                IsOn="{Binding IconAnimationsEnabled, Mode=TwoWay}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Feature toggles -->
+            <ToggleSwitch
+                Header="Allow Canvas"
+                IsOn="{Binding CanvasEnabled, Mode=TwoWay}" />
+
+            <TextBlock
+                Text="Allow the agent to show and control the Canvas panel."
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <ToggleSwitch
+                Header="Allow Talk Mode"
+                IsOn="{Binding TalkEnabled, Mode=TwoWay}" />
+
+            <ToggleSwitch
+                Header="Enable Heartbeats"
+                IsOn="{Binding HeartbeatsEnabled, Mode=TwoWay}" />
+
+            <ToggleSwitch
+                Header="Enable Peekaboo Bridge"
+                IsOn="{Binding PeekabooBridgeEnabled, Mode=TwoWay}" />
+
+            <TextBlock
+                Text="Allow signed tools (e.g. peekaboo) to drive UI automation via PeekabooBridge."
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <ToggleSwitch
+                Header="Enable Debug Tools"
+                IsOn="{Binding DebugPaneEnabled, Mode=TwoWay}" />
+
+            <TextBlock
+                Text="Show the Debug tab with development utilities."
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Exec approval mode -->
+            <TextBlock Text="Tool Execution Approval" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <ComboBox
+                Header="Default policy"
+                SelectedIndex="{Binding ExecApprovalModeIndex, Mode=TwoWay}"
+                MinWidth="180">
+                <ComboBoxItem Content="Deny all" />
+                <ComboBoxItem Content="Ask each time" />
+                <ComboBoxItem Content="Allow all" />
+            </ComboBox>
+
+            <NavigationViewItemSeparator />
+
+            <!-- Gateway endpoint (advanced) -->
+            <TextBlock Text="Gateway Endpoint" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <TextBox
+                Header="URL (leave empty for auto)"
+                Text="{Binding GatewayEndpointUri, Mode=TwoWay}"
+                PlaceholderText="ws://localhost:18789" />
+
+            <!-- Health status read-only -->
+            <TextBlock
+                Text="{Binding HealthStatus}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Visibility="{Binding HealthStatus, Converter={StaticResource StringToVisibilityConverter}}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Tailscale integration — mirrors TailscaleIntegrationSection.swift -->
+            <settings:TailscaleSettingsSection x:Name="TailscaleSection" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Save -->
+            <Button
+                Content="Save Settings"
+                Command="{Binding SaveCommand}"
+                Style="{StaticResource AccentButtonStyle}"
+                HorizontalAlignment="Right" />
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,116 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets\openclaw.ico</ApplicationIcon>
+    <AssemblyName>OpenClawWindows</AssemblyName>
+    <RootNamespace>OpenClawWindows</RootNamespace>
+    <Platforms>x64;ARM64</Platforms>
+
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <DefaultLanguage>en-US</DefaultLanguage>
+
+    <!-- Suppress Bootstrap module initializer for test builds — DDLM may not be installed. -->
+    <WindowsAppSdkBootstrapInitialize Condition="'$(TestBuild)' == 'true'">false</WindowsAppSdkBootstrapInitialize>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- WinUIEx.Icon is [Obsolete] (no message) → CS0612 in XAML-generated XamlTypeInfo.g.cs.
+         The XAML compiler only suppresses CS0618 (obsolete with message), not CS0612. -->
+    <NoWarn>$(NoWarn);CS0612</NoWarn>
+  </PropertyGroup>
+
+  <!-- Unpackaged (default): traditional EXE for dev/test -->
+  <PropertyGroup Condition="'$(PackageMsix)' != 'true'">
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!-- MSIX packaged: enables install/update, camera/mic consent prompts, package identity -->
+  <PropertyGroup Condition="'$(PackageMsix)' == 'true'">
+    <WindowsPackageType>MSIX</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <AppxBundle>Never</AppxBundle>
+    <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
+  </PropertyGroup>
+
+  <ItemGroup Label="Core">
+    <PackageReference Include="Ardalis.GuardClauses" />
+    <PackageReference Include="CommunityToolkit.WinUI.UI.Controls.Markdown" />
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="ErrorOr" />
+    <PackageReference Include="MediatR" />
+  </ItemGroup>
+
+  <ItemGroup Label="Presentation — WinUI 3">
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
+<PackageReference Include="CommunityToolkit.WinUI" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="WinUIEx" />
+  </ItemGroup>
+
+  <ItemGroup Label="Infrastructure">
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+<PackageReference Include="NAudio" />
+    <PackageReference Include="NAudio.Wasapi" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="BouncyCastle.Cryptography" />
+    <PackageReference Include="Jint" />
+    <PackageReference Include="Zeroconf" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test visibility">
+    <!-- Expose internal types to the unit-test project -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>OpenClawWindows.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Allow NSubstitute (Castle DynamicProxy) to proxy internal interfaces in unit tests -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>DynamicProxyGenAssembly2</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup Label="Assets">
+    <Content Include="Assets\Icons\*.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\*.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Label="Embedded resources">
+    <EmbeddedResource Include="src\infrastructure\devices\DeviceModels\ios-device-identifiers.json" LogicalName="DeviceModels.ios-device-identifiers.json" />
+    <EmbeddedResource Include="src\infrastructure\devices\DeviceModels\mac-device-identifiers.json" LogicalName="DeviceModels.mac-device-identifiers.json" />
+  </ItemGroup>
+
+  <ItemGroup Label="Exclusions">
+    <Compile Remove="tests\**" />
+    <Compile Remove="cli\**" />
+    <Compile Remove="WinUITest2\**" />
+    <EmbeddedResource Remove="tests\**" />
+    <EmbeddedResource Remove="cli\**" />
+    <EmbeddedResource Remove="WinUITest2\**" />
+    <None Remove="tests\**" />
+    <None Remove="cli\**" />
+    <None Remove="WinUITest2\**" />
+    <Page Remove="tests\**" />
+    <Page Remove="cli\**" />
+    <Page Remove="WinUITest2\**" />
+
+    <!-- App.xaml lives at project root (not src/) because the WinUI XAML
+         type system resolves ms-appx:///App.xaml for theme resources. Placing
+         it under src/ generates ms-appx:///src/App.xaml which breaks
+         XamlControlsResources resolution in unpackaged mode. -->
+    <ApplicationDefinition Remove="src\App.xaml" />
+    <Compile Remove="src\App.xaml.cs" />
+    <Page Remove="src\App.xaml" />
+  </ItemGroup>
+
+</Project>

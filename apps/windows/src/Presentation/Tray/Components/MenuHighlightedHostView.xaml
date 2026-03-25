@@ -1,0 +1,20 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.MenuHighlightedHostView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <!-- Mirrors NSColor.selectedContentBackgroundColor — system accent at full opacity -->
+        <SolidColorBrush x:Key="SelectionBackground" Color="{ThemeResource SystemAccentColor}" />
+    </UserControl.Resources>
+
+    <!-- Mirrors HighlightedMenuItemHostView: NSView — hosts content with a hover-highlight background.
+         Adapts: draw(_:) selectedContentBackgroundColor fill → HighlightPanel.Background. -->
+    <Grid x:Name="HighlightPanel">
+        <ContentPresenter x:Name="HostedPresenter" />
+    </Grid>
+
+</UserControl>

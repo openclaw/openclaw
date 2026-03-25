@@ -1,0 +1,32 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.VoiceOverlayWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:OpenClawWindows.Presentation.Windows"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors VoiceWakeOverlayView.swift: borderless acrylic bubble at top-right.
+         Inner content (text, send, close) is owned by VoiceOverlayInnerView (N4-03). -->
+    <Grid
+        x:Name="RootGrid"
+        PointerEntered="RootGrid_PointerEntered"
+        PointerExited="RootGrid_PointerExited"
+        ManipulationMode="TranslateX,TranslateY"
+        ManipulationDelta="RootGrid_ManipulationDelta">
+
+        <!-- Acrylic bubble — mirrors OverlayBackground (VisualEffectView hudWindow) -->
+        <Border
+            Padding="10,8"
+            CornerRadius="12"
+            Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource SubtleFillColorTransparentBrush}"
+            BorderThickness="1">
+
+            <!-- N4-03: inner view owns transcript toggle, send button, close button -->
+            <local:VoiceOverlayInnerView x:Name="InnerView" />
+
+        </Border>
+    </Grid>
+</Window>

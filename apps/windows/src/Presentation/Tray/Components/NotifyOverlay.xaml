@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Toast notification — implementation replaced by ToastNotificationManager WinRT.
+     This file is intentionally empty; NotifyOverlay.xaml.cs is no longer XAML-backed. -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" />

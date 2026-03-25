@@ -1,0 +1,19 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Voice.VoiceOverlayReadOnlyLabel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors VibrantLabelView.swift: read-only word-wrapping label that fires OnTap on click.
+         Adapts NSTextField(labelWithAttributedString:) inside ClickCatcher → RichTextBlock in a Tappable border. -->
+    <Border x:Name="TapArea" Tapped="TapArea_Tapped">
+        <RichTextBlock
+            x:Name="Label"
+            IsTextSelectionEnabled="False"
+            TextWrapping="Wrap"
+            FontSize="13" />
+    </Border>
+
+</UserControl>

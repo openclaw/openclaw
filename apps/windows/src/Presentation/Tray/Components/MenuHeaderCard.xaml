@@ -1,0 +1,52 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.MenuHeaderCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors MenuHeaderCard.swift:
+         VStack(alignment:.leading, spacing:6) { HStack(title+subtitle), statusText?, content }
+         padding: top 8, bottom paddingBottom (default 6), leading 20, trailing 10
+         frame: minWidth 300, maxWidth .infinity -->
+    <StackPanel x:Name="RootPanel" MinWidth="300" Spacing="6">
+
+        <!-- HStack(alignment:.firstTextBaseline): title left, subtitle right, minSpacing 10 -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock
+                x:Name="TitleBlock"
+                Grid.Column="0"
+                FontSize="11"
+                FontWeight="SemiBold"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                VerticalAlignment="Bottom" />
+            <!-- Margin left=10 mirrors Spacer(minLength:10) -->
+            <TextBlock
+                x:Name="SubtitleBlock"
+                Grid.Column="1"
+                FontSize="11"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                VerticalAlignment="Bottom"
+                Margin="10,0,0,0" />
+        </Grid>
+
+        <!-- statusText: hidden when null/empty; lineLimit 1 + tail truncation -->
+        <TextBlock
+            x:Name="StatusBlock"
+            FontSize="11"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            TextTrimming="CharacterEllipsis"
+            MaxLines="1"
+            Visibility="Collapsed" />
+
+        <!-- @ViewBuilder content slot -->
+        <ContentPresenter x:Name="HostedContentPresenter" />
+
+    </StackPanel>
+
+</UserControl>

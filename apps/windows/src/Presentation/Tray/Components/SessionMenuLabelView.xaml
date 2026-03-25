@@ -1,0 +1,60 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.SessionMenuLabelView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:comp="using:OpenClawWindows.Presentation.Components"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors SessionMenuLabelView.swift:
+         VStack(spacing:8) { ContextUsageBar, HStack(label + spacer + summary + chevron) }
+         padding: vertical 10, leading 22, trailing 14 -->
+    <StackPanel x:Name="RootPanel" Spacing="8">
+
+        <!-- ContextUsageBar — height:6 set in the component itself -->
+        <comp:ContextUsageBar x:Name="UsageBar" HorizontalAlignment="Stretch" />
+
+        <!-- HStack: label (truncates middle) + tokens·age + chevron -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <!-- label: fills remaining space, truncates on overflow -->
+                <ColumnDefinition Width="*" />
+                <!-- summary text: fixed size (fixedSize horizontal:true) -->
+                <ColumnDefinition Width="Auto" />
+                <!-- chevron -->
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- row.label — semibold if key == "main", else regular; mirrors .truncationMode(.middle) -->
+            <TextBlock
+                x:Name="LabelBlock"
+                Grid.Column="0"
+                FontSize="11"
+                MaxLines="1"
+                TextTrimming="CharacterEllipsis"
+                Margin="0,0,4,0"
+                VerticalAlignment="Bottom" />
+
+            <!-- "\(row.tokens.contextSummaryShort) · \(row.ageText)" — monospaced digits -->
+            <TextBlock
+                x:Name="SummaryBlock"
+                Grid.Column="1"
+                FontSize="11"
+                FontFamily="Consolas"
+                MaxLines="1"
+                VerticalAlignment="Bottom" />
+
+            <!-- chevron.right — padding(.leading, 2) -->
+            <FontIcon
+                x:Name="ChevronIcon"
+                Grid.Column="2"
+                Glyph="&#xE76C;"
+                FontSize="9"
+                Margin="4,0,0,0"
+                VerticalAlignment="Bottom" />
+        </Grid>
+
+    </StackPanel>
+
+</UserControl>

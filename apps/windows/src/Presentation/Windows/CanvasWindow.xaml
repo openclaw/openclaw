@@ -1,0 +1,19 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.CanvasWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:wv2="using:Microsoft.Web.WebView2.Core"
+    mc:Ignorable="d">
+
+    <!-- Mirrors CanvasWindowController.swift: full-window WebView2 (equivalent to WKWebView).
+         canvas:// virtual host mapped to local files via SetVirtualHostNameToFolderMapping. -->
+    <Grid>
+        <WebView2
+            x:Name="WebView"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch"
+            NavigationCompleted="WebView_NavigationCompleted" />
+    </Grid>
+</Window>

@@ -1,0 +1,67 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Settings.VoiceWakeTestCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors VoiceWakeTestCard.swift: header + start/stop button + status area. -->
+    <StackPanel Spacing="10" Padding="0,2">
+
+        <!-- ── Header row ──────────────────────────────────────────────────── -->
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0"
+                       Text="Test Voice Wake"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <Button x:Name="ToggleBtn"
+                    Grid.Column="1"
+                    Click="OnToggleClicked"
+                    Style="{StaticResource AccentButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon x:Name="ToggleIcon"
+                              FontFamily="Segoe MDL2 Assets"
+                              FontSize="14"
+                              Glyph="&#xE768;" />
+                    <TextBlock x:Name="ToggleLabel" Text="Start test" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- ── Status area ─────────────────────────────────────────────────── -->
+        <Border Padding="10" CornerRadius="8" MinHeight="54"
+                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+            <Grid ColumnDefinitions="Auto,*">
+
+                <!-- Status icon / spinner -->
+                <Grid Grid.Column="0" Width="24" Height="24" Margin="0,0,10,0"
+                      VerticalAlignment="Top">
+                    <ProgressRing x:Name="StatusSpinner"
+                                  Width="20" Height="20"
+                                  IsActive="False"
+                                  Visibility="Collapsed" />
+                    <FontIcon x:Name="StatusIcon"
+                              FontFamily="Segoe MDL2 Assets"
+                              FontSize="16"
+                              Glyph="&#xE767;" />
+                </Grid>
+
+                <!-- Status text -->
+                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                    <TextBlock x:Name="StatusLabel"
+                               FontSize="13"
+                               TextWrapping="Wrap"
+                               MaxLines="3" />
+                    <TextBlock x:Name="HeardText"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Visibility="Collapsed"
+                               TextWrapping="Wrap"
+                               MaxLines="2" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+    </StackPanel>
+</UserControl>

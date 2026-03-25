@@ -1,0 +1,102 @@
+root = true
+
+[*.cs]
+# ─── StyleCop — suppress rules incompatible with this project's coding style ───
+# Project uses: underscore-prefix fields, top-level using directives, file-scoped
+# namespaces, no file headers, modern C# idioms. StyleCop SA rules that conflict
+# are set to none so they don't produce errors under TreatWarningsAsErrors=true.
+
+dotnet_diagnostic.SA0001.severity = none  # XML documentation disabled
+dotnet_diagnostic.SA1600.severity = none  # Elements should be documented — DOC-004: constructors/privados sin XML doc
+dotnet_diagnostic.SA1611.severity = none  # Missing param documentation — DOC-007: <param> prohibido
+dotnet_diagnostic.SA1642.severity = none  # Constructor summary text — DOC-004: constructores sin XML doc
+dotnet_diagnostic.SA1009.severity = none  # Closing parenthesis spacing
+dotnet_diagnostic.SA1025.severity = none  # Multiple whitespace
+dotnet_diagnostic.SA1101.severity = none  # Prefix local calls with 'this'
+dotnet_diagnostic.SA1107.severity = none  # Code should not contain multiple statements on one line
+dotnet_diagnostic.SA1116.severity = none  # The parameters should begin on the line after the declaration
+dotnet_diagnostic.SA1117.severity = none  # Parameters must all be on the same line or each on own line
+dotnet_diagnostic.SA1118.severity = none  # Parameter spans multiple lines
+dotnet_diagnostic.SA1119.severity = none  # Statement must not use unnecessary parenthesis
+dotnet_diagnostic.SA1122.severity = none  # Use string.Empty
+dotnet_diagnostic.SA1127.severity = none  # Generic type constraint must be on its own line
+dotnet_diagnostic.SA1128.severity = none  # Put constructor initializers on their own line
+dotnet_diagnostic.SA1132.severity = none  # Do not combine fields
+dotnet_diagnostic.SA1133.severity = none  # Do not combine attributes
+dotnet_diagnostic.SA1134.severity = none  # Attributes must not share line
+dotnet_diagnostic.SA1136.severity = none  # Enum values should be on separate lines
+dotnet_diagnostic.SA1137.severity = none  # Elements should have the same indentation
+dotnet_diagnostic.SA1142.severity = none  # Refer to tuple fields by name
+dotnet_diagnostic.SA1200.severity = none  # Using directives must be placed within a namespace
+dotnet_diagnostic.SA1201.severity = none  # Elements must appear in the correct order
+dotnet_diagnostic.SA1202.severity = none  # Elements must be ordered by access
+dotnet_diagnostic.SA1203.severity = none  # Constants must appear before fields
+dotnet_diagnostic.SA1204.severity = none  # Static elements must appear before instance elements
+dotnet_diagnostic.SA1208.severity = none  # System using directives must be placed before other using directives
+dotnet_diagnostic.SA1209.severity = none  # Using alias directives must be placed after using namespace directives
+dotnet_diagnostic.SA1210.severity = none  # Using directives must be ordered alphabetically by namespace
+dotnet_diagnostic.SA1214.severity = none  # Readonly fields should appear before non-readonly fields
+dotnet_diagnostic.SA1300.severity = none  # Element must begin with upper-case letter
+dotnet_diagnostic.SA1308.severity = none  # Variable names must not be prefixed
+dotnet_diagnostic.SA1309.severity = none  # Field names must not begin with an underscore
+dotnet_diagnostic.SA1310.severity = none  # Field names must not contain an underscore
+dotnet_diagnostic.SA1311.severity = none  # Static readonly fields must begin with upper-case letter
+dotnet_diagnostic.SA1312.severity = none  # Variable names must begin with lower-case letter
+dotnet_diagnostic.SA1313.severity = none  # Parameter names must begin with lower-case letter
+dotnet_diagnostic.SA1316.severity = none  # Tuple element names should use correct casing
+dotnet_diagnostic.SA1402.severity = none  # File may only contain a single type
+dotnet_diagnostic.SA1407.severity = none  # Arithmetic expressions must declare precedence
+dotnet_diagnostic.SA1413.severity = none  # Use trailing comma in multi-line initializers
+dotnet_diagnostic.SA1500.severity = none  # Braces for multi-line statements must not share line
+dotnet_diagnostic.SA1501.severity = none  # Statement must not be on a single line
+dotnet_diagnostic.SA1502.severity = none  # Element must not be on a single line
+dotnet_diagnostic.SA1503.severity = none  # Braces must not be omitted
+dotnet_diagnostic.SA1512.severity = none  # Single-line comments must not be followed by blank line
+dotnet_diagnostic.SA1513.severity = none  # Closing brace must be followed by blank line
+dotnet_diagnostic.SA1515.severity = none  # Single-line comment must be preceded by blank line
+dotnet_diagnostic.SA1516.severity = none  # Elements must be separated by blank line
+dotnet_diagnostic.SA1519.severity = none  # Braces must not be omitted from multi-line child statement
+dotnet_diagnostic.SA1633.severity = none  # File must have header
+dotnet_diagnostic.SA1649.severity = none  # File name must match first type name
+
+# ─── SonarAnalyzer — suppress rules that are false positives or style choices ──
+dotnet_diagnostic.S101.severity = none    # Rename to match pascal case (HUD abbreviation is intentional)
+dotnet_diagnostic.S108.severity = none    # Empty block
+dotnet_diagnostic.S125.severity = none    # Commented-out code
+dotnet_diagnostic.S127.severity = none    # Loop counter modified in body
+dotnet_diagnostic.S1066.severity = none   # Merge nested if
+dotnet_diagnostic.S1075.severity = none   # Hardcoded URI
+dotnet_diagnostic.S1125.severity = none   # Boolean literal comparison
+dotnet_diagnostic.S1172.severity = none   # Unused method parameter
+dotnet_diagnostic.S1244.severity = none   # Floating point equality
+dotnet_diagnostic.S1854.severity = none   # Useless assignment
+dotnet_diagnostic.S1905.severity = none   # Redundant cast
+dotnet_diagnostic.S2094.severity = none   # Empty class/record
+dotnet_diagnostic.S2139.severity = none   # Exception logged then rethrown
+dotnet_diagnostic.S2325.severity = none   # Method or property can be static
+dotnet_diagnostic.S2365.severity = none   # Properties should not make collection copies
+dotnet_diagnostic.S2486.severity = none   # Don't swallow exceptions
+dotnet_diagnostic.S2930.severity = none   # Dispose IDisposable (CancellationTokenSource managed by host)
+dotnet_diagnostic.S3060.severity = none   # 'is' operator
+dotnet_diagnostic.S3236.severity = none   # Redundant argument passing default value
+dotnet_diagnostic.S3267.severity = none   # Simplify LINQ
+dotnet_diagnostic.S3358.severity = none   # Nested ternary
+dotnet_diagnostic.S3459.severity = none   # Unassigned field
+dotnet_diagnostic.S3604.severity = none   # Member initializer redundant
+dotnet_diagnostic.S3903.severity = none   # Type not in namespace (top-level Program class)
+dotnet_diagnostic.S3923.severity = none   # All branches in conditional are same
+dotnet_diagnostic.S4487.severity = none   # Unread private field
+dotnet_diagnostic.S6667.severity = none   # Logging template string
+dotnet_diagnostic.S6966.severity = none   # Prefer await using
+dotnet_diagnostic.S927.severity  = none   # Parameter names should match base declaration
+
+# ─── CommunityToolkit.Mvvm — suppress WinRT AOT warning (field-based [ObservableProperty]) ──
+# MVVMTK0045: field-based [ObservableProperty] is not AOT-compatible in WinRT scenarios.
+# Tracked for future migration to partial-property syntax per MVVM Toolkit v8.4 guidance.
+dotnet_diagnostic.MVVMTK0034.severity = none
+dotnet_diagnostic.MVVMTK0045.severity = none
+
+# ─── NetAnalyzers — suppress rules that conflict with project patterns ──────────
+dotnet_diagnostic.S1144.severity = none   # Remove unused private member (tunables/constants kept as docs)
+dotnet_diagnostic.SA1401.severity = none  # Field should be private — test spy classes use public fields intentionally
+dotnet_diagnostic.S2699.severity = none   # Add assertion — FsCheck [Property] methods assert implicitly via property checking

@@ -1,0 +1,25 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Settings.Components.SettingsSidebarScroll"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    MinWidth="220"
+    MaxWidth="280"
+    HorizontalAlignment="Left"
+    VerticalAlignment="Stretch">
+
+    <!-- Mirrors SettingsSidebarScroll.swift: ScrollView wrapping content with 10pt padding,
+         styled with settingsSidebarCardLayout() (cornerRadius=12, windowBackground, width=220-280). -->
+    <Border
+        CornerRadius="12"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <ContentPresenter
+                Content="{x:Bind ScrollContent, Mode=OneWay}"
+                Padding="10" />
+        </ScrollViewer>
+    </Border>
+
+</UserControl>

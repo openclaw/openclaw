@@ -1,0 +1,149 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.OnboardingWizard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Padding="28,24,28,8" Spacing="10">
+            <Image
+                Source="ms-appx:///Assets/Icons/AppIcon.png"
+                Width="88" Height="88"
+                HorizontalAlignment="Center" />
+            <TextBlock
+                Text="{Binding StepTitle}"
+                FontSize="20" FontWeight="SemiBold"
+                HorizontalAlignment="Center"
+                TextWrapping="Wrap" TextAlignment="Center" />
+        </StackPanel>
+
+        <!-- Main content -->
+        <Grid Grid.Row="1">
+
+            <!-- Loading -->
+            <StackPanel
+                HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12"
+                Visibility="{Binding ShowLoading, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ProgressRing IsActive="True" Width="48" Height="48" HorizontalAlignment="Center" />
+                <TextBlock Text="Starting wizard…" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Step content -->
+            <ScrollViewer
+                Padding="28,4,28,0"
+                VerticalScrollBarVisibility="Auto"
+                Visibility="{Binding ShowStepContent, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel Spacing="12">
+
+                    <TextBlock
+                        Text="{Binding StepMessage}"
+                        TextWrapping="Wrap"
+                        Visibility="{Binding StepMessage, Converter={StaticResource StringToVisibilityConverter}}" />
+
+                    <TextBox
+                        PlaceholderText="{Binding StepPlaceholder}"
+                        Text="{Binding TextInput, Mode=TwoWay}"
+                        Visibility="{Binding ShowTextInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <PasswordBox
+                        x:Name="StepPasswordBox"
+                        PlaceholderText="{Binding StepPlaceholder}"
+                        PasswordChanged="StepPasswordBox_PasswordChanged"
+                        Visibility="{Binding ShowPasswordInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <CheckBox
+                        IsChecked="{Binding ConfirmInput, Mode=TwoWay}"
+                        Content="{Binding StepPlaceholder}"
+                        Visibility="{Binding ShowConfirmInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <ItemsControl
+                        ItemsSource="{Binding OptionItems}"
+                        Visibility="{Binding ShowSelectInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Tag="{Binding Index}"
+                                    Click="SelectOption_Click"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Left"
+                                    Margin="0,2,0,2">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" />
+                                        <TextBlock
+                                            Text="{Binding Hint}" FontSize="12"
+                                            Visibility="{Binding Hint, Converter={StaticResource StringToVisibilityConverter}}" />
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <ItemsControl
+                        ItemsSource="{Binding OptionItems}"
+                        Visibility="{Binding ShowMultiselectInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2,0,2">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" />
+                                        <TextBlock
+                                            Text="{Binding Hint}" FontSize="12"
+                                            Visibility="{Binding Hint, Converter={StaticResource StringToVisibilityConverter}}" />
+                                    </StackPanel>
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <ProgressRing
+                        IsActive="True" Width="32" Height="32" HorizontalAlignment="Center"
+                        Visibility="{Binding ShowProgressInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <TextBlock
+                        Text="{Binding ErrorMessage}"
+                        TextWrapping="Wrap"
+                        Foreground="Red"
+                        Visibility="{Binding ShowError, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Startup error -->
+            <StackPanel
+                HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="400"
+                Visibility="{Binding ShowError, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock
+                    Text="{Binding ErrorMessage}"
+                    TextWrapping="Wrap" TextAlignment="Center"
+                    Foreground="Red" />
+                <Button
+                    Content="Retry"
+                    Command="{Binding RetryCommand}"
+                    HorizontalAlignment="Center" />
+            </StackPanel>
+
+        </Grid>
+
+        <!-- Footer -->
+        <Grid Grid.Row="2" Padding="28,8,28,20">
+            <Button
+                x:Name="FinishButton"
+                Content="Finish"
+                Click="FinishButton_Click"
+                HorizontalAlignment="Right"
+                Visibility="{Binding IsComplete, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <Button
+                Content="{Binding SubmitButtonTitle}"
+                Command="{Binding SubmitStepCommand}"
+                IsEnabled="{Binding CanSubmit}"
+                HorizontalAlignment="Right"
+                Visibility="{Binding ShowStepContent, Converter={StaticResource BoolToVisibilityConverter}}" />
+        </Grid>
+    </Grid>
+</Window>

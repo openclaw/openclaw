@@ -1,0 +1,13 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.MenuUsageHeaderView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:OpenClawWindows.Presentation.Tray.Components"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors MenuUsageHeaderView.swift: wraps MenuHeaderCard(title:"Usage", subtitle:...) -->
+    <local:MenuHeaderCard x:Name="Card" Title="Usage" />
+
+</UserControl>

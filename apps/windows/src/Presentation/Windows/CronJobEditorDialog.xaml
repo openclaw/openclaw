@@ -1,0 +1,388 @@
+<ContentDialog
+    x:Class="OpenClawWindows.Presentation.Windows.CronJobEditorDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    PrimaryButtonText="Save"
+    CloseButtonText="Cancel">
+
+    <!-- Mirrors CronJobEditor.swift: form for creating / editing a cron job.
+         Sections: Basics · Schedule · Payload · Delivery -->
+    <ScrollViewer
+        Width="660"
+        MaxHeight="640"
+        VerticalScrollBarVisibility="Auto">
+
+        <StackPanel Spacing="16" Padding="0,4,0,4">
+
+            <!-- ── Intro ─────────────────────────────────────────────────────── -->
+            <TextBlock
+                Text="{Binding IntroText}"
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                FontSize="12" />
+
+            <!-- ── Basics ────────────────────────────────────────────────────── -->
+            <TextBlock Text="Basics" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <Grid ColumnSpacing="12" RowSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Name -->
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="Name"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Required (e.g. Daily summary)" />
+
+                <!-- Description -->
+                <TextBlock Grid.Row="1" Grid.Column="0"
+                           Text="Description"
+                           VerticalAlignment="Top"
+                           Margin="0,6,0,0"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="1" Grid.Column="1"
+                         Text="{Binding Description, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Optional notes"
+                         AcceptsReturn="True"
+                         MaxHeight="80" />
+
+                <!-- Agent ID -->
+                <TextBlock Grid.Row="2" Grid.Column="0"
+                           Text="Agent ID"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="2" Grid.Column="1"
+                         Text="{Binding AgentId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Optional (default agent)" />
+
+                <!-- Enabled -->
+                <TextBlock Grid.Row="3" Grid.Column="0"
+                           Text="Enabled"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ToggleSwitch Grid.Row="3" Grid.Column="1"
+                              IsOn="{Binding Enabled, Mode=TwoWay}"
+                              OnContent="" OffContent=""
+                              Margin="0,-4,0,0" />
+
+                <!-- Session target -->
+                <TextBlock Grid.Row="4" Grid.Column="0"
+                           Text="Session target"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox Grid.Row="4" Grid.Column="1"
+                          SelectedIndex="{Binding SessionTargetIndex, Mode=TwoWay}"
+                          MinWidth="200">
+                    <ComboBoxItem Content="main" />
+                    <ComboBoxItem Content="isolated" />
+                </ComboBox>
+
+                <!-- Wake mode -->
+                <TextBlock Grid.Row="5" Grid.Column="0"
+                           Text="Wake mode"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox Grid.Row="5" Grid.Column="1"
+                          SelectedIndex="{Binding WakeModeIndex, Mode=TwoWay}"
+                          MinWidth="200">
+                    <ComboBoxItem Content="now" />
+                    <ComboBoxItem Content="next-heartbeat" />
+                </ComboBox>
+
+                <!-- Session target note -->
+                <TextBlock Grid.Row="6" Grid.Column="1"
+                           Text="{Binding SessionTargetNote}"
+                           TextWrapping="Wrap"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Grid>
+
+            <NavigationViewItemSeparator />
+
+            <!-- ── Schedule ──────────────────────────────────────────────────── -->
+            <TextBlock Text="Schedule" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <Grid ColumnSpacing="12" RowSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <!-- at section -->
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <!-- every section -->
+                    <RowDefinition Height="Auto" />
+                    <!-- cron section -->
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Kind -->
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="Kind"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox Grid.Row="0" Grid.Column="1"
+                          SelectedIndex="{Binding ScheduleKindIndex, Mode=TwoWay}"
+                          MinWidth="200">
+                    <ComboBoxItem Content="at" />
+                    <ComboBoxItem Content="every" />
+                    <ComboBoxItem Content="cron" />
+                </ComboBox>
+
+                <!-- Schedule kind note -->
+                <TextBlock Grid.Row="1" Grid.Column="1"
+                           Text="{Binding ScheduleKindNote}"
+                           TextWrapping="Wrap"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <!-- "at" fields -->
+                <TextBlock Grid.Row="2" Grid.Column="0"
+                           Text="At"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding AtSectionVisibility}" />
+                <DatePicker Grid.Row="2" Grid.Column="1"
+                            Date="{Binding AtDateOnly, Mode=TwoWay}"
+                            Visibility="{Binding AtSectionVisibility}" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0"
+                           Text="Auto-delete"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding AtSectionVisibility}" />
+                <ToggleSwitch Grid.Row="3" Grid.Column="1"
+                              IsOn="{Binding DeleteAfterRun, Mode=TwoWay}"
+                              Header="Delete after successful run"
+                              Visibility="{Binding AtSectionVisibility}"
+                              Margin="0,-4,0,0" />
+
+                <!-- "every" fields -->
+                <TextBlock Grid.Row="4" Grid.Column="0"
+                           Text="Every"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding EverySectionVisibility}" />
+                <TextBox Grid.Row="4" Grid.Column="1"
+                         Text="{Binding EveryText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="10m, 1h, 1d"
+                         Visibility="{Binding EverySectionVisibility}" />
+
+                <!-- "cron" fields -->
+                <TextBlock Grid.Row="5" Grid.Column="0"
+                           Text="Expression"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding CronSectionVisibility}" />
+                <TextBox Grid.Row="5" Grid.Column="1"
+                         Text="{Binding CronExpr, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="e.g. 0 9 * * 3"
+                         Visibility="{Binding CronSectionVisibility}" />
+
+                <TextBlock Grid.Row="6" Grid.Column="0"
+                           Text="Timezone"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding CronSectionVisibility}" />
+                <TextBox Grid.Row="6" Grid.Column="1"
+                         Text="{Binding CronTz, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Optional (e.g. America/Los_Angeles)"
+                         Visibility="{Binding CronSectionVisibility}" />
+            </Grid>
+
+            <NavigationViewItemSeparator />
+
+            <!-- ── Payload ───────────────────────────────────────────────────── -->
+            <TextBlock Text="Payload" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <!-- Isolated: always agentTurn + note -->
+            <TextBlock
+                Text="{Binding IsolatedPayloadNote}"
+                TextWrapping="Wrap"
+                FontSize="11"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Visibility="{Binding IsolatedPayloadVisibility}" />
+
+            <!-- Main: kind picker + note -->
+            <Grid ColumnSpacing="12" RowSpacing="6"
+                  Visibility="{Binding MainPayloadKindVisibility}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="Kind"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox Grid.Row="0" Grid.Column="1"
+                          SelectedIndex="{Binding PayloadKindIndex, Mode=TwoWay}"
+                          MinWidth="200">
+                    <ComboBoxItem Content="systemEvent" />
+                    <ComboBoxItem Content="agentTurn" />
+                </ComboBox>
+
+                <TextBlock Grid.Row="1" Grid.Column="1"
+                           Text="{Binding MainPayloadNote}"
+                           TextWrapping="Wrap"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Grid>
+
+            <!-- systemEvent editor -->
+            <TextBox
+                Text="{Binding SystemEventText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                PlaceholderText="System event text"
+                AcceptsReturn="True"
+                MaxHeight="120"
+                Visibility="{Binding SystemEventEditorVisibility}" />
+
+            <!-- agentTurn editor -->
+            <Grid ColumnSpacing="12" RowSpacing="10"
+                  Visibility="{Binding AgentTurnEditorVisibility}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="Message"
+                           VerticalAlignment="Top"
+                           Margin="0,6,0,0"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding AgentMessage, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="What should OpenClaw do?"
+                         AcceptsReturn="True"
+                         MaxHeight="120" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0"
+                           Text="Thinking"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="1" Grid.Column="1"
+                         Text="{Binding Thinking, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Optional (e.g. low)" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0"
+                           Text="Timeout"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Row="2" Grid.Column="1"
+                         Text="{Binding TimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Seconds (optional)"
+                         MaxWidth="180"
+                         HorizontalAlignment="Left" />
+            </Grid>
+
+            <NavigationViewItemSeparator
+                Visibility="{Binding DeliveryRowVisibility}" />
+
+            <!-- ── Delivery (isolated only) ──────────────────────────────────── -->
+            <TextBlock Text="Delivery"
+                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                       Visibility="{Binding DeliveryRowVisibility}" />
+
+            <Grid ColumnSpacing="12" RowSpacing="10"
+                  Visibility="{Binding DeliveryRowVisibility}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <!-- announce sub-rows -->
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Delivery mode picker -->
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="Delivery"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox Grid.Row="0" Grid.Column="1"
+                          SelectedIndex="{Binding DeliveryModeIndex, Mode=TwoWay}"
+                          MinWidth="200">
+                    <ComboBoxItem Content="Announce summary" />
+                    <ComboBoxItem Content="None" />
+                </ComboBox>
+
+                <!-- Channel (announce only) -->
+                <TextBlock Grid.Row="1" Grid.Column="0"
+                           Text="Channel"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding DeliveryAnnounceVisibility}" />
+                <ComboBox Grid.Row="1" Grid.Column="1"
+                          x:Name="ChannelComboBox"
+                          MinWidth="200"
+                          Visibility="{Binding DeliveryAnnounceVisibility}" />
+
+                <!-- To (announce only) -->
+                <TextBlock Grid.Row="2" Grid.Column="0"
+                           Text="To"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding DeliveryAnnounceVisibility}" />
+                <TextBox Grid.Row="2" Grid.Column="1"
+                         Text="{Binding To, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Optional override (phone / chat id / Discord channel)"
+                         Visibility="{Binding DeliveryAnnounceVisibility}" />
+
+                <!-- Best-effort (announce only) -->
+                <TextBlock Grid.Row="3" Grid.Column="0"
+                           Text="Best-effort"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{Binding DeliveryAnnounceVisibility}" />
+                <ToggleSwitch Grid.Row="3" Grid.Column="1"
+                              IsOn="{Binding BestEffortDeliver, Mode=TwoWay}"
+                              Header="Do not fail the job if announce fails"
+                              Visibility="{Binding DeliveryAnnounceVisibility}"
+                              Margin="0,-4,0,0" />
+            </Grid>
+
+            <!-- ── Error ─────────────────────────────────────────────────────── -->
+            <TextBlock
+                x:Name="ErrorText"
+                Text="{Binding Error}"
+                TextWrapping="Wrap"
+                Foreground="Red"
+                FontSize="12"
+                Visibility="{Binding ErrorVisibility}" />
+
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

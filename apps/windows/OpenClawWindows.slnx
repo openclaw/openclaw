@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenClawWindows.Tests.csproj" />
+  </Folder>
+  <Project Path="OpenClawWindows.csproj" />
+  <Project Path="packaging/OpenClawWindows.wapproj" />
+</Solution>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>openclaw-win</AssemblyName>
+    <RootNamespace>OpenClawWindows.CLI</RootNamespace>
+    <!-- Override Directory.Build.props: plain console, no WinUI runtime required -->
+    <UseWinUI>false</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <AppxPackage>false</AppxPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Zeroconf" />
+  </ItemGroup>
+
+</Project>

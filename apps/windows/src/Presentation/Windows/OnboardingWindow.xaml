@@ -1,0 +1,62 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.OnboardingWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Page content — navigated via Frame.Navigate -->
+        <ScrollViewer
+            Grid.Row="0"
+            VerticalScrollBarVisibility="Auto"
+            Padding="28,0,28,4">
+            <Frame x:Name="ContentFrame" />
+        </ScrollViewer>
+
+        <!-- Navigation bar -->
+        <Grid Grid.Row="1" Padding="28,10,28,18" ColumnDefinitions="80,*,80">
+
+            <!-- Back button -->
+            <HyperlinkButton
+                Grid.Column="0"
+                Content="&#x2039; Back"
+                Command="{Binding GoBackCommand}"
+                HorizontalAlignment="Left" VerticalAlignment="Center"
+                Visibility="{Binding CanGoBack, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- Page dots — active dot uses full opacity, inactive uses 0.3 -->
+            <ItemsControl
+                Grid.Column="1"
+                ItemsSource="{Binding PageDots}"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="8" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Ellipse
+                            Width="8" Height="8"
+                            Fill="{ThemeResource SystemAccentColor}"
+                            Opacity="{Binding IsActive, Converter={StaticResource BoolToOpacityConverter}}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Next / Finish button -->
+            <Button
+                Grid.Column="2"
+                Content="{Binding NextButtonTitle}"
+                Command="{Binding GoNextCommand}"
+                IsEnabled="{Binding CanGoNext}"
+                Style="{StaticResource AccentButtonStyle}"
+                HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+        </Grid>
+    </Grid>
+</Window>

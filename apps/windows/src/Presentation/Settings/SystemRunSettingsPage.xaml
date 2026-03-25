@@ -1,0 +1,13 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.SystemRunSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors SystemRunSettingsView.swift: VStack with header + segmented tab + policy/allowlist panel. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,18">
+        <StackPanel x:Name="RootPanel" Spacing="12" MaxWidth="560" HorizontalAlignment="Left" />
+    </ScrollViewer>
+</Page>

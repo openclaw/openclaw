@@ -1,0 +1,54 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.CostUsageMenuView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    HorizontalAlignment="Left">
+
+    <UserControl.Resources>
+        <!-- Mirrors .foregroundStyle(Color.accentColor) on BarMark -->
+        <SolidColorBrush x:Key="BarAccentBrush" Color="{ThemeResource SystemAccentColor}" />
+    </UserControl.Resources>
+
+    <!-- Mirrors CostUsageHistoryMenuView: VStack(spacing:10) with header / chart / footer.
+         Adapts: Swift Charts BarMark → Canvas with Rectangle bars (no chart library available). -->
+    <StackPanel x:Name="RootPanel" Spacing="10" Padding="12,10">
+
+        <!-- Header: "Today" + "Last Nd" cost columns — mirrors private var header -->
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <StackPanel Spacing="2">
+                <TextBlock x:Name="TodayLabelBlock"
+                           Text="Today"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="TodayCostBlock"
+                           FontSize="14"
+                           FontWeight="SemiBold" />
+            </StackPanel>
+            <StackPanel Spacing="2">
+                <TextBlock x:Name="RangeLabelBlock"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="TotalCostBlock"
+                           FontSize="14"
+                           FontWeight="SemiBold" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Chart area — mirrors .frame(height: 110); bars drawn in code-behind -->
+        <Canvas x:Name="ChartCanvas"
+                Height="110"
+                HorizontalAlignment="Stretch"
+                SizeChanged="ChartCanvas_SizeChanged" />
+
+        <!-- Footer — mirrors private var footer; visible only when missingCostEntries > 0 -->
+        <TextBlock x:Name="FooterBlock"
+                   FontSize="11"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Visibility="Collapsed" />
+
+    </StackPanel>
+
+</UserControl>

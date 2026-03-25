@@ -1,0 +1,151 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.ConfigSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:settings="using:OpenClawWindows.Presentation.Settings"
+    xmlns:vm="using:OpenClawWindows.Presentation.ViewModels"
+    mc:Ignorable="d">
+
+    <!-- Mirrors ConfigSettings.swift: HStack(sidebar + detail) — XAML-driven, no Children.Clear() -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ── Sidebar: section list ──────────────────────────────────────── -->
+        <ListView
+            Grid.Column="0"
+            Padding="8,12,8,12"
+            ItemsSource="{x:Bind ViewModel.SectionItems, Mode=OneWay}"
+            SelectedItem="{x:Bind ViewModel.SelectedSection, Mode=OneWay}"
+            SelectionChanged="SectionList_SelectionChanged">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Padding" Value="4,2,4,2" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:ConfigSectionVM">
+                    <StackPanel Spacing="2" Padding="4,6,4,6">
+                        <TextBlock Text="{x:Bind Label}" />
+                        <TextBlock
+                            Text="{x:Bind Help}"
+                            FontSize="12"
+                            MaxLines="2"
+                            TextTrimming="CharacterEllipsis"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Visibility="{x:Bind settings:ConfigSettingsPage.HelpVisibility(Help)}" />
+                    </StackPanel>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- ── Detail: scrollable section content ────────────────────────── -->
+        <ScrollViewer Grid.Column="1" Padding="24,18,24,18" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16" MaxWidth="660" HorizontalAlignment="Left">
+
+                <!-- Header (static) -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Config" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock
+                        Text="Edit ~/.openclaw/openclaw.json using the schema-driven form."
+                        FontSize="14"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <!-- Loading spinner -->
+                <ProgressRing IsActive="True" Width="20" Height="20"
+                    Visibility="{x:Bind ViewModel.ConfigSchemaLoading, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <!-- Status message (error / info) -->
+                <TextBlock
+                    Text="{x:Bind ViewModel.ConfigStatus, Mode=OneWay}"
+                    FontSize="14"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Visibility="{x:Bind ViewModel.HasStatus, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <!-- Action row (only when schema loaded) -->
+                <StackPanel Orientation="Horizontal" Spacing="10"
+                    Visibility="{x:Bind ViewModel.ConfigLoaded, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}">
+                    <Button Content="Reload"
+                            IsEnabled="{x:Bind ViewModel.ConfigLoaded, Mode=OneWay}"
+                            Click="Reload_Click" />
+                    <Button Content="{x:Bind ViewModel.SaveLabel, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.CanSave, Mode=OneWay}"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Click="Save_Click" />
+                </StackPanel>
+
+                <!-- Section header -->
+                <StackPanel Spacing="6"
+                    Visibility="{x:Bind ViewModel.HasActiveSection, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock
+                        Text="{x:Bind ViewModel.SelectedSection.Label, Mode=OneWay, FallbackValue=''}"
+                        FontSize="16"
+                        FontWeight="SemiBold" />
+                    <TextBlock
+                        Text="{x:Bind ViewModel.SelectedSection.Help, Mode=OneWay, FallbackValue=''}"
+                        FontSize="14"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Visibility="{x:Bind ViewModel.HasSectionHelp, Mode=OneWay,
+                                     Converter={StaticResource BoolToVisibilityConverter}}" />
+                </StackPanel>
+
+                <!-- Subsection pills -->
+                <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled"
+                    Visibility="{x:Bind ViewModel.HasSubsections, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SubsectionItems, Mode=OneWay}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="8" Padding="0,2,0,2" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ConfigSubsectionVM">
+                                <Button
+                                    Padding="0"
+                                    Style="{StaticResource DefaultButtonStyle}"
+                                    Click="SubsectionPill_Click"
+                                    Tag="{x:Bind}">
+                                    <Border Padding="10,6,10,6" CornerRadius="100"
+                                            Background="{x:Bind settings:ConfigSettingsPage.PillBackground(IsSelected), Mode=OneWay}">
+                                        <TextBlock
+                                            Text="{x:Bind Label}"
+                                            FontSize="14"
+                                            FontWeight="SemiBold"
+                                            Foreground="{x:Bind settings:ConfigSettingsPage.PillForeground(IsSelected), Mode=OneWay}" />
+                                    </Border>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- Schema form (UserControl with the recursive builder) -->
+                <settings:ConfigSchemaFormView
+                    x:Name="SchemaForm"
+                    Visibility="{x:Bind ViewModel.HasActiveSection, Mode=OneWay,
+                                 Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <!-- Unsaved changes notice -->
+                <TextBlock Text="Unsaved changes" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{x:Bind ViewModel.ConfigDirty, Mode=OneWay,
+                                        Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

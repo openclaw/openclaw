@@ -1,0 +1,18 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:OpenClawWindows.Presentation.Converters">
+    <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+    <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter" />
+    <converters:BoolToGreenRedBrushConverter x:Key="BoolToGreenRedBrushConverter" />
+    <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
+    <converters:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+    <converters:StreamToBrushConverter x:Key="StreamToBrushConverter" />
+    <converters:StatusColorToBrushConverter x:Key="StatusColorToBrushConverter" />
+    <converters:ConnectionModeToEnabledConverter x:Key="ConnectionModeToEnabledConverter" />
+    <converters:RepairCountSuffixConverter x:Key="RepairCountSuffixConverter" />
+    <converters:BoolToAlignmentConverter x:Key="BoolToAlignmentConverter" />
+    <converters:BoolToFontWeightConverter x:Key="BoolToFontWeightConverter" />
+    <converters:BytesToBitmapConverter x:Key="BytesToBitmapConverter" />
+    <converters:MarkdownPreprocessConverter x:Key="MarkdownPreprocessConverter" />
+</ResourceDictionary>

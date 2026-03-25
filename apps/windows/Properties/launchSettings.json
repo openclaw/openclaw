@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "OpenClawWindows": {
+      "commandName": "Project"
+    }
+  }
+}

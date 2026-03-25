@@ -1,0 +1,144 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.TalkOverlayWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors TalkOverlayView.swift + TalkOverlay.swift:
+         440×440 borderless always-on-top overlay positioned at top-right of screen.
+         Orb at top-right corner; wave rings expand outward per phase/level;
+         drag anywhere to reposition; single-tap = pause, double-tap = stop;
+         close button revealed on hover. -->
+    <Grid
+        x:Name="OrbHost"
+        Width="440"
+        Height="440"
+        ManipulationMode="TranslateX,TranslateY"
+        PointerEntered="OrbHost_PointerEntered"
+        PointerExited="OrbHost_PointerExited"
+        ManipulationDelta="OrbHost_ManipulationDelta">
+
+        <!-- ── Wave rings — 3 expanding circles driven by animation timer ──── -->
+        <!-- Ring 0 -->
+        <Ellipse
+            Width="96" Height="96"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,12,12,0"
+            RenderTransformOrigin="0.5,0.5"
+            Opacity="{Binding WaveRing0Opacity}"
+            Visibility="{Binding WaveRingsVisibility}">
+            <Ellipse.Stroke>
+                <SolidColorBrush Color="{Binding AccentColor}" />
+            </Ellipse.Stroke>
+            <Ellipse.StrokeThickness>1.6</Ellipse.StrokeThickness>
+            <Ellipse.RenderTransform>
+                <ScaleTransform ScaleX="{Binding WaveRing0Scale}" ScaleY="{Binding WaveRing0Scale}" />
+            </Ellipse.RenderTransform>
+        </Ellipse>
+
+        <!-- Ring 1 -->
+        <Ellipse
+            Width="96" Height="96"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,12,12,0"
+            RenderTransformOrigin="0.5,0.5"
+            Opacity="{Binding WaveRing1Opacity}"
+            Visibility="{Binding WaveRingsVisibility}">
+            <Ellipse.Stroke>
+                <SolidColorBrush Color="{Binding AccentColor}" />
+            </Ellipse.Stroke>
+            <Ellipse.StrokeThickness>1.6</Ellipse.StrokeThickness>
+            <Ellipse.RenderTransform>
+                <ScaleTransform ScaleX="{Binding WaveRing1Scale}" ScaleY="{Binding WaveRing1Scale}" />
+            </Ellipse.RenderTransform>
+        </Ellipse>
+
+        <!-- Ring 2 -->
+        <Ellipse
+            Width="96" Height="96"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,12,12,0"
+            RenderTransformOrigin="0.5,0.5"
+            Opacity="{Binding WaveRing2Opacity}"
+            Visibility="{Binding WaveRingsVisibility}">
+            <Ellipse.Stroke>
+                <SolidColorBrush Color="{Binding AccentColor}" />
+            </Ellipse.Stroke>
+            <Ellipse.StrokeThickness>1.6</Ellipse.StrokeThickness>
+            <Ellipse.RenderTransform>
+                <ScaleTransform ScaleX="{Binding WaveRing2Scale}" ScaleY="{Binding WaveRing2Scale}" />
+            </Ellipse.RenderTransform>
+        </Ellipse>
+
+        <!-- ── Thinking indicator ─────────────────────────────────────────── -->
+        <!-- ProgressRing replaces orbit arcs (macOS TimelineView not available in WinUI 3) -->
+        <ProgressRing
+            Width="120" Height="120"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,0,0,0"
+            IsActive="True"
+            Opacity="0.55"
+            Visibility="{Binding ThinkingRingVisibility}" />
+
+        <!-- ── Main orb ───────────────────────────────────────────────────── -->
+        <!-- Single-tap = toggle pause; double-tap = stop speaking. -->
+        <Ellipse
+            x:Name="OrbCircle"
+            Width="96" Height="96"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,12,12,0"
+            RenderTransformOrigin="0.5,0.5"
+            Opacity="{Binding OrbOpacity}"
+            Tapped="OrbCircle_Tapped"
+            DoubleTapped="OrbCircle_DoubleTapped">
+            <Ellipse.RenderTransform>
+                <ScaleTransform ScaleX="{Binding OrbScaleX}" ScaleY="{Binding OrbScaleY}" />
+            </Ellipse.RenderTransform>
+            <Ellipse.Fill>
+                <RadialGradientBrush GradientOrigin="0.2,0.2" Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                    <GradientStop Color="White" Offset="0" />
+                    <GradientStop Color="{Binding AccentColor}" Offset="1" />
+                </RadialGradientBrush>
+            </Ellipse.Fill>
+        </Ellipse>
+
+        <!-- ── Transcript display ─────────────────────────────────────────── -->
+        <!-- Shows recognized speech while listening — mirrors session transcript. -->
+        <Border
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Bottom"
+            Margin="16,0,16,16"
+            Padding="10,6"
+            CornerRadius="8"
+            Background="#CC000000"
+            Visibility="{Binding TranscriptVisibility}">
+            <TextBlock
+                Text="{Binding Transcript}"
+                TextWrapping="Wrap"
+                FontSize="13"
+                Foreground="White"
+                MaxLines="4"
+                TextTrimming="CharacterEllipsis" />
+        </Border>
+
+        <!-- ── Close (exit talk mode) button ─────────────────────────────── -->
+        <!-- Revealed on hover — offset x:-2,y:-2 relative to orb top-left. -->
+        <Button
+            x:Name="CloseBtn"
+            Visibility="{Binding IsHoveringVisibility}"
+            Command="{Binding ExitCommand}"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Margin="0,10,96,0"
+            Width="18"
+            Height="18"
+            Padding="0"
+            CornerRadius="9"
+            Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}">
+            <FontIcon Glyph="&#xE711;" FontSize="9" Foreground="White" />
+        </Button>
+
+    </Grid>
+</Window>

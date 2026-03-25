@@ -1,0 +1,33 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Settings.Components.SettingsRefreshButton"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors SettingsRefreshButton.swift: spinner while loading, bordered refresh button otherwise. -->
+    <Grid>
+        <ProgressRing
+            x:Name="Spinner"
+            Width="20"
+            Height="20"
+            IsActive="False"
+            Visibility="Collapsed" />
+
+        <Button
+            x:Name="RefreshBtn"
+            Click="OnClick"
+            Style="{StaticResource DefaultButtonStyle}"
+            ToolTipService.ToolTip="Refresh">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <FontIcon
+                    FontFamily="Segoe MDL2 Assets"
+                    FontSize="14"
+                    Glyph="&#xE72C;" />
+                <TextBlock Text="Refresh" />
+            </StackPanel>
+        </Button>
+    </Grid>
+
+</UserControl>

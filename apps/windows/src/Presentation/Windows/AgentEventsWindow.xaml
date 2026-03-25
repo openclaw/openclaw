@@ -1,0 +1,89 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.AgentEventsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:OpenClawWindows.Presentation.ViewModels"
+    mc:Ignorable="d">
+
+    <!-- Mirrors AgentEventsWindow.swift: title row + ScrollView of event rows, min 520×360 -->
+    <Grid Padding="12" MinWidth="520" MinHeight="360">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header: title + Clear button -->
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock
+                Text="Agent Events"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                VerticalAlignment="Center" />
+            <Button
+                Content="Clear"
+                Command="{Binding ClearCommand}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- Scrollable event list (newest first, matching reversed() in Swift) -->
+        <ScrollViewer
+            Grid.Row="1"
+            VerticalScrollBarVisibility="Auto"
+            HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding Events}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1">
+                            <StackPanel Spacing="4">
+                                <!-- Badge row: stream + runId + timestamp -->
+                                <Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <!-- Colored stream badge -->
+                                        <Border
+                                            Padding="6,2"
+                                            CornerRadius="5"
+                                            Background="{Binding Stream, Converter={StaticResource StreamToBrushConverter}}">
+                                            <TextBlock
+                                                Text="{Binding StreamUpperCase}"
+                                                FontSize="10"
+                                                FontWeight="Bold"
+                                                Foreground="White" />
+                                        </Border>
+                                        <TextBlock
+                                            Text="{Binding RunIdDisplay}"
+                                            FontFamily="Cascadia Mono, Consolas, Courier New"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <!-- Timestamp right-aligned -->
+                                    <TextBlock
+                                        Text="{Binding FormattedTimestamp}"
+                                        FontSize="10"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center" />
+                                </Grid>
+                                <!-- Pretty-printed JSON payload -->
+                                <TextBlock
+                                    Text="{Binding PrettyJson}"
+                                    FontFamily="Cascadia Mono, Consolas, Courier New"
+                                    FontSize="11"
+                                    TextWrapping="Wrap"
+                                    IsTextSelectionEnabled="True" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Window>

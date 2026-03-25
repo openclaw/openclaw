@@ -1,0 +1,64 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.DebugSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors DebugSettings.swift: health status, config folder, log folder, verbose logging. -->
+    <ScrollViewer Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12">
+
+            <!-- Health panel — mirrors HealthStore.summaryLine / state in macOS -->
+            <TextBlock Text="Gateway Health" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock
+                    Text="{Binding HealthStateBadge}"
+                    FontWeight="SemiBold" />
+                <TextBlock Text="·" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock
+                    Text="{Binding HealthSummaryLine}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <TextBlock
+                Text="{Binding HealthDetailLine}"
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+
+            <NavigationViewItemSeparator />
+
+            <TextBlock Text="Developer Tools" Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+            <Button Content="Open Config Folder" Command="{Binding OpenConfigFolderCommand}" />
+            <Button Content="Open Log Folder"    Command="{Binding OpenLogFolderCommand}" />
+
+            <NavigationViewItemSeparator />
+
+            <ToggleSwitch
+                Header="Verbose Logging"
+                IsOn="{Binding VerboseLogging, Mode=TwoWay}" />
+
+            <ComboBox
+                Header="Log Level"
+                SelectedItem="{Binding LogLevel, Mode=TwoWay}"
+                HorizontalAlignment="Stretch">
+                <x:String>debug</x:String>
+                <x:String>info</x:String>
+                <x:String>warning</x:String>
+                <x:String>error</x:String>
+            </ComboBox>
+
+            <NavigationViewItemSeparator />
+
+            <Button
+                Content="Restart Onboarding"
+                Command="{Binding RestartOnboardingCommand}"
+                Style="{StaticResource DefaultButtonStyle}" />
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

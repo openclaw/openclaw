@@ -1,0 +1,253 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.TrayContextMenu"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:tray="using:OpenClawWindows.Presentation.Tray"
+    xmlns:comp="using:OpenClawWindows.Presentation.Tray.Components"
+    mc:Ignorable="d">
+
+    <StackPanel MinWidth="280" Padding="0,4,0,4">
+
+        <!-- ── Status header ── -->
+        <StackPanel Padding="12,6,12,6">
+            <!-- Brand header: OpenClaw lobster icon + name (mirrors macOS Toggle label).
+                 Tapping the header toggles pause/resume. -->
+            <Button Command="{Binding PauseResumeCommand}"
+                IsEnabled="{Binding ConnectionMode, Converter={StaticResource ConnectionModeToEnabledConverter}}"
+                Background="Transparent" BorderThickness="0"
+                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                Padding="0" Margin="0,0,0,2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Image Source="ms-appx:///Assets/openclaw-logo.png"
+                        Width="20" Height="20"
+                        VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ConnectionLabel}"
+                        FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="28,4,0,0">
+                <Ellipse Width="6" Height="6" VerticalAlignment="Center"
+                    Fill="{Binding HealthStatusColor, Converter={StaticResource StatusColorToBrushConverter}}" />
+                <TextBlock Text="{Binding HealthStatusLabel}" FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis" MaxLines="2" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="28,0,0,0"
+                Visibility="{Binding PairingPendingCount, Converter={StaticResource CountToVisibilityConverter}}">
+                <Ellipse Width="6" Height="6" VerticalAlignment="Center">
+                    <Ellipse.Fill><SolidColorBrush Color="Orange"/></Ellipse.Fill>
+                </Ellipse>
+                <TextBlock Text="{Binding PairingStatusText}" FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="28,0,0,0"
+                Visibility="{Binding DevicePairingPendingCount, Converter={StaticResource CountToVisibilityConverter}}">
+                <Ellipse Width="6" Height="6" VerticalAlignment="Center">
+                    <Ellipse.Fill><SolidColorBrush Color="Orange"/></Ellipse.Fill>
+                </Ellipse>
+                <TextBlock Text="{Binding DevicePairingStatusText}" FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- ── Context card (L-5) — hidden when gateway disconnected ── -->
+        <comp:ContextMenuCardView
+            Rows="{Binding ContextCardRows}"
+            StatusText="{Binding ContextCardStatusText}"
+            IsLoading="{Binding IsContextCardLoading}"
+            Visibility="{Binding IsGatewayConnected, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+        <MenuFlyoutSeparator
+            Visibility="{Binding IsGatewayConnected, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+
+        <!-- ── Toggles ── -->
+        <MenuFlyoutPresenter Background="Transparent" BorderThickness="0" Padding="0" CornerRadius="0">
+            <ToggleMenuFlyoutItem x:Name="SendHeartbeatsToggle" Text="Send Heartbeats"
+                IsChecked="{Binding HeartbeatsEnabled, Mode=OneWay}"
+                Command="{Binding ToggleHeartbeatsCommand}">
+                <ToggleMenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE8D6;" />
+                </ToggleMenuFlyoutItem.Icon>
+            </ToggleMenuFlyoutItem>
+
+            <ToggleMenuFlyoutItem x:Name="BrowserControlToggle" Text="Browser Control"
+                IsChecked="{Binding BrowserControlEnabled, Mode=OneWay}"
+                Command="{Binding ToggleBrowserControlCommand}">
+                <ToggleMenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE774;" />
+                </ToggleMenuFlyoutItem.Icon>
+            </ToggleMenuFlyoutItem>
+
+            <ToggleMenuFlyoutItem x:Name="AllowCameraToggle" Text="Allow Camera"
+                IsChecked="{Binding CameraEnabled, Mode=OneWay}"
+                Command="{Binding ToggleCameraCommand}">
+                <ToggleMenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE722;" />
+                </ToggleMenuFlyoutItem.Icon>
+            </ToggleMenuFlyoutItem>
+
+            <MenuFlyoutSubItem x:Name="ExecApprovalSubItem" Text="{Binding ExecApprovalTitle}">
+                <MenuFlyoutSubItem.Icon>
+                    <FontIcon Glyph="&#xE756;" />
+                </MenuFlyoutSubItem.Icon>
+                <MenuFlyoutItem Text="Deny All"  Command="{Binding SetExecApprovalModeCommand}" CommandParameter="Deny" />
+                <MenuFlyoutItem Text="Ask"       Command="{Binding SetExecApprovalModeCommand}" CommandParameter="Ask" />
+                <MenuFlyoutItem Text="Allow All" Command="{Binding SetExecApprovalModeCommand}" CommandParameter="Allow" />
+            </MenuFlyoutSubItem>
+
+            <ToggleMenuFlyoutItem x:Name="AllowCanvasToggle" Text="Allow Canvas"
+                IsChecked="{Binding CanvasEnabled, Mode=OneWay}"
+                Command="{Binding ToggleCanvasCommand}">
+                <ToggleMenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE737;" />
+                </ToggleMenuFlyoutItem.Icon>
+            </ToggleMenuFlyoutItem>
+
+            <ToggleMenuFlyoutItem x:Name="VoiceWakeToggle" Text="Voice Wake"
+                IsChecked="{Binding VoiceWakeEnabled, Mode=OneWay}"
+                IsEnabled="{Binding IsVoiceWakeSupported}"
+                Command="{Binding ToggleVoiceWakeCommand}"
+                Opacity="{Binding IsVoiceWakeSupported, Converter={StaticResource BoolToOpacityConverter}}">
+                <ToggleMenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE720;" />
+                </ToggleMenuFlyoutItem.Icon>
+            </ToggleMenuFlyoutItem>
+
+            <MenuFlyoutSubItem x:Name="MicPickerSubItem"
+                Text="{Binding MicPickerLabel}"
+                Visibility="{Binding ShowMicPicker, Converter={StaticResource BoolToVisibilityConverter}}" />
+        </MenuFlyoutPresenter>
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="40,0,12,2">
+            <Ellipse Width="6" Height="6" VerticalAlignment="Center"
+                Fill="{Binding HeartbeatStatusColor, Converter={StaticResource StatusColorToBrushConverter}}" />
+            <TextBlock Text="{Binding HeartbeatStatusLabel}" FontSize="10"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <MenuFlyoutSeparator />
+
+        <!-- ── Usage + Cost (L-2) ── -->
+        <comp:MenuUsageHeaderView
+            Count="{Binding UsageRowCount}"
+            Visibility="{Binding HasUsageRows, Converter={StaticResource BoolToVisibilityConverter}}" />
+        <ItemsControl ItemsSource="{Binding UsageRows}"
+            Visibility="{Binding HasUsageRows, Converter={StaticResource BoolToVisibilityConverter}}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <comp:UsageMenuLabelView Row="{Binding}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <comp:CostUsageMenuView Summary="{Binding CostSummary}"
+            Visibility="{Binding HasCostSummary, Converter={StaticResource BoolToVisibilityConverter}}" />
+        <MenuFlyoutSeparator
+            Visibility="{Binding HasUsageOrCost, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+        <!-- ── Actions ── -->
+        <MenuFlyoutPresenter Background="Transparent" BorderThickness="0" Padding="0" CornerRadius="0">
+            <MenuFlyoutItem x:Name="OpenDashboardItem" Text="Open Dashboard" Command="{Binding OpenDashboardCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE9D9;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem x:Name="OpenChatItem" Text="Open Chat" Command="{Binding OpenChatCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE8BD;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem x:Name="OpenCanvasItem" Text="{Binding OpenCanvasLabel}"
+                Command="{Binding ToggleCanvasPanelCommand}"
+                Visibility="{Binding CanvasEnabled, Converter={StaticResource BoolToVisibilityConverter}}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE737;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem x:Name="TalkModeItem" Text="{Binding TalkModeLabel}"
+                Command="{Binding ToggleTalkModeCommand}"
+                IsEnabled="{Binding IsTalkModeSupported}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE720;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+        </MenuFlyoutPresenter>
+
+        <tray:NodesMenuSection x:Name="NodesSectionControl"
+            Nodes="{Binding Nodes}"
+            IsConnected="{Binding IsGatewayConnected}"
+            IsNodesLoading="{Binding NodesIsLoading}" />
+
+        <MenuFlyoutSeparator />
+
+        <!-- ── Settings + extras ── -->
+        <MenuFlyoutItem Text="Settings…" Command="{Binding OpenSettingsCommand}" />
+
+        <MenuFlyoutSubItem Text="Debug"
+            Visibility="{Binding DebugPaneEnabled, Converter={StaticResource BoolToVisibilityConverter}}">
+            <MenuFlyoutItem Text="Open Config Folder" Command="{Binding OpenConfigFolderCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE8B7;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Run Health Check Now" Command="{Binding RunHealthCheckNowCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE9D9;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Send Test Heartbeat" Command="{Binding SendTestHeartbeatCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE8D6;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="{Binding VerboseLoggingLabel}" Command="{Binding ToggleVerboseLoggingMainCommand}" />
+            <MenuFlyoutSubItem Text="App Logging">
+                <MenuFlyoutItem Text="{Binding FileLoggingLabel}" Command="{Binding ToggleFileLoggingCommand}" />
+            </MenuFlyoutSubItem>
+            <MenuFlyoutItem Text="Open Session Store" Command="{Binding OpenSessionStoreCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xEDA2;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Open Agent Events…" Command="{Binding OpenAgentEventsCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE945;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Open Log" Command="{Binding OpenLogCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE721;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutSeparator />
+            <MenuFlyoutItem Text="Send Debug Voice Text" Command="{Binding SendDebugVoiceCommand}" />
+            <MenuFlyoutItem Text="Send Test Notification" Command="{Binding SendTestNotificationCommand}" />
+            <MenuFlyoutSeparator />
+            <MenuFlyoutItem Text="Restart Onboarding" Command="{Binding RestartOnboardingCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE72C;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Restart Gateway" Command="{Binding RestartGatewayCommand}"
+                Visibility="{Binding IsLocalMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE72C;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="Restart App" Command="{Binding RestartAppCommand}">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE72C;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+        </MenuFlyoutSubItem>
+
+        <MenuFlyoutItem Text="About OpenClaw" Command="{Binding OpenAboutCommand}" />
+        <MenuFlyoutItem Text="Update ready — restart now?"
+            Command="{Binding ApplyUpdateCommand}"
+            Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVisibilityConverter}}" />
+        <MenuFlyoutItem Text="Quit" Command="{Binding QuitCommand}" />
+
+    </StackPanel>
+</UserControl>

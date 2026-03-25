@@ -1,0 +1,17 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Components.StatusPill"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors StatusPill.swift: capsule badge with tinted text and 12%-opacity tinted background. -->
+    <Border x:Name="Container" CornerRadius="9999" Padding="7,3">
+        <TextBlock
+            x:Name="Label"
+            FontSize="10"
+            FontWeight="SemiBold" />
+    </Border>
+
+</UserControl>

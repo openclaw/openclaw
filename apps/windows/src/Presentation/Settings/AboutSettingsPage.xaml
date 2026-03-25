@@ -1,0 +1,83 @@
+<Page
+    x:Class="OpenClawWindows.Presentation.Settings.AboutSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors AboutSettings.swift: app icon, name, version, auto-check toggle, check-for-updates button. -->
+    <ScrollViewer Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel HorizontalAlignment="Center" MaxWidth="440" Spacing="12">
+
+            <Image
+                Source="ms-appx:///Assets/Icons/AppIcon.png"
+                Width="80"
+                Height="80"
+                HorizontalAlignment="Center" />
+
+            <TextBlock
+                Text="{Binding AppName}"
+                Style="{StaticResource TitleTextBlockStyle}"
+                HorizontalAlignment="Center" />
+
+            <TextBlock
+                Text="{Binding VersionLabel}"
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <TextBlock
+                Text="Menu bar companion for notifications, screenshots, and privileged agent actions."
+                HorizontalAlignment="Center"
+                TextWrapping="Wrap"
+                TextAlignment="Center"
+                FontSize="12"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <NavigationViewItemSeparator />
+
+            <!-- Updater section — only shown when MSIX updater is functional -->
+            <StackPanel
+                Spacing="10"
+                Visibility="{Binding UpdaterAvailable, Converter={StaticResource BoolToVisibilityConverter}}">
+
+                <!-- Update-ready banner (mirrors IsUpdateReady in tray menu) -->
+                <TextBlock
+                    Text="{Binding UpdateStatus}"
+                    HorizontalAlignment="Center"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                    Visibility="{Binding UpdateStatus, Converter={StaticResource StringToVisibilityConverter}}" />
+
+                <!-- Auto-check toggle — mirrors Toggle("Check for updates automatically") in macOS -->
+                <ToggleSwitch
+                    Header="Check for updates automatically"
+                    IsOn="{Binding AutoCheckEnabled, Mode=TwoWay}"
+                    HorizontalAlignment="Center" />
+
+                <Button
+                    Content="Check for Updates"
+                    Command="{Binding CheckForUpdatesCommand}"
+                    HorizontalAlignment="Center" />
+
+            </StackPanel>
+
+            <!-- Shown when updater is unavailable (dev / unsigned build) -->
+            <TextBlock
+                Text="Updates unavailable in this build."
+                HorizontalAlignment="Center"
+                FontSize="12"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Visibility="{Binding UpdaterAvailable, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+
+            <NavigationViewItemSeparator />
+
+            <TextBlock
+                Text="© 2025 Peter Steinberger — MIT License."
+                HorizontalAlignment="Center"
+                FontSize="12"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

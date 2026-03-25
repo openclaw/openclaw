@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="mp uap uap5 desktop rescap">
+
+  <Identity
+    Name="ai.openclaw.windows"
+    Publisher="CN=OpenClaw"
+    Version="1.0.1.0" />
+
+  <Properties>
+    <DisplayName>OpenClaw</DisplayName>
+    <PublisherDisplayName>OpenClaw</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.99999.0" />
+    <PackageDependency Name="Microsoft.WindowsAppRuntime.1.8" MinVersion="1.8.0.0"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"/>
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="OpenClaw"
+        Description="AI agent node — exposes device capabilities to AI agents"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- Deep-link protocol handler: openclaw://agent?... and openclaw://gateway?...
+             Equivalent to the CFBundleURLSchemes registration in Info.plist (macOS). -->
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="openclaw">
+            <uap:DisplayName>OpenClaw</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+
+        <!-- Autostart: registers app as a startup task — managed via StartupTask WinRT API.
+             TaskId="OpenClaw" must match TaskSchedulerAdapter.TaskId.
+             Enabled="false" — the user is prompted on first call to RequestEnableAsync(). -->
+        <desktop:Extension Category="windows.startupTask" Executable="OpenClawWindows.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="OpenClaw" Enabled="false" DisplayName="OpenClaw" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Required by desktop:Extension (startupTask, FullTrustApplication) -->
+    <rescap:Capability Name="runFullTrust"/>
+    <!-- IScreenCapturePort — screen.record temporary files -->
+    <uap:Capability Name="picturesLibrary"/>
+    <!-- WebSocket gateway connection -->
+    <Capability Name="internetClient"/>
+    <!-- Local gateway on LAN -->
+    <Capability Name="privateNetworkClientServer"/>
+    <!-- ICameraPort — camera.snap, camera.clip, camera.list -->
+    <DeviceCapability Name="webcam"/>
+    <!-- ISpeechRecognitionPort + IWakeWordPort — TalkMode STT, VoiceWake -->
+    <DeviceCapability Name="microphone"/>
+    <!-- ILocationPort — location.get -->
+    <DeviceCapability Name="location"/>
+  </Capabilities>
+
+</Package>

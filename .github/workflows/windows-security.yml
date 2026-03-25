@@ -1,0 +1,95 @@
+name: Windows Security Scan
+
+on:
+  push:
+    branches: [main]
+    paths: [apps/windows/**]
+  pull_request:
+    branches: [main]
+    paths: [apps/windows/**]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: windows-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore OpenClawWindows.csproj -r win-x64 -p:Platform=x64
+
+      - name: Build for CodeQL
+        working-directory: apps/windows
+        run: dotnet build OpenClawWindows.csproj -c Release -r win-x64 -p:Platform=x64 --no-restore
+
+      - uses: github/codeql-action/analyze@v3
+
+  vuln-scan:
+    name: Vulnerability Scan
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore OpenClawWindows.csproj -r win-x64 -p:Platform=x64
+
+      - name: Check for vulnerable packages
+        working-directory: apps/windows
+        run: dotnet list OpenClawWindows.sln package --vulnerable --include-transitive
+
+  sbom:
+    name: SBOM Generation
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: apps/windows/global.json
+
+      - name: Install dotnet-cyclonedx
+        run: dotnet tool install --global CycloneDX
+
+      - name: Restore
+        working-directory: apps/windows
+        run: dotnet restore OpenClawWindows.csproj -r win-x64 -p:Platform=x64
+
+      - name: Generate SBOM
+        working-directory: apps/windows
+        run: dotnet CycloneDX OpenClawWindows.csproj --json --output sbom-out
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: apps/windows/sbom-out/bom.json

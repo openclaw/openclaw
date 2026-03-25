@@ -1,0 +1,120 @@
+<ContentDialog
+    x:Class="OpenClawWindows.Presentation.Onboarding.GatewayWizardDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Setup Wizard"
+    PrimaryButtonText="{Binding SubmitButtonTitle}"
+    IsPrimaryButtonEnabled="{Binding CanSubmit}"
+    SecondaryButtonText="Cancel"
+    DefaultButton="Primary">
+
+    <StackPanel Spacing="12" MinWidth="340">
+
+        <!-- Loading state -->
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1" CornerRadius="8" Padding="16"
+            Visibility="{Binding ShowLoading, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel HorizontalAlignment="Center" Spacing="12">
+                <ProgressRing IsActive="True" Width="40" Height="40" HorizontalAlignment="Center" />
+                <TextBlock Text="Starting wizard…" HorizontalAlignment="Center" Opacity="0.7" />
+            </StackPanel>
+        </Border>
+
+        <!-- Step content -->
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1" CornerRadius="8" Padding="16"
+            Visibility="{Binding ShowStepContent, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel Spacing="12">
+                <TextBlock
+                    Text="{Binding StepTitle}"
+                    FontWeight="SemiBold" FontSize="16" TextWrapping="Wrap" />
+                <TextBlock
+                    Text="{Binding StepMessage}"
+                    TextWrapping="Wrap" Opacity="0.7"
+                    Visibility="{Binding StepMessage, Converter={StaticResource StringToVisibilityConverter}}" />
+
+                <TextBox
+                    PlaceholderText="{Binding StepPlaceholder}"
+                    Text="{Binding TextInput, Mode=TwoWay}"
+                    Visibility="{Binding ShowTextInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <PasswordBox
+                    x:Name="WizardPasswordBox"
+                    PlaceholderText="{Binding StepPlaceholder}"
+                    PasswordChanged="WizardPasswordBox_PasswordChanged"
+                    Visibility="{Binding ShowPasswordInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <CheckBox
+                    IsChecked="{Binding ConfirmInput, Mode=TwoWay}"
+                    Content="{Binding StepPlaceholder}"
+                    Visibility="{Binding ShowConfirmInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <ItemsControl
+                    ItemsSource="{Binding OptionItems}"
+                    Visibility="{Binding ShowSelectInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button
+                                Tag="{Binding Index}"
+                                Click="WizardSelectOption_Click"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Margin="0,2">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Label}" />
+                                    <TextBlock
+                                        Text="{Binding Hint}" FontSize="11" Opacity="0.6"
+                                        Visibility="{Binding Hint, Converter={StaticResource StringToVisibilityConverter}}" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ItemsControl
+                    ItemsSource="{Binding OptionItems}"
+                    Visibility="{Binding ShowMultiselectInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Label}" />
+                                    <TextBlock
+                                        Text="{Binding Hint}" FontSize="11" Opacity="0.6"
+                                        Visibility="{Binding Hint, Converter={StaticResource StringToVisibilityConverter}}" />
+                                </StackPanel>
+                            </CheckBox>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ProgressRing
+                    IsActive="True" Width="28" Height="28" HorizontalAlignment="Center"
+                    Visibility="{Binding ShowProgressInput, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            </StackPanel>
+        </Border>
+
+        <!-- Error with retry -->
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1" CornerRadius="8" Padding="16"
+            Visibility="{Binding ShowError, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel HorizontalAlignment="Center" Spacing="12">
+                <TextBlock
+                    Text="{Binding ErrorMessage}"
+                    TextWrapping="Wrap" HorizontalAlignment="Center" Foreground="Red" />
+                <Button
+                    Content="Retry"
+                    Command="{Binding RetryCommand}"
+                    HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+    </StackPanel>
+</ContentDialog>

@@ -1,0 +1,73 @@
+<ContentDialog
+    x:Class="OpenClawWindows.Presentation.Windows.PairingApprovalDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Allow device to connect?"
+    PrimaryButtonText="Approve"
+    SecondaryButtonText="Reject"
+    CloseButtonText="Later">
+
+    <!-- Mirrors DevicePairingApprovalPrompter.swift describe():
+         Device / Platform / Role / Scopes / IP / Repair. -->
+    <StackPanel MinWidth="340" MaxWidth="520" Spacing="8">
+
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Device -->
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Device:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DeviceDisplayName}" TextWrapping="Wrap" />
+
+            <!-- Platform -->
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Platform:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Visibility="{Binding HasPlatform, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Platform}"
+                       Visibility="{Binding HasPlatform, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- Role -->
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Role:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Visibility="{Binding HasRole, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Role}"
+                       Visibility="{Binding HasRole, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- Scopes -->
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Scopes:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Visibility="{Binding HasScopes, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ScopesDisplay}" TextWrapping="Wrap"
+                       Visibility="{Binding HasScopes, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- IP -->
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="IP:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Visibility="{Binding HasRemoteIp, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding RemoteIp}"
+                       Visibility="{Binding HasRemoteIp, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+            <!-- Repair -->
+            <TextBlock Grid.Row="5" Grid.Column="0" Text="Repair:"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Visibility="{Binding IsRepair, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <TextBlock Grid.Row="5" Grid.Column="1" Text="yes"
+                       Visibility="{Binding IsRepair, Converter={StaticResource BoolToVisibilityConverter}}" />
+        </Grid>
+
+    </StackPanel>
+</ContentDialog>

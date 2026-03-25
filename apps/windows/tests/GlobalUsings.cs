@@ -1,0 +1,20 @@
+global using Xunit;
+global using FluentAssertions;
+global using NSubstitute;
+global using FsCheck;
+global using FsCheck.Xunit;
+global using OpenClawWindows.Domain.SharedKernel;
+global using OpenClawWindows.Domain.Camera;
+global using OpenClawWindows.Domain.Canvas;
+global using OpenClawWindows.Domain.ExecApprovals;
+global using OpenClawWindows.Domain.Gateway;
+global using OpenClawWindows.Domain.AgentEvents;
+global using OpenClawWindows.Domain.WorkActivity;
+global using OpenClawWindows.Domain.Pairing;
+global using OpenClawWindows.Domain.VoiceWake;
+global using OpenClawWindows.Domain.TalkMode;
+global using OpenClawWindows.Domain.Onboarding;
+global using OpenClawWindows.Application.Ports;
+global using ErrorOr;
+// Disambiguate ErrorOr.Result vs FsCheck.Result — tests never use FsCheck.Result directly
+global using Result = ErrorOr.Result;

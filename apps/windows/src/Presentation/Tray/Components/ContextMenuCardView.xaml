@@ -1,0 +1,100 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.ContextMenuCardView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:OpenClawWindows.Presentation.Tray.Components"
+    xmlns:comp="using:OpenClawWindows.Presentation.Components"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors ContextMenuCardView.swift (barHeight:3):
+         header (title + subtitle) + optional statusText + content area. -->
+    <StackPanel MinWidth="300" Spacing="6" Padding="20,8,10,8">
+
+        <!-- Header row: "Context" left + subtitle right -->
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBlock
+                Text="Context"
+                FontSize="11" FontWeight="SemiBold"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                VerticalAlignment="Bottom" />
+            <TextBlock
+                Grid.Column="1"
+                Text="{x:Bind SubtitleText, Mode=OneWay}"
+                FontSize="11"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                VerticalAlignment="Bottom"
+                Margin="10,0,0,0" />
+        </Grid>
+
+        <!-- Loading placeholder — shown while context card data is fetching (no spinner, macOS parity) -->
+        <TextBlock
+            Text="Loading…"
+            FontSize="11"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Visibility="{x:Bind IsLoading, Mode=OneWay,
+                         Converter={StaticResource BoolToVisibilityConverter}}" />
+
+        <!-- Status / error text — visible only when non-empty and not loading -->
+        <TextBlock
+            Text="{x:Bind StatusText, Mode=OneWay}"
+            FontSize="11"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            TextTrimming="CharacterEllipsis"
+            MaxLines="1"
+            Visibility="{x:Bind HasStatusText, Mode=OneWay,
+                         Converter={StaticResource BoolToVisibilityConverter}}" />
+
+        <!-- No sessions placeholder -->
+        <TextBlock
+            Text="No active sessions"
+            FontSize="11"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Visibility="{x:Bind IsEmpty, Mode=OneWay,
+                         Converter={StaticResource BoolToVisibilityConverter}}" />
+
+        <!-- Session rows — one entry per SessionRow via ItemsControl + DataTemplate -->
+        <ItemsControl
+            ItemsSource="{x:Bind SessionRows, Mode=OneWay}"
+            Visibility="{x:Bind HasRows, Mode=OneWay,
+                         Converter={StaticResource BoolToVisibilityConverter}}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="12" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <!-- Mirrors BuildRowPanel: ContextUsageBar (barHeight=3) + label/summary grid -->
+                <DataTemplate x:DataType="local:ContextMenuRowVM">
+                    <StackPanel Spacing="5">
+                        <comp:ContextUsageBar
+                            HorizontalAlignment="Stretch"
+                            Height="3"
+                            UsedTokens="{x:Bind TotalTokens}"
+                            ContextTokens="{x:Bind ContextTokens}" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock
+                                Grid.Column="0"
+                                Text="{x:Bind Label}"
+                                FontSize="11"
+                                MaxLines="1"
+                                TextTrimming="CharacterEllipsis"
+                                VerticalAlignment="Bottom"
+                                Margin="0,0,8,0"
+                                FontWeight="{x:Bind IsMain, Converter={StaticResource BoolToFontWeightConverter}}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                Text="{x:Bind Summary}"
+                                FontSize="11"
+                                FontFamily="Consolas"
+                                MaxLines="1"
+                                VerticalAlignment="Bottom" />
+                        </Grid>
+                    </StackPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+    </StackPanel>
+</UserControl>

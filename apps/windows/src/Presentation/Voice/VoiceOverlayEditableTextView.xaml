@@ -1,0 +1,31 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Voice.VoiceOverlayEditableTextView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors TranscriptTextView.swift: editable rich-text field with vertical scroll.
+         Padding mirrors textContainerInset NSSize(width:2, height:6). -->
+    <RichEditBox
+        x:Name="EditBox"
+        Background="Transparent"
+        BorderBrush="Transparent"
+        BorderThickness="0"
+        Padding="2,6,2,6"
+        AcceptsReturn="True"
+        TextWrapping="Wrap"
+        HorizontalAlignment="Stretch"
+        VerticalAlignment="Stretch"
+        FontSize="13"
+        IsSpellCheckEnabled="False"
+        IsTextPredictionEnabled="False"
+        ScrollViewer.VerticalScrollBarVisibility="Auto"
+        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+        PreviewKeyDown="EditBox_PreviewKeyDown"
+        GotFocus="EditBox_GotFocus"
+        LostFocus="EditBox_LostFocus"
+        TextChanged="EditBox_TextChanged" />
+
+</UserControl>

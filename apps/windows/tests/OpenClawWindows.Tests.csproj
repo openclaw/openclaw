@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <IsPackable>false</IsPackable>
+    <!-- Windows Desktop SDK required because main project uses WinUI 3 types -->
+    <UseWinUI>true</UseWinUI>
+    <!-- Suppress Windows App SDK auto-bootstrap — triggers installer popup in test runner.
+         Microsoft.NET.Test.Sdk 17.12 (netcoreapp3.1 fallback) sets OutputType=Exe unconditionally,
+         which causes BootstrapCommon.targets to set WindowsAppSdkBootstrapInitialize=true and
+         compile MddBootstrapAutoInitializer.cs whose [ModuleInitializer] calls Bootstrap.TryInitialize()
+         and calls Environment.Exit() on failure. Explicitly setting this property to false (not empty)
+         prevents BootstrapCommon.targets from overriding it, blocking Bootstrap.CS.targets from being
+         imported and the module initializer from being compiled. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSDKDeploymentManagerInitialize>false</WindowsAppSDKDeploymentManagerInitialize>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>false</WindowsAppSdkUndockedRegFreeWinRTInitialize>
+    <WindowsAppSDKBootstrapNetModuleInitializerDisable>true</WindowsAppSDKBootstrapNetModuleInitializerDisable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Test frameworks — versions managed by Directory.Packages.props -->
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="FsCheck" />
+    <PackageReference Include="FsCheck.Xunit" />
+    <PackageReference Include="coverlet.collector">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="NetArchTest.Rules" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference main project — all source files are in one WinUI 3 project.
+         AdditionalProperties=TestBuild=true suppresses the Bootstrap module initializer
+         in OpenClawWindows.dll so that Bootstrap.TryInitialize() is never called by
+         the test host (DDLM packages may not be installed on test machines). -->
+    <ProjectReference Include="..\OpenClawWindows.csproj">
+      <AdditionalProperties>TestBuild=true</AdditionalProperties>
+    </ProjectReference>
+  </ItemGroup>
+
+
+</Project>

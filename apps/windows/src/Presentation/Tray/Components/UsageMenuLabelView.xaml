@@ -1,0 +1,63 @@
+<UserControl
+    x:Class="OpenClawWindows.Presentation.Tray.Components.UsageMenuLabelView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:comp="using:OpenClawWindows.Presentation.Components"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Mirrors UsageMenuLabelView.swift:
+         VStack(spacing:8) { optional ContextUsageBar, HStack(title + spacer + detail + chevron) }
+         padding: vertical 10, leading 22, trailing 14 -->
+    <StackPanel x:Name="RootPanel" Spacing="8">
+
+        <!-- ContextUsageBar — visible only when row.usedPercent is not nil; height:6 set in component -->
+        <comp:ContextUsageBar x:Name="UsageBar" HorizontalAlignment="Stretch" Visibility="Collapsed" />
+
+        <!-- HStack(spacing:6): title [spacer min:4] detail [chevron] -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <!-- title: fills remaining space, layoutPriority(1), truncates (middle approximated as end) -->
+                <ColumnDefinition Width="*" />
+                <!-- detail: auto, layoutPriority(2), truncates tail -->
+                <ColumnDefinition Width="Auto" />
+                <!-- chevron: shown when showsChevron=true -->
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- row.titleText — semibold caption, mirrors .truncationMode(.middle) -->
+            <TextBlock
+                x:Name="TitleBlock"
+                Grid.Column="0"
+                FontSize="11"
+                FontWeight="SemiBold"
+                MaxLines="1"
+                TextTrimming="CharacterEllipsis"
+                Margin="0,0,10,0"
+                VerticalAlignment="Bottom" />
+
+            <!-- row.detailText() — monospaced digits caption, truncates tail -->
+            <TextBlock
+                x:Name="DetailBlock"
+                Grid.Column="1"
+                FontSize="11"
+                FontFamily="Consolas"
+                MaxLines="1"
+                VerticalAlignment="Bottom" />
+
+            <!-- chevron.right — caption semibold, padding(.leading, 2) → Margin left 8 (spacing:6 + 2) -->
+            <FontIcon
+                x:Name="ChevronIcon"
+                Grid.Column="2"
+                Glyph="&#xE76C;"
+                FontSize="9"
+                FontWeight="SemiBold"
+                Margin="8,0,0,0"
+                VerticalAlignment="Bottom"
+                Visibility="Collapsed" />
+        </Grid>
+
+    </StackPanel>
+
+</UserControl>

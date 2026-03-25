@@ -1,0 +1,65 @@
+<Window
+    x:Class="OpenClawWindows.Presentation.Windows.HoverHUDWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Mirrors HoverHUDView.swift: status dot + title/detail + badge icon.
+         Acrylic backdrop is set via Window.SystemBackdrop in code-behind.
+         Width=360 Height=74 (logical px) are enforced by HoverHUDController. -->
+    <Grid
+        x:Name="RootGrid"
+        PointerEntered="RootGrid_PointerEntered"
+        PointerExited="RootGrid_PointerExited"
+        PointerPressed="RootGrid_PointerPressed">
+
+        <Border Padding="12" CornerRadius="14">
+            <Grid ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Filled circle status dot — green=working, gray=idle.
+                     Equivalent to Circle().fill(dotColor) in HoverHUDView. -->
+                <Ellipse
+                    Grid.Column="0"
+                    Width="7" Height="7"
+                    VerticalAlignment="Top"
+                    Margin="0,5,0,0">
+                    <Ellipse.Fill>
+                        <SolidColorBrush Color="{Binding DotColor}" />
+                    </Ellipse.Fill>
+                </Ellipse>
+
+                <!-- VStack: StatusTitle (semibold 13) + Detail (secondary 12, max 2 lines). -->
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock
+                        Text="{Binding StatusTitle}"
+                        FontSize="13"
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                    <TextBlock
+                        Text="{Binding Detail}"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="Wrap"
+                        MaxLines="2" />
+                </StackPanel>
+
+                <!-- Badge icon — Sync (working) or Pause (idle).
+                     Mirrors Image(systemName: symbolName) in HoverHUDView. -->
+                <FontIcon
+                    Grid.Column="2"
+                    FontFamily="Segoe MDL2 Assets"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    VerticalAlignment="Top"
+                    Margin="0,1,0,0"
+                    Glyph="{Binding BadgeGlyph}" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

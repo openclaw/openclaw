@@ -1,0 +1,28 @@
+<Project>
+  <!--
+    CI / command-line dev builds: override packaging targets that require the Visual Studio
+    "Windows application development" workload (Microsoft.Build.AppxPackage.dll,
+    Microsoft.Build.Packaging.Pri.Tasks.dll). Those DLLs live at
+    $(MSBuildExtensionsPath)\Microsoft\VisualStudio\v*\AppxPackage\ and are only present
+    when VS is installed with that workload.
+
+    No-op targets are defined in Directory.Build.NoOpAppx.targets and imported ONLY when
+    _AppxNoOp is true. Using a conditional Import (rather than inline target definitions)
+    ensures the SDK's real GetPackagingOutputs and friends are never replaced when building
+    via WAPPROJ — a replaced target with Condition=false returns empty instead of running
+    the SDK implementation, which causes APPX0703.
+
+    Packaging / MSIX generation is intentionally disabled on CI environments
+    (Directory.Build.props: WindowsPackageType=None, AppxGeneratePriEnabled=false).
+  -->
+  <PropertyGroup>
+    <_AppxDllMissing Condition="!Exists('$(AppxMSBuildToolsPath)Microsoft.Build.AppxPackage.dll')">true</_AppxDllMissing>
+    <!-- _AppxNoOp: true only when DLLs are absent AND we are NOT producing an MSIX package.
+         Single-project MSIX (WindowsPackageType != None) needs the real SDK targets too. -->
+    <_AppxNoOp Condition="'$(_AppxDllMissing)' == 'true' AND '$(AppxPackageOutput)' == '' AND '$(WindowsPackageType)' == 'None'">true</_AppxNoOp>
+  </PropertyGroup>
+
+  <!-- Import no-ops only when needed. This leaves SDK targets untouched during WAPPROJ builds. -->
+  <Import Project="Directory.Build.NoOpAppx.targets" Condition="'$(_AppxNoOp)' == 'true'"/>
+
+</Project>
