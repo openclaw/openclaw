@@ -56,7 +56,7 @@ describe("resolvePreferredNodePath", () => {
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "18.0.0\n", stderr: "" }) // execPath too old
-      .mockResolvedValueOnce({ stdout: "22.16.0\n", stderr: "" }); // system node ok
+      .mockResolvedValueOnce({ stdout: "22.14.0\n", stderr: "" }); // system node ok
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -73,7 +73,7 @@ describe("resolvePreferredNodePath", () => {
   it("ignores execPath when it is not node", async () => {
     mockNodePathPresent(darwinNode);
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -93,8 +93,8 @@ describe("resolvePreferredNodePath", () => {
   it("uses system node when it meets the minimum version", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.16.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
+    // Node 22.14.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -111,8 +111,8 @@ describe("resolvePreferredNodePath", () => {
   it("skips system node when it is too old", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.15.x is below minimum 22.16.0
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.15.0\n", stderr: "" });
+    // Node 22.13.x is below minimum 22.14.0
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.13.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -168,7 +168,7 @@ describe("resolveStableNodePath", () => {
   it("resolves versioned node@22 formula to opt symlink", async () => {
     mockNodePathPresent("/opt/homebrew/opt/node@22/bin/node");
 
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@22/22.16.0/bin/node");
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@22/22.14.0/bin/node");
     expect(result).toBe("/opt/homebrew/opt/node@22/bin/node");
   });
 
@@ -218,8 +218,8 @@ describe("resolveSystemNodeInfo", () => {
   it("returns supported info when version is new enough", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.16.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
+    // Node 22.14.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -229,7 +229,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
-      version: "22.16.0",
+      version: "22.14.0",
       supported: true,
     });
   });
@@ -251,7 +251,7 @@ describe("resolveSystemNodeInfo", () => {
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("below the required Node 22.16+");
+    expect(warning).toContain("below the required Node 22.14+");
     expect(warning).toContain(darwinNode);
   });
 });
