@@ -11,6 +11,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolveGoogleGenerativeAiTransport } from "../google-generative-ai.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
@@ -21,10 +22,6 @@ import {
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-
-function normalizeGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): string | undefined {
-  return baseUrl ? normalizeGoogleApiBaseUrl(baseUrl) : baseUrl;
-}
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -180,15 +177,14 @@ function applyConfiguredProviderOverrides(params: {
       ? resolvedInput.filter((item) => item === "text" || item === "image")
       : (["text"] as Array<"text" | "image">);
 
-  const resolvedApi = configuredModel?.api ?? providerConfig.api ?? discoveredModel.api;
-  let resolvedBaseUrl = providerConfig.baseUrl ?? discoveredModel.baseUrl;
-  if (resolvedApi === "google-generative-ai") {
-    resolvedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(resolvedBaseUrl) ?? resolvedBaseUrl;
-  }
+  const resolvedTransport = resolveGoogleGenerativeAiTransport({
+    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+  });
   return {
     ...discoveredModel,
-    api: resolvedApi,
-    baseUrl: resolvedBaseUrl,
+    api: resolvedTransport.api,
+    baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
@@ -218,16 +214,15 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     return (entry?.models ?? []).map((model) => {
-      const modelApi = model.api ?? entry?.api;
-      let baseUrl = entry?.baseUrl;
-      if (modelApi === "google-generative-ai") {
-        baseUrl = normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? baseUrl;
-      }
+      const transport = resolveGoogleGenerativeAiTransport({
+        api: model.api ?? entry?.api,
+        baseUrl: entry?.baseUrl,
+      });
       return {
         ...model,
         provider: trimmed,
-        baseUrl,
-        api: modelApi,
+        baseUrl: transport.baseUrl,
+        api: transport.api,
         headers: (() => {
           const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
             stripSecretRefMarkers: true,
@@ -375,11 +370,10 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
-  const fallbackApi = providerConfig?.api ?? "openai-responses";
-  let fallbackBaseUrl = providerConfig?.baseUrl;
-  if (fallbackApi === "google-generative-ai") {
-    fallbackBaseUrl = normalizeGoogleGenerativeAiBaseUrl(fallbackBaseUrl) ?? fallbackBaseUrl;
-  }
+  const fallbackTransport = resolveGoogleGenerativeAiTransport({
+    api: providerConfig?.api ?? "openai-responses",
+    baseUrl: providerConfig?.baseUrl,
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -387,9 +381,9 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: fallbackApi,
+      api: fallbackTransport.api,
       provider,
-      baseUrl: fallbackBaseUrl,
+      baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
