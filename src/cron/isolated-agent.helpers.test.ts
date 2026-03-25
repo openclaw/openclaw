@@ -39,6 +39,33 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toBe("Write completed successfully.");
   });
 
+  it("treats appended error as non-fatal when a substantive payload precedes it", () => {
+    // Common pattern: tool fails, LLM retries and succeeds, payloads.ts appends the original
+    // error warning after the successful output.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Here is the full Linear intake summary:\n\n" + "x".repeat(150), isError: false },
+        { text: "⚠️ ✉️ Message failed", isError: true },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.summary).toContain("Linear intake summary");
+  });
+
+  it("treats a short status line before an error as fatal (not recovered)", () => {
+    // A short progress message like "Starting…" before a real crash should not suppress the error.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Starting digest…", isError: false },
+        { text: "⚠️ Fatal: context limit exceeded", isError: true },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("context limit exceeded");
+  });
+
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

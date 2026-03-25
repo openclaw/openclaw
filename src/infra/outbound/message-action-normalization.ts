@@ -76,6 +76,9 @@ export function normalizeMessageActionInput(params: {
     explicitChannel.includes(":")
   ) {
     normalizedArgs.target = explicitChannel;
+    // The channel field held a target identifier, not a provider name.  Clear it so
+    // downstream routing does not attempt to look up provider "channel:123456".
+    delete normalizedArgs.channel;
   }
 
   applyTargetToParams({ action, args: normalizedArgs });

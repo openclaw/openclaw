@@ -136,7 +136,24 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // A non-error payload *before* the last error is also a recovery signal, but only when it
+  // looks like substantive output rather than a transient status line.  The threshold of 100
+  // characters filters out short progress messages like "Starting digest…" that appear before
+  // a genuine fatal crash, while still catching real agent output that was emitted before an
+  // appended false-positive error warning (the common tool-wrapper pattern).
+  const RECOVERY_MIN_CHARS = 100;
+  const hasSubstantivePayloadBeforeLastError =
+    !params.runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    params.payloads
+      .slice(0, lastErrorPayloadIndex)
+      .some(
+        (payload) =>
+          payload?.isError !== true && (payload?.text?.trim().length ?? 0) >= RECOVERY_MIN_CHARS,
+      );
+  const hasRecoveredFromError =
+    hasSuccessfulPayloadAfterLastError || hasSubstantivePayloadBeforeLastError;
+  const hasFatalErrorPayload = hasErrorPayload && !hasRecoveredFromError;
   const lastErrorPayloadText = [...params.payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
