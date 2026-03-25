@@ -443,20 +443,28 @@ function readDiscordDeployRejectedFields(value: unknown): string[] {
   return Object.keys(value).slice(0, 6);
 }
 
+function resolveDiscordRejectedDeployEntriesSource(
+  rawBody: unknown,
+): Record<string, unknown> | null {
+  if (!rawBody || typeof rawBody !== "object") {
+    return null;
+  }
+  const payload = rawBody as { errors?: unknown };
+  const errors = payload.errors && typeof payload.errors === "object" ? payload.errors : undefined;
+  const source = errors ?? rawBody;
+  return source && typeof source === "object" ? (source as Record<string, unknown>) : null;
+}
+
 function formatDiscordRejectedDeployEntries(params: {
   rawBody: unknown;
   requestBody: unknown;
 }): string[] {
   const requestBody = Array.isArray(params.requestBody) ? params.requestBody : null;
-  if (
-    !params.rawBody ||
-    typeof params.rawBody !== "object" ||
-    !requestBody ||
-    requestBody.length === 0
-  ) {
+  const rejectedEntriesSource = resolveDiscordRejectedDeployEntriesSource(params.rawBody);
+  if (!rejectedEntriesSource || !requestBody || requestBody.length === 0) {
     return [];
   }
-  const rawEntries = Object.entries(params.rawBody).filter(([key]) => /^\d+$/.test(key));
+  const rawEntries = Object.entries(rejectedEntriesSource).filter(([key]) => /^\d+$/.test(key));
   return rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT).flatMap(([key, value]) => {
     const index = Number.parseInt(key, 10);
     if (!Number.isFinite(index) || index < 0 || index >= requestBody.length) {

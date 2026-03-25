@@ -556,11 +556,32 @@ describe("monitorDiscordProvider", () => {
   it("formats rejected Discord deploy entries with command details", () => {
     const details = providerTesting.formatDiscordDeployErrorDetails({
       status: 400,
+      discordCode: 50035,
       rawBody: {
-        63: ["description"],
-        65: ["description"],
-        66: ["description"],
-        67: ["description"],
+        code: 50035,
+        message: "Invalid Form Body",
+        errors: {
+          63: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          65: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          66: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          67: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+        },
       },
       deployRequestBody: Array.from({ length: 68 }, (_entry, index) => ({
         name: `command-${index}`,
@@ -569,6 +590,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(details).toContain("status=400");
+    expect(details).toContain("code=50035");
     expect(details).toContain("rejected=");
     expect(details).toContain(
       '#63 fields=description name=command-63 description="description-63"',
