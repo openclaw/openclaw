@@ -914,7 +914,7 @@
           "exportName": "createMessageToolCardSchema",
           "kind": "function",
           "source": {
-            "line": 27,
+            "line": 29,
             "path": "src/plugin-sdk/channel-actions.ts"
           }
         },

@@ -479,6 +479,24 @@ describe("message tool schema scoping", () => {
     },
   );
 
+  it("keeps buttons schema optional so plain sends do not require buttons", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.buttons).toBeDefined();
+    expect(schema.required ?? []).not.toContain("buttons");
+  });
+
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
       id: "telegram",
