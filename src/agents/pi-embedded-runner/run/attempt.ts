@@ -2612,7 +2612,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
 
-      const {
+      let {
         assistantTexts,
         toolMetas,
         unsubscribe,
@@ -2898,10 +2898,19 @@ export async function runEmbeddedAttempt(
 
           // Proactive context guard for warn/error modes
           const currentCompactionMode = resolveCompactionMode(params.config);
+          let skipPromptForCompactionGuard = false;
           if (currentCompactionMode === "warn" || currentCompactionMode === "error") {
             let totalTokens = 0;
             try {
-              totalTokens = activeSession.messages.reduce(
+              // Sanitize session history to exclude toolResult.details payloads
+              // that are not part of the model-visible transcript.
+              const sanitizedMessages = await sanitizeSessionHistory({
+                messages: activeSession.messages,
+                sessionManager,
+                sessionId: params.sessionId,
+              });
+
+              totalTokens = sanitizedMessages.reduce(
                 (sum, msg) => sum + estimateTokens(msg as unknown as AgentMessage),
                 0,
               );
@@ -2923,68 +2932,46 @@ export async function runEmbeddedAttempt(
                 );
               }
               if (currentCompactionMode === "warn") {
-                // Fallback warning if estimation fails in warn mode
-                return {
-                  aborted: false,
-                  timedOut: false,
-                  timedOutDuringCompaction: false,
-                  promptError: null,
-                  sessionIdUsed: activeSession.sessionId,
-                  messagesSnapshot: activeSession.messages.slice(),
-                  assistantTexts: [
-                    "🧹 Context limit check failed (estimation error), but mode is 'warn'. Please use /compact to be safe.",
-                  ],
-                  toolMetas: [],
-                  lastAssistant: undefined,
-                  didSendViaMessagingTool: false,
-                  messagingToolSentTexts: [],
-                  messagingToolSentMediaUrls: [],
-                  messagingToolSentTargets: [],
-                  cloudCodeAssistFormatError: false,
-                };
+                const warnMsg =
+                  "🧹 Context limit check failed (estimation error), but mode is 'warn'. Please use /compact to be safe.";
+                assistantTexts = [warnMsg];
+                skipPromptForCompactionGuard = true;
               }
             }
 
-            const reserveTokens = settingsManager.getCompactionReserveTokens();
-            const contextWindow = params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
-            const threshold = Math.max(0, contextWindow - reserveTokens);
+            if (!skipPromptForCompactionGuard) {
+              const reserveTokens = settingsManager.getCompactionReserveTokens();
+              const contextWindow = params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+              const threshold = Math.max(0, contextWindow - reserveTokens);
 
-            if (totalTokens > threshold) {
-              if (currentCompactionMode === "warn") {
-                log.warn(
-                  `[compaction-guard] context near limit (mode=warn): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
-                );
-                return {
-                  aborted: false,
-                  timedOut: false,
-                  timedOutDuringCompaction: false,
-                  promptError: null,
-                  sessionIdUsed: activeSession.sessionId,
-                  messagesSnapshot: activeSession.messages.slice(),
-                  assistantTexts: ["🧹 Context near limit, use /compact"],
-                  toolMetas: [],
-                  lastAssistant: undefined,
-                  didSendViaMessagingTool: false,
-                  messagingToolSentTexts: [],
-                  messagingToolSentMediaUrls: [],
-                  messagingToolSentTargets: [],
-                  cloudCodeAssistFormatError: false,
-                };
-              } else if (currentCompactionMode === "error") {
-                log.error(
-                  `[compaction-guard] context exceeded (mode=error): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
-                );
-                throw new Error("Context exceeded, cannot proceed");
+              if (totalTokens > threshold) {
+                if (currentCompactionMode === "warn") {
+                  const warnMsg = "🧹 Context near limit, use /compact";
+                  log.warn(
+                    `[compaction-guard] context near limit (mode=warn): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
+                  );
+                  assistantTexts = [warnMsg];
+                  skipPromptForCompactionGuard = true;
+                } else if (currentCompactionMode === "error") {
+                  log.error(
+                    `[compaction-guard] context exceeded (mode=error): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
+                  );
+                  throw new Error("Context exceeded, cannot proceed");
+                }
               }
             }
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          if (!skipPromptForCompactionGuard) {
+            // Only pass images option if there are actually images to pass
+            // This avoids potential issues with models that don't expect the images parameter
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
           }
         } catch (err) {
           // Yield-triggered abort is intentional — treat as clean stop, not error.
