@@ -409,10 +409,6 @@ WeChat support is provided by the official Tencent plugin [`@tencent-weixin/open
 # Install the plugin (v2.x for OpenClaw >= 2026.3.22)
 openclaw plugins install "@tencent-weixin/openclaw-weixin"
 
-# Enable it
-openclaw config set plugins.allow '["openclaw-weixin"]'
-openclaw config set plugins.entries.openclaw-weixin.enabled true
-
 # Log in by scanning a QR code with your phone (WeChat mobile app)
 openclaw channels login --channel openclaw-weixin
 
