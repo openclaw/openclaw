@@ -82,10 +82,11 @@ export async function monitorWebInbox(options: {
   // Bot's own LID (Linked Identity) — needed for reply-to-bot detection
   // when contextInfo.participant returns a LID instead of a phone JID.
   // Baileys 7 rc9 does not expose lid on sock.user, so read from creds file.
-  const selfLid = (() => {
+  const selfLid = await (async () => {
     try {
-      const credsPath = path.join(options.authDir ?? "", "creds.json");
-      const creds = JSON.parse(fs.readFileSync(credsPath, "utf-8"));
+      const credsPath = path.join(options.authDir, "creds.json");
+      const raw = await fs.promises.readFile(credsPath, "utf-8");
+      const creds = JSON.parse(raw) as { me?: { lid?: string } };
       return creds?.me?.lid ?? undefined;
     } catch {
       return (sock.user as { lid?: string } | undefined)?.lid ?? undefined;
