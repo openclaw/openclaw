@@ -9,6 +9,126 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
+export interface ParsedMinimaxToolCall {
+  name: string;
+  input: Record<string, string>;
+  id: string;
+}
+
+let minimaxToolCallCounter = 0;
+
+/**
+ * Parse MiniMax XML tool invocations from text content.
+ *
+ * MiniMax M2.5 embeds tool calls as XML instead of structured `toolUse` blocks:
+ * ```xml
+ * <minimax:tool_call>
+ * <invoke name="some_tool">
+ * <parameter name="param1">value1</parameter>
+ * </invoke>
+ * </minimax:tool_call>
+ * ```
+ *
+ * Returns an array of parsed tool calls. Returns empty array when the text
+ * contains no minimax tool call markers or no parseable invocations.
+ */
+export function parseMinimaxToolCallXml(text: string): ParsedMinimaxToolCall[] {
+  if (!text || !/minimax:tool_call/i.test(text)) {
+    return [];
+  }
+
+  const toolCalls: ParsedMinimaxToolCall[] = [];
+  const invokeRe = /<invoke\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/gi;
+
+  for (const match of text.matchAll(invokeRe)) {
+    const name = match[1];
+    const body = match[2];
+    const input: Record<string, string> = {};
+
+    const paramRe = /<parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+    for (const paramMatch of body.matchAll(paramRe)) {
+      input[paramMatch[1]] = paramMatch[2]!;
+    }
+
+    minimaxToolCallCounter += 1;
+    toolCalls.push({
+      name,
+      input,
+      id: `toolu_minimax_${minimaxToolCallCounter}`,
+    });
+  }
+
+  return toolCalls;
+}
+
+/**
+ * Transform MiniMax XML tool invocations in text content blocks into
+ * structured `toolUse` content blocks on the assistant message.
+ *
+ * Follows the same in-place mutation pattern as {@link promoteThinkingTagsToBlocks}.
+ * Must be called before {@link extractAssistantText} so the tool calls are
+ * available as structured blocks and the XML is removed from displayed text.
+ *
+ * Falls back gracefully: if parsing yields no tool calls the text block is
+ * left untouched and the existing strip-only path in extractAssistantText
+ * will clean it up.
+ */
+export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
+    if (block.type !== "text") {
+      next.push(block);
+      continue;
+    }
+    const text: string = (block as { text?: string }).text ?? "";
+    if (!text || !/minimax:tool_call/i.test(text)) {
+      next.push(block);
+      continue;
+    }
+
+    const toolCalls = parseMinimaxToolCallXml(text);
+    if (toolCalls.length === 0) {
+      // No parseable invocations — keep the block as-is; the strip function
+      // inside extractAssistantText will still clean stray tags.
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+
+    // Strip XML from text and keep any remaining prose.
+    const cleaned = stripMinimaxToolCallXml(text).trim();
+    if (cleaned) {
+      next.push({ type: "text", text: cleaned });
+    }
+
+    // Insert structured toolUse blocks.
+    for (const tc of toolCalls) {
+      next.push({
+        type: "toolUse",
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+      } as unknown as (typeof next)[number]);
+    }
+  }
+
+  if (!changed) {
+    return;
+  }
+  message.content = next;
+}
+
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of

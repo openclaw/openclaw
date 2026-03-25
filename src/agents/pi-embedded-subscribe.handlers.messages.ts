@@ -20,6 +20,7 @@ import {
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
+  promoteMinimaxToolCallsToBlocks,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -343,6 +344,7 @@ export function handleMessageEnd(
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
+  promoteMinimaxToolCallsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
   appendRawStream({

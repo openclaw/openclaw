@@ -9,6 +9,7 @@ import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
+  shouldConfigPatchTriggerGatewayRestart,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -250,6 +251,61 @@ describe("resolveGatewayReloadSettings", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");
     expect(settings.debounceMs).toBe(300);
+  });
+});
+
+describe("shouldConfigPatchTriggerGatewayRestart", () => {
+  it("skips restart when the patch changes nothing", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "restart" } } }, []),
+    ).toBe(false);
+  });
+
+  it.each(["hybrid", "hot"] as const)(
+    "skips restart for hot-reload browser changes in %s mode",
+    (mode) => {
+      expect(
+        shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode } } }, [
+          "browser.profiles.sandbox.cdpUrl",
+        ]),
+      ).toBe(false);
+    },
+  );
+
+  it("skips restart when all changed paths are hot-reloadable or no-op", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hybrid" } } }, [
+        "browser.profiles.sandbox.cdpUrl",
+        "gateway.reload.mode",
+      ]),
+    ).toBe(false);
+  });
+
+  it.each(["off", "restart"] as const)(
+    "still restarts explicit patches for browser changes in %s mode",
+    (mode) => {
+      expect(
+        shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode } } }, [
+          "browser.profiles.sandbox.cdpUrl",
+        ]),
+      ).toBe(true);
+    },
+  );
+
+  it("still restarts explicit patches for restart-required paths in hot mode", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hot" } } }, [
+        "gateway.port",
+      ]),
+    ).toBe(true);
+  });
+
+  it("restarts when a changed path needs a full gateway restart", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hybrid" } } }, [
+        "gateway.port",
+      ]),
+    ).toBe(true);
   });
 });
 
