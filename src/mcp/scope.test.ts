@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../memory/sqlite.js";
+import { runMigrations } from "../infra/state-db/schema.js";
 import {
   findServerScope,
   loadServersFromScope,
@@ -11,6 +13,10 @@ import {
   upsertServerInScope,
   writeServersToScope,
 } from "./scope.js";
+import {
+  resetMcpServersDbForTest,
+  setMcpServersDbForTest,
+} from "./servers-sqlite.js";
 import type { McpServerConfig } from "./types.js";
 
 describe("mcpDirForScope", () => {
@@ -54,9 +60,23 @@ describe("mcpLockFileForScope", () => {
   });
 });
 
-// ── Scope read/write tests ──────────────────────────────────────────────────
+// ── Shared test server fixtures ──────────────────────────────────────────────
 
-describe("scope read/write operations", () => {
+const testServer: McpServerConfig = {
+  type: "http",
+  url: "https://example.com/mcp",
+};
+
+const testStdioServer: McpServerConfig = {
+  type: "stdio",
+  command: "/usr/bin/node",
+  args: ["server.js"],
+  env: { API_KEY: "test123" },
+};
+
+// ── YAML scope tests (project / local) ──────────────────────────────────────
+
+describe("scope read/write operations (project/local — YAML)", () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -67,19 +87,7 @@ describe("scope read/write operations", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  const testServer: McpServerConfig = {
-    type: "http",
-    url: "https://example.com/mcp",
-  };
-
-  const testStdioServer: McpServerConfig = {
-    type: "stdio",
-    command: "/usr/bin/node",
-    args: ["server.js"],
-    env: { API_KEY: "test123" },
-  };
-
-  it("writeServersToScope + loadServersFromScope round-trips", async () => {
+  it("writeServersToScope + loadServersFromScope round-trips (project)", async () => {
     const servers = { "test-server": testServer, "stdio-server": testStdioServer };
     await writeServersToScope("project", tempDir, servers);
 
@@ -88,13 +96,13 @@ describe("scope read/write operations", () => {
     expect(loaded["stdio-server"]).toMatchObject({ type: "stdio", command: "/usr/bin/node" });
   });
 
-  it("upsertServerInScope adds a new server", async () => {
+  it("upsertServerInScope adds a new server (project)", async () => {
     await upsertServerInScope("project", tempDir, "new-server", testServer);
     const loaded = await loadServersFromScope("project", tempDir);
     expect(loaded["new-server"]).toMatchObject({ type: "http" });
   });
 
-  it("upsertServerInScope updates an existing server", async () => {
+  it("upsertServerInScope updates an existing server (project)", async () => {
     await upsertServerInScope("project", tempDir, "srv", testServer);
     await upsertServerInScope("project", tempDir, "srv", {
       ...testServer,
@@ -104,7 +112,7 @@ describe("scope read/write operations", () => {
     expect(loaded["srv"]?.url).toBe("https://updated.com/mcp");
   });
 
-  it("removeServerFromScope removes a server", async () => {
+  it("removeServerFromScope removes a server (project)", async () => {
     await upsertServerInScope("project", tempDir, "srv", testServer);
     const removed = await removeServerFromScope("project", tempDir, "srv");
     expect(removed).toBe(true);
@@ -112,12 +120,12 @@ describe("scope read/write operations", () => {
     expect(loaded["srv"]).toBeUndefined();
   });
 
-  it("removeServerFromScope returns false for missing server", async () => {
+  it("removeServerFromScope returns false for missing server (project)", async () => {
     const removed = await removeServerFromScope("project", tempDir, "nonexistent");
     expect(removed).toBe(false);
   });
 
-  it("findServerScope finds server in correct scope", async () => {
+  it("findServerScope finds server in correct scope (project vs local)", async () => {
     await upsertServerInScope("project", tempDir, "proj-only", testServer);
     await upsertServerInScope("local", tempDir, "local-only", testStdioServer);
 
@@ -134,16 +142,92 @@ describe("scope read/write operations", () => {
     expect(await findServerScope("dup", tempDir)).toBe("local");
   });
 
-  it("writeServersToScope creates directory if missing", async () => {
+  it("writeServersToScope creates directory if missing (project)", async () => {
     const deepDir = join(tempDir, "deep", "nested");
-    // Use project scope with a deep directory as project root
     await writeServersToScope("project", deepDir, { srv: testServer });
     const loaded = await loadServersFromScope("project", deepDir);
     expect(loaded["srv"]).toMatchObject({ type: "http" });
   });
 
-  it("loadServersFromScope returns empty for missing file", async () => {
+  it("loadServersFromScope returns empty for missing file (project)", async () => {
     const loaded = await loadServersFromScope("project", tempDir);
     expect(loaded).toEqual({});
+  });
+});
+
+// ── SQLite scope tests (user) ────────────────────────────────────────────────
+
+describe("scope read/write operations (user — SQLite)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "mcp-scope-user-test-"));
+
+    // Wire up an in-memory DB for the user-scope SQLite functions.
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    setMcpServersDbForTest(db);
+  });
+
+  afterEach(async () => {
+    resetMcpServersDbForTest();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("upsertServerInScope adds a server in user scope (SQLite)", async () => {
+    await upsertServerInScope("user", tempDir, "u-server", testServer);
+    const loaded = await loadServersFromScope("user", tempDir);
+    expect(loaded["u-server"]).toMatchObject({ type: "http", url: "https://example.com/mcp" });
+  });
+
+  it("upsertServerInScope updates an existing user-scope server", async () => {
+    await upsertServerInScope("user", tempDir, "u-srv", testServer);
+    await upsertServerInScope("user", tempDir, "u-srv", {
+      ...testServer,
+      url: "https://updated.com/mcp",
+    });
+    const loaded = await loadServersFromScope("user", tempDir);
+    expect(loaded["u-srv"]?.url).toBe("https://updated.com/mcp");
+  });
+
+  it("removeServerFromScope removes a user-scope server", async () => {
+    await upsertServerInScope("user", tempDir, "u-srv", testServer);
+    const removed = await removeServerFromScope("user", tempDir, "u-srv");
+    expect(removed).toBe(true);
+    const loaded = await loadServersFromScope("user", tempDir);
+    expect(loaded["u-srv"]).toBeUndefined();
+  });
+
+  it("removeServerFromScope returns false for missing user-scope server", async () => {
+    const removed = await removeServerFromScope("user", tempDir, "nonexistent");
+    expect(removed).toBe(false);
+  });
+
+  it("writeServersToScope bulk-upserts and deletes removed keys (user)", async () => {
+    await upsertServerInScope("user", tempDir, "keep", testServer);
+    await upsertServerInScope("user", tempDir, "remove", testStdioServer);
+
+    await writeServersToScope("user", tempDir, { keep: testServer });
+    const loaded = await loadServersFromScope("user", tempDir);
+    expect(loaded["keep"]).toBeDefined();
+    expect(loaded["remove"]).toBeUndefined();
+  });
+
+  it("loadServersFromScope returns empty when no user-scope servers exist", async () => {
+    const loaded = await loadServersFromScope("user", tempDir);
+    expect(loaded).toEqual({});
+  });
+
+  it("findServerScope finds server in user scope (SQLite)", async () => {
+    await upsertServerInScope("user", tempDir, "user-only", testServer);
+    expect(await findServerScope("user-only", tempDir)).toBe("user");
+  });
+
+  it("findServerScope returns local over user when both have a key", async () => {
+    await upsertServerInScope("user", tempDir, "dup", testServer);
+    await upsertServerInScope("local", tempDir, "dup", testStdioServer);
+    expect(await findServerScope("dup", tempDir)).toBe("local");
   });
 });

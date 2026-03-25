@@ -3,11 +3,22 @@
  *
  * Handles local → project → user scope resolution and config merging.
  * Mirrors the agent scope pattern in `src/config/agent-scope.ts`.
+ *
+ * Storage strategy:
+ * - "user" scope  → SQLite (`op1_mcp_servers`, scope = 'user'), with YAML fallback
+ * - "project" scope → YAML file (`<projectRoot>/.openclaw/mcp/servers.yaml`)
+ * - "local" scope   → YAML file (`<projectRoot>/.openclaw/mcp.local/servers.yaml`)
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import {
+  deleteMcpServerFromDb,
+  hasMcpServersInDb,
+  loadMcpServersFromDb,
+  saveMcpServerToDb,
+} from "./servers-sqlite.js";
 import type { McpConfig, McpScope, McpServerConfig } from "./types.js";
 
 // ── Scope paths ──────────────────────────────────────────────────────────────
@@ -44,13 +55,13 @@ export function mcpLockFileForScope(scope: McpScope, projectRoot: string): strin
   }
 }
 
-// ── Config loading ───────────────────────────────────────────────────────────
+// ── Internal YAML helpers (project / local scopes) ───────────────────────────
 
 /**
- * Try to load MCP servers config from a scope directory's `servers.yaml`.
+ * Load servers from a YAML file for project or local scopes.
  * Returns an empty record if the file doesn't exist or is invalid.
  */
-export async function loadServersFromScope(
+async function loadServersFromYaml(
   scope: McpScope,
   projectRoot: string,
 ): Promise<Record<string, McpServerConfig>> {
@@ -61,7 +72,6 @@ export async function loadServersFromScope(
     if (!parsed || typeof parsed !== "object") {
       return {};
     }
-    // Basic validation: each value should be an object with a `type` field
     const servers: Record<string, McpServerConfig> = {};
     for (const [key, value] of Object.entries(parsed)) {
       if (value && typeof value === "object" && "type" in value) {
@@ -72,6 +82,64 @@ export async function loadServersFromScope(
   } catch {
     return {};
   }
+}
+
+/**
+ * Write servers to a YAML file for project or local scopes.
+ * Creates the directory if needed.
+ */
+async function writeServersToYaml(
+  scope: McpScope,
+  projectRoot: string,
+  servers: Record<string, McpServerConfig>,
+): Promise<void> {
+  const dir = mcpDirForScope(scope, projectRoot);
+  await mkdir(dir, { recursive: true });
+  const filePath = join(dir, "servers.yaml");
+  const yaml = stringifyYaml(servers, { lineWidth: 120 });
+  await writeFile(filePath, yaml, "utf-8");
+}
+
+// ── Config loading ───────────────────────────────────────────────────────────
+
+/**
+ * Load MCP servers config from a scope.
+ *
+ * - "user" scope: reads from SQLite. If no DB rows exist, falls back to
+ *   ~/.openclaw/mcp/servers.yaml and auto-imports into the DB.
+ * - "project" / "local" scopes: reads from YAML files as before.
+ *
+ * Returns an empty record if nothing is found.
+ */
+export async function loadServersFromScope(
+  scope: McpScope,
+  projectRoot: string,
+): Promise<Record<string, McpServerConfig>> {
+  if (scope === "user") {
+    // Primary: SQLite
+    if (hasMcpServersInDb("user")) {
+      return loadMcpServersFromDb("user");
+    }
+
+    // Fallback: read YAML and auto-import into DB (one-time migration path for
+    // environments where the schema migration didn't handle it, e.g. tests).
+    const yamlServers = await loadServersFromYaml("user", projectRoot);
+    if (Object.keys(yamlServers).length > 0) {
+      for (const [key, config] of Object.entries(yamlServers)) {
+        try {
+          saveMcpServerToDb("user", key, config);
+        } catch {
+          // Best-effort: skip rows that fail (e.g. table not yet created in test).
+        }
+      }
+      return yamlServers;
+    }
+
+    return {};
+  }
+
+  // project / local: YAML files
+  return loadServersFromYaml(scope, projectRoot);
 }
 
 // ── Scope resolution ─────────────────────────────────────────────────────────
@@ -86,7 +154,7 @@ const SCOPE_LOAD_ORDER: McpScope[] = ["user", "project", "local"];
  * 1. Inline config from `tools.mcp.servers` (highest — explicit config)
  * 2. Local scope (`.openclaw/mcp.local/servers.yaml`)
  * 3. Project scope (`.openclaw/mcp/servers.yaml`)
- * 4. User scope (`~/.openclaw/mcp/servers.yaml`)
+ * 4. User scope (SQLite op1_mcp_servers / ~/.openclaw/mcp/servers.yaml fallback)
  */
 export async function resolveMcpServers(
   inlineConfig: McpConfig | undefined,
@@ -132,26 +200,36 @@ export async function resolveEffectiveMcpConfig(
 // ── Scope writing ─────────────────────────────────────────────────────────
 
 /**
- * Write the full servers record to a scope's `servers.yaml`.
- * Creates the directory if it doesn't exist.
+ * Write the full servers record to a scope.
+ *
+ * - "user" scope: bulk-upserts into SQLite (deletes removed keys).
+ * - "project" / "local" scopes: writes YAML file.
  */
 export async function writeServersToScope(
   scope: McpScope,
   projectRoot: string,
   servers: Record<string, McpServerConfig>,
 ): Promise<void> {
-  const dir = mcpDirForScope(scope, projectRoot);
-  await mkdir(dir, { recursive: true });
-  const filePath = join(dir, "servers.yaml");
+  if (scope === "user") {
+    // Fetch existing keys so we can delete any that were removed.
+    const existing = loadMcpServersFromDb("user");
+    for (const key of Object.keys(existing)) {
+      if (!(key in servers)) {
+        deleteMcpServerFromDb("user", key);
+      }
+    }
+    for (const [key, config] of Object.entries(servers)) {
+      saveMcpServerToDb("user", key, config);
+    }
+    return;
+  }
 
-  // Strip comment-only or empty files; write the YAML content.
-  const yaml = stringifyYaml(servers, { lineWidth: 120 });
-  await writeFile(filePath, yaml, "utf-8");
+  await writeServersToYaml(scope, projectRoot, servers);
 }
 
 /**
  * Find which scope a server key lives in. Checks narrowest → broadest.
- * Returns undefined if the server isn't found in any scope file.
+ * Returns undefined if the server isn't found in any scope.
  */
 export async function findServerScope(
   serverKey: string,
@@ -169,7 +247,10 @@ export async function findServerScope(
 }
 
 /**
- * Add or update a server in a specific scope's `servers.yaml`.
+ * Add or update a server in a specific scope.
+ *
+ * - "user" scope: single-row upsert in SQLite.
+ * - "project" / "local" scopes: read-modify-write YAML.
  */
 export async function upsertServerInScope(
   scope: McpScope,
@@ -177,13 +258,18 @@ export async function upsertServerInScope(
   serverKey: string,
   config: McpServerConfig,
 ): Promise<void> {
-  const servers = await loadServersFromScope(scope, projectRoot);
+  if (scope === "user") {
+    saveMcpServerToDb("user", serverKey, config);
+    return;
+  }
+
+  const servers = await loadServersFromYaml(scope, projectRoot);
   servers[serverKey] = config;
-  await writeServersToScope(scope, projectRoot, servers);
+  await writeServersToYaml(scope, projectRoot, servers);
 }
 
 /**
- * Remove a server from a specific scope's `servers.yaml`.
+ * Remove a server from a specific scope.
  * Returns true if the server was found and removed.
  */
 export async function removeServerFromScope(
@@ -191,11 +277,15 @@ export async function removeServerFromScope(
   projectRoot: string,
   serverKey: string,
 ): Promise<boolean> {
-  const servers = await loadServersFromScope(scope, projectRoot);
+  if (scope === "user") {
+    return deleteMcpServerFromDb("user", serverKey);
+  }
+
+  const servers = await loadServersFromYaml(scope, projectRoot);
   if (!(serverKey in servers)) {
     return false;
   }
   delete servers[serverKey];
-  await writeServersToScope(scope, projectRoot, servers);
+  await writeServersToYaml(scope, projectRoot, servers);
   return true;
 }

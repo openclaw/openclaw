@@ -1695,6 +1695,64 @@ const MIGRATIONS: Migration[] = [
       // so we use a full index and filter in queries
     },
   },
+
+  // ── v33: MCP Servers ───────────────────────────────────────────────────────
+  {
+    version: 33,
+    description: "MCP servers: op1_mcp_servers (replaces ~/.openclaw/mcp/servers.yaml)",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_mcp_servers (
+          key         TEXT NOT NULL,
+          scope       TEXT NOT NULL,
+          type        TEXT NOT NULL,
+          config_json TEXT NOT NULL,
+          enabled     INTEGER NOT NULL DEFAULT 1,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          PRIMARY KEY (key, scope)
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_servers_scope ON op1_mcp_servers(scope)",
+      );
+
+      // Best-effort auto-import from ~/.openclaw/mcp/servers.yaml (user scope only).
+      // Uses dynamic require to avoid a hard dependency at module load time.
+      try {
+        const { readFileSync } = require("node:fs");
+        const { homedir } = require("node:os");
+        const { join } = require("node:path");
+        const { parse: parseYaml } = require("yaml");
+
+        const yamlPath = join(homedir(), ".openclaw", "mcp", "servers.yaml");
+        let raw: string;
+        try {
+          raw = readFileSync(yamlPath, "utf-8") as string;
+        } catch {
+          // File doesn't exist — nothing to import.
+          return;
+        }
+
+        const parsed = parseYaml(raw) as Record<string, unknown> | null;
+        if (!parsed || typeof parsed !== "object") return;
+
+        const insert = db.prepare(
+          `INSERT OR IGNORE INTO op1_mcp_servers (key, scope, type, config_json, enabled)
+           VALUES (?, 'user', ?, ?, ?)`,
+        );
+        for (const [key, value] of Object.entries(parsed)) {
+          if (!value || typeof value !== "object" || !("type" in value)) continue;
+          const cfg = value as Record<string, unknown>;
+          const type = typeof cfg["type"] === "string" ? cfg["type"] : "stdio";
+          const enabled = cfg["enabled"] !== false ? 1 : 0;
+          insert.run(key, type, JSON.stringify(cfg), enabled);
+        }
+      } catch {
+        // Best-effort: never crash the migration if YAML import fails.
+      }
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────
