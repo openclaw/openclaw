@@ -13,6 +13,7 @@ import {
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { clearPluginLoaderCache } from "../../plugins/loader.js";
 import {
   getActiveTaskCount,
   markGatewayDraining,
@@ -221,6 +222,11 @@ export async function runGatewayLoop(params: {
       // coordinator level — rather than inside individual subsystem init
       // functions, to avoid surprising cross-cutting side effects.
       resetAllLanes();
+      // Release cached plugin registries from the previous lifecycle so stale
+      // entries don't accumulate across in-process restarts. Each cached entry
+      // holds a full PluginRegistry with loaded runtimes; without this, the
+      // 128-entry LRU cap lets old registries persist indefinitely.
+      clearPluginLoaderCache();
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

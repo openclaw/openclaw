@@ -29,6 +29,7 @@ const abortEmbeddedPiRun = vi.fn(
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const clearPluginLoaderCache = vi.fn();
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
@@ -64,6 +65,10 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
     abortEmbeddedPiRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
+vi.mock("../../plugins/loader.js", () => ({
+  clearPluginLoaderCache: () => clearPluginLoaderCache(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -280,6 +285,7 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(clearPluginLoaderCache).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -292,6 +298,7 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(clearPluginLoaderCache).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();
