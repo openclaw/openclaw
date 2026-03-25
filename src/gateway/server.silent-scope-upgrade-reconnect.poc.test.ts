@@ -1,7 +1,8 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import * as devicePairingModule from "../infra/device-pairing.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -131,6 +132,52 @@ describe("gateway silent scope-upgrade reconnect", () => {
       initialDeviceTokenWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("accepts local silent reconnect when pairing was concurrently approved", async () => {
+    const started = await startServerWithClient("secret");
+    const loaded = loadDeviceIdentity("silent-reconnect-race");
+    let ws: WebSocket | undefined;
+
+    const approveOriginal = devicePairingModule.approveDevicePairing;
+    let simulatedRace = false;
+    const approveSpy = vi
+      .spyOn(devicePairingModule, "approveDevicePairing")
+      .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown, maybeBaseDir?: unknown) => {
+        if (simulatedRace) {
+          return await approveOriginal(
+            requestId,
+            optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
+            maybeBaseDir as string | undefined,
+          );
+        }
+        simulatedRace = true;
+        await approveOriginal(
+          requestId,
+          optionsOrBaseDir as { callerScopes?: readonly string[] } | string | undefined,
+          maybeBaseDir as string | undefined,
+        );
+        return null;
+      });
+
+    try {
+      ws = await openTrackedWs(started.port);
+      const res = await connectReq(ws, {
+        token: "secret",
+        deviceIdentityPath: loaded.identityPath,
+      });
+      expect(res.ok).toBe(true);
+
+      const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired?.publicKey).toBe(loaded.publicKey);
+      expect(paired?.tokens?.operator?.token).toBeTruthy();
+    } finally {
+      approveSpy.mockRestore();
+      ws?.close();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();

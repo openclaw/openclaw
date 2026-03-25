@@ -746,6 +746,37 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
           ) => {
+            const pairingStateAllowsRequestedAccess = (
+              pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
+            ): boolean => {
+              if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
+                return false;
+              }
+              const pairedRoles = Array.isArray(pairedCandidate.roles)
+                ? pairedCandidate.roles
+                : pairedCandidate.role
+                  ? [pairedCandidate.role]
+                  : [];
+              if (pairedRoles.length > 0 && !pairedRoles.includes(role)) {
+                return false;
+              }
+              if (scopes.length === 0) {
+                return true;
+              }
+              const pairedScopes = Array.isArray(pairedCandidate.scopes)
+                ? pairedCandidate.scopes
+                : Array.isArray(pairedCandidate.approvedScopes)
+                  ? pairedCandidate.approvedScopes
+                  : [];
+              if (pairedScopes.length === 0) {
+                return false;
+              }
+              return roleScopesAllow({
+                role,
+                requestedScopes: scopes,
+                allowedScopes: pairedScopes,
+              });
+            };
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
               isLocalClient,
               hasBrowserOriginHeader,
@@ -761,6 +792,7 @@ export function attachGatewayWsMessageHandler(params: {
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
+            let resolvedByConcurrentApproval = false;
             if (pairing.request.silent === true) {
               approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
@@ -777,13 +809,18 @@ export function attachGatewayWsMessageHandler(params: {
                   },
                   { dropIfSlow: true },
                 );
-              } else if (pairing.created) {
-                context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+              } else {
+                resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
+                  await getPairedDevice(device.id),
+                );
+                if (!resolvedByConcurrentApproval && pairing.created) {
+                  context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+                }
               }
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
-            if (!(pairing.request.silent === true && approved)) {
+            if (!(pairing.request.silent === true && (approved || resolvedByConcurrentApproval))) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
