@@ -498,7 +498,9 @@
   border-radius: var(--radius-md);
   border: none;
   background: var(--muted-strong);
-  color: var(--text-strong);
+  /* Use white icon for sufficient contrast against --muted-strong background
+     across all themes (WCAG AA ≥ 4.5:1). */
+  color: #fff;
   cursor: pointer;
   flex-shrink: 0;
   transition:
