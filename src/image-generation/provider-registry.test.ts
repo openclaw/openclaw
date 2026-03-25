@@ -57,6 +57,70 @@ describe("image-generation provider registry", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("resolves custom provider to compatible registered image generation provider via api field", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.imageGenerationProviders.push({
+      pluginId: "google",
+      pluginName: "Google",
+      source: "test",
+      provider: {
+        id: "google",
+        label: "Google",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      models: {
+        providers: {
+          "my-gemini-proxy": {
+            baseUrl: "https://proxy.example.com/v1beta",
+            apiKey: "sk-test",
+            api: "google-generative-ai",
+            models: [{ id: "gemini-3.1-flash-image-preview" }],
+          },
+        },
+      },
+    };
+
+    const provider = getImageGenerationProvider(
+      "my-gemini-proxy",
+      cfg as unknown as import("../config/config.js").OpenClawConfig,
+    );
+    expect(provider?.id).toBe("google");
+  });
+
+  it("returns undefined for custom provider with unsupported api", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      models: {
+        providers: {
+          "custom-llm": {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            models: [{ id: "auto" }],
+          },
+        },
+      },
+    };
+
+    expect(
+      getImageGenerationProvider(
+        "custom-llm",
+        cfg as unknown as import("../config/config.js").OpenClawConfig,
+      ),
+    ).toBeUndefined();
+  });
+
   it("ignores prototype-like provider ids and aliases", () => {
     const registry = createEmptyPluginRegistry();
     registry.imageGenerationProviders.push(

@@ -222,6 +222,62 @@ describe("Google image-generation provider", () => {
     );
   });
 
+  it("resolves auth and baseUrl from custom provider config via req.provider", async () => {
+    const resolveAuthSpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "custom-proxy-key",
+      source: "models.json",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("png-data").toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const customBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "my-gemini-proxy",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            "my-gemini-proxy": {
+              baseUrl: customBaseUrl,
+              apiKey: "custom-proxy-key",
+              api: "google-generative-ai",
+              models: [],
+            },
+          },
+        },
+      } as any,
+    });
+
+    expect(resolveAuthSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "my-gemini-proxy" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${customBaseUrl}/models/gemini-3.1-flash-image-preview:generateContent`,
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("forwards explicit aspect ratio without forcing a default when size is omitted", async () => {
     mockGoogleApiKeyAuth();
     const fetchMock = installGoogleFetchMock();

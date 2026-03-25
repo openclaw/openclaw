@@ -68,6 +68,34 @@ export function listImageGenerationProviders(
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/**
+ * Map custom provider API protocols to known image generation provider IDs.
+ * When a custom provider in `models.providers` uses a compatible API, we can
+ * delegate to the matching registered image generation provider.
+ */
+const API_TO_IMAGE_GENERATION_PROVIDER: Record<string, string> = {
+  "google-generative-ai": "google",
+};
+
+function resolveCompatibleImageGenerationProvider(
+  providerId: string,
+  cfg: OpenClawConfig | undefined,
+): ImageGenerationProviderPlugin | undefined {
+  const providerConfig = cfg?.models?.providers?.[providerId];
+  if (!providerConfig) {
+    return undefined;
+  }
+  const api = providerConfig.api?.trim();
+  if (!api) {
+    return undefined;
+  }
+  const targetId = API_TO_IMAGE_GENERATION_PROVIDER[api];
+  if (!targetId) {
+    return undefined;
+  }
+  return buildProviderMaps(cfg).canonical.get(targetId);
+}
+
 export function getImageGenerationProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
@@ -76,5 +104,6 @@ export function getImageGenerationProvider(
   if (!normalized) {
     return undefined;
   }
-  return buildProviderMaps(cfg).aliases.get(normalized);
+  const maps = buildProviderMaps(cfg);
+  return maps.aliases.get(normalized) ?? resolveCompatibleImageGenerationProvider(normalized, cfg);
 }

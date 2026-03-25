@@ -52,7 +52,16 @@ type GoogleGenerateImageResponse = {
   }>;
 };
 
-function resolveGoogleBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
+function resolveGoogleBaseUrl(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  providerId?: string,
+): string {
+  if (providerId && providerId !== "google") {
+    const custom = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
+    if (custom) {
+      return custom;
+    }
+  }
   return normalizeGoogleApiBaseUrl(cfg?.models?.providers?.google?.baseUrl);
 }
 
@@ -124,7 +133,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
-        provider: "google",
+        provider: req.provider,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
@@ -134,8 +143,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const baseUrl = normalizeBaseUrl(resolveGoogleBaseUrl(req.cfg), DEFAULT_GOOGLE_API_BASE_URL);
-      const allowPrivate = Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim());
+      const baseUrl = normalizeBaseUrl(
+        resolveGoogleBaseUrl(req.cfg, req.provider),
+        DEFAULT_GOOGLE_API_BASE_URL,
+      );
+      const providerBaseUrl = req.cfg?.models?.providers?.[req.provider]?.baseUrl?.trim();
+      const allowPrivate = Boolean(providerBaseUrl);
       const authHeaders = parseGeminiAuth(auth.apiKey);
       const headers = new Headers(authHeaders.headers);
       const imageConfig = mapSizeToImageConfig(req.size);
