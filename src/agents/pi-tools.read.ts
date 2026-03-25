@@ -63,6 +63,9 @@ type ReadTruncationDetails = {
 
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
+// Matches the exact error thrown by @mariozechner/pi-coding-agent's read tool.
+// If this pattern stops matching after an upstream update, recovery silently degrades
+// back to a thrown error, so validate it against the pi-coding-agent version in use.
 const READ_OFFSET_OUT_OF_RANGE_RE = /^Offset (\d+) is beyond end of file \((\d+) lines total\)$/;
 
 type ReadOffsetOutOfRangeDiagnostic = {
@@ -254,7 +257,7 @@ function prependReadRecoveryNotice(
 ): AgentToolResult<unknown> {
   const returnedLines = Math.max(1, details.totalLines - details.recoveredOffset + 1);
   const lineLabel = returnedLines === 1 ? "line" : "lines";
-  const notice = `[Requested offset ${details.requestedOffset} is beyond end of file (${details.totalLines} lines total). Returning the last ${returnedLines} ${lineLabel} from offset=${details.recoveredOffset} instead.]`;
+  const notice = `[Requested offset ${details.requestedOffset} is beyond end of file (${details.totalLines} lines total). Returning up to the last ${returnedLines} ${lineLabel} from offset=${details.recoveredOffset} instead.]`;
   const existingText = getToolResultText(result);
   const withNotice = withToolResultText(
     result,

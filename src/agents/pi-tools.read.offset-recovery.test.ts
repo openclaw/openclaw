@@ -56,7 +56,7 @@ describe("createOpenClawReadTool offset recovery", () => {
 
     const text = extractToolText(result);
     expect(text).toContain("Requested offset 200 is beyond end of file (4 lines total)");
-    expect(text).toContain("Returning the last 4 lines from offset=1 instead");
+    expect(text).toContain("Returning up to the last 4 lines from offset=1 instead");
     expect(text).toContain("line-1");
     expect(text).toContain("line-4");
     expect(
@@ -93,7 +93,7 @@ describe("createOpenClawReadTool offset recovery", () => {
 
     const text = extractToolText(result);
     expect(text).toContain("Requested offset 200 is beyond end of file (6 lines total)");
-    expect(text).toContain("Returning the last 2 lines from offset=5 instead");
+    expect(text).toContain("Returning up to the last 2 lines from offset=5 instead");
     expect(text).toContain("line-5");
     expect(text).toContain("line-6");
     expect(text).not.toContain("line-1");
