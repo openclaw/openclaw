@@ -156,9 +156,14 @@ export async function searchKeyword(params: {
   const modelClause = params.providerModel ? " AND model = ?" : "";
   const modelParams = params.providerModel ? [params.providerModel] : [];
 
+  // SQLite FTS5 snippet() accepts at most 64 tokens for the column index.
+  // Clamp nTokens explicitly to avoid silent truncation by SQLite.
+  const snippetTokens = Math.min(64, Math.max(1, Math.floor(params.snippetMaxChars / 4)));
+
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT id, path, source, start_line, end_line,\n` +
+        `       snippet(${params.ftsTable}, 0, '\u2026', '\u2026', '\u2026', ${snippetTokens}) AS snippet,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
         ` WHERE ${params.ftsTable} MATCH ?${modelClause}${params.sourceFilter.sql}\n` +
@@ -171,7 +176,7 @@ export async function searchKeyword(params: {
     source: SearchSource;
     start_line: number;
     end_line: number;
-    text: string;
+    snippet: string;
     rank: number;
   }>;
 
@@ -184,7 +189,7 @@ export async function searchKeyword(params: {
       endLine: row.end_line,
       score: textScore,
       textScore,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+      snippet: truncateUtf16Safe(row.snippet ?? "", params.snippetMaxChars),
       source: row.source,
     };
   });
