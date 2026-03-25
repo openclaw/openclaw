@@ -210,13 +210,18 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
+    // Upstream convention: package suffix may differ from manifest id by a
+    // known role suffix (e.g. "@openclaw/duckduckgo-plugin" → idHint
+    // "duckduckgo-plugin" vs manifest.id "duckduckgo", or "-speech", "-provider").
+    // These are intentional and should not produce warnings.
+    const knownSuffixes = ["-plugin", "-provider", "-speech"];
+    const idHintMatchesKnownSuffix =
+      candidate.idHint !== undefined &&
+      knownSuffixes.some((suffix) => candidate.idHint === `${manifest.id}${suffix}`);
     if (
       candidate.idHint &&
       candidate.idHint !== manifest.id &&
-      // Suppress known `-provider` suffix mismatches (upstream convention:
-      // directory "ollama" + package "@openclaw/ollama-provider" → idHint
-      // "ollama-provider" vs manifest.id "ollama"). These are intentional.
-      candidate.idHint !== `${manifest.id}-provider`
+      !idHintMatchesKnownSuffix
     ) {
       diagnostics.push({
         level: "warn",
