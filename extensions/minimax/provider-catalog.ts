@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
-const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204800;
 const MINIMAX_DEFAULT_MAX_TOKENS = 131072;
 const MINIMAX_API_COST = {
@@ -44,10 +43,8 @@ function buildMinimaxTextModel(params: {
   return buildMinimaxModel({ ...params, input: ["text"] });
 }
 
-const MINIMAX_TUI_MODELS = new Set(["MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
-
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
-  return MINIMAX_TEXT_MODEL_ORDER.filter((id) => MINIMAX_TUI_MODELS.has(id)).map((id) => {
+  return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
     const model = MINIMAX_TEXT_MODEL_CATALOG[id];
     return buildMinimaxTextModel({
       id,

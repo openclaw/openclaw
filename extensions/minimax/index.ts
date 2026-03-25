@@ -236,6 +236,9 @@ export default definePluginEntry({
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
 
+    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+
     api.registerProvider({
       id: PORTAL_PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -278,8 +281,6 @@ export default definePluginEntry({
       ],
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
-    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
-    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProviderForApi());
