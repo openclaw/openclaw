@@ -2,7 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { compareSemverStrings } from "../../../src/infra/update-check.js";
+import { compareSemverStrings } from "../../../src/shared/semver.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
