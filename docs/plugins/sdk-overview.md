@@ -152,6 +152,13 @@ methods:
 | `api.on(hookName, handler, opts?)`           | Typed lifecycle hook          |
 | `api.onConversationBindingResolved(handler)` | Conversation binding callback |
 
+### Hook decision semantics
+
+- `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
+
 ### API object fields
 
 | Field                    | Type                      | Description                                               |
