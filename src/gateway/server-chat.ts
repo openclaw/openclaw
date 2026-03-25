@@ -207,6 +207,14 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /**
+   * Tracks text offset per run for segmented streaming. When a tool-start
+   * event fires, the current buffer length is recorded so subsequent delta
+   * broadcasts only contain text produced *after* the tool boundary. This
+   * prevents the UI from displaying accumulated pre-tool text in each new
+   * streaming segment.
+   */
+  segmentOffsets: Map<string, number>;
   clear: () => void;
 };
 
@@ -216,6 +224,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const segmentOffsets = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
@@ -223,6 +232,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    segmentOffsets.clear();
   };
 
   return {
@@ -231,6 +241,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    segmentOffsets,
     clear,
   };
 }
@@ -536,6 +547,11 @@ export function createAgentEventHandler({
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
+    // Slice off text that was already committed to a previous streaming
+    // segment (before a tool-start boundary) so the UI only receives the
+    // portion produced *after* the last tool call.
+    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
+    const displayText = segmentOffset > 0 ? mergedText.slice(segmentOffset) : mergedText;
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -543,7 +559,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: mergedText }],
+        content: [{ type: "text", text: displayText }],
         timestamp: now,
       },
     };
@@ -593,6 +609,9 @@ export function createAgentEventHandler({
     }
 
     const now = Date.now();
+    // Apply segment offset so the flushed payload only contains post-tool text.
+    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
+    const displayText = segmentOffset > 0 ? text.slice(segmentOffset) : text;
     const flushPayload = {
       runId: clientRunId,
       sessionKey,
@@ -600,7 +619,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: displayText }],
         timestamp: now,
       },
     };
@@ -628,6 +647,7 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.segmentOffsets.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -730,6 +750,12 @@ export function createAgentEventHandler({
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (toolPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
         flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
+        // Record the current buffer length as the segment offset so
+        // subsequent delta broadcasts only carry text produced *after*
+        // this tool boundary.  This prevents the UI from re-displaying
+        // pre-tool text that was already committed to a streaming segment.
+        const currentBuffer = chatRunState.buffers.get(clientRunId) ?? "";
+        chatRunState.segmentOffsets.set(clientRunId, currentBuffer.length);
       }
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
@@ -799,6 +825,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.segmentOffsets.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }
