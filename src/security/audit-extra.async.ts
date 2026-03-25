@@ -9,9 +9,9 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
 import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
-import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { resolveEffectiveSandboxToolPolicyForAgent } from "../agents/tool-policy-sandbox.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -151,7 +151,9 @@ function resolveToolPolicies(params: {
     pickSandboxToolPolicy(params.agentTools),
   ];
   if (params.sandboxMode === "all") {
-    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
+    policies.push(
+      resolveEffectiveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined),
+    );
   }
   return policies;
 }

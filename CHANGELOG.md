@@ -8,7 +8,28 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- MiniMax: add image generation provider for `image-01` model, supporting generate and image-to-image editing with aspect ratio control. (#54487) Thanks @liyuan97.
+- MiniMax: trim model catalog to M2.7 only, removing legacy M2, M2.1, M2.5, and VL-01 models. (#54487) Thanks @liyuan97.
+
 ### Fixes
+
+- Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
+- Feishu: close WebSocket connections on monitor stop/abort so ghost connections no longer persist, preventing duplicate event processing and resource leaks across restart cycles. (#52844) Thanks @schumilin.
+- Feishu: use the original message `create_time` instead of `Date.now()` for inbound timestamps so offline-retried messages carry the correct authoring time, preventing mis-targeted agent actions on stale instructions. (#52809) Thanks @schumilin.
+- Plugins/SDK: thread `moduleUrl` through plugin-sdk alias resolution so user-installed plugins outside the openclaw directory (e.g. `~/.openclaw/extensions/`) correctly resolve `openclaw/plugin-sdk/*` subpath imports, and gate `plugin-sdk:check-exports` in `release:check`. (#54283) Thanks @xieyongliang.
+
+## 2026.3.24-beta.2
+
+### Breaking
+
+### Changes
+
+### Fixes
+
+- Outbound media/local files: align outbound media access with the configured fs policy so host-local files and inbound-media paths keep sending when `workspaceOnly` is off, while strict workspace-only agents remain sandboxed.
+- Runtime/install: lower the supported Node 22 floor to `22.14+` while continuing to recommend Node 24, so npm installs and self-updates do not strand Node 22.14 users on older releases.
+- CLI/update: preflight the target npm package `engines.node` before `openclaw update` runs a global package install, so outdated Node runtimes fail with a clear upgrade message instead of attempting an unsupported latest release.
+- Tests/security audit: isolate audit-test home and personal skill resolution so local `~/.agents/skills` installs no longer make maintainer prep runs fail nondeterministically. (#54473) thanks @huntharo
 
 ## 2026.3.24-beta.1
 
@@ -74,6 +95,7 @@ Docs: https://docs.openclaw.ai
 - Marketplace/agents: correct the ClawHub skill URL in agent docs and stream marketplace archive downloads to disk so installs avoid excess memory use and fail cleanly on empty responses. (#54160) Thanks @QuinnH496.
 - Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
+- Discord/commands: trim overlong slash-command descriptions to Discord's 100-character limit and map rejected deploy indexes from Discord validation payloads back to command names/descriptions, so deploys stop failing on long descriptions and startup logs identify the rejected commands. (#54118) thanks @huntharo
 
 ## 2026.3.23
 

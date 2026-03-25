@@ -636,8 +636,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
-        primaryModel: "minimax/MiniMax-M2.5-highspeed",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.7-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
