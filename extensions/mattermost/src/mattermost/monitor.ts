@@ -1984,11 +1984,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   lastSentText = "";
 
                   // Short-turn path: no stream post existed (the 200ms ticker never
-                  // fired or the send is still in flight). Reset patchSending and return.
-                  // Note: if the send is truly still in flight, streamMessageId will be
-                  // populated after we return and that post will be cleaned up by the
-                  // next onAssistantMessageStart or by onSettled.
+                  // fired or the send is still in flight). Await patchInflight
+                  // before clearing the lock so the next turn cannot launch a
+                  // concurrent send while the previous one is still settling
+                  // (ID=2984546455).
                   if (!finalizeId || !finalizeText) {
+                    if (patchInflight) {
+                      await patchInflight.catch(() => {});
+                    }
                     patchSending = false;
                     return;
                   }
