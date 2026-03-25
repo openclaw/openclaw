@@ -387,8 +387,12 @@ scripts/sandbox-setup.sh
     ```bash
     docker compose run --rm openclaw-cli config set gateway.mode local
     docker compose run --rm openclaw-cli config set gateway.bind lan
-    docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
+    TOKEN="$(grep '^OPENCLAW_GATEWAY_TOKEN=' .env | cut -d= -f2-)"
+    docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789 --token "$TOKEN"
     ```
+
+    When you pass `--url`, also pass `--token` or `--password`. URL overrides do
+    not reuse implicit credentials from config or environment.
 
   </Accordion>
 </AccordionGroup>
