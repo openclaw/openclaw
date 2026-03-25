@@ -29321,6 +29321,22 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.accounts.*.reactionTrigger",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "own",
+        "all",
+        "allowlist"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.accounts.*.replyToMode",
       "kind": "channel",
       "type": "string",
@@ -30716,6 +30732,22 @@
     },
     {
       "path": "channels.slack.reactionNotifications",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "own",
+        "all",
+        "allowlist"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.reactionTrigger",
       "kind": "channel",
       "type": "string",
       "required": false,

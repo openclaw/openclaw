@@ -239,7 +239,6 @@ describe("registerSlackReactionEvents", () => {
 
     it("calls requestHeartbeatNow for 'allowlist' when user is in reactionAllowlist", async () => {
       reactionQueueMock.mockReset();
-      reactionAllowMock.mockReset().mockResolvedValue([]);
       requestHeartbeatNowMock.mockReset();
       const harness = createSlackSystemEventTestHarness({
         reactionTrigger: "allowlist",
@@ -255,7 +254,6 @@ describe("registerSlackReactionEvents", () => {
 
     it("does NOT call requestHeartbeatNow for 'allowlist' when user is not in list", async () => {
       reactionQueueMock.mockReset();
-      reactionAllowMock.mockReset().mockResolvedValue([]);
       requestHeartbeatNowMock.mockReset();
       const harness = createSlackSystemEventTestHarness({
         reactionTrigger: "allowlist",
