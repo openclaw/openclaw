@@ -1,6 +1,6 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -108,6 +108,11 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (!isImageExtension(trimmed)) {
       return;
     }
+    try {
+      assertNoWindowsNetworkPath(trimmed, "Image path");
+    } catch {
+      return;
+    }
     seen.add(dedupeKey);
     const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
     refs.push({ raw: trimmed, type: "path", resolved });
@@ -160,7 +165,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     seen.add(dedupeKey);
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
     try {
-      const resolved = fileURLToPath(raw);
+      const resolved = safeFileURLToPath(raw);
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs

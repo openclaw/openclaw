@@ -36,7 +36,6 @@ function hasDiagnosticSourceSuffix(
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_HOME: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
@@ -396,6 +395,23 @@ describe("discoverOpenClawPlugins", () => {
     expectEscapesPackageDiagnostic(result.diagnostics);
   });
 
+  it("skips missing package extension entries without escape diagnostics", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
+    mkdirSafe(globalExt);
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/missing-entry-pack",
+      extensions: ["./missing.ts"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("rejects package extension entries that escape via symlink", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
@@ -519,7 +535,6 @@ describe("discoverOpenClawPlugins", () => {
         env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },
       });

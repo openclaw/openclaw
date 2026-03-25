@@ -24,6 +24,9 @@ const SessionsHistoryToolSchema = Type.Object({
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
+const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+type GatewayCaller = typeof callGateway;
+
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
 function enforceSessionsHistoryHardCap(params: {
@@ -55,6 +58,7 @@ export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Session History",
@@ -63,6 +67,7 @@ export function createSessionsHistoryTool(opts?: {
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callGateway;
       const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
@@ -125,6 +130,7 @@ export function createSessionsHistoryTool(opts?: {
       const includeTools = Boolean(params.includeTools);
       const preserveLatestAssistantReasoning = Boolean(params.preserveLatestAssistantReasoning);
       const result = await callGateway<{ messages: Array<unknown> }>({
+      const result = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });

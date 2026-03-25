@@ -43,6 +43,7 @@ export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 
@@ -285,6 +286,7 @@ vi.mock("./helpers.js", () => ({
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
+  resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
   resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
 }));
 
@@ -387,6 +389,26 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   listDescendantRunsForRequesterMock.mockReturnValue([]);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  resolveCronPayloadOutcomeMock.mockReset();
+  resolveCronPayloadOutcomeMock.mockImplementation(
+    ({ payloads }: { payloads: Array<{ isError?: boolean }> }) => {
+      const outputText = pickLastNonEmptyTextFromPayloadsMock(payloads);
+      const synthesizedText = outputText?.trim() || "summary";
+      const hasFatalErrorPayload = payloads.some((payload) => payload?.isError === true);
+      return {
+        summary: "summary",
+        outputText,
+        synthesizedText,
+        deliveryPayload: undefined,
+        deliveryPayloads: synthesizedText ? [{ text: synthesizedText }] : [],
+        deliveryPayloadHasStructuredContent: false,
+        hasFatalErrorPayload,
+        embeddedRunError: hasFatalErrorPayload
+          ? "cron isolated run returned an error payload"
+          : undefined,
+      };
+    },
+  );
   resolveCronDeliveryPlanMock.mockReset();
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();
