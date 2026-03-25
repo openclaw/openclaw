@@ -72,6 +72,7 @@ import {
 } from "./shared.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
+import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime
@@ -686,6 +687,7 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   threading: {
     topLevelReplyToMode: "telegram",
+    buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
       replyToId ? undefined : resolveTelegramAutoThreadId({ to, toolContext }),
   },
