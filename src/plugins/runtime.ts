@@ -106,16 +106,25 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
  *  gateway startup after the initial plugin load so that config-schema reads
  *  and other non-primary registry loads cannot evict channel plugins. */
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
+  if (state.channelRegistry === registry && state.channelRegistryPinned) {
+    return;
+  }
   state.channelRegistry = registry;
   state.channelRegistryPinned = true;
+  state.version += 1;
 }
 
 export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   if (registry && state.channelRegistry !== registry) {
     return;
   }
+  const nextChannelRegistry = state.registry;
+  if (state.channelRegistry === nextChannelRegistry && !state.channelRegistryPinned) {
+    return;
+  }
   state.channelRegistryPinned = false;
-  state.channelRegistry = state.registry;
+  state.channelRegistry = nextChannelRegistry;
+  state.version += 1;
 }
 
 /** Return the registry that should be used for channel plugin resolution.
