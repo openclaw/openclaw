@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
@@ -19,6 +19,15 @@ const windowsAuditEnv = {
   USERNAME: "Tester",
   USERDOMAIN: "DESKTOP-TEST",
 };
+const pathResolutionEnvKeys = [
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+] as const;
 const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawFn"]> = async () => {
   return {
     stdout: Buffer.alloc(0),
@@ -271,7 +280,10 @@ describe("security audit", () => {
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
   let sharedInstallMetadataStateDir = "";
-  let previousOpenClawHome: string | undefined;
+  let isolatedHome = "";
+  let homedirSpy: { mockRestore(): void } | undefined;
+  const previousPathResolutionEnv: Partial<Record<(typeof pathResolutionEnvKeys)[number], string>> =
+    {};
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -353,9 +365,19 @@ description: test skill
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
-    previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = path.join(fixtureRoot, "home");
-    await fs.mkdir(process.env.OPENCLAW_HOME, { recursive: true, mode: 0o700 });
+    isolatedHome = path.join(fixtureRoot, "home");
+    const isolatedEnv = createPathResolutionEnv(isolatedHome, { OPENCLAW_HOME: isolatedHome });
+    for (const key of pathResolutionEnvKeys) {
+      previousPathResolutionEnv[key] = process.env[key];
+      const value = isolatedEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(isolatedHome);
+    await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
     sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
@@ -376,10 +398,14 @@ description: test skill
   });
 
   afterAll(async () => {
-    if (previousOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    homedirSpy?.mockRestore();
+    for (const key of pathResolutionEnvKeys) {
+      const value = previousPathResolutionEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
     if (!fixtureRoot) {
       return;

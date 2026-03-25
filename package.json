@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.24-beta.1",
+  "version": "2026.3.24-beta.2",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -837,7 +837,7 @@
     "openshell": "0.1.0"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.14.0"
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {

@@ -161,7 +161,7 @@ async function resolvePackageRuntimePreflightError(params: {
   return [
     `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
     `The requested package requires ${status.nodeEngine}.`,
-    "Upgrade Node to 22.16+ or Node 24, then rerun `openclaw update`.",
+    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
   ].join("\n");
