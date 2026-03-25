@@ -495,45 +495,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    const plugins = listChannelPlugins();
-    const failedPlugins: Array<{ id: string; error: string }> = [];
-
-    await Promise.allSettled(
-      plugins.map(async (plugin) => {
-        try {
-          await startChannel(plugin.id);
-        } catch (err) {
-          try {
-            const message = formatErrorMessage(err);
-            channelLogs[plugin.id]?.error?.(
-              `[${plugin.id}] channel startup failed: ${message}`,
-            );
-            failedPlugins.push({ id: plugin.id, error: message });
-          } catch (innerErr) {
-            // Secondary failure during error formatting or logging; ignore
-            failedPlugins.push({
-              id: plugin.id,
-              error: `Internal logging error: ${String(innerErr)}`,
-            });
-          }
-        }
-      }),
-    );
-
-    // Log summary of channel startup results
-    if (failedPlugins.length > 0) {
-      const total = plugins.length;
-      const succeeded = total - failedPlugins.length;
-      
-      // No general logger is available here; use the first succeeded channel's logger,
-      // falling back to the first plugin's logger if all failed.
-      const firstSucceededId = plugins.find((p) => !failedPlugins.some((f) => f.id === p.id))?.id;
-      const targetChannelId = (firstSucceededId ?? plugins[0]?.id) as ChannelId;
-      const log = channelLogs[targetChannelId];
-      
-      log?.warn?.(
-        `Channel startup summary: ${succeeded}/${total} channels started successfully (${failedPlugins.length} failed: ${failedPlugins.map((p) => p.id).join(", ")})`,
-      );
+    for (const plugin of listChannelPlugins()) {
+      try {
+        await startChannel(plugin.id);
+      } catch (err) {
+        channelLogs[plugin.id]?.error?.(
+          `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+        );
+      }
     }
   };
 
