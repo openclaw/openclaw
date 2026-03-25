@@ -51,22 +51,25 @@ export async function resolveTeamGroupId(
   // The team ID in channelData is typically the group ID itself for standard teams.
   // Validate by fetching /teams/{id} and returning the confirmed id.
   // Requires Team.ReadBasic.All permission; fall back to raw ID if missing.
-  let groupId: string;
   try {
     const path = `/teams/${encodeURIComponent(conversationTeamId)}?$select=id`;
     const team = await fetchGraphJson<{ id?: string }>({ token, path });
-    groupId = team.id ?? conversationTeamId;
+    const groupId = team.id ?? conversationTeamId;
+
+    // Only cache when the Graph lookup succeeds — caching a fallback raw ID
+    // can cause silent failures for the entire TTL if the ID is not a valid
+    // Graph team GUID (e.g. Bot Framework conversation key).
+    teamGroupIdCache.set(conversationTeamId, {
+      groupId,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+
+    return groupId;
   } catch {
-    // Fallback to raw team ID when /teams endpoint is unavailable (missing Team.ReadBasic.All)
-    groupId = conversationTeamId;
+    // Fallback to raw team ID without caching so subsequent calls retry the
+    // Graph lookup instead of using a potentially invalid cached value.
+    return conversationTeamId;
   }
-
-  teamGroupIdCache.set(conversationTeamId, {
-    groupId,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
-
-  return groupId;
 }
 
 /**
