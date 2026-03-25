@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import {
   loadCombinedSessionStoreForGateway,
   resolveGatewaySessionStoreTarget,
@@ -74,6 +75,7 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     return cachedKey;
   }
 
+  const matchingEntries: Array<[string, SessionEntry]> = [];
   for (const [key, entry] of Object.entries(store)) {
     if (!entry?.sessionId || key === cachedKey) {
       continue;
@@ -86,8 +88,21 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
         targetPath,
       })
     ) {
-      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, key);
-      return key;
+      matchingEntries.push([key, entry]);
+    }
+  }
+
+  if (matchingEntries.length > 0) {
+    const firstSessionId = matchingEntries[0]?.[1].sessionId;
+    const sameSessionMatches = matchingEntries.filter(
+      (entry): entry is [string, SessionEntry] => entry[1].sessionId === firstSessionId,
+    );
+    const resolvedKey =
+      resolvePreferredSessionKeyForSessionIdMatches(sameSessionMatches, firstSessionId) ??
+      matchingEntries[0]?.[0];
+    if (resolvedKey) {
+      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
+      return resolvedKey;
     }
   }
 
